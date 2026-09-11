@@ -158,12 +158,15 @@ impl<H: TickHook> Server<H> {
         // load a chunk from disk before creating an all-air placeholder for it;
         // `Server` therefore drives saving through the game and never closes the
         // handle itself (see `Game`'s threading notes).
-        let game = crate::game::Game::with_seed_and_storage(
+        let mut game = crate::game::Game::with_seed_and_storage(
             world,
             i32::try_from(self.config.simulation.view_distance).unwrap_or(8),
             events_rx,
             crate::game::DEFAULT_RANDOM_SEED,
         )?;
+        // The lifecycle is the authority for the player cap, so it tells the game
+        // rather than the game reading the config itself (`/list` is the only consumer).
+        game.set_max_players(self.config.network.max_players);
         self.game_link = Some(mc_network::listener::GameLink::new(
             events_tx,
             mc_network::bridge::DEFAULT_OUTBOUND_CAPACITY,
@@ -341,6 +344,13 @@ impl<H: TickHook> Server<H> {
                 // runs the six scheduled phases and returns this tick's counters.
                 if let Some(game) = self.game.as_mut() {
                     let report = game.tick()?;
+                    // `/stop` sets this flag; draining it here is how a command reaches
+                    // the lifecycle without the game holding a shutdown handle. The
+                    // direction stays one-way: the server reads the game.
+                    if game.shutdown_requested() {
+                        tracing::info!(tick, "shutdown requested by command");
+                        self.shutdown.request();
+                    }
                     if report.events > 0 || report.block_changes > 0 {
                         tracing::trace!(
                             tick,

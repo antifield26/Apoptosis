@@ -316,6 +316,7 @@ dependencies = [
 name = "mc-server"
 version = "0.1.0"
 dependencies = [
+ "mc-command",
  "mc-container",
  "mc-core",
  "mc-entity",

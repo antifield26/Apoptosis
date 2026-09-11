@@ -232,6 +232,12 @@ const CLIENT_COMMAND_RESPAWN: i32 = 0;
 /// Blocks a player (or any other entity) falls before damage starts (Vanilla: 3).
 const FALL_DAMAGE_THRESHOLD: f64 = 3.0;
 
+/// Player cap before the lifecycle supplies the configured one.
+///
+/// Vanilla's `server.properties` default, so a game built without a config (tests, and
+/// the `Game::new` path) reports a plausible number rather than a placeholder zero.
+pub const DEFAULT_MAX_PLAYERS: u32 = 20;
+
 /// Ticks between food/regeneration steps (Vanilla's `foodTickTimer` period).
 ///
 /// 80 ticks is 4 seconds, which is the interval Vanilla uses for both natural
@@ -278,11 +284,17 @@ const ENTITY_GRAVITY: f64 = 0.04;
 const PLAINS_BIOME_ID: u32 = 0;
 
 /// One connected player's server-side state.
-struct Session {
-    id: ConnectionId,
+/// One connected player's simulation state.
+///
+/// pub(crate) because the command handlers are a sibling module: they read a player's
+/// name, position and permission to build a command source. The individual fields are
+/// crate-visible for the same reason, and nothing outside the crate sees any of it.
+pub(crate) struct Session {
+    /// The connection this session belongs to.
+    pub(crate) id: ConnectionId,
     /// **Authoritative** player state; the entity-store entry is a projection of
     /// this (see the module docs).
-    player: Player,
+    pub(crate) player: Player,
     /// The entity this connection controls, chosen by the entity store so ids are
     /// unique across every entity and never reused.
     entity: EntityId,
@@ -291,6 +303,13 @@ struct Session {
     sent_chunks: BTreeSet<ChunkPos>,
     /// Position at the start of this tick, for fall-damage accounting.
     tick_start_y: f64,
+    /// What this connection is permitted to do.
+    ///
+    /// Defaults to [`mc_command::PermissionLevel::All`]. Nothing raises it yet because
+    /// no permission storage is read (`ops.json` is P07-04's remaining half), so the
+    /// operator-only commands are unreachable from a player — which is the correct
+    /// behaviour for a server that has no way to record a grant.
+    pub(crate) permission: mc_command::PermissionLevel,
     /// The container window this player has open.
     ///
     /// Every player always has the player-inventory menu (`window 0`) open; other
@@ -425,7 +444,12 @@ pub struct Game {
     /// passed per call instead.
     storage: Option<WorldService>,
     world: World,
-    sessions: BTreeMap<ConnectionId, Session>,
+    /// Live sessions, keyed by connection.
+    ///
+    /// `pub(crate)` because the command handlers are a sibling module: `/list` and
+    /// `/say` iterate every session, and `/tp` resolves a name to one. Making the whole
+    /// struct crate-visible would expose far more than that; this exposes exactly the map.
+    pub(crate) sessions: BTreeMap<ConnectionId, Session>,
     /// Every live entity in the dimension (P05-03).
     entities: EntityStore,
     /// Which entity each connection controls.
@@ -447,6 +471,21 @@ pub struct Game {
     /// Retained for the tests that exercise the disconnect path directly; the
     /// production path carries overflow on the `TickReport` (see its field docs).
     overflowed: Vec<ConnectionId>,
+    /// The configured player cap, for `/list`.
+    ///
+    /// One value rather than the whole `ServerConfig`: the alternative was a new
+    /// parameter on four constructors and every call site, including six tests, to serve
+    /// a single line of output. The lifecycle sets it from the real config; the default
+    /// is Vanilla's own.
+    max_players: u32,
+    /// Offset applied to the time-of-day broadcast, so `/time set` survives the
+    /// per-second recomputation from the tick counter.
+    time_offset: i64,
+    /// Set by `/stop`; the lifecycle drains it and shuts down.
+    ///
+    /// `Game` records the request and the *lifecycle* acts on it, which keeps the
+    /// ownership direction one-way: the server drives the game, never the reverse.
+    shutdown_requested: bool,
     /// Every loaded block entity, keyed by position.
     ///
     /// Owned here rather than in `mc-world` because a block entity is *state*, not
@@ -562,6 +601,9 @@ impl Game {
             report: TickReport::default(),
             tick: 0,
             overflowed: Vec::new(),
+            max_players: DEFAULT_MAX_PLAYERS,
+            time_offset: 0,
+            shutdown_requested: false,
             block_entities: mc_container::BlockEntityStore::new(),
             placeholder_without_storage: BTreeSet::new(),
         })
@@ -1165,9 +1207,11 @@ impl Game {
         if !tick.is_multiple_of(20) {
             return Ok(());
         }
+        // The offset is what makes `/time set` stick: without it the per-second
+        // broadcast would immediately overwrite whatever the command chose.
         let packet = SetTime {
             world_age: tick as i64,
-            time_of_day: (tick % 24_000) as i64,
+            time_of_day: ((tick % 24_000) as i64 + self.time_offset).rem_euclid(24_000),
             tick_day_time: true,
         }
         .to_raw()?;
@@ -1310,6 +1354,7 @@ impl Game {
                 outbound,
                 sent_chunks: BTreeSet::new(),
                 tick_start_y: f64::from(sy),
+                permission: mc_command::PermissionLevel::All,
                 menu,
                 ready: false,
             },
@@ -1443,15 +1488,10 @@ impl Game {
                 )?;
             }
             PlayIntent::ChatCommand { command } => {
-                info!(id = %id, %command, "player command (dispatcher lands in P07)");
-                self.send(
-                    id,
-                    &SystemChat {
-                        content: TextComponent::literal("Commands are not implemented yet."),
-                        overlay: false,
-                    },
-                    report,
-                )?;
+                // The dispatcher validates the name, the permission and the arguments
+                // before any handler runs, so a handler cannot be reached with a command
+                // the source may not use or arguments that do not fit (P07-05).
+                self.dispatch_command(id, &command, report)?;
             }
             PlayIntent::ContainerClick {
                 window_id,
@@ -1483,6 +1523,29 @@ impl Game {
             | PlayIntent::UseItem { .. } => {}
         }
         Ok(())
+    }
+
+    /// The configured maximum player count, for `/list`.
+    #[must_use]
+    pub const fn max_players(&self) -> u32 {
+        self.max_players
+    }
+
+    /// Set the player cap. The lifecycle is the authority for this value.
+    pub const fn set_max_players(&mut self, max_players: u32) {
+        self.max_players = max_players;
+    }
+
+    /// Every online player's name, ascending.
+    #[must_use]
+    pub fn player_names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self
+            .sessions
+            .values()
+            .map(|session| session.player.profile.name.as_str())
+            .collect();
+        names.sort_unstable();
+        names
     }
 
     /// The session for a connection, for tests and diagnostics.
@@ -1517,6 +1580,77 @@ impl Game {
     #[must_use]
     pub fn menu_total_items(&self, id: ConnectionId) -> Option<i64> {
         self.sessions.get(&id).map(|s| s.menu.total_items())
+    }
+
+    /// The time-of-day offset applied on top of the tick counter.
+    #[must_use]
+    pub const fn time_offset(&self) -> i64 {
+        self.time_offset
+    }
+
+    /// Set the time-of-day offset.
+    pub fn set_time_offset(&mut self, offset: i64) {
+        self.time_offset = offset.rem_euclid(24_000);
+    }
+
+    /// Whether a command has asked the server to stop.
+    #[must_use]
+    pub const fn shutdown_requested(&self) -> bool {
+        self.shutdown_requested
+    }
+
+    /// Record a shutdown request from a command.
+    pub fn request_shutdown(&mut self) {
+        self.shutdown_requested = true;
+    }
+
+    /// Move the invoking source to a resolved block position.
+    ///
+    /// The destination is resolved against collision the same way a gameplay move is, so
+    /// a teleport into a wall lands on top of it rather than inside it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the reason as a message, because a command's failure is a message to a
+    /// player rather than an error condition.
+    pub(crate) fn teleport_source(
+        &mut self,
+        source: &mc_command::CommandSource,
+        x: i32,
+        y: i32,
+        z: i32,
+    ) -> Result<(), String> {
+        if !self.in_build_range(y) {
+            return Err(format!(
+                "Cannot teleport to y={y}: outside the world's build range."
+            ));
+        }
+        let target = Vec3::new(f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5);
+        // Find the connection whose name matches, since a command source carries a name
+        // rather than an id (the framework has no notion of connections).
+        let Some(id) = self
+            .sessions
+            .iter()
+            .find(|(_, session)| session.player.profile.name == source.name)
+            .map(|(id, _)| *id)
+        else {
+            return Err("That player is no longer online.".to_owned());
+        };
+        let Some(session) = self.sessions.get_mut(&id) else {
+            return Err("That player is no longer online.".to_owned());
+        };
+        // A landed-on-surface resolution: the destination, or the first free spot above
+        // it when it is inside a block.
+        let resolved = self.world.find_surface(x, z, y).map_or(target, |surface| {
+            Vec3::new(f64::from(x) + 0.5, f64::from(surface), f64::from(z) + 0.5)
+        });
+        session.player.position = mc_entity::player::Vec3::new(resolved.x, resolved.y, resolved.z);
+        session.player.on_ground = false;
+        session.tick_start_y = resolved.y;
+        // Terrain may not be streamed for the destination yet; `stream_for` picks it up
+        // on the next tick because the chunk it computes from has changed.
+        debug!(name = %source.name, x, y, z, "teleported by command");
+        Ok(())
     }
 
     /// Re-mirror the menu from the authoritative inventory and tell the client.
@@ -2060,7 +2194,7 @@ impl Game {
     /// hostile (or merely desynchronised) packet would return an error out of
     /// [`Game::tick`], and [`crate::lifecycle::Server::run`] treats a tick error as
     /// fatal — one client could stop the server.
-    fn in_build_range(&self, y: i32) -> bool {
+    pub(crate) fn in_build_range(&self, y: i32) -> bool {
         let min_y = i32::from(self.world.min_section_y()) * mc_world::SECTION_HEIGHT;
         let max_y = (i32::from(self.world.min_section_y()) + self.world.section_count() as i32)
             * mc_world::SECTION_HEIGHT;
@@ -2649,7 +2783,7 @@ impl Game {
     ///
     /// [`ServerError::Invariant`] when the packet cannot be encoded, which is a
     /// server-side bug rather than client input.
-    fn send<T: Packet>(
+    pub(crate) fn send<T: Packet>(
         &self,
         id: ConnectionId,
         packet: &T,
