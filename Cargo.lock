@@ -195,6 +195,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-command"
+version = "0.1.0"
+dependencies = [
+ "mc-core",
+ "mc-test-support",
+ "tracing",
+]
+
+[[package]]
 name = "mc-container"
 version = "0.1.0"
 dependencies = [
