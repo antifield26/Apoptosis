@@ -211,11 +211,8 @@ impl<H: TickHook> Server<H> {
             });
         let mut roots = crate::packs::PackRoots::new(&self.config.storage.world_dir);
         if let Some(configured) = &self.config.datapacks.vanilla_data {
-            // Resolve the level a caller named: the data directory itself, or a pack root
-            // containing it. The two are indistinguishable from outside, and getting it wrong has
-            // the same symptom as configuring nothing — so it is resolved rather than guessed at
-            // by the operator.
-            roots.vanilla_data = Some(crate::packs::resolve_vanilla_data(configured));
+            // `with_vanilla_data` resolves the level the operator named, so nothing here has to.
+            roots = roots.with_vanilla_data(configured);
         }
         match crate::packs::load_packs(&mut game, &roots, &enabled) {
             Ok(outcome) => {

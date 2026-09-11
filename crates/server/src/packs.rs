@@ -56,6 +56,12 @@ pub struct PackLoadOutcome {
     pub vanilla_data: bool,
     /// How many functions were loaded across every pack.
     pub functions_loaded: usize,
+    /// How many structure files the packs hold.
+    pub structures_seen: usize,
+    /// How many structure templates loaded.
+    pub structures_loaded: usize,
+    /// Structure files that were refused, with the reason.
+    pub structures_refused: Vec<String>,
 }
 
 impl PackLoadOutcome {
@@ -87,6 +93,15 @@ impl PackLoadOutcome {
         if !self.rejected.is_empty() {
             let _ = write!(text, "; {} pack(s) unreadable", self.rejected.len());
         }
+        if self.structures_seen > 0 {
+            let _ = write!(
+                text,
+                "; {} of {} structure templates ({} refused)",
+                self.structures_loaded,
+                self.structures_seen,
+                self.structures_refused.len()
+            );
+        }
         text
     }
 }
@@ -111,9 +126,14 @@ impl PackRoots {
     }
 
     /// The same roots with a vanilla data directory.
+    ///
+    /// The path is **resolved here**, so a caller may name the pack root, the `data` directory or the
+    /// `minecraft` namespace directory and get the same result. Resolving it in the callers instead
+    /// meant one of them forgot — my own wiring test — and the symptom was a pack that loaded zero
+    /// namespaces: silent, and indistinguishable from a pack with no data.
     #[must_use]
     pub fn with_vanilla_data(mut self, path: impl Into<PathBuf>) -> Self {
-        self.vanilla_data = Some(path.into());
+        self.vanilla_data = Some(resolve_vanilla_data(&path.into()));
         self
     }
 }
@@ -140,11 +160,20 @@ pub fn load_packs(
     if let Some(vanilla) = &roots.vanilla_data {
         // A configured path that does not exist is a **configuration** mistake, and saying so is
         // better than silently loading nothing: the symptom would be "every recipe is missing".
-        if vanilla.is_dir() {
+        // A root with no `data/` is a pack that loads and contributes nothing, which is the
+        // silent-nothing failure this module exists to prevent — so it is rejected with a reason
+        // rather than pushed. The world-pack path already checks this; the vanilla path did not.
+        if vanilla.join("data").is_dir() {
             // `BuiltIn`, which is what the jar's `data/minecraft` is: a pack shipped inside the
             // server rather than one a world or an operator supplied.
             set.push(vanilla, PackSource::BuiltIn, Limits::DEFAULT);
             outcome.vanilla_data = true;
+        } else if vanilla.is_dir() {
+            outcome.rejected.push(format!(
+                "{}: has no data/ directory, so it is not a pack root; point vanilla_data at the \
+                 directory containing data/minecraft",
+                vanilla.display()
+            ));
         } else {
             outcome.rejected.push(format!(
                 "{}: the configured vanilla data directory does not exist",
@@ -181,6 +210,32 @@ pub fn load_packs(
     outcome.functions_loaded = functions.len();
     game.set_functions(functions);
 
+    // Structures, from every pack's `structure/` directory in load order.
+    let mut structures = mc_worldgen::structures::StructureRegistry::new();
+    for (_namespace, root, _source) in set.load_plan() {
+        let structure_root = root.join("structure");
+        if !structure_root.is_dir() {
+            continue;
+        }
+        let (loaded, report) = mc_worldgen::structures::load_structures(
+            &structure_root,
+            mc_worldgen::StructureLimits::PACK,
+        );
+        outcome.structures_seen += report.files;
+        outcome.structures_loaded += report.loaded;
+        for (path, reason) in &report.skipped {
+            outcome
+                .structures_refused
+                .push(format!("{}: {reason}", path.display()));
+        }
+        for name in loaded.names() {
+            if let Some(template) = loaded.by_name(&name) {
+                structures.insert(name, template.clone());
+            }
+        }
+    }
+    game.set_structures(structures);
+
     Ok(outcome)
 }
 
@@ -197,18 +252,44 @@ pub fn looks_like_vanilla_data(path: &Path) -> bool {
     direct || nested
 }
 
-/// The vanilla data directory inside a pack root, if this is a root rather than the data itself.
+/// The pack root that holds the vanilla data, from any of the three forms a caller might name.
 ///
-/// A caller who points `vanilla_data` at a directory *containing* `data/minecraft` should not have
-/// to know which level to name, and the two levels are indistinguishable from the outside.
+/// A `DataPack` is a directory **containing** `data/<namespace>/`, so the root is what the loader needs
+/// — but there are three natural ways to point at Mojang's data, and a caller should not have to know
+/// which one the pack model wants:
+///
+/// | Caller names | Root |
+/// |---|---|
+/// | `…/extract` (containing `data/minecraft`) | `…/extract` |
+/// | `…/extract/data` | `…/extract` |
+/// | `…/extract/data/minecraft` (the namespace directory itself) | `…/extract` |
+///
+/// The third is the one `MC_VANILLA_DATA` uses in every differential test, and getting it wrong is
+/// **silent**: the pack loads and contributes zero namespaces. So the rule is explicit here and
+/// `looks_like_vanilla_data` reports a path that matches none of the three.
 #[must_use]
 pub fn resolve_vanilla_data(path: &Path) -> PathBuf {
-    let nested = path.join("data").join("minecraft");
-    if nested.join("tags").is_dir() {
-        nested
-    } else {
-        path.to_path_buf()
+    // The namespace directory itself: `…/data/minecraft` means the root is `…`.
+    let is_namespace_dir = path.file_name().is_some_and(|name| name == "minecraft")
+        && path
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|name| name == "data");
+    if is_namespace_dir {
+        return path
+            .parent()
+            .and_then(Path::parent)
+            .map_or_else(|| path.to_path_buf(), Path::to_path_buf);
     }
+    // The `data` directory itself.
+    if path.file_name().is_some_and(|name| name == "data") {
+        return path
+            .parent()
+            .map_or_else(|| path.to_path_buf(), Path::to_path_buf);
+    }
+    // A root containing `data/minecraft`, or something unrecognised — returned unchanged so the
+    // caller's own check can report it.
+    path.to_path_buf()
 }
 
 #[cfg(test)]
@@ -222,10 +303,13 @@ mod tests {
         assert!(roots.vanilla_data.is_none());
         assert_eq!(roots.world_dir, std::path::Path::new("world"));
 
+        // The setter **resolves**, so a caller may name any of the three forms. `/srv/data/minecraft`
+        // is the namespace directory, whose pack root is `/srv`.
         let with = roots.with_vanilla_data("/srv/data/minecraft");
         assert_eq!(
             with.vanilla_data.as_deref(),
-            Some(std::path::Path::new("/srv/data/minecraft"))
+            Some(std::path::Path::new("/srv")),
+            "the namespace-directory form resolves to its pack root"
         );
     }
 
@@ -254,19 +338,52 @@ mod tests {
     }
 
     #[test]
-    fn resolve_finds_the_nested_data_directory() {
-        // A caller should not have to know which level to name — the two are indistinguishable
-        // from outside, and the symptom of getting it wrong is the same as configuring nothing.
+    fn every_accepted_form_resolves_to_the_same_pack_root() {
+        // **The property that matters**, and the one the previous version of this test did not check:
+        // a caller may name any of three forms and must get the same root.
+        //
+        // The third form is the one `MC_VANILLA_DATA` uses — the namespace directory itself — and it was
+        // the one the old contract rejected. Rejecting it was **silent**: the pack loaded and contributed
+        // zero namespaces, so a fully configured server saw no structures and no functions.
         let dir = TempDir::new("packs-resolve");
         let root = dir.path().join("pack");
-        let nested = root.join("data").join("minecraft");
-        std::fs::create_dir_all(nested.join("tags")).expect("tags");
-        assert_eq!(resolve_vanilla_data(&root), nested);
+        let data = root.join("data");
+        let namespace = data.join("minecraft");
+        std::fs::create_dir_all(namespace.join("tags")).expect("tags");
+        std::fs::create_dir_all(namespace.join("structure")).expect("structure");
 
-        // Given the data itself, it is returned unchanged.
-        let data = dir.path().join("direct");
-        std::fs::create_dir_all(data.join("tags")).expect("tags");
-        assert_eq!(resolve_vanilla_data(&data), data);
+        for (form, named) in [
+            ("the pack root", root.clone()),
+            ("the data directory", data.clone()),
+            ("the namespace directory", namespace.clone()),
+        ] {
+            assert_eq!(
+                resolve_vanilla_data(&named),
+                root,
+                "naming {form} must resolve to the pack root"
+            );
+        }
+
+        // An unrecognised path is returned unchanged, so the caller's own check reports it rather than
+        // this function silently inventing a root.
+        let stray = dir.path().join("stray");
+        std::fs::create_dir_all(&stray).expect("stray");
+        assert_eq!(resolve_vanilla_data(&stray), stray);
+    }
+
+    #[test]
+    fn a_namespace_directory_is_recognised_only_under_data() {
+        // The rule is "a path named `minecraft` whose parent is named `data`". A directory named
+        // `minecraft` anywhere else must not be mistaken for one, or a stray path would resolve to a
+        // root that does not exist and the pack would load nothing — silently, again.
+        let dir = TempDir::new("packs-namespace-rule");
+        let elsewhere = dir.path().join("minecraft");
+        std::fs::create_dir_all(&elsewhere).expect("dir");
+        assert_eq!(
+            resolve_vanilla_data(&elsewhere),
+            elsewhere,
+            "`minecraft` outside a `data` directory is not a namespace directory"
+        );
     }
 
     #[test]

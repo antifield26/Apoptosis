@@ -232,6 +232,22 @@ const CLIENT_COMMAND_RESPAWN: i32 = 0;
 /// Blocks a player (or any other entity) falls before damage starts (Vanilla: 3).
 const FALL_DAMAGE_THRESHOLD: f64 = 3.0;
 
+/// What the structure decorator has done.
+///
+/// Counted rather than logged because "no structure appeared" and "a structure appeared and blends with
+/// the terrain" look identical from outside a chunk, and only the decorator can tell them apart.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StructureStats {
+    /// Chunks the decorator looked at.
+    pub considered: usize,
+    /// Chunks the selection picked a template for.
+    pub selected: usize,
+    /// Blocks those templates wrote.
+    pub blocks_written: usize,
+    /// Selections the placement policy refused.
+    pub refused: usize,
+}
+
 /// Player cap before the lifecycle supplies the configured one.
 ///
 /// Vanilla's `server.properties` default, so a game built without a config (tests, and
@@ -483,6 +499,20 @@ pub struct Game {
     /// Empty until [`Game::load_functions_from`] is called, which is what a server with no data
     /// pack legitimately has.
     pub(crate) functions: mc_data::function::FunctionRegistry,
+    /// Structure templates loaded from the packs, for decoration.
+    structures: mc_worldgen::structures::StructureRegistry,
+    /// How many chunks the structure decorator has looked at, and what it found.
+    ///
+    /// A counter rather than a log line: "no structure appeared" and "a structure appeared and blends
+    /// with the terrain" are indistinguishable from the outside, and only the decorator knows which
+    /// happened. Exposed so a test can assert the difference.
+    structure_stats: StructureStats,
+    /// The placement rule, derived **once** when the templates are installed.
+    ///
+    /// `StructureSet::from_registry` sorts the names and caps the selectable slice, which is O(n log n)
+    /// over the pack. Deriving it per chunk would make a chunk's cost depend on the installed pack
+    /// size, which is exactly what the cap exists to prevent — so it is derived here instead.
+    structure_set: mc_worldgen::structures::StructureSet,
     /// Who may run operator commands, loaded from `ops.json` at construction.
     ///
     /// Loaded once rather than per login, matching Vanilla's startup read. A change to the
@@ -673,6 +703,13 @@ impl Game {
             overflowed: Vec::new(),
             generator,
             functions: mc_data::function::FunctionRegistry::new(),
+            structures: mc_worldgen::structures::StructureRegistry::new(),
+            structure_stats: StructureStats::default(),
+            // Derived from an empty registry: the rule for "no templates", which is the correct
+            // initial state. `set_structures` re-derives it when a pack loads.
+            structure_set: mc_worldgen::structures::StructureSet::from_registry(
+                &mc_worldgen::structures::StructureRegistry::new(),
+            ),
             operators,
             max_players: DEFAULT_MAX_PLAYERS,
             time_offset: 0,
@@ -2645,7 +2682,7 @@ impl Game {
                         .generate_chunk(pos, &self.registries.blocks)
                         .map_err(|error| error.to_string())
                 }) {
-                Some(Ok(chunk)) => {
+                Some(Ok(mut chunk)) => {
                     // Left **clean**, which is the non-obvious part: this generator is
                     // deterministic, so a generated chunk is reproducible byte for byte
                     // from `(seed, pos)` at any later time. Persisting it buys nothing, and
@@ -2657,6 +2694,12 @@ impl Game {
                     // it", which broke chunk unloading for every generated chunk and (via a
                     // matching change to the clean-marking below) let placeholders be
                     // written back over real terrain. Two existing tests caught both.
+                    //
+                    // Structures decorate the terrain, so they run **after** it and read the same
+                    // height field the terrain pass used. A refusal is counted rather than fatal: a
+                    // missing decoration is strictly better than losing the terrain a player stands
+                    // on.
+                    self.decorate_with_structures(pos, &mut chunk);
                     self.world.load_chunk(chunk);
                 }
                 Some(Err(error)) => {
@@ -2690,6 +2733,109 @@ impl Game {
         // The third is the one an earlier version broke by making this conditional, which
         // `a_stored_chunk_is_loaded_from_disk_and_never_overwritten_by_a_placeholder` caught.
         self.mark_chunk_clean(pos);
+    }
+
+    /// Install the structure templates and derive the placement rule.
+    ///
+    /// The rule is derived **here**, once, rather than per chunk: `StructureSet::from_registry` sorts
+    /// the names and caps the selectable slice, so deriving it per chunk would make one chunk's cost
+    /// depend on the installed pack size — which is exactly what the cap exists to prevent.
+    pub fn set_structures(&mut self, structures: mc_worldgen::structures::StructureRegistry) {
+        // The set is derived from the templates the **build policy can place**, not from all of them.
+        //
+        // `StructureSet::from_registry` takes the first 64 names in sorted order, and alphabetically
+        // those are all `ancient_city/*` — large multi-chunk pieces — while
+        // `StructureBuild::default()` is `CrossChunk::SingleChunk`, which refuses anything that does not
+        // fit. Selection and placement therefore disagreed on **every** chunk: `selected: 2,
+        // blocks_written: 0, refused: 2`, so a server generated no structures at all with the pack fully
+        // loaded. Found by a test that generates through the server rather than through the library.
+        //
+        // Deriving from `fitting_in_one_chunk` makes the two consistent by construction. The cost is
+        // real and recorded: the selectable population is the single-chunk subset, so large structures
+        // never generate under a `SingleChunk` policy.
+        self.structure_set = mc_worldgen::structures::StructureSet::from_registry(
+            &structures.fitting_in_one_chunk(),
+        );
+        self.structures = structures;
+    }
+
+    /// The placement rule the server uses for structural decoration.
+    ///
+    /// Exposed so a test can assert that every name the selection can pick is one the build policy can
+    /// place — the invariant whose violation made a server generate no structures at all while the pack
+    /// was fully loaded.
+    #[must_use]
+    pub const fn structure_set(&self) -> &mc_worldgen::structures::StructureSet {
+        &self.structure_set
+    }
+
+    /// What the structure decorator has done so far.
+    #[must_use]
+    pub const fn structure_stats(&self) -> StructureStats {
+        self.structure_stats
+    }
+
+    /// The structure templates this game has loaded.
+    #[must_use]
+    pub const fn structures(&self) -> &mc_worldgen::structures::StructureRegistry {
+        &self.structures
+    }
+
+    /// Place whatever structure this chunk's selection picks, if any.
+    ///
+    /// A no-op when no templates are loaded, so a server without a data pack pays nothing. The
+    /// selection is a pure function of `(seed, chunk_pos)`, so a chunk decorated here and one decorated
+    /// after a restart get the same structure — which is what makes regeneration reproducible.
+    fn decorate_with_structures(&mut self, pos: ChunkPos, chunk: &mut Chunk) {
+        if self.structures.is_empty() {
+            return;
+        }
+        self.structure_stats.considered += 1;
+        if self.generator.is_none() {
+            // No generator means no terrain, and a structure on a placeholder would be decoration on
+            // nothing. Skipped rather than placed.
+            return;
+        }
+        // Rebuilt from the seed rather than stored: `WorldgenContext::overworld` is the only
+        // constructor the server uses, and deriving it here keeps one source of truth for the seed.
+        let context = mc_worldgen::WorldgenContext::overworld(mc_worldgen::WorldSeed::from_raw(
+            self.random_seed,
+        ));
+        let surface_height = |x: i32, z: i32| {
+            self.generator
+                .as_ref()
+                .map_or(0, |generator| generator.surface_height(x, z))
+        };
+        let request = mc_worldgen::structures::StructureGenRequest {
+            pos,
+            context: &context,
+            registry: &self.structures,
+            set: &self.structure_set,
+            build: mc_worldgen::structures::StructureBuild::default(),
+            blocks: &self.registries.blocks,
+            surface_height: &surface_height,
+        };
+        let report = mc_worldgen::structures::generate_structures(chunk, &request);
+        if report.selected {
+            self.structure_stats.selected += 1;
+            self.structure_stats.blocks_written += report.blocks_written;
+            if report.refused.is_some() {
+                self.structure_stats.refused += 1;
+            }
+        }
+        if report.selected && report.blocks_written == 0 {
+            // Selected but wrote nothing: either it was refused or every block was air under
+            // `IgnoreAir`. Logged because it is the difference between "no structure here" and
+            // "a structure that did not appear", which is otherwise invisible.
+            debug!(
+                ?pos,
+                name = ?report.name,
+                outside = report.blocks_outside,
+                out_of_world = report.blocks_out_of_world,
+                refused = ?report.refused,
+                "a structure was selected but wrote no blocks"
+            );
+        }
     }
 
     /// Load a chunk, generating or reading it as appropriate.
