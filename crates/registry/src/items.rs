@@ -144,6 +144,16 @@ impl ItemRegistry {
         Ok(self.entry(id)?.block.as_deref())
     }
 
+    /// Every item name, in ascending id order.
+    ///
+    /// Added for data-pack tag validation (P07-03): checking whether a tag references
+    /// a real item needs the *set* of names, which `id(name)` cannot produce. The
+    /// order is by id, so a caller building a set from this gets the same set on every
+    /// run.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.by_id.iter().map(|entry| entry.name.as_str())
+    }
+
     /// Item that places a given block, when one exists.
     ///
     /// # Errors

@@ -9,19 +9,24 @@ file/type counts come from a straight `zipfile` enumeration of the same jar.
 
 ## 1. What a vanilla pack contains
 
+Precise **file** counts (see section 0a for why the first version was wrong):
+
 | Directory | Files | Loaded by `mc-data` |
 |---|---|---|
-| `advancement/` | 1 633 | no |
-| `recipe/` | 1 516 | **7 of 21 types** |
-| `structure/` | 1 359 | no |
-| `loot_table/` | 1 353 | no |
-| `worldgen/` | 1 029 | no |
-| `tags/` | 800 (758 `.json`) | **yes** |
-| `villager_trade/` | 468 | no |
-| `datapacks/` | 132 | no (built-in packs) |
-| `trade_set/` | 83 | no |
-| remainder (33 directories) | ~250 | no |
-| **total** | **8 775** | |
+| `advancement/` | 1 617 | no |
+| `recipe/` | 1 515 | **7 of 21 types** |
+| `loot_table/` | 1 326 | no |
+| `structure/` | 1 202 | no |
+| `worldgen/` | 951 | no |
+| `tags/` | 758 | **yes** |
+| `villager_trade/` | 387 | no |
+| `datapacks/` | 106 | no (built-in packs) |
+| `trade_set/` | 68 | no |
+| `painting_variant/` | 51 | no |
+| `damage_type/` | 50 | no |
+| `banner_pattern/` | 43 | no |
+| remainder | ~208 | no |
+| **total** | **8 282 files** (8 775 zip entries) | |
 
 ## 2. Tags — the one format fully measured
 
@@ -54,6 +59,39 @@ The file format:
 A `#`-prefixed string is a reference to another tag **in the same registry** — the
 format has no way to name a different registry from a value, which is why the registry
 is inherited from the containing tag's path rather than parsed.
+
+### 2a. The registry of a tag file is a *known set*, not a path split
+
+This cost two wrong attempts, so it is written down. A tag lives at
+`tags/<registry>/<tag path>.json`, and the split point is **not recoverable from the
+path**:
+
+| File | Registry | Tag name |
+|---|---|---|
+| `tags/block/mineable/axe.json` | `block` | `minecraft:mineable/axe` |
+| `tags/villager_trade/armorer/level_1.json` | `villager_trade` | `minecraft:armorer/level_1` |
+| `tags/worldgen/biome/is_beach.json` | `worldgen/biome` | `minecraft:is_beach` |
+
+`block` and `villager_trade` are one-segment registries whose tags have sub-paths;
+`worldgen/biome` is a two-segment registry whose tags are flat. The directory shapes do
+not distinguish them: `block/` holds 244 flat files and one subdirectory, while
+`villager_trade/` holds **zero** flat files and fifteen subdirectories.
+
+What settles it is the **references**:
+
+- `tags/villager_trade/armorer/level_1.json` contains `#minecraft:common_smith/level_1`,
+  which must be `tags/villager_trade/common_smith/level_1.json` — so the registry is
+  `villager_trade`, not `villager_trade/armorer`;
+- `tags/worldgen/biome/has_structure/buried_treasure.json` contains `#minecraft:is_beach`,
+  which is `tags/worldgen/biome/is_beach.json` — so there the registry *is* two segments.
+
+Splitting at the last separator produced **103** spurious missing-tag problems;
+splitting at the first left **46**. `mc_data::tag::TAG_REGISTRIES` is the answer: 20
+registry paths, longest-match first, with an unknown prefix falling back to the first
+segment **and being reported** so a registry this build does not know is visible rather
+than silently mis-split.
+
+With the table, the real pack resolves with **758 of 758 tags and zero problems**.
 
 ## 3. Recipes — 21 types, 7 modelled
 

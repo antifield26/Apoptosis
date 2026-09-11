@@ -27,6 +27,15 @@ struct BlockEntry {
 }
 
 impl BlockEntry {
+    /// The id of this block's first (default) state.
+    ///
+    /// Public so [`BlockRegistry::block_names`] can order by it without reaching into
+    /// a private field.
+    #[must_use]
+    pub const fn first_state_id(&self) -> i32 {
+        self.first_state_id
+    }
+
     /// Mixed-radix index of a property assignment, or `None` if a property is
     /// missing or carries an unknown value.
     fn index_of(&self, properties: &[(String, String)]) -> Option<usize> {
@@ -276,6 +285,24 @@ impl BlockRegistry {
     #[must_use]
     pub fn contains(&self, name: &str) -> bool {
         self.by_name.contains_key(name)
+    }
+
+    /// Every **block** name, ascending by the block's first state id.
+    ///
+    /// A `BlockRegistry` is keyed by *state*, so the same block appears once per
+    /// state; this yields each name once, in the order the blocks first appear. Added
+    /// for data-pack tag validation (P07-03), which asks about block names, not
+    /// states.
+    pub fn block_names(&self) -> impl Iterator<Item = &str> {
+        // Sorted by the block's first state id, which is the order the fixture
+        // defines, so the iteration is reproducible.
+        let mut entries: Vec<(&str, i32)> = self
+            .by_name
+            .iter()
+            .map(|(name, entry)| (name.as_str(), entry.first_state_id()))
+            .collect();
+        entries.sort_unstable_by_key(|(_, first_state)| *first_state);
+        entries.into_iter().map(|(name, _)| name)
     }
 
     /// Default (property-less) state id of a block.

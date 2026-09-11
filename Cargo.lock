@@ -216,6 +216,7 @@ dependencies = [
 name = "mc-data"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "mc-core",
  "mc-registry",
  "mc-test-support",

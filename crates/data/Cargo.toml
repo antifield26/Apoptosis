@@ -17,3 +17,9 @@ tracing.workspace = true
 
 [dev-dependencies]
 mc-test-support = { path = "../test-support" }
+mc-registry = { path = "../registry" }
+# The differential test reads the vanilla data pack out of the server jar, whose
+# entries are deflate-compressed. `flate2` is already a workspace dependency
+# (`mc-persistence` uses it for region payloads), so this adds no new third-party
+# crate and needs no licence review beyond the existing record.
+flate2.workspace = true

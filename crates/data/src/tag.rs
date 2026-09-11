@@ -243,13 +243,18 @@ pub struct TagLoadReport {
     pub skipped: Vec<String>,
     /// Problems found while resolving.
     pub problems: Vec<TagProblem>,
+    /// Tag directories whose registry this build does not know.
+    ///
+    /// Not an error — a pack may add a registry — but recorded, because the fallback
+    /// split may be wrong and silence would hide that.
+    pub unknown_registries: Vec<String>,
 }
 
 impl TagLoadReport {
     /// Whether anything was skipped or reported.
     #[must_use]
     pub fn is_clean(&self) -> bool {
-        self.skipped.is_empty() && self.problems.is_empty()
+        self.skipped.is_empty() && self.problems.is_empty() && self.unknown_registries.is_empty()
     }
 
     /// Every cycle found.
@@ -420,6 +425,71 @@ impl RegistryContents {
     }
 }
 
+/// The registries a tag may belong to, longest path first.
+///
+/// Measured from the 26.1.2 jar (`docs/research/data-pack-baseline.md` section 2). The
+/// order matters: the lookup takes the **longest** matching prefix, so
+/// `worldgen/biome` wins over a hypothetical `worldgen`.
+///
+/// Why this is a table and not a rule: the split point is genuinely not recoverable
+/// from the path. `block/mineable/axe.json` is registry `block` plus tag
+/// `mineable/axe`, while `worldgen/biome/is_beach.json` is registry `worldgen/biome`
+/// plus tag `is_beach`, and the directory shapes do not distinguish them —
+/// `villager_trade/` holds **zero** flat files and fifteen subdirectories, yet it is a
+/// one-segment registry, which the `#minecraft:common_smith/level_1` reference inside
+/// its files proves.
+///
+/// Two earlier attempts were wrong in opposite directions: splitting at the last
+/// separator gave 103 spurious missing-tag problems, splitting at the first left 46.
+/// Both were caught only by loading the real vanilla pack.
+pub const TAG_REGISTRIES: &[&str] = &[
+    // Two-segment registries (longest first).
+    "worldgen/biome",
+    "worldgen/configured_feature",
+    "worldgen/flat_level_generator_preset",
+    "worldgen/structure",
+    "worldgen/world_preset",
+    // One-segment registries.
+    "banner_pattern",
+    "block",
+    "damage_type",
+    "dialog",
+    "enchantment",
+    "entity_type",
+    "fluid",
+    "game_event",
+    "instrument",
+    "item",
+    "painting_variant",
+    "point_of_interest_type",
+    "potion",
+    "timeline",
+    "villager_trade",
+];
+
+/// Split a tag file's path, relative to `tags/`, into its registry and tag path.
+///
+/// Returns `(registry, tag_path, recognised)`. `recognised` is `false` when no entry of
+/// [`TAG_REGISTRIES`] matched, in which case the first segment is used as a fallback —
+/// and the caller records it, so an unknown registry is visible rather than silently
+/// mis-attributed.
+#[must_use]
+pub fn split_registry(relative: &str) -> (&str, &str, bool) {
+    for registry in TAG_REGISTRIES {
+        // A prefix match must end at a separator, so `block` does not match `blocky/…`.
+        if let Some(tag_path) = relative
+            .strip_prefix(registry)
+            .and_then(|rest| rest.strip_prefix('/'))
+        {
+            return (registry, tag_path, true);
+        }
+    }
+    match relative.split_once('/') {
+        Some((first, rest)) => (first, rest, false),
+        None => (relative, "", false),
+    }
+}
+
 /// Read every tag file under `<root>/tags/`.
 ///
 /// An unreadable or malformed file is recorded in the report and skipped rather than
@@ -443,17 +513,23 @@ pub fn load_directory(
         let Some(stem) = stem_path.to_str() else {
             continue;
         };
-        // The registry may itself contain a slash (`worldgen/biome`), so split at the
-        // last separator: everything before it is the registry.
+        // See `TAG_REGISTRIES` for why this needs a table rather than a split rule.
         let normalised = stem.replace('\\', "/");
-        let Some((registry, name)) = normalised.rsplit_once('/') else {
+        let (registry, tag_path, recognised) = split_registry(&normalised);
+        if tag_path.is_empty() {
             report.skipped.push(format!(
                 "{}: a tag file must sit under a registry directory",
                 path.display()
             ));
             continue;
-        };
-        let Ok(name) = ResourceId::parse(&format!("{namespace}:{name}")) else {
+        }
+        if !recognised {
+            // Not fatal, and not silent: a pack may define a registry this build does
+            // not know, and treating it as the first segment is the best available
+            // guess. Saying so is what keeps the guess honest.
+            report.unknown_registries.push(registry.to_owned());
+        }
+        let Ok(name) = ResourceId::parse(&format!("{namespace}:{tag_path}")) else {
             report
                 .skipped
                 .push(format!("{}: unusable tag name", path.display()));
