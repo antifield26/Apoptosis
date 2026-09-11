@@ -13,6 +13,13 @@ members = ["crates/*", "apps/*"]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.98.1"
+# This workspace builds a server binary, not libraries for crates.io. Declaring that
+# is not cosmetic: `cargo deny` requires *publishable* crates to version their path
+# dependencies (crates.io forbids a versionless path dep in a published crate), and
+# every internal crate here is referenced by path with its version in this table.
+# `publish = false` states the real intent and lets the licence gate check what it is
+# actually for — the third-party registry dependencies.
+publish = false
 
 # Quality gate shared by every crate (DoD item 9):
 # `cargo fmt --check` + `cargo clippy -- -D warnings` must pass.

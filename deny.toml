@@ -36,9 +36,25 @@ allow = [
 ]
 confidence-threshold = 0.9
 
+# Our own crates are unpublished (`publish = false` in the workspace manifest) and
+# carry no licence field, because the project's licence is **undecided** (ADR-0001
+# R-09, an owner action). Ignoring them here makes this gate check what the policy is
+# actually about — the third-party tree — instead of failing forever on a decision the
+# agent cannot make. It does **not** resolve R-09: see docs/operations/DEPENDENCY-POLICY.md.
+#
+# Without this, the first real run of this gate failed with `error[unlicensed]:
+# mc-container = 0.1.0 is unlicensed` for all 15 workspace members.
+private = { ignore = true }
+
 [bans]
 multiple-versions = "allow"
+# Reject a wildcard requirement from a *registry*: that is the supply-chain hazard the
+# rule exists for. Path dependencies are exempt because they are vendored in this
+# repository — every internal crate is referenced that way, and `wildcards = "deny"`
+# without this flag rejects all 40+ of them. Verified by running the gate: before this
+# flag, `cargo deny check bans` failed on `mc-core = { path = "../core" }`.
 wildcards = "deny"
+allow-wildcard-paths = true
 deny = [
     # Reference implementations of Minecraft servers, all copyleft or
     # licence-ambiguous for our purposes: never dependencies (docs/legal/third-party.md).

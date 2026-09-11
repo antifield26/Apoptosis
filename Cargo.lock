@@ -213,6 +213,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-data"
+version = "0.1.0"
+dependencies = [
+ "mc-core",
+ "mc-registry",
+ "mc-test-support",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "mc-entity"
 version = "0.1.0"
 dependencies = [

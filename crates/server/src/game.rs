@@ -206,6 +206,21 @@ const PENDING_INTENT_BUDGET: usize = 256;
 const ACTION_START_DESTROY_BLOCK: i32 = 0;
 /// `player_action` status: finish digging (creative instant break, survival result).
 const ACTION_FINISH_DESTROY_BLOCK: i32 = 2;
+/// Whether a `player_action` status carries a block position that must be in reach.
+///
+/// `0` start-destroy, `1` abort-destroy and `2` finish-destroy all name the block
+/// being mined. Every other status (drop, drop-all, release-use, swap-with-offhand)
+/// is about the player's own hands and carries `BlockPos.ZERO`.
+#[must_use]
+const fn targets_a_block(status: i32) -> bool {
+    matches!(
+        status,
+        ACTION_START_DESTROY_BLOCK | ACTION_ABORT_DESTROY_BLOCK | ACTION_FINISH_DESTROY_BLOCK
+    )
+}
+
+/// `player_action` status: abort digging (the client changed its mind).
+const ACTION_ABORT_DESTROY_BLOCK: i32 = 1;
 /// `player_action` status: drop the held item.
 const ACTION_DROP_ITEM: i32 = 3;
 /// `player_action` status: swap the held item with the offhand.
@@ -348,6 +363,18 @@ impl SessionView<'_> {
     #[must_use]
     pub fn menu_cursor(&self) -> mc_entity::stack::ItemStack {
         self.session.menu.cursor()
+    }
+
+    /// Total items in the player\'s own inventory, excluding the cursor.
+    ///
+    /// The instrument the duplication regression tests assert against: a drop or a
+    /// placement must move this number, and a no-op click must not.
+    #[must_use]
+    pub fn inventory_total(&self) -> i64 {
+        let slots = self.session.player.inventory.stored_slots();
+        (0..slots)
+            .map(|index| i64::from(self.session.player.inventory.slot(index).count()))
+            .sum()
     }
 }
 
@@ -1165,9 +1192,29 @@ impl Game {
 
     /// Remove a connection's player and mark its entity for the sweep.
     fn leave(&mut self, id: ConnectionId) {
-        let Some(session) = self.sessions.remove(&id) else {
+        let Some(mut session) = self.sessions.remove(&id) else {
             return;
         };
+        // Whatever the player was carrying on the cursor goes back to their
+        // inventory. Dropping it with the session would destroy items on every
+        // disconnect (Audit 04 A2), and the cursor is not part of the inventory, so
+        // `write_back_inventory` alone would not recover it.
+        let carried = session.menu.cursor();
+        if !carried.is_empty() {
+            let leftover = session.player.inventory.add_stack(carried);
+            if leftover.is_empty() {
+                debug!(id = %id, items = carried.count(), "returned the cursor to the inventory");
+            } else {
+                // The inventory was full. Report the loss rather than hiding it; a
+                // drop entity needs a position and this path has already released the
+                // session, so it is recorded as a warn.
+                warn!(
+                    id = %id,
+                    lost = leftover.count(),
+                    "the inventory was full, so cursor items were lost on disconnect"
+                );
+            }
+        }
         // Flag rather than remove: the Broadcast phase sweeps once per tick, so a
         // departure produces one batch rather than a removal per event.
         if let Some(entity) = self.entities.get_mut(session.entity) {
@@ -1369,13 +1416,13 @@ impl Game {
                 position,
                 facing,
                 ..
-            } => self.apply_player_action(id, status, position, facing)?,
+            } => self.apply_player_action(id, status, position, facing, report)?,
             PlayIntent::UseItemOn {
                 position,
                 face,
                 hand,
                 ..
-            } => self.apply_use_item_on(id, position, face, hand, report)?,
+            } => self.apply_use_item_on(id, position, face, hand, report),
             PlayIntent::SetCarriedItem { slot } => self.apply_hotbar(id, slot, report)?,
             PlayIntent::ClientCommand { action } => {
                 self.apply_client_command(id, action, report)?;
@@ -1468,6 +1515,82 @@ impl Game {
         self.sessions.get(&id).map(|s| s.menu.total_items())
     }
 
+    /// Re-mirror the menu from the authoritative inventory and tell the client.
+    ///
+    /// Called after any action that mutated the inventory without going through the
+    /// menu (drop, offhand swap, block placement). Without it the menu keeps a stale
+    /// view until the next click and the client is never told, which is half of the
+    /// dual-copy problem Audit 04 found.
+    ///
+    /// Deliberately sends **per-slot** updates rather than a whole-window resync: the
+    /// action touched one or two slots, and a full `container_set_content` on every
+    /// block placement would be a packet per placed block.
+    fn sync_menu_from_inventory(&mut self, id: ConnectionId, report: &mut TickReport) {
+        let Some(session) = self.sessions.get_mut(&id) else {
+            return;
+        };
+        // Record what the client currently believes before overwriting it.
+        let before: Vec<mc_entity::stack::ItemStack> = (0..session.menu.slot_count())
+            .map(|slot| session.menu.display_stack(slot))
+            .collect();
+        mirror_inventory(&mut session.menu, &session.player.inventory);
+
+        let mut changed: Vec<(i16, mc_protocol::packets::play::ItemStack)> = Vec::new();
+        for (slot, previous) in before.iter().enumerate() {
+            let now = session.menu.display_stack(slot);
+            if now != *previous {
+                changed.push((slot as i16, wire_stack(now)));
+            }
+        }
+        let state = session.menu.state_id();
+        let window = session.menu.window_id().cast_signed();
+        if changed.is_empty() {
+            return;
+        }
+        // The state id advances because the window the client is looking at changed;
+        // a client that clicks afterwards must carry the new revision.
+        session.menu.bump_state();
+        let state = session.menu.state_id().max(state);
+
+        for (slot, item) in changed {
+            let packet = ContainerSetSlot {
+                window_id: window,
+                state_id: state,
+                slot,
+                item,
+            };
+            if let Err(error) = self.send(id, &packet, report) {
+                debug!(id = %id, %error, "could not send a post-action slot update");
+            }
+        }
+    }
+
+    /// Whether the menu and the authoritative inventory agree, and by how much
+    /// they differ.
+    ///
+    /// Returns the number of slots whose contents differ, summed across the player's
+    /// 41 storage slots; `None` when there is no session. A non-zero value means the
+    /// two views have diverged, which is the condition that produced item
+    /// duplication (Audit 04 A1). Exposed for the regression tests, and cheap enough
+    /// to be worth asserting in a debug build.
+    #[must_use]
+    pub fn menu_inventory_divergence(&self, id: ConnectionId) -> Option<usize> {
+        let session = self.sessions.get(&id)?;
+        let Some(container) = session.menu.container(0) else {
+            // No player container, so there is nothing to compare; reporting a
+            // divergence would be wrong, so this is a distinct answer.
+            return None;
+        };
+        let slots = container.len().min(session.player.inventory.stored_slots());
+        let mut differing = 0;
+        for index in 0..slots {
+            if container.get(index) != session.player.inventory.slot(index) {
+                differing += 1;
+            }
+        }
+        Some(differing)
+    }
+
     /// What a player currently holds on the cursor.
     #[must_use]
     pub fn menu_cursor(&self, id: ConnectionId) -> Option<mc_entity::stack::ItemStack> {
@@ -1501,11 +1624,24 @@ impl Game {
     ) -> ServerResult<()> {
         let item_id = self.registries.items.id(item_name)?;
         let stack = mc_entity::stack::ItemStack::new(item_id, count)?;
+        // `Menu::set_slot` clamps to the slot limit, so a 64-count grant of a stack-1
+        // item would silently become 1 and lose 63 (Audit 04 B4). Refusing is the
+        // honest behaviour for a *server-authored* value: it is a caller bug.
+        let allowed = mc_entity::stack::StackSizeTable::resolve(&self.registries.items)?;
+        let limit = allowed.max_stack_size(item_id);
+        if count > limit {
+            return Err(ServerError::InvalidAction(format!(
+                "{count} {item_name} exceeds that item's stack limit of {limit}"
+            )));
+        }
         let Some(session) = self.sessions.get_mut(&id) else {
             return Err(ServerError::InvalidAction(format!(
                 "no session for {id} to grant an item to"
             )));
         };
+        // Mirror first, so a grant starts from the authoritative inventory rather
+        // than replacing whatever the menu last saw (the same direction as a click).
+        mirror_inventory(&mut session.menu, &session.player.inventory);
         // Menu slot 36 is hotbar slot 0 in the player layout.
         session.menu.set_slot(36, stack)?;
         write_back_inventory(&session.menu, &mut session.player.inventory);
@@ -1547,6 +1683,13 @@ impl Game {
         let Some(session) = self.sessions.get_mut(&id) else {
             return;
         };
+        // **Authority direction.** `PlayerInventory` is the authoritative state and
+        // the menu is a per-click transaction view over it, so the inventory is
+        // mirrored *in* before the click is applied. Without this, a player action
+        // that mutated only the inventory (Q-drop, offhand swap, block placement)
+        // would be reverted by the unconditional write-back below — which was a
+        // client-reachable item duplication (Audit 04 A1).
+        mirror_inventory(&mut session.menu, &session.player.inventory);
         let outcome = match session.menu.apply_click(&click) {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -1618,9 +1761,10 @@ impl Game {
             }
         }
 
-        // Mirror the accepted result back onto the authoritative player inventory.
-        // This is the second of the two places the two models meet: without it the
-        // menu would be a second, diverging copy of the player's items.
+        // Flush the accepted transaction back onto the authoritative inventory.
+        // This is the other half of the pair: the menu was mirrored *in* at the top of
+        // this function, so the two can only disagree for the duration of one click,
+        // during which nothing else runs.
         if let Some(session) = self.sessions.get_mut(&id) {
             write_back_inventory(&session.menu, &mut session.player.inventory);
         }
@@ -1816,10 +1960,16 @@ impl Game {
         status: i32,
         position: i64,
         _facing: u8,
+        report: &mut TickReport,
     ) -> ServerResult<()> {
         let (x, y, z) = unpack_block_position(position);
-        if !self.within_reach(id, x, y, z) {
-            debug!(id = %id, x, y, z, "rejected action outside reach");
+        // Only the block-targeting statuses carry a position that means anything.
+        // Vanilla sends `BlockPos.ZERO` for drop, swap and release, so applying the
+        // reach check to those refused every Q-drop by any player not standing at the
+        // origin (found by `inventory_duplication`). The list is explicit rather than
+        // "everything else", so a new status cannot silently inherit the wrong rule.
+        if targets_a_block(status) && !self.within_reach(id, x, y, z) {
+            debug!(id = %id, x, y, z, status, "rejected action outside reach");
             return Ok(());
         }
         match status {
@@ -1852,6 +2002,7 @@ impl Game {
                     return Ok(());
                 }
                 debug!(id = %id, x, y, z, "block broken");
+                self.sync_menu_from_inventory(id, report);
             }
             ACTION_DROP_ITEM => {
                 // The held stack leaves the inventory and becomes a dropped-item
@@ -1879,6 +2030,10 @@ impl Game {
                     // refusal is a real loss and is logged rather than swallowed.
                     Err(error) => warn!(id = %id, %error, "could not spawn a dropped item"),
                 }
+                // The slot the client is looking at just emptied, so the menu is
+                // re-mirrored and the update sent. Without this the menu kept the
+                // pre-drop view until the next click.
+                self.sync_menu_from_inventory(id, report);
             }
             ACTION_SWAP_ITEM_WITH_OFFHAND => {
                 if let Some(session) = self.sessions.get_mut(&id) {
@@ -1887,6 +2042,7 @@ impl Game {
                     let _ = session.player.inventory.replace_held(Hand::Main, off);
                     let _ = session.player.inventory.replace_held(Hand::Off, main);
                 }
+                self.sync_menu_from_inventory(id, report);
             }
             other => debug!(id = %id, status = other, "unhandled player action"),
         }
@@ -1915,26 +2071,26 @@ impl Game {
         face: i32,
         hand: i32,
         report: &mut TickReport,
-    ) -> ServerResult<()> {
+    ) {
         let (x, y, z) = unpack_block_position(position);
         if !self.within_reach(id, x, y, z) {
             debug!(id = %id, "rejected placement outside reach");
-            return Ok(());
+            return;
         }
         let hand = Hand::from_id(u8::try_from(hand).unwrap_or(0)).unwrap_or(Hand::Main);
         let Some(session) = self.sessions.get(&id) else {
-            return Ok(());
+            return;
         };
         let held = session.player.inventory.held_item(hand);
         let Some(item_id) = held.item_id() else {
-            return Ok(()); // empty hand
+            return; // empty hand
         };
         let block = match self.registries.items.block_of(item_id) {
             Ok(Some(block)) => block.to_owned(),
-            Ok(None) => return Ok(()), // not a placeable item
+            Ok(None) => return, // not a placeable item
             Err(error) => {
                 debug!(id = %id, item_id, %error, "held item is missing from the registry");
-                return Ok(());
+                return;
             }
         };
         let (dx, dy, dz) = face_offset(face);
@@ -1943,15 +2099,15 @@ impl Game {
         // server: refuse it before it reaches the world (AGENTS.md section 9).
         if !self.in_build_range(ty) {
             debug!(id = %id, y = ty, "rejected placement outside the world height");
-            return Ok(());
+            return;
         }
         let Some(target) = self.world.get_block_loaded(tx, ty, tz) else {
             debug!(id = %id, "rejected placement into an unloaded chunk");
-            return Ok(());
+            return;
         };
         if !self.registries.blocks.is_empty(target) {
             debug!(id = %id, "refused to place inside an occupied block");
-            return Ok(());
+            return;
         }
         // A block must not be placed inside any player, including the placer.
         let box_ = Aabb::block(tx, ty, tz);
@@ -1961,7 +2117,7 @@ impl Game {
             .any(|other| other.aabb().intersects(box_))
         {
             debug!(id = %id, "refused to place a block inside a player");
-            return Ok(());
+            return;
         }
         // `state_id` with no properties yields the block's first state. A block
         // whose default needs a facing (stairs, logs) is placed with that first
@@ -1970,7 +2126,7 @@ impl Game {
             Ok(id) => id,
             Err(error) => {
                 debug!(id = %id, %block, %error, "cannot resolve a block state");
-                return Ok(());
+                return;
             }
         };
         if let Err(error) = self.world.set_block(tx, ty, tz, block_id) {
@@ -1978,40 +2134,29 @@ impl Game {
             // change to the world's own validation cannot turn a client action into
             // a fatal tick error.
             debug!(id = %id, x = tx, y = ty, z = tz, %error, "placement was refused");
-            return Ok(());
+            return;
         }
         let survival = self
             .sessions
             .get(&id)
             .is_some_and(|s| s.player.game_mode == GameMode::Survival);
         if survival {
-            let remaining = {
+            {
                 let Some(session) = self.sessions.get_mut(&id) else {
-                    return Ok(());
+                    return;
                 };
                 let mut stack = session.player.inventory.take_held(hand);
                 stack.shrink(1);
                 let leftover = session.player.inventory.add_stack(stack);
                 debug_assert!(leftover.is_empty(), "a shrunk stack must fit back");
-                session.player.inventory.selected_item()
-            };
-            let slot = self
-                .sessions
-                .get(&id)
-                .map_or(0, |s| i32::from(s.player.inventory.selected_hotbar()));
-            let packet = mc_protocol::packets::play::ContainerSetSlot {
-                window_id: 0,
-                state_id: 0,
-                slot: slot as i16,
-                item: wire_stack(remaining),
-            };
-            // A failure here is the server's own encoding, not the client's input,
-            // so it propagates rather than being dropped: a silently-skipped slot
-            // sync leaves the client showing the wrong count.
-            self.send(id, &packet, report)?;
+            }
+            // One path for "an action changed my items": mirror the inventory into the
+            // menu, advance the revision and send the per-slot updates. The bespoke
+            // single-slot send this replaces used a hard-coded `state_id: 0`, so the
+            // client was handed a revision the server did not have (Audit 04 A6).
+            self.sync_menu_from_inventory(id, report);
         }
         debug!(id = %id, block = %block, x = tx, y = ty, z = tz, "block placed");
-        Ok(())
     }
 
     /// Hostile or malformed hotbar indices are dropped, never applied.
@@ -2784,6 +2929,9 @@ fn chunk_of(x: f64, z: f64) -> ChunkPos {
 /// need a real codec —see `mc_protocol::packets::play::ItemStack`.
 /// Copy a player's inventory into a menu's player container.
 ///
+/// Called at join and again before every click, so the menu always starts a
+/// transaction from the authoritative state (Audit 04 A1).
+///
 /// Slot order is identical in both models (`PlayerInventory`'s storage order: hotbar
 /// `0..=8`, main `9..=35`, armour `36..=39` boots-first, offhand `40`), so the copy
 /// is positional and needs no permutation. That identity is asserted by
@@ -2807,6 +2955,9 @@ fn mirror_inventory(
 }
 
 /// Copy a menu's player container back into a player's inventory.
+///
+/// The return direction of the pair; see [`mirror_inventory`] for why the inventory
+/// is the authoritative side.
 fn write_back_inventory(
     menu: &mc_container::Menu,
     inventory: &mut mc_entity::inventory::PlayerInventory,

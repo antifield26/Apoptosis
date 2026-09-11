@@ -1,5 +1,5 @@
 [package]
-name = "mc-persistence"
+name = "mc-data"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,8 +10,9 @@ workspace = true
 
 [dependencies]
 mc-core = { path = "../core" }
-mc-nbt = { path = "../nbt" }
-flate2.workspace = true
+mc-registry = { path = "../registry" }
+serde.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
