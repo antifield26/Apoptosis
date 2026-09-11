@@ -28,7 +28,7 @@ and the report says which.
 | P07-06 selectors | **DONE (parse + match)** | `@a/@p/@r/@s/@e/@n` with `type`, `name`, `distance`, `level`, `gamemode`, `limit`, `sort`, `x/y/z` |
 | P07-07 `execute` context | **DONE (modifier subset)** | `as`, `at`, `positioned`, `align`, `if`/`unless entity`, `if`/`unless block`, `run`, and nesting with a depth bound. 22 parser tests + 9 E2E that assert on the **reply text**. `rotated`/`facing`/`anchored`/`in`/`store` and the `data`/`score`/`predicate`/`biome`/`loaded`/`blocks`/`function` conditions are **refused by name** |
 | P07-08 data/function execution baseline | **DONE** | `/function <name>` discovers `.mcfunction` files by extension, names them by their path, and runs each line as the invoker through the dispatcher. Recursion bounded at depth 16, command count at 10 000 across a chain, macro files refused with that reason, an unknown command reported while the function continues. 13 E2E tests, two of them falsification-verified |
-| P07-09 real recipe data in the furnace | **DONE** | 73 smelting recipes → 156 rows from the real pack; **retires P06 §5.9's recipe half** |
+| P07-09 recipe data loading | **DONE (conversion); not installed on the server** | `SmeltingRegistry::from_recipes` builds a 156-row table from the pack's real 73 smelting recipes, and `vanilla_smelting` asserts the values against the jar. **The server never calls it**: `Game` holds no smelting registry, so a furnace still smelts from the hand-written Phase 06 baseline. **P06 §5.9's caveat is therefore half-retired** — the data is available and verified, the wiring is not there |
 | P07-10 loot data loading | **DONE (loading); not wired** | `mc-data::loot` parses the real pack's 1 326 tables — 12 table types, 6 entry types, 19 functions, 12 conditions — and `roll` executes **4 564 of 6 826 constructs**, **refusing the rest with a named reason** rather than returning a wrong result. Nothing consumes a loot table yet, so no mob or block drops loot |
 | P07-11 advancement/statistics baseline | **DONE (loading); not wired** | `mc-data::advancement` parses all 1 617 advancements (3 546 criteria, 54 triggers, zero missing parents, zero cycles, zero duplicate ids) and models the tree with hazard detection. **Nothing grants or evaluates a criterion** — the conditions are preserved as raw JSON, and no statistics baseline exists |
 | P07-12 data pack discovery/validation | **DONE (directory packs)** | `level.dat`'s `DataPacks` list now **gates** discovery: a disabled pack does not load, and a world with no list loads everything. The server loads packs at startup and merges their functions in load order, so a world pack overrides a vanilla one. **Gap**: `.zip` packs are not read |
@@ -296,7 +296,11 @@ Recorded here rather than discovered later:
     concrete: **no shipwreck can generate.** Implementing it needs a documented per-structure variant
     draw, and a wrong guess places a wreck of the wrong wood — a plausible-looking wrong answer, which is
     why it is refused rather than guessed.
-13. **No structure's placement matches Vanilla.** Vanilla selects through
+13. **Recipes and tags are loaded by `mc-data` but never installed on the server.** The differential
+    suites assert their census against the real pack, and `SmeltingRegistry::from_recipes` builds a
+    verified 156-row table — but `Game` holds no smelting registry, so **a furnace smelts from the
+    hand-written Phase 06 baseline**. P07-09's conversion is complete and its wiring is not.
+14. **No structure's placement matches Vanilla.** Vanilla selects through
     `RandomSpreadStructurePlacement` over per-structure `StructureSet` JSON this build does not load, so
     the spacing, separation, chance and attempt constants are `approximation` / `product decision`
     labels rather than Vanilla values. Structure **entity NBT is counted and never spawned**.

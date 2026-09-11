@@ -16,10 +16,23 @@
 //!
 //! ## What "no vanilla data" means, stated rather than implied
 //!
-//! A server with no `vanilla_data` configured loads **no** vanilla functions, recipes or tags.
-//! That is not a degraded mode to hide: it means `/function` reports unknown names, and the reason
-//! is a missing configuration rather than a missing file. [`PackLoadOutcome`] carries it so the
-//! lifecycle can log it once at startup instead of a player discovering it.
+//! A server with no `vanilla_data` configured loads **no** vanilla functions and **no** structures.
+//! That is not a degraded mode to hide: it means `/function` reports unknown names and every generated
+//! chunk is bare terrain, and the reason is a missing configuration rather than a missing file.
+//! [`PackLoadOutcome`] carries it so the lifecycle can log it once at startup instead of a player
+//! discovering it.
+//!
+//! ## What this does **not** load, stated because the earlier wording claimed otherwise
+//!
+//! **Recipes and tags.** `mc-data` parses both and the differential suites assert their census against
+//! the real pack, but nothing here installs them: a server loads no recipes whether or not `vanilla_data`
+//! is set, and no tag lookup is reachable from gameplay. The consequence is concrete — **a furnace
+//! smelts from the hand-written Phase 06 baseline, not from the pack**, which is why P07-09's status is
+//! "the table is built and tested" rather than "the server smelts from data".
+//!
+//! An earlier version of this comment said the loader handled "functions, recipes or tags". It handled
+//! functions. That is the same failure this project keeps finding — a description of an intention, three
+//! lines above code that does something narrower — and it is why the sentence now names what is absent.
 //!
 //! ## Why this does not stop the boot
 //!
