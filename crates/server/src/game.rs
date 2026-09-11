@@ -478,6 +478,11 @@ pub struct Game {
     /// generate must still start, because refusing to boot over a terrain palette would
     /// take a working world offline.
     generator: Option<mc_worldgen::TerrainGenerator>,
+    /// Data functions this game has loaded, for `/function`.
+    ///
+    /// Empty until [`Game::load_functions_from`] is called, which is what a server with no data
+    /// pack legitimately has.
+    pub(crate) functions: mc_data::function::FunctionRegistry,
     /// Who may run operator commands, loaded from `ops.json` at construction.
     ///
     /// Loaded once rather than per login, matching Vanilla's startup read. A change to the
@@ -667,6 +672,7 @@ impl Game {
             tick: 0,
             overflowed: Vec::new(),
             generator,
+            functions: mc_data::function::FunctionRegistry::new(),
             operators,
             max_players: DEFAULT_MAX_PLAYERS,
             time_offset: 0,

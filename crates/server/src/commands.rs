@@ -112,6 +112,10 @@ impl Game {
             Command::new("execute", "Run a command in a modified context")
                 .with_argument(Argument::greedy("command")),
         );
+        // A function runs commands as the invoker, so it needs no permission of its own: each
+        // command inside it passes its own check. Vanilla agrees, and it is what stops a function
+        // from being a privilege-escalation route.
+        add(Command::new("function", "Run a data function").with_argument(Argument::word("name")));
         add(Command::new("op", "Grant operator status").requiring(PermissionLevel::Operator));
         add(Command::new("stop", "Stop the server").requiring(PermissionLevel::Console));
         tree
@@ -246,6 +250,7 @@ impl Game {
                 self.dispatch_execute(id, &tokens, report, 0)?;
                 Ok(CommandResult::silent())
             }
+            "function" => self.command_function(id, parsed, report),
             "op" => Ok(Self::command_op(parsed)),
             "stop" => Ok(CommandResult::Stop),
             // Unreachable: the tree only contains the names above, and `parse` resolved

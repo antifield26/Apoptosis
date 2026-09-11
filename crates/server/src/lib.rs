@@ -14,6 +14,7 @@
 pub mod commands;
 pub mod config;
 pub mod execute;
+pub mod functions;
 pub mod game;
 pub mod lifecycle;
 pub mod logging;

@@ -1,7 +1,7 @@
 # Phase 07 Report — Commands, Data Packs and World Generation
 
 Date: 2026-09-11 (in progress). Scope: `P07-01..P07-20` per `tasks/TASK-INDEX.md`.
-Gate status at the time of writing: `cargo test --workspace` **1 081 passed, 0 failed, 7
+Gate status at the time of writing: `cargo test --workspace` **1 094 passed, 0 failed, 7
 ignored** plus three ignored differential suites that pass when run against the jar; `cargo fmt --check`, `cargo clippy -D warnings`,
 `cargo check --target aarch64-unknown-linux-gnu` and `cargo deny check` all clean. Each is
 re-run before the phase is called done, and the numbers in this report are re-derived from
@@ -27,7 +27,7 @@ and the report says which.
 | P07-05 command set | **DONE (7 commands)** | `help`, `list`, `say`, `time`, `tp`, `op`, `stop` — each reachable over a real socket, limits named |
 | P07-06 selectors | **DONE (parse + match)** | `@a/@p/@r/@s/@e/@n` with `type`, `name`, `distance`, `level`, `gamemode`, `limit`, `sort`, `x/y/z` |
 | P07-07 `execute` context | **DONE (modifier subset)** | `as`, `at`, `positioned`, `align`, `if`/`unless entity`, `if`/`unless block`, `run`, and nesting with a depth bound. 22 parser tests + 9 E2E that assert on the **reply text**. `rotated`/`facing`/`anchored`/`in`/`store` and the `data`/`score`/`predicate`/`biome`/`loaded`/`blocks`/`function` conditions are **refused by name** |
-| P07-08 functions | delegated | `mc-data::function` |
+| P07-08 data/function execution baseline | **DONE** | `/function <name>` discovers `.mcfunction` files by extension, names them by their path, and runs each line as the invoker through the dispatcher. Recursion bounded at depth 16, command count at 10 000 across a chain, macro files refused with that reason, an unknown command reported while the function continues. 13 E2E tests, two of them falsification-verified |
 | P07-09 real recipe data in the furnace | **DONE** | 73 smelting recipes → 156 rows from the real pack; **retires P06 §5.9's recipe half** |
 | P07-10 loot tables | delegated | `mc-data::loot` |
 | P07-11 advancements | delegated | `mc-data::advancement` |
@@ -226,7 +226,12 @@ Recorded here rather than discovered later:
    selector matching only mobs selects nothing (reported as "no entity matched" rather than
    silently running as the invoker). And feedback goes to the **invoker** rather than to the
    executing source, because a non-player source has no reply channel.
-10. **`.zip` data packs are not read; the world's enabled-pack list is not read.**
+10. **`/function` diverges from Vanilla in three ways.** Function **tags**
+    (`/function #namespace:tag`) are refused by name rather than run. **Macro** lines (`$(name)`) are
+    refused with that reason instead of expanded, because the substitution language is not
+    implemented — passing the text through would dispatch a command that does not exist. And
+    `/schedule` is not modelled, so a function cannot be deferred.
+11. **`.zip` data packs are not read; the world's enabled-pack list is not read.**
 10. **Recipes load but the container layer consumes only the smelting kind.** Crafting and
     stonecutting data is loaded and not yet used by a menu.
 11. **Redstone is still not wired into the tick loop** (carried from Phase 06).
