@@ -387,6 +387,23 @@ mod tests {
     }
 
     #[test]
+    fn a_slow_drip_never_grows_the_buffer_without_bound() {
+        // P08-07: one byte per feed, never completing a frame. The buffer must
+        // hold at most the drip, and feeding past the cap must fail rather than
+        // grow: this is the slowloris shape at the frame layer.
+        let mut codec = FrameCodec::new();
+        for _ in 0..1024 {
+            codec.feed(&[0x80]).expect("a drip fits");
+        }
+        assert!(codec.buffered() <= 1024, "buffered {}", codec.buffered());
+        // A frame-length prefix of five continuation bytes is malformed, and a
+        // codec holding a full cap of drips plus one frame must refuse the feed.
+        let mut full = FrameCodec::new();
+        let filler = vec![0x01u8; super::BUFFER_CAP + 1];
+        assert!(full.feed(&filler).is_err(), "past the cap must fail");
+    }
+
+    #[test]
     fn malformed_frames_never_panic() {
         let mut state: u64 = 0x1234_5678_9ABC_DEF0;
         let mut next = move || {

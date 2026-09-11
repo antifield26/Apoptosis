@@ -106,6 +106,26 @@ fn percentile(sorted: &[f64], fraction: f64) -> f64 {
     sorted[index.min(sorted.len() - 1)]
 }
 
+/// Print the windowed per-phase means (P08-13), replacing the old lifetime
+/// `busiest_phase` line: a lifetime mean reflects the join burst, while the
+/// phase means show what a settled tick costs.
+fn print_phase_means(game: &Game) {
+    use mc_simulation::TickPhase;
+    let metrics = game.metrics();
+    for phase in TickPhase::all() {
+        println!(
+            "phase {:<15}: {:>8.4} ms mean",
+            phase.name(),
+            metrics.phase_mean(*phase).as_secs_f64() * 1e3
+        );
+    }
+    println!(
+        "overruns         : {} of {} ticks",
+        metrics.overruns(),
+        metrics.tick_count()
+    );
+}
+
 #[test]
 #[ignore = "on-demand measurement: a full run costs minutes in a debug build"]
 fn ten_players_tick_within_the_frame_budget() {
@@ -182,10 +202,12 @@ fn ten_players_tick_within_the_frame_budget() {
     println!("view distance    : {VIEW_DISTANCE} chunks");
     println!("measured ticks   : {MEASURED_TICKS} (after {WARMUP_TICKS} warm-up)");
     println!("wall time        : {:.3} s", wall.as_secs_f64());
+    println!("tps estimate     : {:.2}", MEASURED_TICKS as f64 / wall.as_secs_f64());
     println!("mspt mean        : {mean:.4}");
     println!("mspt p50/p95/p99 : {p50:.4} / {p95:.4} / {p99:.4}");
     println!("mspt max         : {max:.4}");
     println!("chunks streamed  : {chunks_streamed} over {MEASURED_TICKS} ticks");
+    print_phase_means(&game);
     println!("NOTE: this is a regression guard, not a 20 TPS claim. AGENTS.md");
     println!("      section 13 requires the Pi 5 harness (P08-09/P08-13) for that.");
 
@@ -338,8 +360,6 @@ fn entity_heavy_ticks_within_the_frame_budget() {
     let p99 = percentile(&samples, 0.99);
     let max = samples.last().copied().unwrap_or(0.0);
     let mean = samples.iter().sum::<f64>() / samples.len() as f64;
-    let metrics = game.metrics();
-    let busiest = metrics.busiest_phase();
 
     println!("--- Phase 05 entity-heavy baseline (development host, NOT a Pi 5) ---");
     println!("players          : {PLAYERS}");
@@ -347,16 +367,15 @@ fn entity_heavy_ticks_within_the_frame_budget() {
     println!("view distance    : {VIEW_DISTANCE} chunks");
     println!("measured ticks   : {MEASURED_TICKS} (after {WARMUP_TICKS} warm-up)");
     println!("wall time        : {:.3} s", wall.as_secs_f64());
+    println!("tps estimate     : {:.2}", MEASURED_TICKS as f64 / wall.as_secs_f64());
     println!("mspt mean        : {mean:.4}");
     println!("mspt p50/p95/p99 : {p50:.4} / {p95:.4} / {p99:.4}");
     println!("mspt max         : {max:.4}");
+    print_phase_means(&game);
     println!(
         "entity-ticks     : {entities_ticked} over {MEASURED_TICKS} ticks ({:.1}/tick)",
         entities_ticked as f64 / MEASURED_TICKS as f64
     );
-    if let Some((phase, mean)) = busiest {
-        println!("busiest phase    : {phase} ({mean:?} mean)");
-    }
     println!("NOTE: mobs are seeded directly and the AI hook is a documented no-op,");
     println!("      and entities are not yet sent to clients (P05-15). This measures");
     println!("      entity bookkeeping and physics, NOT a spawning world at 20 TPS.");

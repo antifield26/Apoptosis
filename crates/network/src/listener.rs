@@ -203,11 +203,14 @@ impl NetworkService {
             ServerError::Operational(format!("cannot read local address: {error}"))
         })?;
         let shutdown = NetworkShutdown::new();
-        // Headroom covers status pings and simultaneous login handshakes.
+        // Headroom covers status pings and simultaneous login handshakes. The
+        // three numbers are named at the gate constructor (P08-06): the global
+        // budget is players plus headroom, the per-IP cap stops one address
+        // owning the server, and the refill interval blunts reconnect storms.
         let connection_gate = Arc::new(ConnectionGate::new(
-            settings.max_players + 8,
-            4,
-            Duration::from_millis(250),
+            settings.max_players.saturating_add(GATE_HEADROOM_CONNECTIONS),
+            MAX_CONNECTIONS_PER_IP,
+            RECONNECT_REFILL_INTERVAL,
         ));
         let auth = auth.unwrap_or_else(default_auth);
         let task_shutdown = shutdown.clone();
@@ -289,6 +292,28 @@ impl NetworkService {
 /// restart by more than this.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Extra sockets beyond `max_players` the gate admits (P08-06).
+///
+/// Status pings and in-flight login handshakes are connections too: refusing
+/// them the moment the player count hits the cap would make the server list
+/// lie and logins flake under exactly the load the cap is meant to serve.
+/// Eight covers a full server plus a burst of pings.
+pub const GATE_HEADROOM_CONNECTIONS: u32 = 8;
+
+/// Most concurrent connections one IP address may hold (P08-06).
+///
+/// Four lets a normal household (a few players plus status pings behind one
+/// NAT address) play while stopping one address from owning the whole global
+/// budget. The game loop's own player cap is the second line behind this one.
+pub const MAX_CONNECTIONS_PER_IP: u32 = 4;
+
+/// Time to regain one reconnect token after the burst is spent (P08-06).
+///
+/// Eight tokens burst, then one per 250 ms: a normal login (a handful of
+/// connections) never notices, while a reconnect storm is throttled to four
+/// connections per second per address.
+pub const RECONNECT_REFILL_INTERVAL: Duration = Duration::from_millis(250);
+
 async fn accept_loop(
     listener: TcpListener,
     settings: Arc<NetworkSettings>,
@@ -336,8 +361,28 @@ async fn accept_loop(
 
 #[cfg(test)]
 mod tests {
-    use super::{NetworkService, NetworkSettings, NetworkShutdown};
+    use super::{
+        GATE_HEADROOM_CONNECTIONS, MAX_CONNECTIONS_PER_IP, NetworkService, NetworkSettings,
+        NetworkShutdown, RECONNECT_REFILL_INTERVAL,
+    };
     use std::time::Duration;
+
+    #[test]
+    fn the_gate_budget_is_players_plus_named_headroom() {
+        // P08-06: the numbers a reviewer asks about live here, not inline.
+        // A 10-player server admits 18 sockets; one address may hold 4 of them.
+        assert_eq!(GATE_HEADROOM_CONNECTIONS, 8);
+        assert_eq!(MAX_CONNECTIONS_PER_IP, 4);
+        assert_eq!(RECONNECT_REFILL_INTERVAL, Duration::from_millis(250));
+        let settings = NetworkSettings {
+            max_players: 10,
+            ..NetworkSettings::default()
+        };
+        assert_eq!(
+            settings.max_players.saturating_add(GATE_HEADROOM_CONNECTIONS),
+            18
+        );
+    }
 
     #[tokio::test]
     async fn service_binds_ephemeral_port_and_stops() {

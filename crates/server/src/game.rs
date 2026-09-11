@@ -348,6 +348,16 @@ impl Session {
     }
 }
 
+/// The validated half of a join: everything `join` needs before it allocates an
+/// entity id for the newcomer.
+///
+/// Grouped so the admission check and the session construction cannot drift
+/// apart: both take the same two fields the refusal paths validated.
+struct PreparedJoin {
+    profile: mc_entity::GameProfile,
+    inventory: mc_entity::PlayerInventory,
+}
+
 /// The five raw integers of a `container_click`, grouped so the handler takes one
 /// argument instead of five positional ones that are trivially swappable.
 #[derive(Debug, Clone, Copy)]
@@ -1390,6 +1400,10 @@ impl Game {
         );
     }
 
+    // One linear admission: the cap, then the profile, then the inventory, then
+    // the entity id, then the menu. Splitting it would put the refusal ordering
+    // (which the full-server test depends on) behind a call for no benefit.
+    #[allow(clippy::too_many_lines)]
     fn join(
         &mut self,
         id: ConnectionId,
@@ -1397,30 +1411,24 @@ impl Game {
         outbound: OutboundSender,
         report: &mut TickReport,
     ) -> ServerResult<()> {
-        let (sx, sy, sz) = self.world.spawn();
-        // One expression for the join position so the entity projection, the
-        // authoritative `Player` and the `player_position` packet cannot disagree.
-        let at = Vec3::new(f64::from(sx) + 0.5, f64::from(sy), f64::from(sz) + 0.5);
-
-        // The three things that can refuse a join are handled here rather than
-        // propagated: an entity cap reached by one player's drop spam, a profile
-        // the entity model rejects, or a registry that cannot build an inventory
-        // must disconnect *that* client, not return an error out of `tick()`, which
-        // the lifecycle treats as fatal (AGENTS.md sections 9 and 10).
-        let Ok(entity_profile) = mc_entity::GameProfile::new(profile.id.to_string(), &profile.name)
-        else {
-            warn!(id = %id, name = %profile.name, "refused a join with an unusable profile");
-            refuse_join(&outbound, "Invalid player profile");
+        // The cap is enforced here and not at the socket: the network layer admits
+        // connections with headroom for status pings and handshakes, and the game
+        // loop is where "a player" exists. An operator whose entry sets
+        // `bypassesPlayerLimit` joins anyway (P08-06). Every refusal below
+        // disconnects *that* client rather than failing the tick, which the
+        // lifecycle treats as fatal (AGENTS.md sections 9 and 10).
+        if self.is_full_for(&profile.id.to_string()) {
+            warn!(id = %id, name = %profile.name, "refused a join: the server is full");
+            refuse_join(&outbound, "The server is full");
+            return Ok(());
+        }
+        let Some(prepared) = self.prepare_join(id, profile, &outbound) else {
             return Ok(());
         };
-        let inventory = match mc_entity::inventory::inventory_for_registry(&self.registries.items) {
-            Ok(inventory) => inventory,
-            Err(error) => {
-                warn!(id = %id, %error, "refused a join: the registry cannot build an inventory");
-                refuse_join(&outbound, "Server inventory registry unavailable");
-                return Ok(());
-            }
-        };
+        // One expression for the join position so the entity projection, the
+        // authoritative `Player` and the `player_position` packet cannot disagree.
+        let (sx, sy, sz) = self.world.spawn();
+        let at = Vec3::new(f64::from(sx) + 0.5, f64::from(sy), f64::from(sz) + 0.5);
         // The entity store allocates the id, so it is unique across every entity in
         // the dimension and never reused — the property the wire protocol needs.
         let Ok(entity) = self.entities.spawn(EntityBody::Player, to_entity(at)) else {
@@ -1430,7 +1438,12 @@ impl Game {
         };
         let entity_id = entity.get();
 
-        let mut player = Player::new(entity_profile, entity_id, "minecraft:overworld", inventory);
+        let mut player = Player::new(
+            prepared.profile,
+            entity_id,
+            "minecraft:overworld",
+            prepared.inventory,
+        );
         player.position = to_entity(at);
         player.game_mode = GameMode::Survival;
 
@@ -1518,6 +1531,37 @@ impl Game {
         // The terrain itself goes out through `stream_all` later in this same tick,
         // which shares the per-tick chunk budget.
         Ok(())
+    }
+
+    /// The profile and inventory a join needs, or `None` when the join is refused.
+    ///
+    /// Split out of `join` so the admission reads as one screen: the profile the
+    /// entity model rejects and the registry that cannot build an inventory both
+    /// disconnect *that* client, and both refusals happen before an entity id is
+    /// allocated for them.
+    fn prepare_join(
+        &self,
+        id: ConnectionId,
+        profile: &mc_network::auth::GameProfile,
+        outbound: &OutboundSender,
+    ) -> Option<PreparedJoin> {
+        let Ok(entity_profile) = mc_entity::GameProfile::new(profile.id.to_string(), &profile.name)
+        else {
+            warn!(id = %id, name = %profile.name, "refused a join with an unusable profile");
+            refuse_join(outbound, "Invalid player profile");
+            return None;
+        };
+        match mc_entity::inventory::inventory_for_registry(&self.registries.items) {
+            Ok(inventory) => Some(PreparedJoin {
+                profile: entity_profile,
+                inventory,
+            }),
+            Err(error) => {
+                warn!(id = %id, %error, "refused a join: the registry cannot build an inventory");
+                refuse_join(outbound, "Server inventory registry unavailable");
+                None
+            }
+        }
     }
 
     // One flat dispatch over the play intents, in wire-id order. Splitting it would
@@ -1656,6 +1700,27 @@ impl Game {
     #[must_use]
     pub const fn max_players(&self) -> u32 {
         self.max_players
+    }
+
+    /// Whether a uuid's operator entry asks for a player-limit bypass.
+    ///
+    /// The check is its own method so the join path names the rule it enforces:
+    /// a listed operator with `bypassesPlayerLimit` joins a full server rather
+    /// than being refused with it. An absent or malformed entry grants nothing.
+    #[must_use]
+    pub fn player_limit_bypass(&self, uuid: &str) -> bool {
+        self.operators
+            .get(uuid)
+            .is_some_and(|entry| entry.bypasses_player_limit)
+    }
+
+    /// Whether `uuid` must be refused because the server is full.
+    ///
+    /// Split out of `join` so the four-way refusal fits the line budget: the
+    /// rule is one predicate (at cap and no bypass entry), not inline
+    /// arithmetic at the call site.
+    fn is_full_for(&self, uuid: &str) -> bool {
+        self.sessions.len() >= self.max_players as usize && !self.player_limit_bypass(uuid)
     }
 
     /// Set the player cap. The lifecycle is the authority for this value.

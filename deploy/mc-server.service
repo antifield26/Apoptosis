@@ -1,0 +1,63 @@
+# systemd unit for the Rust Minecraft server (P08-04).
+#
+# Install (on the Pi, as root):
+#   1. create the service user and directories:
+#        useradd --system --no-create-home --shell /usr/sbin/nologin mc-server
+#        mkdir -p /srv/mc-server /var/lib/mc-server /var/backups/mc-server
+#        chown mc-server:mc-server /var/lib/mc-server /var/backups/mc-server
+#        install -m 0755 target/release/mc-server /srv/mc-server/mc-server
+#        install -m 0644 config.example.toml /srv/mc-server/config.toml
+#      then edit /srv/mc-server/config.toml (bind, world_dir, vanilla_data).
+#   2. install the unit and start it:
+#        install -m 0644 deploy/mc-server.service /etc/systemd/system/mc-server.service
+#        systemctl daemon-reload
+#        systemctl enable --now mc-server.service
+#
+# Shutdown path this unit relies on (lifecycle.rs, P08-03):
+# SIGTERM -> the server's SIGTERM handler -> cooperative shutdown flag ->
+# Running -> Stopping -> drain connections (5 s) -> bounded final save (30 s) ->
+# Stopped. TimeoutStopSec must therefore exceed the drain plus the save bound;
+# 60 s covers both with margin, and leaves systemd's own SIGKILL as the backstop.
+#
+# No `Restart=` line is a deliberate choice, not an omission: an operator who
+# wants automatic restarts adds `Restart=on-failure` explicitly. The default of
+# always restarting would turn a corrupt world (which fails the boot the same
+# way every time) into a restart loop that also defeats the save barrier.
+[Unit]
+Description=Rust Minecraft 26.1.2 server (mc-server)
+Documentation=file:/srv/mc-server/RUNBOOK.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=mc-server
+Group=mc-server
+WorkingDirectory=/srv/mc-server
+ExecStart=/srv/mc-server/mc-server /srv/mc-server/config.toml
+# The world, the operator list and the backups live outside the binary dir so a
+# binary swap cannot take them with it. world_dir in config.toml must point at
+# /var/lib/mc-server/world for this layout.
+ReadWritePaths=/var/lib/mc-server /var/backups/mc-server
+# SIGTERM is the graceful stop; the 60 s bound covers the 5 s connection drain
+# plus the 30 s save bound with margin (see the header comment).
+KillSignal=SIGTERM
+TimeoutStopSec=60
+# A clean `systemctl stop` exits 0 via the Shutdown path; anything else is a
+# failure worth surfacing rather than masking.
+SuccessExitStatus=0
+# File-descriptor headroom: 64 region handles plus one socket per connection
+# plus stdio. 1024 is generous on a Pi 5 and still bounded.
+LimitNOFILE=1024
+# The process address space on an 8 GB Pi: 6 GB lets a 10-player world breathe
+# while the OOM killer still has room to act before the box wedges.
+MemoryMax=6G
+# Structured logs go to the journal; the server's own levels are selected with
+# MC_LOG (see logging.rs). RUST_LOG stays as the fallback for tooling.
+Environment=MC_LOG=info
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mc-server
+
+[Install]
+WantedBy=multi-user.target

@@ -179,6 +179,71 @@ fn the_file_is_read_from_beside_the_world() {
 }
 
 #[test]
+fn a_full_server_refuses_one_more_join_but_keeps_a_bypass_operator() {
+    // P08-06: the game loop is where "a player" exists, so the cap is enforced here.
+    // A bypass operator joins anyway; a refused client is disconnected, not fatal.
+    use mc_network::bridge::OutboundSender;
+
+    let dir = TempDir::new("ops-e2e-full");
+    let service = WorldService::open(&config(&dir)).expect("world opens");
+    let (events_tx, events_rx) = mc_network::bridge::game_channel(64);
+    let operator = mc_network::auth::offline_profile("BypassOp").id.to_string();
+    let bypass = format!(
+        r#"[{{"uuid": "{operator}", "name": "BypassOp", "level": 4, "bypassesPlayerLimit": true}}]"#
+    );
+    let operators =
+        OperatorList::parse(&bypass, Path::new(OPS_FILE_NAME)).expect("the fixture parses");
+    let mut game = Game::build_with_operators(None, Some(service), 3, events_rx, 7, operators)
+        .expect("game builds");
+    game.set_max_players(1);
+    let ids = ConnectionIds::new();
+
+    let join = |game: &mut Game, name: &str| -> (mc_network::bridge::ConnectionId, bool) {
+        let id = ids.next_id();
+        let (outbound, mut inbound) = OutboundSender::pair(id, 64);
+        events_tx
+            .try_send(ClientEvent {
+                id,
+                kind: ClientEventKind::Joined {
+                    profile: mc_network::auth::offline_profile(name),
+                    outbound,
+                },
+            })
+            .expect("join queued");
+        game.tick().expect("tick");
+        let joined = game.has_player(id);
+        let refused = {
+            use mc_protocol::packets::Packet as _;
+            let mut saw_refusal = false;
+            while let Some(raw) = inbound.try_recv() {
+                let Ok(packet) = mc_protocol::packets::play::PlayDisconnect::decode(&raw.payload)
+                else {
+                    continue;
+                };
+                if packet.reason.as_plain().contains("full") {
+                    saw_refusal = true;
+                }
+            }
+            saw_refusal
+        };
+        (id, joined && !refused)
+    };
+
+    let (_, first) = join(&mut game, "First");
+    assert!(first, "the first player joins a one-slot server");
+    let (_, extra) = join(&mut game, "Extra");
+    assert!(!extra, "one more join on a full server is refused");
+    assert_eq!(
+        game.player_count(),
+        1,
+        "the refusal leaves the session map alone"
+    );
+    let (_, op) = join(&mut game, "BypassOp");
+    assert!(op, "a bypass operator joins a full server");
+    assert_eq!(game.player_count(), 2);
+}
+
+#[test]
 fn an_uppercase_uuid_in_the_file_still_grants() {
     // Files in the wild are not consistent about uuid case, and a mismatch is invisible: the
     // operator simply appears not to be listed, which reads as "permissions stopped working".

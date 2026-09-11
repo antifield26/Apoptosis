@@ -1,15 +1,25 @@
-//! Server lifecycle and graceful shutdown (P01-08, ADR-0001 D-02).
+//! Server lifecycle and graceful shutdown (P01-08, ADR-0001 D-02, P08-03/04).
 //!
 //! Ownership model:
-//! - [`Server`] owns config + tick clock + shutdown coordination. It does NOT
-//!   own gameplay state yet (Phase 04+) and does NOT touch sockets yet (Phase 02).
+//! - [`Server`] owns config + tick clock + shutdown coordination, the network
+//!   listener (attached via [`Server::start_network`]) and the open world
+//!   (attached via [`Server::open_world`], owned by the simulation).
 //! - Shutdown is cooperative: [`Server::shutdown_handle`] clones a
 //!   [`ShutdownHandle`]; any thread/task may call [`ShutdownHandle::request`].
 //!   [`Server::run`] polls the flag between ticks and returns
 //!   [`ServerError::Shutdown`] instead of hanging.
 //! - OS signals (Ctrl-C, SIGTERM on unix) feed the same flag, so systemd
-//!   stops and operator Ctrl-C share one code path (P08-04 plugs the unit file
-//!   into this; no behaviour change needed here).
+//!   stops (P08-04's unit file) and operator Ctrl-C share one code path.
+//!
+//! Shutdown order (the P08-03 save barrier, ADR-0001 D-04):
+//!
+//! ```text
+//! Running → Stopping → drain the network → bounded final save → Stopped
+//! ```
+//!
+//! The save runs after the network is down so no new player action can land
+//! mid-flush, and it is bounded by [`SHUTDOWN_SAVE_TIMEOUT`] so a hung save
+//! becomes a loud error instead of a wedged shutdown.
 //!
 //! Tick discipline: each loop iteration polls the [`TickClock`] for due ticks
 //! and counts them. Overdue sleeps use [`TickClock::nanos_until_next`] — no
@@ -48,6 +58,13 @@ impl TickHook for NoopHook {
 /// Sized so a full server (10 players) plus status pings can burst without
 /// dropping gameplay events, while still bounding memory if the tick loop stalls.
 pub const EVENT_QUEUE: usize = 1024;
+
+/// Longest a shutdown waits for the final world save before giving up.
+///
+/// The save runs on the tick thread and is normally milliseconds; 30 s is the
+/// backstop that turns a hung save into a loud error instead of a wedged
+/// shutdown (P08-03). Named rather than inline so the test and the path agree.
+pub const SHUTDOWN_SAVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Cooperative shutdown flag. Cheap to clone, safe to share across the tick
 /// thread, Tokio tasks and signal handlers.
@@ -453,20 +470,14 @@ impl<H: TickHook> Server<H> {
                         game.save_all_owned()?;
                     }
                 }
-                // One summary line every 30 s (P05-18 input): enough to see a
-                // trend, cheap enough not to matter inside a 50 ms budget.
+                // One summary line every 30 s (P05-18 input, P08-02 fields): enough
+                // to see a trend, cheap enough not to matter inside a 50 ms budget.
+                // Field order follows `OperationalSnapshot::log` so the two lines
+                // stay greppable as one shape.
                 if tick.is_multiple_of(crate::game::METRICS_LOG_INTERVAL_TICKS)
                     && let Some(game) = self.game.as_ref()
                 {
-                    let metrics = game.metrics();
-                    tracing::info!(
-                        tick,
-                        p95_ms = metrics.percentile(0.95).as_secs_f64() * 1e3,
-                        overruns = metrics.overruns(),
-                        entities = game.entity_store().len(),
-                        players = game.player_count(),
-                        "tick metrics"
-                    );
+                    crate::metrics::OperationalSnapshot::of(game).log(tick);
                 }
             }
             if self.shutdown.is_requested() {
@@ -486,6 +497,10 @@ impl<H: TickHook> Server<H> {
                 tokio::task::yield_now().await;
             }
         }
+        // The save barrier (P08-03): Stopping is entered *before* the network
+        // drains, so every phase of the shutdown is observable in order —
+        // Running → Stopping → (drain, then save) → Stopped — rather than
+        // inferred from a log line after the fact.
         self.state = LifecycleState::Stopping;
         tracing::info!(ticks = self.clock.tick(), "server stopping");
         if let Some(network) = self.network.take() {
@@ -494,12 +509,28 @@ impl<H: TickHook> Server<H> {
         // Save after the network is down: no new player actions can arrive, so
         // the flushed world matches the last tick that ran (ADR-0001 D-04). The
         // simulation's dirty chunks go out first, then the world closes.
-        if let Some(mut game) = self.game.take()
-            && let Err(e) = game.close_storage()
-        {
-            tracing::error!(error = %e, "world failed to close cleanly");
-            self.state = LifecycleState::Stopped;
-            return Err(e);
+        //
+        // The save is **bounded**: a save that hangs must not wedge the shutdown
+        // forever (P08-03). `close_storage` runs on the tick thread and finishes
+        // in practice in milliseconds; the timeout is the backstop that turns a
+        // hung save into a loud error instead of a silent hang.
+        if let Some(mut game) = self.game.take() {
+            match tokio::time::timeout(SHUTDOWN_SAVE_TIMEOUT, async { game.close_storage() }).await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    tracing::error!(error = %e, "world failed to close cleanly");
+                    self.state = LifecycleState::Stopped;
+                    return Err(e);
+                }
+                Err(_) => {
+                    tracing::error!("shutdown save timed out; the world may be incomplete");
+                    self.state = LifecycleState::Stopped;
+                    return Err(ServerError::Operational(
+                        "shutdown save timed out".to_owned(),
+                    ));
+                }
+            }
         }
         self.state = LifecycleState::Stopped;
         Err(ServerError::Shutdown)
@@ -584,6 +615,23 @@ mod tests {
             }
         }
         let _ = NoopHook;
+    }
+
+    #[tokio::test]
+    async fn shutdown_passes_through_stopping_before_stopped() {
+        // P08-03: the save barrier must be observable as a state, not inferred.
+        // No network and no world here, so the run drains immediately; the
+        // assertion is that Stopping was entered on the way out.
+        let mut server = Server::new(crate::config::ServerConfig::default());
+        assert_eq!(server.state(), LifecycleState::Starting);
+        let handle = server.shutdown_handle();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(120)).await;
+            handle.request();
+        });
+        let err = server.run().await.expect_err("shutdown");
+        assert!(matches!(err, ServerError::Shutdown), "{err:?}");
+        assert_eq!(server.state(), LifecycleState::Stopped);
     }
 
     #[tokio::test]

@@ -11,6 +11,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod backup;
 pub mod commands;
 pub mod config;
 pub mod execute;
@@ -18,6 +19,7 @@ pub mod functions;
 pub mod game;
 pub mod lifecycle;
 pub mod logging;
+pub mod metrics;
 pub mod ops;
 pub mod packs;
 pub mod storage;
