@@ -210,6 +210,11 @@ pub struct DataPackSet {
     /// Packs that could not be opened, with the reason. Kept so a caller can report
     /// them instead of wondering why a pack had no effect.
     rejected: Vec<String>,
+    /// Packs that were **deliberately** not loaded, with the reason.
+    ///
+    /// A disabled pack is not broken, so it is not `rejected`: an operator looking for a
+    /// corruption that is not there is a worse outcome than two lists.
+    skipped: Vec<String>,
 }
 
 impl DataPackSet {
@@ -257,6 +262,71 @@ impl DataPackSet {
                 ));
             }
         }
+    }
+
+    /// Discover a world's packs, loading only the ones the world enables.
+    ///
+    /// This is the variant a server should use. [`DataPackSet::discover_world_packs`] loads
+    /// everything it finds, which is wrong for a real world: `level.dat`'s `DataPacks.Enabled` says
+    /// which packs are on, and loading a **disabled** pack is the most confusing possible failure —
+    /// the world behaves as if a pack the player turned off were still active, with nothing in the
+    /// logs to explain it.
+    ///
+    /// A skipped pack is recorded in [`DataPackSet::skipped`] **by name with its reason**, so "my
+    /// pack has no effect" is answerable.
+    pub fn discover_world_packs_enabled(
+        &mut self,
+        world_root: &Path,
+        enabled: &crate::enabled::EnabledPacks,
+        limits: Limits,
+    ) {
+        let dir = world_root.join("datapacks");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return;
+        };
+        let mut candidates: Vec<PathBuf> = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect();
+        candidates.sort();
+        for candidate in candidates {
+            // The pack's identity is its **directory name**, which is what `level.dat` names.
+            let Some(name) = candidate.file_name().and_then(|name| name.to_str()) else {
+                self.skipped.push(format!(
+                    "{}: has no usable directory name",
+                    candidate.display()
+                ));
+                continue;
+            };
+            let name = name.to_owned();
+            // The `data/` check comes **before** the enabled test, so a directory that is not a
+            // pack is reported as rejected whether or not the world names it. Reporting it as
+            // "disabled" would be wrong: it was never a pack.
+            if !candidate.join("data").is_dir() {
+                self.rejected.push(format!(
+                    "{}: no data/ directory, so it is not a data pack",
+                    candidate.display()
+                ));
+                continue;
+            }
+            if !enabled.allows(&name) {
+                self.skipped
+                    .push(format!("{name}: disabled by the world's DataPacks list"));
+                continue;
+            }
+            self.push(&candidate, PackSource::World, limits);
+        }
+    }
+
+    /// Packs that were **deliberately** not loaded, with the reason.
+    ///
+    /// Separate from [`DataPackSet::rejected`], which is for packs that could not be opened: a
+    /// disabled pack is not broken, and conflating the two would make an operator hunt for a
+    /// corruption that is not there.
+    #[must_use]
+    pub fn skipped(&self) -> &[String] {
+        &self.skipped
     }
 
     /// The packs, in load order (lowest priority first).

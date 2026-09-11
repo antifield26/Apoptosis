@@ -52,7 +52,7 @@ impl Harness {
         .expect("world opens");
         let (event_tx, event_rx) = game_channel(256);
         let mut game = Game::new(&storage, 3, event_rx).expect("game builds");
-        game.load_functions_from(&functions_dir)
+        game.load_functions_from(&functions_dir, "minecraft")
             .expect("functions load");
 
         let settings = mc_network::NetworkSettings {
@@ -146,15 +146,45 @@ fn a_function_is_named_by_its_path_relative_to_the_function_directory() {
         ("/pack/function/v1.2.mcfunction", "minecraft:v1.2"),
     ];
     for (path, expected) in cases {
-        let name = mc_server::functions::function_name(root, Path::new(path))
+        let name = mc_server::functions::function_name(root, Path::new(path), "minecraft")
             .unwrap_or_else(|| panic!("{path} must yield a name"));
         assert_eq!(name.to_string(), expected, "{path}");
     }
 
     // A path outside the function root has no name, which means the caller discovered it wrongly.
     assert!(
-        mc_server::functions::function_name(root, Path::new("/elsewhere/x.mcfunction")).is_none()
+        mc_server::functions::function_name(
+            root,
+            Path::new("/elsewhere/x.mcfunction"),
+            "minecraft"
+        )
+        .is_none()
     );
+}
+
+#[test]
+fn the_namespace_comes_from_the_caller_not_a_constant() {
+    // **The bug this parameter exists to prevent.** The first version hard-coded `minecraft:`, so a
+    // world pack's `data/testns/function/greet.mcfunction` was named `minecraft:greet` and
+    // `/function testns:greet` reported an unknown function — with the file present, loaded and
+    // counted. The same path under two namespaces must give two different names.
+    let root = Path::new("/pack/function");
+    let path = Path::new("/pack/function/greet.mcfunction");
+
+    let vanilla = mc_server::functions::function_name(root, path, "minecraft").expect("a name");
+    let pack = mc_server::functions::function_name(root, path, "testns").expect("a name");
+    assert_eq!(vanilla.to_string(), "minecraft:greet");
+    assert_eq!(pack.to_string(), "testns:greet");
+    assert_ne!(vanilla, pack, "the namespace must change the name");
+
+    // A nested path keeps its subdirectory under either namespace.
+    let nested = mc_server::functions::function_name(
+        root,
+        Path::new("/pack/function/foo/bar.mcfunction"),
+        "testns",
+    )
+    .expect("a name");
+    assert_eq!(nested.to_string(), "testns:foo/bar");
 }
 
 #[tokio::test]
@@ -167,7 +197,7 @@ async fn a_function_runs_its_commands_in_order() {
     // work because the harness creates the directory it writes into.
     harness
         .game
-        .load_functions_from(&harness.functions_dir)
+        .load_functions_from(&harness.functions_dir, "minecraft")
         .expect("reload");
 
     let lines = harness.run("function minecraft:ordered").await;
@@ -196,7 +226,7 @@ async fn comments_and_blank_lines_are_not_commands() {
     );
     harness
         .game
-        .load_functions_from(&harness.functions_dir)
+        .load_functions_from(&harness.functions_dir, "minecraft")
         .expect("reload");
 
     let lines = harness.run("function minecraft:sparse").await;
@@ -233,7 +263,7 @@ async fn a_function_cannot_exceed_the_recursion_bound() {
     harness.write_function("loop.mcfunction", "function minecraft:loop\n");
     harness
         .game
-        .load_functions_from(&harness.functions_dir)
+        .load_functions_from(&harness.functions_dir, "minecraft")
         .expect("reload");
 
     let lines = harness.run("function minecraft:loop").await;
@@ -258,7 +288,7 @@ async fn mutual_recursion_between_two_functions_is_also_bounded() {
     harness.write_function("pong.mcfunction", "function minecraft:ping\n");
     harness
         .game
-        .load_functions_from(&harness.functions_dir)
+        .load_functions_from(&harness.functions_dir, "minecraft")
         .expect("reload");
 
     let lines = harness.run("function minecraft:ping").await;
@@ -279,7 +309,7 @@ async fn a_function_does_not_grant_permission() {
     harness.write_function("sneaky.mcfunction", "stop\nop\n");
     harness
         .game
-        .load_functions_from(&harness.functions_dir)
+        .load_functions_from(&harness.functions_dir, "minecraft")
         .expect("reload");
 
     let lines = harness.run("function minecraft:sneaky").await;
@@ -304,7 +334,7 @@ async fn a_function_containing_macros_is_refused_with_that_reason() {
     harness.write_function("macro.mcfunction", "say $(greeting) world\n");
     harness
         .game
-        .load_functions_from(&harness.functions_dir)
+        .load_functions_from(&harness.functions_dir, "minecraft")
         .expect("reload");
 
     let lines = harness.run("function minecraft:macro").await;
@@ -323,7 +353,7 @@ async fn a_function_can_call_another_function() {
     harness.write_function("outer.mcfunction", "say OUTER\nfunction minecraft:inner\n");
     harness
         .game
-        .load_functions_from(&harness.functions_dir)
+        .load_functions_from(&harness.functions_dir, "minecraft")
         .expect("reload");
 
     let lines = harness.run("function minecraft:outer").await;
@@ -366,7 +396,7 @@ async fn a_function_runs_execute_chains_and_reports_them() {
     );
     harness
         .game
-        .load_functions_from(&harness.functions_dir)
+        .load_functions_from(&harness.functions_dir, "minecraft")
         .expect("reload");
 
     let lines = harness.run("function minecraft:chained").await;
@@ -394,7 +424,7 @@ async fn a_function_with_an_unknown_command_reports_it_and_keeps_going() {
     );
     harness
         .game
-        .load_functions_from(&harness.functions_dir)
+        .load_functions_from(&harness.functions_dir, "minecraft")
         .expect("reload");
 
     let lines = harness.run("function minecraft:mixed").await;
@@ -424,7 +454,7 @@ async fn a_malformed_function_file_does_not_remove_the_others() {
     harness.write_function("huge.mcfunction", &huge);
     let loaded = harness
         .game
-        .load_functions_from(&harness.functions_dir)
+        .load_functions_from(&harness.functions_dir, "minecraft")
         .expect("a malformed file must not fail the load");
     assert!(loaded >= 1, "the good function is still loaded: {loaded}");
 

@@ -85,42 +85,46 @@ pub const FUNCTION_DIRECTORY: &str = "function";
 
 /// Derive a function's name from its path, per the format's rule.
 ///
-/// `function/foo/bar.mcfunction` is `minecraft:foo/bar`: the path relative to the function
-/// directory, minus the extension. The namespace is the vanilla one because that is the only pack
-/// this build loads, and a `namespace` parameter that can only take one value would be a lie about
-/// what is supported.
+/// `data/<namespace>/function/foo/bar.mcfunction` is `<namespace>:foo/bar`: the path relative to
+/// the function directory, minus the extension, under the **pack's own namespace**.
+///
+/// The namespace is a parameter rather than the vanilla constant, and that is a correction: the
+/// first version hard-coded `minecraft:`, so a world pack's `data/testns/function/greet.mcfunction`
+/// was named `minecraft:greet` and `/function testns:greet` reported an unknown function — with the
+/// file present, loaded and counted. A test found it.
 ///
 /// Returns `None` when the path is not under the function directory, which means the caller
 /// discovered it wrongly rather than that the file is bad.
 #[must_use]
-pub fn function_name(function_root: &Path, path: &Path) -> Option<ResourceId> {
+pub fn function_name(function_root: &Path, path: &Path, namespace: &str) -> Option<ResourceId> {
     let relative = path.strip_prefix(function_root).ok()?;
     // On Windows a path uses `\`, and the format uses `/`, so the separator is normalised rather
     // than left to the platform — a name with a backslash in it would never match a `/function`
     // argument.
     let without_extension = relative.with_extension("");
     let text = without_extension.to_string_lossy().replace('\\', "/");
-    ResourceId::parse(&format!("{}:{text}", mc_data::VANILLA_NAMESPACE)).ok()
+    ResourceId::parse(&format!("{namespace}:{text}")).ok()
 }
 
-/// Load every function from a pack's function directory.
+/// Load every function from one namespace's function directory.
 ///
-/// `function_root` is the directory holding `.mcfunction` files — `data/minecraft/function` in a
-/// pack — because that is what the naming rule is relative to.
+/// `function_root` is the directory holding `.mcfunction` files —
+/// `data/<namespace>/function` in a pack — because that is what the naming rule is relative to, and
+/// `namespace` is the `<namespace>` segment, which becomes the name's prefix.
 ///
 /// # Errors
 ///
 /// Never for a malformed file: each is skipped with a warning and counted, so one bad function
 /// does not remove every other one (AGENTS.md §9). The `Result` is kept for the caller's symmetry
-/// with the other loaders and for a future `&PackSource` variant that can fail to read a directory.
-pub fn load_functions(function_root: &Path) -> ServerResult<FunctionRegistry> {
+/// with the other loaders and for a future variant that can fail to read a directory.
+pub fn load_functions(function_root: &Path, namespace: &str) -> ServerResult<FunctionRegistry> {
     // The loader discovers by **extension**, not by directory walk: `.mcfunction` is the format's
     // marker, and `files_with_extension` is where that rule lives. Following it exactly rather than
     // adapting another loader's shape is the point — the extension is what decides whether a file
     // is a function at all.
     let mut registry = FunctionRegistry::new();
     for path in mc_data::function::files_with_extension(function_root, "mcfunction") {
-        let Some(name) = function_name(function_root, &path) else {
+        let Some(name) = function_name(function_root, &path, namespace) else {
             warn!(path = %path.display(), "a discovered function is not under the function root");
             continue;
         };
@@ -145,13 +149,34 @@ impl Game {
         &self.functions
     }
 
-    /// Load functions from a pack root into this game.
+    /// Replace this game's function registry.
+    ///
+    /// What the pack loader calls: it loads every pack's functions in load order and installs the
+    /// merged result, so a world pack's function of the same name overrides the vanilla one it was
+    /// loaded after.
+    pub fn set_functions(&mut self, functions: FunctionRegistry) {
+        self.functions = functions;
+    }
+
+    /// Load functions from one namespace's function directory into this game.
+    ///
+    /// Replaces the whole registry rather than merging: this is the "load a pack" entry point, and
+    /// a caller wanting several packs merged should use [`crate::packs::load_packs`], which applies
+    /// the load order.
+    ///
+    /// `namespace` is a parameter rather than defaulting to `minecraft`, because defaulting would
+    /// reintroduce the bug the pack loader just had — every function named `minecraft:<path>` — in
+    /// the method a caller is most likely to reach for.
     ///
     /// # Errors
     ///
     /// As for [`load_functions`].
-    pub fn load_functions_from(&mut self, function_root: &Path) -> ServerResult<usize> {
-        self.functions = load_functions(function_root)?;
+    pub fn load_functions_from(
+        &mut self,
+        function_root: &Path,
+        namespace: &str,
+    ) -> ServerResult<usize> {
+        self.functions = load_functions(function_root, namespace)?;
         Ok(self.functions.len())
     }
 

@@ -19,4 +19,5 @@ pub mod game;
 pub mod lifecycle;
 pub mod logging;
 pub mod ops;
+pub mod packs;
 pub mod storage;

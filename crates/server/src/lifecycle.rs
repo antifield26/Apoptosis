@@ -191,6 +191,59 @@ impl<H: TickHook> Server<H> {
             crate::game::DEFAULT_RANDOM_SEED,
             operators,
         )?;
+        // Data packs. The world's `DataPacks` list is read from the `level.dat` of the world just
+        // opened, which is why this happens here and not at config-validation time: the list is
+        // world data, not configuration.
+        //
+        // The enabled list decides which world packs load. A world with **no** list enables
+        // everything, which is the case that matters: reading an absent list as "nothing enabled"
+        // would silently disable every pack in a world that has been running for months.
+        // `storage().level()` is the same path the operator list uses: the world's parsed
+        // `level.dat`, which is where `DataPacks` lives.
+        let enabled = self
+            .world()
+            .and_then(|service| service.storage().level())
+            .map_or_else(mc_data::enabled::EnabledPacks::default, |level| {
+                mc_data::enabled::EnabledPacks::from_level_dat(
+                    &level.enabled_packs,
+                    &level.disabled_packs,
+                )
+            });
+        let mut roots = crate::packs::PackRoots::new(&self.config.storage.world_dir);
+        if let Some(configured) = &self.config.datapacks.vanilla_data {
+            // Resolve the level a caller named: the data directory itself, or a pack root
+            // containing it. The two are indistinguishable from outside, and getting it wrong has
+            // the same symptom as configuring nothing — so it is resolved rather than guessed at
+            // by the operator.
+            roots.vanilla_data = Some(crate::packs::resolve_vanilla_data(configured));
+        }
+        match crate::packs::load_packs(&mut game, &roots, &enabled) {
+            Ok(outcome) => {
+                if outcome.has_problems() {
+                    tracing::warn!(
+                        packs = outcome.packs_loaded,
+                        functions = outcome.functions_loaded,
+                        rejected = ?outcome.rejected,
+                        "some data packs could not be read"
+                    );
+                } else {
+                    tracing::info!(
+                        packs = outcome.packs_loaded,
+                        functions = outcome.functions_loaded,
+                        namespaces = outcome.namespaces.len(),
+                        skipped = outcome.skipped.len(),
+                        vanilla_data = outcome.vanilla_data,
+                        "data packs loaded"
+                    );
+                }
+            }
+            // A pack problem must never stop the boot: a world that has run for months has to start
+            // on a machine where nobody copied the jar data (AGENTS.md §9).
+            Err(error) => {
+                tracing::error!(%error, "loading data packs failed; the server continues without them");
+            }
+        }
+
         // The lifecycle is the authority for the player cap, so it tells the game
         // rather than the game reading the config itself (`/list` is the only consumer).
         game.set_max_players(self.config.network.max_players);

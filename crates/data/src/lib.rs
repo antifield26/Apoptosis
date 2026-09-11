@@ -48,6 +48,7 @@
 use std::collections::BTreeMap;
 
 pub mod advancement;
+pub mod enabled;
 pub mod function;
 pub mod json;
 pub mod loot;
