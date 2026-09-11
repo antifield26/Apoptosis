@@ -1,7 +1,7 @@
 # Phase 07 Report — Commands, Data Packs and World Generation
 
 Date: 2026-09-11 (in progress). Scope: `P07-01..P07-20` per `tasks/TASK-INDEX.md`.
-Gate status at the time of writing: `cargo test --workspace` **1 173 passed, 0 failed, 13
+Gate status at the time of writing: `cargo test --workspace` **1 173 passed, 0 failed, 15
 ignored** plus three ignored differential suites that pass when run against the jar; `cargo fmt --check`, `cargo clippy -D warnings`,
 `cargo check --target aarch64-unknown-linux-gnu` and `cargo deny check` all clean. Each is
 re-run before the phase is called done, and the numbers in this report are re-derived from
@@ -37,8 +37,8 @@ and the report says which.
 | P07-15 biomes | **DONE** | Six biomes driving surface composition |
 | P07-16 structures/placement baseline | **DONE (1 182 of 1 202 templates)** | `structure.rs` reads the gzip-NBT format, `placement.rs` places into a chunk under a documented cross-chunk policy, `structures.rs` derives a deterministic per-chunk selection. **1 182 files load, 20 are refused by name** (all shipwrecks, all using 8 alternative `palettes` — an unimplemented material-variant feature), and **zero fail to parse**. 2 differential tests against the real pack, with five fabricated assertions found and replaced by measured values (§2.10) |
 | P07-17 existing-world-first | **DONE** | Stored chunk read before generation; asserted by tests, and the source of two bugs below |
-| P07-18 command/data/worldgen parity tests | **DONE** | Four differential suites against the real jar (`vanilla_pack` 1, `vanilla_data` 1, `vanilla_smelting` 1, `structure_pack` 6) plus `command_e2e` (10), `execute_e2e` (9), `function_e2e` (14), `ops_e2e` (6), `pack_loading_e2e` (8), `worldgen_e2e` (7) |
-| P07-19 differential scenario expansion | **PARTIAL** | Four suites exist against the real jar. That is the baseline the earlier phases lacked, not the *expansion* this task names — no scripted multi-step scenario exists yet |
+| P07-18 command/data/worldgen parity tests | **DONE** | Five differential suites against the real jar (`vanilla_pack` 1, `vanilla_data` 1, `vanilla_smelting` 1, `structure_pack` 6, `scenario_vanilla` 2) plus `command_e2e` (10), `execute_e2e` (9), `function_e2e` (14), `ops_e2e` (6), `pack_loading_e2e` (8), `worldgen_e2e` (7) |
+| P07-19 differential scenario expansion | **DONE** | `scenario_vanilla` runs five stages in sequence against the real pack: 758 tags, 1 421 recipes → 156 furnace rows, terrain in all 256 columns of a generated chunk, a real `igloo/bottom` placed (180 blocks), and a marker surviving save/reopen. Two claims probed: a no-op save loses the marker, and removing the generation gate breaks the borrowing test |
 | P07-20 matrices | **DONE** | `TEST-MATRIX.md` §Phase 07; `PARITY-MATRIX.md` command/data/worldgen rows |
 
 ## 2. Bugs found and fixed, in the order they were found
