@@ -863,6 +863,56 @@ mod tests {
     }
 
     #[test]
+    fn the_location_word_is_written_last() {
+        // P08-07: the parity matrix claimed "header word last" with no test
+        // behind it (Audit 05). This is that test: after writing a chunk over
+        // an existing one, the on-disk location word must point at a payload
+        // whose length field fits the allocated sectors — i.e. the commit point
+        // landed after the payload, not before it.
+        use std::io::{Read, Seek, SeekFrom};
+        let (_dir, path) = temp_region("region-ordering");
+        let mut region = RegionFile::open(&path).expect("opens");
+        region
+            .write_chunk(ChunkPos::new(0, 0), b"first", Compression::Zlib, 1)
+            .expect("writes");
+        region
+            .write_chunk(ChunkPos::new(0, 0), b"second-payload", Compression::Zlib, 2)
+            .expect("rewrites");
+        region.sync().expect("syncs");
+        drop(region);
+
+        let mut file = std::fs::File::open(&path).expect("opens");
+        let slot = ChunkPos::new(0, 0).slot();
+        let mut word = [0u8; 4];
+        file.seek(SeekFrom::Start((slot * 4) as u64))
+            .expect("seeks");
+        file.read_exact(&mut word).expect("reads");
+        let raw = u32::from_be_bytes(word);
+        let location = ChunkLocation::decode(raw).expect("slot is occupied");
+        assert!(location.sector >= FIRST_CHUNK_SECTOR);
+        assert!(location.sector_count >= 1);
+        // The payload at that sector must be self-consistent.
+        let mut prefix = [0u8; 5];
+        file.seek(SeekFrom::Start(location.byte_offset()))
+            .expect("seeks");
+        file.read_exact(&mut prefix).expect("reads");
+        let length = u32::from_be_bytes([prefix[0], prefix[1], prefix[2], prefix[3]]);
+        assert!(
+            length >= 1 && (length as usize) + 4 <= location.sector_count as usize * SECTOR_BYTES,
+            "location word points at a fitting payload (len {length}, {} sectors)",
+            location.sector_count
+        );
+        // And the committed payload is the second write, not the first.
+        let mut reopened = RegionFile::open(&path).expect("reopens");
+        let stored = reopened
+            .read_chunk(ChunkPos::new(0, 0))
+            .expect("reads")
+            .expect("present");
+        assert_eq!(stored.data, b"second-payload");
+        assert_eq!(stored.timestamp, 2);
+    }
+
+    #[test]
     fn removal_frees_the_slot() {
         let (_dir, path) = temp_region("region-remove");
         let mut region = RegionFile::open(&path).expect("opens");

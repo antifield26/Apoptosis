@@ -208,7 +208,9 @@ impl NetworkService {
         // budget is players plus headroom, the per-IP cap stops one address
         // owning the server, and the refill interval blunts reconnect storms.
         let connection_gate = Arc::new(ConnectionGate::new(
-            settings.max_players.saturating_add(GATE_HEADROOM_CONNECTIONS),
+            settings
+                .max_players
+                .saturating_add(GATE_HEADROOM_CONNECTIONS),
             MAX_CONNECTIONS_PER_IP,
             RECONNECT_REFILL_INTERVAL,
         ));
@@ -379,7 +381,9 @@ mod tests {
             ..NetworkSettings::default()
         };
         assert_eq!(
-            settings.max_players.saturating_add(GATE_HEADROOM_CONNECTIONS),
+            settings
+                .max_players
+                .saturating_add(GATE_HEADROOM_CONNECTIONS),
             18
         );
     }

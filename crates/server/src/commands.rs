@@ -26,8 +26,8 @@
 //! - **`tp`** moves the *invoking* player, not a named target, because the server has no
 //!   cross-player teleport authority model yet; the `target` argument is validated and
 //!   must name the source itself. That is a real limitation, not a stub.
-//! - **`op`** cannot persist a grant: `ops.json` is not read or written (P07-04's
-//!   remaining half), so it reports that and changes nothing.
+//! - **`op`** cannot persist a grant: `ops.json` is read at startup but never
+//!   written (P07-04's remaining half), so it reports that and changes nothing.
 //! - **`stop`** sets the shutdown flag; it does not save first, because the lifecycle's
 //!   shutdown path already saves after the network drains (ADR-0001 D-04).
 //!
@@ -190,10 +190,10 @@ impl Game {
 
     /// The command source for a connection, or `None` when it has no session.
     ///
-    /// A player source is **level 0** (`All`): `ops.json` is not read, so nothing grants
-    /// more, which means `op` and `stop` are unreachable from a player right now. That is
-    /// honest — a server with no permission storage cannot have operators — and it is
-    /// recorded rather than papered over by defaulting everyone to operator.
+    /// The level comes from the session, which the join path set from
+    /// `ops.json`: listed uuids hold their file level, everyone else is level
+    /// 0 (`All`). A stale comment here once claimed no storage was read; the
+    /// `ops_e2e` suite proves otherwise (a level-4 operator stops the server).
     #[must_use]
     pub fn command_source(&self, id: mc_network::bridge::ConnectionId) -> Option<CommandSource> {
         let session = self.sessions.get(&id)?;
@@ -209,8 +209,9 @@ impl Game {
 
     /// The permission level a connection holds.
     ///
-    /// Level 0 unless the session was granted more. Exists as its own method so the
-    /// `ops.json` work (P07-04) has one place to change.
+    /// Level 0 unless the join path granted more from `ops.json` (P07-04,
+    /// proven by `ops_e2e`). A command that needs more than the source holds
+    /// is answered with a refusal, never run (P08-08).
     #[must_use]
     pub fn player_permission(
         &self,
@@ -404,12 +405,14 @@ impl Game {
     /// Associated rather than a method: it changes nothing and reads nothing, which is
     /// precisely the point it reports.
     fn command_op(parsed: &mc_command::dispatch::ParsedCommand) -> CommandResult {
-        // Vanilla's `/op` takes a player and writes `ops.json`. This build reads no
-        // permission storage, so granting would not survive a restart and there is no
-        // other player to grant to. Saying exactly that is better than a fake success.
+        // Vanilla's `/op` takes a player and writes `ops.json`. This build *reads*
+        // the file at startup (P07-04) but never writes it, so granting here would
+        // not survive a restart — and writing an operator file is an authority
+        // decision this phase deliberately does not make silently. Saying exactly
+        // that is better than a fake success (P08-08 review).
         CommandResult::message(format!(
-            "/op is not implemented: permission grants are not persisted (no ops.json \
-             support yet), so {} is not changed.",
+            "/op is not implemented: permission grants are not persisted (ops.json \
+              is read at startup, never written), so {} is not changed.",
             parsed.source.name
         ))
     }

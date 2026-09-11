@@ -202,7 +202,10 @@ fn ten_players_tick_within_the_frame_budget() {
     println!("view distance    : {VIEW_DISTANCE} chunks");
     println!("measured ticks   : {MEASURED_TICKS} (after {WARMUP_TICKS} warm-up)");
     println!("wall time        : {:.3} s", wall.as_secs_f64());
-    println!("tps estimate     : {:.2}", MEASURED_TICKS as f64 / wall.as_secs_f64());
+    println!(
+        "tps estimate     : {:.2}",
+        MEASURED_TICKS as f64 / wall.as_secs_f64()
+    );
     println!("mspt mean        : {mean:.4}");
     println!("mspt p50/p95/p99 : {p50:.4} / {p95:.4} / {p99:.4}");
     println!("mspt max         : {max:.4}");
@@ -367,7 +370,10 @@ fn entity_heavy_ticks_within_the_frame_budget() {
     println!("view distance    : {VIEW_DISTANCE} chunks");
     println!("measured ticks   : {MEASURED_TICKS} (after {WARMUP_TICKS} warm-up)");
     println!("wall time        : {:.3} s", wall.as_secs_f64());
-    println!("tps estimate     : {:.2}", MEASURED_TICKS as f64 / wall.as_secs_f64());
+    println!(
+        "tps estimate     : {:.2}",
+        MEASURED_TICKS as f64 / wall.as_secs_f64()
+    );
     println!("mspt mean        : {mean:.4}");
     println!("mspt p50/p95/p99 : {p50:.4} / {p95:.4} / {p99:.4}");
     println!("mspt max         : {max:.4}");

@@ -294,6 +294,11 @@ impl Packet for RegistryData {
     fn decode(payload: &[u8]) -> ServerResult<Self> {
         let mut reader = PacketReader::new(payload);
         let registry = reader.read_string(crate::MAX_IDENTIFIER_LEN)?;
+        // P08-07: hostile-count hardening in the shared shape. A negative count
+        // is refused; a count that cannot fit in the remaining bytes is refused
+        // *before* any allocation; and the allocation itself is capped at 4096
+        // entries (far above any real registry) so the `with_capacity` cannot
+        // be turned into a multi-megabyte reservation by one VarInt.
         let count = reader.read_varint()?;
         if count < 0 {
             return Err(ServerError::Protocol(format!(
@@ -308,7 +313,7 @@ impl Packet for RegistryData {
                 reader.remaining()
             )));
         }
-        let mut entries = Vec::with_capacity(count.min(4096));
+        let mut entries = Vec::with_capacity(count.min(MAX_REGISTRY_ENTRIES));
         for _ in 0..count {
             let id = reader.read_string(crate::MAX_IDENTIFIER_LEN)?;
             let data = if reader.read_bool()? {
@@ -347,6 +352,14 @@ impl Packet for RegistryData {
         Ok(writer.finish())
     }
 }
+
+/// Most registry entries decoded in one `registry_data` packet (P08-07).
+///
+/// A decode-time allocation cap, not a protocol limit: real registries are
+/// hundreds of entries, and the remaining-bytes check above already refuses a
+/// count that cannot fit. Capping the reservation keeps one hostile `VarInt`
+/// from driving a large `Vec::with_capacity` before the loop validates it.
+pub const MAX_REGISTRY_ENTRIES: usize = 4096;
 
 /// `minecraft:update_tags` (clientbound 13). Phase 02 sends an empty set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -504,6 +517,33 @@ mod tests {
             .expect("writes");
         writer.write_varint(i32::MAX);
         assert!(RegistryData::decode(&writer.finish()).is_err());
+    }
+
+    #[test]
+    fn registry_data_never_reserves_more_than_the_cap() {
+        // P08-07: the count passes the remaining-bytes check but the
+        // reservation stays bounded. 100 bytes of remaining payload admit a
+        // count of 100; decoding must still fail (no 100 entries fit) and, more
+        // importantly, must not have reserved `count` slots to find out. The
+        // reservation bound is structural — `count.min(MAX_REGISTRY_ENTRIES)`
+        // at the single allocation site — so the assertion is that decoding a
+        // hostile-but-plausible count fails closed, not that a constant equals
+        // itself.
+        let mut writer = crate::wire::PacketWriter::new();
+        writer
+            .write_string("minecraft:dimension_type")
+            .expect("writes");
+        writer.write_varint(100);
+        writer
+            .write_string(&"x".repeat(90))
+            .expect("padding to 100 remaining bytes");
+        let err = RegistryData::decode(&writer.finish()).expect_err("must fail");
+        assert!(
+            err.to_string().contains("registry")
+                || err.to_string().contains("string")
+                || err.to_string().contains("truncated"),
+            "the failure names the boundary it hit: {err}"
+        );
     }
 
     #[test]

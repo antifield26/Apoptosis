@@ -321,10 +321,11 @@ pub(crate) struct Session {
     tick_start_y: f64,
     /// What this connection is permitted to do.
     ///
-    /// Defaults to [`mc_command::PermissionLevel::All`]. Nothing raises it yet because
-    /// no permission storage is read (`ops.json` is P07-04's remaining half), so the
-    /// operator-only commands are unreachable from a player — which is the correct
-    /// behaviour for a server that has no way to record a grant.
+    /// Set at join from `ops.json` (listed uuids hold their file level,
+    /// everyone else [`mc_command::PermissionLevel::All`]) and never raised
+    /// afterwards: there is no in-game grant path, because `/op` does not
+    /// write the file. A stale comment here once claimed no storage was read;
+    /// `ops_e2e` proves the join path reads it (P08-08 review).
     pub(crate) permission: mc_command::PermissionLevel,
     /// The container window this player has open.
     ///

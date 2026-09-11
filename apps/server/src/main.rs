@@ -15,7 +15,10 @@ use mc_server::logging::init_logging;
 
 #[tokio::main]
 async fn main() {
-    let code = run().await;
+    // `run()` holds the whole `Server` (config, clock, game, network handle)
+    // across an await, which trips `clippy::large-futures`. Boxing it keeps the
+    // runtime's task stack bounded; the allocation happens once at startup.
+    let code = Box::pin(run()).await;
     std::process::exit(code);
 }
 

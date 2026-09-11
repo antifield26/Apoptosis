@@ -93,9 +93,7 @@ impl BackupManifest {
         let files = value
             .get("files")
             .and_then(serde_json::Value::as_array)
-            .ok_or_else(|| {
-                ServerError::CorruptData(format!("{} has no files", path.display()))
-            })?;
+            .ok_or_else(|| ServerError::CorruptData(format!("{} has no files", path.display())))?;
         let mut files: Vec<String> = files
             .iter()
             .filter_map(serde_json::Value::as_str)
@@ -267,16 +265,19 @@ fn copy_tree_inner(
     to: &Path,
     files: &mut Vec<String>,
 ) -> ServerResult<()> {
-    let entries = std::fs::read_dir(from).map_err(|e| {
-        ServerError::Operational(format!("cannot list {}: {e}", from.display()))
-    })?;
+    let entries = std::fs::read_dir(from)
+        .map_err(|e| ServerError::Operational(format!("cannot list {}: {e}", from.display())))?;
     for entry in entries {
         let entry = entry.map_err(|e| {
             ServerError::Operational(format!("cannot list {}: {e}", from.display()))
         })?;
         let path = entry.path();
         let relative = path.strip_prefix(root).map_err(|_| {
-            ServerError::Operational(format!("{} is not under {}", path.display(), root.display()))
+            ServerError::Operational(format!(
+                "{} is not under {}",
+                path.display(),
+                root.display()
+            ))
         })?;
         if relative.as_os_str() == MANIFEST_FILE {
             continue;
@@ -328,13 +329,11 @@ fn stray_files(world_dir: &Path, manifest: &BackupManifest) -> ServerResult<Opti
 }
 
 fn collect_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> ServerResult<()> {
-    let entries = std::fs::read_dir(dir).map_err(|e| {
-        ServerError::Operational(format!("cannot list {}: {e}", dir.display()))
-    })?;
+    let entries = std::fs::read_dir(dir)
+        .map_err(|e| ServerError::Operational(format!("cannot list {}: {e}", dir.display())))?;
     for entry in entries {
-        let entry = entry.map_err(|e| {
-            ServerError::Operational(format!("cannot list {}: {e}", dir.display()))
-        })?;
+        let entry = entry
+            .map_err(|e| ServerError::Operational(format!("cannot list {}: {e}", dir.display())))?;
         let path = entry.path();
         let file_type = entry.file_type().map_err(|e| {
             ServerError::Operational(format!("cannot stat {}: {e}", path.display()))
@@ -431,10 +430,7 @@ mod tests {
         let backup = backup_root.path().join("backup-1");
         backup_world(&world, &backup).expect("first backup");
         let err = backup_world(&world, &backup).expect_err("second backup must refuse");
-        assert!(
-            err.to_string().contains("already holds a backup"),
-            "{err}"
-        );
+        assert!(err.to_string().contains("already holds a backup"), "{err}");
     }
 
     #[test]

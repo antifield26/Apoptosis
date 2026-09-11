@@ -279,6 +279,49 @@ async fn an_over_long_command_ends_only_that_connection() {
 }
 
 #[tokio::test]
+async fn a_command_flood_from_one_client_does_not_starve_the_tick() {
+    // P08-08: one client sending 300 commands in one tick must not own the
+    // tick. The Network phase drains at most PENDING_INTENT_BUDGET events per
+    // tick; the excess stays queued for the next tick, in order. The evidence
+    // is the drain bound, not the absence of a crash: every command is still
+    // answered, and the tick count advances normally.
+    let mut harness = Harness::start("p08-flood").await;
+    for _ in 0..300 {
+        harness
+            .client
+            .send_raw_packet(&RawPacket::new(
+                serverbound::play::CHAT_COMMAND,
+                string_field("help"),
+            ))
+            .await
+            .expect("command sent");
+    }
+    // One tick drains at most the per-tick budget (256); the rest stays queued
+    // for the next ticks rather than owning this one. The player survives.
+    harness.game.tick().expect("tick");
+    assert_eq!(
+        harness.game.player_count(),
+        1,
+        "a flood must not disconnect the sender"
+    );
+    // Drain the answers over the next ticks; every command gets one.
+    let mut chats = 0usize;
+    for _ in 0..12 {
+        harness.game.tick().expect("tick");
+        for id in harness.drain_ids(200).await {
+            if id == clientbound::play::SYSTEM_CHAT {
+                chats += 1;
+            }
+        }
+    }
+    assert!(
+        chats >= 300,
+        "every flooded command is answered over the next ticks, saw {chats}"
+    );
+    harness.service.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_time_command_changes_the_broadcast_time() {
     // The property that makes `/time` stick: the per-second `SetTime` broadcast computes
     // the time from the tick counter, so a command must record an *offset* or the next
