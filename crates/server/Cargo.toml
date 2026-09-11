@@ -1,0 +1,34 @@
+[package]
+name = "mc-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mc-core = { path = "../core" }
+mc-container = { path = "../container" }
+mc-entity = { path = "../entity" }
+mc-network = { path = "../network" }
+mc-persistence = { path = "../persistence" }
+mc-protocol = { path = "../protocol" }
+mc-registry = { path = "../registry" }
+# The tick scheduler and phase order (P05-01/P05-02). `mc-simulation` owns the
+# shape of a tick and depends on nothing but `mc-core`, so the dependency runs
+# server → simulation and never the other way.
+mc-simulation = { path = "../simulation" }
+mc-world = { path = "../world" }
+serde.workspace = true
+thiserror.workspace = true
+# `signal` is required by the Ctrl-C handler; without it `cargo build -p mc-server`
+# fails even though a full-workspace build passes (feature unification hid it).
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros", "signal"] }
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+mc-test-support = { path = "../test-support" }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net", "signal"] }

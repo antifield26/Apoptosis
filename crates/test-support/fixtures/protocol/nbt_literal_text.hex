@@ -1,0 +1,9 @@
+# Golden bytes: network NBT for the text component {"text":"bye"}.
+# 0A                compound
+#   08 0004 "text"  string entry named text
+#   0003 "bye"      string payload
+# 00                end
+0A
+08 00 04 74 65 78 74
+00 03 62 79 65
+00

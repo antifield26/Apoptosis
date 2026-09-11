@@ -1,0 +1,27 @@
+# Line-ending policy.
+#
+# The production target is Linux (Pi 5, Debian 13, aarch64) and CI runs there too,
+# while development happens on Windows. Without this file git stores LF but checks
+# out CRLF on Windows, so the same commit produces different bytes per platform —
+# which would make `cargo fmt --check`, fixture hashes and any byte-exact wire test
+# platform-dependent. Everything textual is therefore normalized to LF in the
+# repository *and* in the working tree, on every platform.
+* text=auto eol=lf
+
+# Binary fixtures: never touch these. The two Anvil fixtures are byte-exact copies of
+# vanilla output and are compared by hash (P03-05), so any translation would break
+# them. The `.hex` fixtures are text but are golden wire bytes, so they are listed
+# explicitly as text to keep them diffable while still LF.
+*.mca binary
+*.dat binary
+*.png binary
+*.jar binary
+
+# Rust and docs are text; listed for clarity rather than necessity.
+*.rs text
+*.toml text
+*.md text
+*.tsv text
+*.hex text
+*.lock text
+*.yml text

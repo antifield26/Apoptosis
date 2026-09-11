@@ -1,0 +1,4 @@
+# Golden bytes: one uncompressed frame containing packet id 0x2A with payload
+# 01 02. Layout: [VarInt frame length][packet id][payload].
+03
+2A 01 02

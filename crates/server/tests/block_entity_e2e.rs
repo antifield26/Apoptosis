@@ -1,0 +1,216 @@
+//! Block-entity lifecycle tests through the game loop (P06-07).
+//!
+//! `mc-container`'s unit tests prove the store's invariants against a bare map. This
+//! file proves the *integration*: that a block changing on the server retires the
+//! entity attached to it, and that the store the game owns is the one the tick path
+//! touches. Without this, a chest's contents would outlive its block and reappear
+//! when the same block was placed again.
+
+use mc_container::{BlockEntityKind, BlockPos};
+use mc_network::bridge::game_channel;
+use mc_server::game::Game;
+use mc_server::storage::WorldService;
+use mc_test_support::fixtures::TempDir;
+
+fn game(tag: &str) -> (Game, WorldService, TempDir) {
+    let dir = TempDir::new(tag);
+    let config = mc_server::config::StorageConfig {
+        world_dir: dir.path().join("world"),
+        autosave_ticks: 0,
+    };
+    let storage = WorldService::open(&config).expect("world opens");
+    let (_tx, rx) = game_channel(64);
+    let game = Game::new(&storage, 3, rx).expect("game builds");
+    (game, storage, dir)
+}
+
+#[test]
+fn a_placed_block_entity_is_retrievable_and_typed() {
+    let (mut game, _storage, _dir) = game("p06-be-place");
+    let pos = BlockPos::new(4, 64, 6);
+    assert!(
+        game.place_block_entity(pos, BlockEntityKind::Container)
+            .is_none()
+    );
+    let store = game.block_entities();
+    assert_eq!(store.len(), 1);
+    let entity = store.get(pos).expect("the chest");
+    assert_eq!(entity.kind(), BlockEntityKind::Container);
+    assert_eq!(entity.data.items().expect("an inventory").len(), 27);
+    assert!(store.is_well_formed());
+}
+
+#[test]
+fn replacing_a_block_entity_reports_what_it_displaced() {
+    let (mut game, _storage, _dir) = game("p06-be-replace");
+    let pos = BlockPos::new(0, 64, 0);
+    game.place_block_entity(pos, BlockEntityKind::Container);
+    // Fill it, so losing it would lose items.
+    if let Some(items) = game
+        .block_entities_mut()
+        .get_mut(pos)
+        .expect("the chest")
+        .data
+        .items_mut()
+    {
+        items[0] = mc_entity::stack::ItemStack::new(1, 32).expect("stack");
+    }
+    assert_eq!(game.block_entities().total_items(), 32);
+    let displaced = game
+        .place_block_entity(pos, BlockEntityKind::Furnace)
+        .expect("the chest it replaced");
+    assert_eq!(displaced.kind(), BlockEntityKind::Container);
+    assert_eq!(
+        displaced.data.total_items(),
+        32,
+        "the displaced entity's contents must be recoverable, not silently dropped"
+    );
+    assert_eq!(game.block_entities().len(), 1, "one entity per position");
+}
+
+#[test]
+fn breaking_the_block_retires_its_entity() {
+    let (mut game, _storage, _dir) = game("p06-be-break");
+    let pos = BlockPos::new(8, 64, 8);
+
+    // Put a stone block in the world and a chest entity on it.
+    let stone = game
+        .registries()
+        .blocks
+        .default_state("minecraft:stone")
+        .expect("stone");
+    let air = game.registries().blocks.air_id();
+    game.world_mut()
+        .set_block(pos.x, pos.y, pos.z, stone)
+        .expect("place the block");
+    game.place_block_entity(pos, BlockEntityKind::Container);
+    assert_eq!(game.block_entities().len(), 1);
+
+    // Break the block through the world API, which is what the gameplay path does,
+    // then tick so the broadcast phase sees the change.
+    game.world_mut()
+        .set_block(pos.x, pos.y, pos.z, air)
+        .expect("break the block");
+    let report = game.tick().expect("tick");
+
+    assert!(
+        game.block_entities().get(pos).is_none(),
+        "the block entity must not outlive its block"
+    );
+    assert_eq!(
+        report.block_entities_changed, 1,
+        "the report must say a block entity was retired"
+    );
+}
+
+#[test]
+fn an_entity_whose_block_still_exists_is_not_retired() {
+    let (mut game, _storage, _dir) = game("p06-be-kept");
+    let kept = BlockPos::new(2, 64, 2);
+    let changed = BlockPos::new(3, 64, 2);
+    let stone = game
+        .registries()
+        .blocks
+        .default_state("minecraft:stone")
+        .expect("stone");
+    let dirt = game
+        .registries()
+        .blocks
+        .default_state("minecraft:dirt")
+        .expect("dirt");
+
+    for pos in [kept, changed] {
+        game.world_mut()
+            .set_block(pos.x, pos.y, pos.z, stone)
+            .expect("place");
+        game.place_block_entity(pos, BlockEntityKind::Container);
+    }
+
+    // Drain the *placement* changes first. Placing a block is itself a change, so
+    // without this the tick under test would legitimately see two changed positions
+    // and retire both entities — which is correct behaviour, not the case this test
+    // is about.
+    let placed = game.tick().expect("tick");
+    assert_eq!(
+        placed.block_entities_changed, 2,
+        "both placements are changes, so both entities are retired on the first tick"
+    );
+    // Re-place them, now that the world state is established.
+    for pos in [kept, changed] {
+        game.place_block_entity(pos, BlockEntityKind::Container);
+    }
+
+    // Change only one of the two blocks.
+    game.world_mut()
+        .set_block(changed.x, changed.y, changed.z, dirt)
+        .expect("replace");
+    let report = game.tick().expect("tick");
+
+    assert!(
+        game.block_entities().get(kept).is_some(),
+        "an untouched block keeps its entity"
+    );
+    assert!(
+        game.block_entities().get(changed).is_none(),
+        "only the changed block's entity is retired"
+    );
+    assert_eq!(report.block_entities_changed, 1);
+}
+
+#[test]
+fn retiring_an_entity_with_contents_is_reported_not_silent() {
+    // The items are not yet dropped as entities (that needs per-item positions and is
+    // P06-08's work). What this asserts is that the loss is *visible*: the report
+    // counts the retirement, so it cannot happen with no trace at all.
+    let (mut game, _storage, _dir) = game("p06-be-contents");
+    let pos = BlockPos::new(1, 64, 1);
+    let stone = game
+        .registries()
+        .blocks
+        .default_state("minecraft:stone")
+        .expect("stone");
+    let air = game.registries().blocks.air_id();
+    game.world_mut()
+        .set_block(pos.x, pos.y, pos.z, stone)
+        .expect("place");
+    game.place_block_entity(pos, BlockEntityKind::Furnace);
+    if let Some(items) = game
+        .block_entities_mut()
+        .get_mut(pos)
+        .expect("the furnace")
+        .data
+        .items_mut()
+    {
+        items[0] = mc_entity::stack::ItemStack::new(1, 5).expect("stack");
+    }
+    assert_eq!(game.block_entities().total_items(), 5);
+
+    game.world_mut()
+        .set_block(pos.x, pos.y, pos.z, air)
+        .expect("break");
+    let report = game.tick().expect("tick");
+    assert_eq!(report.block_entities_changed, 1);
+    assert_eq!(
+        game.block_entities().total_items(),
+        0,
+        "the store no longer counts the retired items"
+    );
+}
+
+#[test]
+fn a_sign_entity_round_trips_through_the_store() {
+    let (mut game, _storage, _dir) = game("p06-be-sign");
+    let pos = BlockPos::new(0, 70, 0);
+    game.place_block_entity(pos, BlockEntityKind::Sign);
+    if let Some(mc_container::BlockEntityData::Sign { lines }) =
+        game.block_entities_mut().get_mut(pos).map(|e| &mut e.data)
+    {
+        lines[0] = "phase six".to_owned();
+    }
+    let entity = game.block_entities().get(pos).expect("the sign");
+    match &entity.data {
+        mc_container::BlockEntityData::Sign { lines } => assert_eq!(lines[0], "phase six"),
+        other => panic!("expected a sign, got {other:?}"),
+    }
+    assert_eq!(entity.data.total_items(), 0);
+}

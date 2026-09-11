@@ -1,0 +1,25 @@
+# Example server configuration (P01-06). Copy and edit; pass to `mc-server config.toml`.
+# Every value below is also the built-in default, so deleting a line keeps working.
+
+[network]
+# Socket to bind.
+bind = "127.0.0.1:25565"
+# Concurrent player slots (product contract: 10).
+max_players = 10
+# Mojang authentication. Default OFF; set true only when the online-mode
+# provider boundary (P02-08) is configured and validated (P08).
+online_mode = false
+# Compression threshold in bytes; -1 disables compression.
+compression_threshold = 256
+# Server-list description.
+motd = "A Rust Minecraft Server"
+
+[simulation]
+# Chunk view distance radius. Vanilla default 10; 8 until the Pi-5 benchmark (P08) says otherwise.
+view_distance = 8
+
+[storage]
+# World directory (relative to the process working directory).
+world_dir = "world"
+# Ticks between autosaves at 20 TPS (6000 = 5 min); 0 disables the timer.
+autosave_ticks = 6000

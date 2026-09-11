@@ -1,0 +1,7 @@
+# Pinned toolchain (P01-02). Reproducible builds start here.
+# Validated on: stable-x86_64-pc-windows-msvc, rustc 1.98.1 (2026-09-01).
+# Production target aarch64 (Pi 5) verified via CI cross-build (P01-11).
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+targets = ["x86_64-pc-windows-msvc", "aarch64-unknown-linux-gnu"]

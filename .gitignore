@@ -1,0 +1,7 @@
+# Build output (workspace target dir; per-crate dirs inherit via workspace)
+/target
+# Agent prompt pack: local workflow input, not project source
+/mc-rust-agent-prompts
+# Local reference snapshots (Paper/Pumpkin/Valence/Minestom exports): read-only
+# research input, must never be committed (P00-01, ADR-0001 R-01)
+/OpenSourceMinecraftServer

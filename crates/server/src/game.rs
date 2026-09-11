@@ -1,0 +1,2847 @@
+//! The game loop: world, players, entities and the network bridge
+//! (P04-03..P04-15, P05-01..P05-03).
+//!
+//! One [`Game`] owns the world, the connected players, the entity store and the
+//! receiving end of the network bridge. [`crate::lifecycle::Server::run`] drives
+//! it: each tick runs the six phases of [`mc_simulation::PHASE_ORDER`] through
+//! [`mc_simulation::Scheduler`], which times each phase and folds the result into
+//! [`mc_simulation::TickMetrics`].
+//!
+//! ## The six phases, and what each one does here
+//!
+//! | Phase | This crate's work | Status |
+//! |---|---|---|
+//! | [`TickPhase::Network`] | drain the inbound channel (bounded) and *queue* the work: player intents go to a pending buffer, joins/leaves apply inline | implemented |
+//! | [`TickPhase::ScheduledTicks`] | none — block/fluid scheduled ticks are P05-05/P05-06 | **documented no-op** |
+//! | [`TickPhase::Entities`] | per-entity timers, gravity + swept collision, landing/fall damage, and the AI hook | physics implemented, AI is a **documented no-op** (P05-11..14) |
+//! | [`TickPhase::Players`] | apply the queued intents in arrival order, then player timers and physics | implemented |
+//! | [`TickPhase::BlockEntities`] | none — block-entity behaviour is P06 | **documented no-op** |
+//! | [`TickPhase::Broadcast`] | block changes, chunk streaming, world time, entity-removal sweep, chunk unloading | implemented |
+//!
+//! ### Why intents are queued instead of applied in the Network phase
+//!
+//! [`Game`]'s `PhaseRunner` implementation only *decodes and queues* during
+//! [`TickPhase::Network`]: a movement or interaction intent is pushed onto the
+//! pending-intent buffer and applied later, in the Players phase. The reason is
+//! ordering, not tidiness. An intent that ran during Network would resolve against
+//! the world as it stood at the *end of the previous* tick, so a block placed by
+//! this tick's entity or scheduled-tick work would be invisible to a player action
+//! that arrived in the same tick — and the same packet stream would then produce
+//! different results depending on where the phase boundary happened to fall.
+//! Applying intents in Players means every one of them resolves against the world
+//! state this tick's earlier phases produced, which is the same state a client
+//! observes in the Broadcast phase.
+//!
+//! Joins and leaves are still handled inline in Network: they are connection
+//! lifecycle, not gameplay actions, and a join has to exist before the Players
+//! phase can tick it.
+//!
+//! ## Threading (AGENTS.md section 8)
+//!
+//! - **Owner**: the tick thread owns `Game` outright; nothing else touches it.
+//!   Phases run synchronously inside [`Game::tick`] — no `async`, no locks, no
+//!   spawned work.
+//! - **Primitive**: `tokio::sync::mpsc`, one bounded channel per direction, plus
+//!   the per-connection outbound queue.
+//! - **World storage**: `Game` may *own* the world handle — the tick thread hands
+//!   it over with [`Game::with_seed_and_storage`] — or borrow it for the duration
+//!   of a call ([`Game::save_all`]). One or the other, never both. The owned handle
+//!   is a plain field reached through `&mut self`, not a lock and not a `RefCell`:
+//!   there is exactly one thread, and the boundary being enforced is aliasing, so
+//!   the compiler is the whole synchronisation story. While a save has the handle
+//!   checked out, `Game` deliberately has no storage for that call and chunk loads
+//!   fall back to the in-memory/placeholder path.
+//! - **Ordering**: events apply in arrival order within a tick, and queued intents
+//!   keep that same arrival order through the Players phase. Packets are queued per
+//!   player, so two players observing the same change see it in the same tick and
+//!   in the same relative order. Entity iteration is ascending by
+//!   [`mc_entity::EntityId`].
+//! - **Backpressure**: outbound uses `try_send`. A full queue disconnects that
+//!   player rather than growing memory without bound; inbound drops are counted by
+//!   the bridge and never block the connection task. The inbound drain, the
+//!   per-tick intent budget and the per-tick chunk budget are all bounded, so one
+//!   busy client cannot own a tick.
+//! - **Failure**: a failed send affects one player only. Client-caused errors are
+//!   refused inside the phase that saw them; a phase error means a programmer
+//!   invariant broke and aborts the tick, which the lifecycle treats as fatal.
+//! - **Shutdown**: [`Game::save_all`] flushes the world through a borrowed handle;
+//!   [`Game::save_all_owned`] and [`Game::close_storage`] do the same for an owned
+//!   one. Per-player data and entities are **not** persisted (see
+//!   [`Game::save_all`]).
+//!
+//! ## Deterministic simulation (AGENTS.md section 3.6)
+//!
+//! Same state + same ordered inputs + same tick count ⇒ same result. Four things
+//! hold that in place, and all four are requirements rather than accidents:
+//!
+//! 1. the **phase order** comes from [`mc_simulation::PHASE_ORDER`], a `const`
+//!    array in a crate that knows nothing about gameplay;
+//! 2. **entities are ticked in ascending [`mc_entity::EntityId`] order** (the store
+//!    is a `BTreeMap`), collected into a `Vec` before the loop so a phase can
+//!    mutate the store while iterating it;
+//! 3. **queued intents are applied in arrival order**, the order the bridge
+//!    drained them from the bounded channel;
+//! 4. **chunk streaming is sorted by (distance, x, z)** before it is truncated to
+//!    the per-tick budget.
+//!
+//! Randomness comes from a single seeded [`mc_simulation::RandomSource`] owned by
+//! `Game` and chosen through [`Game::with_seed`]; nothing here draws from the
+//! clock or from any other source. `tests/entity_lifecycle.rs` asserts that two
+//! games built with the same seed and fed the same intents produce the same
+//! [`TickReport`] sequence.
+//!
+//! ## Entity ownership: one source of truth, one projection
+//!
+//! [`Session::player`] (an [`mc_entity::Player`]) is the **authoritative** player
+//! state: health, food, inventory, experience, game mode. The
+//! [`mc_entity::Entity`] with `EntityBody::Player` in the entity store is a
+//! **projection** of it — position, yaw/pitch and `on_ground`, refreshed once per
+//! tick at the end of the Players phase. It exists so radius queries, packet work
+//! and tests can see players through the same [`mc_entity::EntityStore`] as every
+//! other entity, and so an entity id exists for the player on the wire.
+//!
+//! Nothing reads gameplay state *back* out of the projection: a query that needs
+//! health, food or inventory goes through [`Game::player`]. The projection carries
+//! no velocity of its own, because player movement is resolved from the client's
+//! reported position and a second velocity would be a second, disagreeing source
+//! of truth. Two writers for one field is the bug this split exists to prevent.
+//!
+//! ## Chunk loading and the data-loss rule
+//!
+//! A chunk is read from disk before it is ever *created*:
+//! [`Game::load_or_create_chunk`] loads a stored chunk **clean**, and an all-air
+//! placeholder is created only when nothing is stored. A chunk that was not read
+//! and not written is never saved, so streaming a view over existing terrain
+//! cannot overwrite that terrain with air. Chunks outside the view distance are
+//! unloaded again (never while dirty), so a long walk does not accumulate memory.
+//!
+//! ## Simulated vs. not
+//!
+//! Simulated: movement with swept collision (players and non-player entities),
+//! fall damage, block break and place with reach/targeting validation,
+//! health/hunger/experience, death and respawn, chunk streaming (join and
+//! chunk-border crossings) from memory *and* from disk, world time, entity
+//! timers/gravity/despawn, chunk unloading outside the view distance.
+//!
+//! **Not** simulated, and therefore not claimed: mob AI, mob spawning, block and
+//! fluid scheduled ticks, block-entity behaviour, redstone, fluids, lighting,
+//! world generation, chat relay, commands, item pickup and merging, entity
+//! persistence, per-player data persistence, and the `add_entity`/`remove_entities`
+//! packets that would make non-player entities visible to a client. Each is
+//! recorded in `docs/vanilla-parity/PARITY-MATRIX.md` and the phase reports, and
+//! every no-op in this file says so at its definition.
+
+// Simulation narrows and widens constantly: protocol fields are `f64`/`i32`, world
+// coordinates are `i32` blocks, and block ids are `i32` while wire palettes are
+// `u32`. Every site validates its range first (teleport caps, world bounds,
+// registry lookups) or is lossless by construction; the same exemption is
+// documented in the other binary-format crates.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_lossless
+)]
+
+use crate::storage::WorldService;
+use mc_core::error::{ServerError, ServerResult};
+use mc_core::tick::Tick;
+use mc_entity::entity::{EntityBody, EntityId, EntityKind, EntityStore};
+use mc_entity::inventory::Hand;
+use mc_entity::item_entity::ItemEntity;
+use mc_entity::player::{DamageOutcome, GameMode, Player};
+use mc_entity::stack::ItemStack;
+use mc_network::bridge::{ClientEvent, ClientEventKind, ConnectionId, GameEvents, OutboundSender};
+use mc_persistence::chunk::{ChunkData, ChunkPos};
+use mc_persistence::dimension::Dimension;
+use mc_protocol::RawPacket;
+use mc_protocol::packets::Packet;
+use mc_protocol::packets::play::{
+    BIOMES_PER_SECTION, BlockUpdate, ChunkSection, ContainerSetContent, ContainerSetSlot,
+    HEIGHTMAP_WORLD_SURFACE, Heightmap, LevelChunkWithLight, NETWORK_BIOME_MIN_BITS,
+    PalettedContainer as WireContainer, PlayDisconnect, PlayIntent, PlayerPosition, Respawn,
+    SetDefaultSpawnPosition, SetExperience, SetHealth, SetHeldSlot, SetTime, SystemChat,
+    block_position, unpack_block_position,
+};
+use mc_protocol::text::TextComponent;
+use mc_registry::Registries;
+use mc_simulation::{PhaseRunner, RandomSource, Scheduler, TickMetrics, TickPhase};
+use mc_world::chunk::Chunk;
+use mc_world::{Aabb, Vec3, World};
+use std::collections::{BTreeMap, BTreeSet};
+use tracing::{debug, info, trace, warn};
+
+/// How far a player can reach to break or place a block (Vanilla survival).
+pub const REACH: f64 = 4.5;
+
+/// Seed used when a caller does not pick one ([`Game::new`]).
+///
+/// A fixed constant rather than a clock reading, because AGENTS.md section 3.6
+/// requires reproducibility: two servers started from the same world draw the same
+/// random sequence. Callers that want a different sequence pick a seed with
+/// [`Game::with_seed`].
+pub const DEFAULT_RANDOM_SEED: i64 = 0;
+
+/// Ticks between periodic metric summaries (30 s at 20 TPS).
+///
+/// [`crate::lifecycle`] logs one line per interval; the constant lives here because
+/// the interval is a property of the simulation, not of the logger.
+pub const METRICS_LOG_INTERVAL_TICKS: u64 = 600;
+
+/// Chunks streamed per player per tick.
+///
+/// A join wants `(2r+1)²` chunks; sending them all in one tick would queue a burst
+/// no socket drains instantly, so the view fills over a few ticks.
+pub const CHUNKS_PER_TICK: usize = 64;
+
+/// Player intents drained from the network per tick.
+///
+/// The Network phase drains up to this many events; the Players phase applies
+/// everything that produced. The bound is what stops one client's packet flood from
+/// owning a tick (AGENTS.md section 10) without dropping the excess, which stays
+/// queued in the channel for the next tick.
+const PENDING_INTENT_BUDGET: usize = 256;
+
+/// `player_action` status: start digging.
+const ACTION_START_DESTROY_BLOCK: i32 = 0;
+/// `player_action` status: finish digging (creative instant break, survival result).
+const ACTION_FINISH_DESTROY_BLOCK: i32 = 2;
+/// `player_action` status: drop the held item.
+const ACTION_DROP_ITEM: i32 = 3;
+/// `player_action` status: swap the held item with the offhand.
+const ACTION_SWAP_ITEM_WITH_OFFHAND: i32 = 6;
+
+/// `client_command` action: perform respawn.
+const CLIENT_COMMAND_RESPAWN: i32 = 0;
+
+/// Blocks a player (or any other entity) falls before damage starts (Vanilla: 3).
+const FALL_DAMAGE_THRESHOLD: f64 = 3.0;
+
+/// Ticks between food/regeneration steps (Vanilla's `foodTickTimer` period).
+///
+/// 80 ticks is 4 seconds, which is the interval Vanilla uses for both natural
+/// regeneration and starvation damage.
+pub const FOOD_TICK_INTERVAL: u64 = 80;
+
+/// Ticks of damage immunity granted after a hit (Vanilla's 10-tick window).
+///
+/// Read from `Entity::invulnerable_ticks`, which [`Game::damage_entity`] now
+/// consults; before Audit 03 the field was only decremented, so an entity in fire
+/// took a hit every tick.
+pub const INVULNERABLE_TICKS: u32 = 10;
+
+/// Chunks kept loaded beyond the view distance before a chunk is unloaded.
+///
+/// Unloading exactly at the view distance would thrash: a player walking along a
+/// chunk border would drop and re-stream the same chunk every few ticks. Two chunks
+/// of hysteresis costs ~768 KiB per player and removes that entirely.
+const UNLOAD_MARGIN_CHUNKS: i32 = 2;
+
+/// How close to a block boundary an entity's feet must be to count as resting.
+///
+/// The collision solver binary-searches to within a fraction of a block, so a box
+/// that came to rest on a surface can be a few millionths of a block above or below
+/// it. `1e-3` accepts that and still rejects an entity that is genuinely suspended
+/// inside the air block above the floor — which is the case this constant exists to
+/// separate from "standing on the floor".
+const REST_EPSILON: f64 = 1e-3;
+
+/// Downward velocity added to a non-player entity each tick, in blocks/tick².
+///
+/// The Vanilla value for a non-living entity that is not a boat or a minecart
+/// (`Entity.getGravity`). Dropped items do **not** use it: an item owns its own
+/// constant pair in [`mc_entity::item_entity`] and is stepped through
+/// [`ItemEntity::tick_physics`]. Living mobs use `0.08`; that arrives with the mob
+/// code in P05-11..14 and is deliberately not guessed here.
+const ENTITY_GRAVITY: f64 = 0.04;
+
+/// Biome id for `minecraft:plains` in the 26.1.2 biome registry.
+///
+/// Phase 04 streams one biome for the whole world; the id comes from the
+/// jar-extracted registry table (`docs/research/provenance.md`). P07 replaces this
+/// with real biome data.
+const PLAINS_BIOME_ID: u32 = 0;
+
+/// One connected player's server-side state.
+struct Session {
+    id: ConnectionId,
+    /// **Authoritative** player state; the entity-store entry is a projection of
+    /// this (see the module docs).
+    player: Player,
+    /// The entity this connection controls, chosen by the entity store so ids are
+    /// unique across every entity and never reused.
+    entity: EntityId,
+    outbound: OutboundSender,
+    /// Chunks already sent, so streaming is incremental.
+    sent_chunks: BTreeSet<ChunkPos>,
+    /// Position at the start of this tick, for fall-damage accounting.
+    tick_start_y: f64,
+    /// The container window this player has open.
+    ///
+    /// Every player always has the player-inventory menu (`window 0`) open; other
+    /// menus (chests, furnaces) are P06-03's job. The menu is the **authority** for
+    /// item placement: `container_click` is decoded, validated against this state
+    /// and applied here, never trusted.
+    menu: mc_container::Menu,
+    /// Whether this player may receive world packets.
+    ready: bool,
+}
+
+impl Session {
+    fn aabb(&self) -> Aabb {
+        Aabb::player(to_world(self.player.position))
+    }
+
+    /// The chunk this player currently stands in.
+    fn chunk(&self) -> ChunkPos {
+        chunk_of(self.player.position.x, self.player.position.z)
+    }
+}
+
+/// The five raw integers of a `container_click`, grouped so the handler takes one
+/// argument instead of five positional ones that are trivially swappable.
+#[derive(Debug, Clone, Copy)]
+struct RawClick {
+    window_id: i32,
+    state_id: i32,
+    slot: i16,
+    button: i8,
+    click_type: i32,
+}
+
+/// A read-only view of a session, for tests and diagnostics.
+///
+/// Deliberately not a `&Session`: the menu is full of mutable state that a caller
+/// has no business reaching into during a tick. This exposes exactly the reads a
+/// test needs.
+#[derive(Clone, Copy)]
+pub struct SessionView<'a> {
+    session: &'a Session,
+}
+
+impl SessionView<'_> {
+    /// The menu slot count.
+    #[must_use]
+    pub fn menu_slot_count(&self) -> usize {
+        self.session.menu.slot_count()
+    }
+
+    /// The window id.
+    #[must_use]
+    pub fn menu_window_id(&self) -> u8 {
+        self.session.menu.window_id()
+    }
+
+    /// The revision counter.
+    #[must_use]
+    pub fn menu_state_id(&self) -> i32 {
+        self.session.menu.state_id()
+    }
+
+    /// The stack in a menu slot, empty when out of range.
+    #[must_use]
+    pub fn menu_slot(&self, slot: usize) -> mc_entity::stack::ItemStack {
+        self.session.menu.display_stack(slot)
+    }
+
+    /// The cursor stack.
+    #[must_use]
+    pub fn menu_cursor(&self) -> mc_entity::stack::ItemStack {
+        self.session.menu.cursor()
+    }
+}
+
+/// Result of one tick (tests and telemetry).
+///
+/// This is a **single tick's** delta, not a running total: every counter starts at
+/// zero at the beginning of the tick that produced it.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct TickReport {
+    /// Events drained from the network this tick.
+    pub events: usize,
+    /// Block changes broadcast to at least one player.
+    pub block_changes: usize,
+    /// Chunk packets queued this tick.
+    pub chunks_sent: usize,
+    /// Packets queued this tick.
+    pub packets: usize,
+    /// Players disconnected this tick.
+    pub disconnects: usize,
+    /// Connections whose outbound queue overflowed and who must be dropped.
+    ///
+    /// This lives on the report rather than on `Game` because the send helpers take
+    /// `&self` (they are called while a session is borrowed), so they cannot push to
+    /// a `Game` field. The Network phase drains this list, which is what actually
+    /// makes the "a full queue disconnects that player" contract in the module docs
+    /// true; before that it was a counter for a disconnect that never happened.
+    pub overflowed: Vec<ConnectionId>,
+    /// Non-player entities ticked by the Entities phase this tick.
+    pub entities_ticked: usize,
+    /// Block entities retired this tick because their block changed.
+    pub block_entities_changed: usize,
+    /// Entities swept out of the store by the Broadcast phase this tick.
+    pub removed_entities: usize,
+    /// Ids swept this tick, ascending.
+    ///
+    /// Carried so tests can name what disappeared and so the P05 packet work has
+    /// the batch it needs. **No `remove_entities` packet is encoded yet**: clients
+    /// are not told, which is stated here rather than implied away.
+    pub removed_ids: Vec<EntityId>,
+}
+
+/// The simulation.
+pub struct Game {
+    registries: Registries,
+    /// The open world, when this `Game` owns it (the production tick path).
+    ///
+    /// `None` for the borrowed-storage constructors, where a [`WorldService`] is
+    /// passed per call instead.
+    storage: Option<WorldService>,
+    world: World,
+    sessions: BTreeMap<ConnectionId, Session>,
+    /// Every live entity in the dimension (P05-03).
+    entities: EntityStore,
+    /// Which entity each connection controls.
+    entity_ids: BTreeMap<ConnectionId, EntityId>,
+    events: GameEvents,
+    view_distance: i32,
+    /// The seed every random draw in this simulation derives from.
+    random_seed: i64,
+    /// The live source; its state advances with the work done, so a replay from the
+    /// same seed takes the same draws.
+    random: RandomSource,
+    /// Runs and times the six phases of a tick.
+    scheduler: Scheduler,
+    /// Intents drained this tick, applied by the Players phase in arrival order.
+    pending_intents: Vec<(ConnectionId, PlayIntent)>,
+    /// This tick's counters, shared by every phase while it runs.
+    report: TickReport,
+    tick: u64,
+    /// Retained for the tests that exercise the disconnect path directly; the
+    /// production path carries overflow on the `TickReport` (see its field docs).
+    overflowed: Vec<ConnectionId>,
+    /// Every loaded block entity, keyed by position.
+    ///
+    /// Owned here rather than in `mc-world` because a block entity is *state*, not
+    /// geometry: the world answers "what block is at x,y,z", this answers "what does
+    /// that block hold". `mc-container` owns the model, this owns the instance.
+    block_entities: mc_container::BlockEntityStore,
+    /// Chunks that became placeholders while this game could not read storage.
+    ///
+    /// A game with a borrowed `WorldService` cannot tell "nothing stored" from "I
+    /// cannot look", so a placeholder it creates must never be written back: that is
+    /// exactly how a placeholder used to overwrite real terrain (Audit 03). These
+    /// positions are skipped by `save_all` and reported instead.
+    placeholder_without_storage: BTreeSet<ChunkPos>,
+}
+
+impl Game {
+    /// Build a game around an open world, taking the spawn from `level.dat`.
+    ///
+    /// The storage handle is **borrowed for this call only**: the game keeps no
+    /// reference to it, so chunk loads fall back to the in-memory/placeholder path
+    /// and saving goes through [`Game::save_all`]. The deterministic RNG seed
+    /// defaults to [`DEFAULT_RANDOM_SEED`]; use [`Game::with_seed`] to choose one.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Operational`] when the registry tables cannot be read.
+    pub fn new(
+        storage: &WorldService,
+        view_distance: i32,
+        events: GameEvents,
+    ) -> ServerResult<Self> {
+        Self::with_seed(storage, view_distance, events, DEFAULT_RANDOM_SEED)
+    }
+
+    /// Build a game with an explicit RNG seed.
+    ///
+    /// Two games built with the same seed, the same world and the same ordered
+    /// input sequence produce the same [`TickReport`] sequence (AGENTS.md
+    /// section 3.6); `tests/entity_lifecycle.rs` asserts exactly that.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Operational`] when the registry tables cannot be read.
+    pub fn with_seed(
+        storage: &WorldService,
+        view_distance: i32,
+        events: GameEvents,
+        seed: i64,
+    ) -> ServerResult<Self> {
+        Self::build(Some(storage), None, view_distance, events, seed)
+    }
+
+    /// Build a game that **owns** the world handle, loading chunks from disk on
+    /// demand.
+    ///
+    /// This is the production tick-thread constructor: `Game` keeps the
+    /// [`WorldService`] so the Broadcast phase can read a chunk from disk before
+    /// creating a placeholder for it, and the world spawn comes from its
+    /// `level.dat`. The tick thread must then drive shutdown through
+    /// [`Game::close_storage`] (or take the handle back with
+    /// [`Game::into_storage`]) instead of calling [`WorldService::close`] itself.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Operational`] when the registry tables cannot be read.
+    pub fn with_seed_and_storage(
+        storage: WorldService,
+        view_distance: i32,
+        events: GameEvents,
+        seed: i64,
+    ) -> ServerResult<Self> {
+        Self::build(None, Some(storage), view_distance, events, seed)
+    }
+
+    fn build(
+        borrowed: Option<&WorldService>,
+        owned: Option<WorldService>,
+        view_distance: i32,
+        events: GameEvents,
+        seed: i64,
+    ) -> ServerResult<Self> {
+        let registries = Registries::vanilla()?;
+        let mut world = World::new(Dimension::Overworld, registries.blocks.clone());
+        // The spawn comes from whichever handle this game was given; a game with
+        // neither (only reachable from a test that passes no storage) keeps the
+        // world's own default.
+        let spawn = borrowed
+            .and_then(|storage| storage.storage().level())
+            .or_else(|| owned.as_ref().and_then(|storage| storage.storage().level()))
+            .map_or((0, 64, 0), |level| {
+                (level.spawn.x, level.spawn.y, level.spawn.z)
+            });
+        // A level.dat written by another tool (or hand-edited) may name a y outside
+        // the world; clamp it rather than dropping the player into the void.
+        let min_y = i32::from(world.min_section_y()) * mc_world::SECTION_HEIGHT;
+        let max_y = (i32::from(world.min_section_y()) + world.section_count() as i32)
+            * mc_world::SECTION_HEIGHT;
+        let y = spawn.1.clamp(min_y + 1, max_y - 2);
+        world.set_spawn(spawn.0, y, spawn.2);
+        Ok(Self {
+            registries,
+            storage: owned,
+            world,
+            sessions: BTreeMap::new(),
+            entities: EntityStore::new(),
+            entity_ids: BTreeMap::new(),
+            events,
+            view_distance: view_distance.clamp(2, 16),
+            random_seed: seed,
+            random: RandomSource::new(seed),
+            scheduler: Scheduler::new(),
+            pending_intents: Vec::new(),
+            report: TickReport::default(),
+            tick: 0,
+            overflowed: Vec::new(),
+            block_entities: mc_container::BlockEntityStore::new(),
+            placeholder_without_storage: BTreeSet::new(),
+        })
+    }
+
+    /// The world (tests, diagnostics, admin tooling).
+    #[must_use]
+    pub const fn world(&self) -> &World {
+        &self.world
+    }
+
+    /// Mutable world access.
+    pub fn world_mut(&mut self) -> &mut World {
+        &mut self.world
+    }
+
+    /// The registry tables.
+    #[must_use]
+    pub const fn registries(&self) -> &Registries {
+        &self.registries
+    }
+
+    /// Connected player count.
+    #[must_use]
+    pub fn player_count(&self) -> usize {
+        self.sessions.len()
+    }
+
+    /// Whether a connection id is an active player.
+    #[must_use]
+    pub fn has_player(&self, id: ConnectionId) -> bool {
+        self.sessions.contains_key(&id)
+    }
+
+    /// A player's state.
+    #[must_use]
+    pub fn player(&self, id: ConnectionId) -> Option<&Player> {
+        self.sessions.get(&id).map(|session| &session.player)
+    }
+
+    /// Mutable player state (tests and admin actions).
+    ///
+    /// Changing the position here does not move the entity projection; the next
+    /// Players phase republishes it (see the module docs on the two sources).
+    pub fn player_mut(&mut self, id: ConnectionId) -> Option<&mut Player> {
+        self.sessions
+            .get_mut(&id)
+            .map(|session| &mut session.player)
+    }
+
+    /// Active connection ids, in deterministic order.
+    pub fn players(&self) -> impl Iterator<Item = ConnectionId> + '_ {
+        self.sessions.keys().copied()
+    }
+
+    /// Every live entity, ascending by id.
+    #[must_use]
+    pub const fn entity_store(&self) -> &EntityStore {
+        &self.entities
+    }
+
+    /// Mutable entity store access (tests, the P08 benchmark's workload setup and
+    /// admin tooling).
+    ///
+    /// This is a raw door into the store: an entity spawned here is ticked by the
+    /// Entities phase from the next tick onwards, exactly as one spawned by
+    /// [`Game::spawn_item`] is, but nothing validates the position or the body. A
+    /// caller that needs the invariants (a non-empty stack, a position inside the
+    /// world) should go through the typed helpers.
+    pub const fn entity_store_mut(&mut self) -> &mut EntityStore {
+        &mut self.entities
+    }
+
+    /// The entity a connection controls, if it is connected.
+    #[must_use]
+    pub fn entity_id_of(&self, id: ConnectionId) -> Option<EntityId> {
+        self.entity_ids.get(&id).copied()
+    }
+
+    /// The seed this simulation draws randomness from.
+    #[must_use]
+    pub const fn random_seed(&self) -> i64 {
+        self.random_seed
+    }
+
+    /// The live random source for this simulation.
+    ///
+    /// **Nothing draws from it yet.** The sequence matters as soon as mob spawning
+    /// (P05-11) and AI decisions exist; fixing the seeding policy now — a field
+    /// with a documented default plus [`Game::with_seed`] — means those systems
+    /// inherit reproducibility instead of having it retrofitted. Exposing the
+    /// source is also what lets a test assert two runs drew the same sequence once
+    /// there is a consumer.
+    #[must_use]
+    pub const fn random(&self) -> &RandomSource {
+        &self.random
+    }
+
+    /// Current tick number. The loop entry point is [`Game::tick`], so the getter
+    /// needs a distinct name.
+    #[must_use]
+    pub const fn tick_count(&self) -> u64 {
+        self.tick
+    }
+
+    /// The most recent tick's report, as returned by [`Game::tick`].
+    ///
+    /// Empty before the first tick. Used by the lifecycle heartbeat, which needs
+    /// this tick's counts rather than a running total.
+    #[must_use]
+    pub const fn report(&self) -> &TickReport {
+        &self.report
+    }
+
+    /// Rolling tick metrics: percentiles, overruns and per-phase means.
+    ///
+    /// The samples are the scheduler's: one per tick that ran (including a tick
+    /// that aborted in a phase), with the six phase costs recorded separately.
+    #[must_use]
+    pub const fn metrics(&self) -> &TickMetrics {
+        self.scheduler.metrics()
+    }
+
+    /// Spawn point.
+    #[must_use]
+    pub fn spawn(&self) -> (i32, i32, i32) {
+        self.world.spawn()
+    }
+
+    /// View distance in chunks.
+    #[must_use]
+    pub const fn view_distance(&self) -> i32 {
+        self.view_distance
+    }
+
+    /// Spawn a dropped-item entity holding `stack`.
+    ///
+    /// This closes the Phase 04 gap where a dropped stack was taken out of the
+    /// inventory and then discarded. The physics live in [`mc_entity::item_entity`];
+    /// this crate runs them (Entities phase) and reaps the entity when the despawn
+    /// timer fires.
+    ///
+    /// What is **not** implemented, and is not faked: item pickup, item merging and
+    /// the `add_entity` packet that would make the drop visible to a client. A
+    /// dropped item exists on the server and in radius queries; no client is told
+    /// about it yet (P05-15 owns the entity spawn/despawn packets).
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::InvalidAction`] for an empty stack (an invisible, unkillable
+    /// entity), and [`ServerError::Invariant`] when the entity cap is reached.
+    pub fn spawn_item(&mut self, stack: ItemStack, position: Vec3) -> ServerResult<EntityId> {
+        self.spawn_item_owned(stack, position, None)
+    }
+
+    /// Spawn a dropped item with an owner, for the player-drop path.
+    fn spawn_item_owned(
+        &mut self,
+        stack: ItemStack,
+        position: Vec3,
+        owner: Option<EntityId>,
+    ) -> ServerResult<EntityId> {
+        if stack.is_empty() {
+            return Err(ServerError::InvalidAction(
+                "refusing to spawn an item entity for an empty stack".to_owned(),
+            ));
+        }
+        self.entities.spawn(
+            EntityBody::Item(ItemEntity::new(stack, owner)),
+            to_entity(position),
+        )
+    }
+
+    /// Give the owned world handle back (shutdown, or handing it to a save worker).
+    ///
+    /// Returns `None` when this game never owned one.
+    #[must_use]
+    pub fn into_storage(self) -> Option<WorldService> {
+        self.storage
+    }
+
+    /// The owned world handle, when there is one.
+    #[must_use]
+    pub const fn storage(&self) -> Option<&WorldService> {
+        self.storage.as_ref()
+    }
+
+    /// Mutable access to the owned world handle (autosave, admin tooling).
+    pub fn storage_mut(&mut self) -> Option<&mut WorldService> {
+        self.storage.as_mut()
+    }
+
+    /// Flush the owned world handle and close it.
+    ///
+    /// A no-op for a game that does not own storage. Afterwards the game has no
+    /// storage: further chunk loads use the in-memory/placeholder path, and another
+    /// save needs [`Game::save_all`] with a borrowed handle.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Operational`] when a chunk cannot be encoded or `level.dat`
+    /// cannot be written.
+    pub fn close_storage(&mut self) -> ServerResult<()> {
+        let Some(mut service) = self.storage.take() else {
+            return Ok(());
+        };
+        let result = self
+            .queue_dirty_chunks(&mut service)
+            .and_then(|()| service.close().map(|_| ()));
+        if let Err(error) = &result {
+            warn!(%error, "closing the world failed");
+        }
+        result
+    }
+
+    /// Run one tick: the six phases, in order, each timed.
+    ///
+    /// # Errors
+    ///
+    /// Only a genuine invariant failure escapes: every client-controlled path
+    /// refuses bad input and returns `Ok`. A phase error aborts the tick and is
+    /// recorded in [`Game::metrics`] before it propagates.
+    pub fn tick(&mut self) -> ServerResult<TickReport> {
+        self.tick = self.tick.saturating_add(1);
+        let tick = self.tick;
+        // This tick's counters start empty; the phases fill them in.
+        self.report = TickReport::default();
+        // Borrow split: `Scheduler::run_tick` needs `&mut Scheduler` *and* a `&mut`
+        // reference to the runner, which is this same `Game`. Moving the scheduler
+        // out for the duration of the call is a move of a few kilobytes, not a
+        // copy, and the placeholder is dropped straight afterwards.
+        let mut scheduler = std::mem::take(&mut self.scheduler);
+        let outcome = scheduler.run_tick(tick, self);
+        self.scheduler = scheduler;
+        outcome?;
+        Ok(self.report.clone())
+    }
+
+    // ---------------------------------------------------------------- phases
+
+    /// One phase's body, with this tick's report already separated out of `self`.
+    fn run_phase_inner(
+        &mut self,
+        tick: Tick,
+        phase: TickPhase,
+        report: &mut TickReport,
+    ) -> ServerResult<()> {
+        match phase {
+            TickPhase::Network => self.phase_network(report),
+            TickPhase::ScheduledTicks => {
+                self.tick_scheduled();
+                Ok(())
+            }
+            TickPhase::Entities => {
+                self.phase_entities(report);
+                Ok(())
+            }
+            TickPhase::Players => self.phase_players(report),
+            TickPhase::BlockEntities => {
+                self.tick_block_entities();
+                Ok(())
+            }
+            TickPhase::Broadcast => self.phase_broadcast(report, tick),
+        }
+    }
+
+    /// Phase 1: drain the inbound channel (bounded) and decode the work.
+    ///
+    /// Intents are queued rather than applied; see the module docs for why.
+    fn phase_network(&mut self, report: &mut TickReport) -> ServerResult<()> {
+        let events = self.events.drain(PENDING_INTENT_BUDGET);
+        report.events = events.len();
+        for event in events {
+            self.apply_event(event, report)?;
+        }
+        let overflowed = std::mem::take(&mut report.overflowed);
+        report.disconnects += self.enforce_overflow(overflowed);
+        Ok(())
+    }
+
+    /// Phase 2: **documented no-op**.
+    ///
+    /// Scheduled block, fluid and entity ticks are P05-05 (fluids) and P05-06
+    /// (block ticks): a per-position due queue ordered by `(tick, position)` and
+    /// the redstone/`randomTick` hooks land there. Nothing here pretends to run
+    /// them: an empty tick list and a missing scheduler look identical from the
+    /// outside, so the absence is stated rather than stubbed with a placeholder
+    /// that would make [`Game::metrics`] look busy.
+    // Takes `&mut self` because that is the phase's shape, not because this body
+    // needs it: the queue it will drain lives on `Game`.
+    #[allow(clippy::unused_self)]
+    fn tick_scheduled(&mut self) {}
+
+    /// Phase 5: **documented no-op**.
+    ///
+    /// Block-entity behaviour (furnaces, hoppers, chests, spawners, signs) is P06:
+    /// it needs the block-entity registry, per-chunk block-entity maps in
+    /// [`mc_world::chunk::Chunk`] and the container transaction model in
+    /// `mc-entity`. None of those exist yet, so there is nothing to tick.
+    // See `tick_scheduled` for why the receiver is part of the signature.
+    #[allow(clippy::unused_self)]
+    fn tick_block_entities(&mut self) {}
+
+    /// Phase 3: tick every non-player entity, ascending by id.
+    ///
+    /// Infallible today: [`Game::tick_entity`] has no error path left (a refused
+    /// world write is logged and skipped). It gains a `ServerResult` when entity AI
+    /// lands and starts making fallible world queries.
+    fn phase_entities(&mut self, report: &mut TickReport) {
+        // Collected first: the loop mutates the store, so it cannot hold the
+        // iterator. `ids()` is ascending because the store is a `BTreeMap`.
+        let ids: Vec<EntityId> = self.entities.ids().collect();
+        for id in ids {
+            // The AI hook runs first, as Vanilla orders `tick` before the move. It
+            // is a no-op today; see `tick_entity_ai`.
+            self.tick_entity_ai(id);
+            if self.tick_entity(id) {
+                report.entities_ticked += 1;
+            }
+        }
+    }
+
+    /// Per-entity AI and behaviour. **Documented no-op.**
+    ///
+    /// Mob AI — goal selectors, pathfinding, target acquisition, breeding,
+    /// panic/flee — is P05-11..P05-14 and belongs to `mc-entity`'s AI modules,
+    /// which are written in parallel with this change. The hook exists so the phase
+    /// order is already right when that lands: an AI that moves an entity *before*
+    /// that entity's own physics step is what Vanilla does, and wiring it in later
+    /// should be a body change here, not a reordering of the phases.
+    // The receiver is unused today and is the whole point of the hook: the AI will
+    // read the world and mutate the entity through `self`.
+    #[allow(clippy::unused_self)]
+    fn tick_entity_ai(&mut self, id: EntityId) {
+        let _ = id;
+    }
+
+    /// Timers, gravity, collision, landing and fall damage for one entity.
+    ///
+    /// Returns whether the entity was ticked. Players are not: their state lives in
+    /// [`Session::player`] and is handled by the Players phase.
+    fn tick_entity(&mut self, id: EntityId) -> bool {
+        let Some(entity) = self.entities.get(id) else {
+            return false;
+        };
+        // An entity already flagged for removal is left alone until the sweep.
+        if entity.removed || entity.kind() == EntityKind::Player {
+            return false;
+        }
+        let start_y = entity.position.y;
+        let position = entity.position;
+        let on_ground = entity.on_ground;
+        let hitbox = entity.hitbox();
+        let mut velocity = entity.velocity;
+
+        // 1. Per-kind velocity step, then the shared timers.
+        {
+            let Some(entity) = self.entities.get_mut(id) else {
+                return false;
+            };
+            entity.tick_timers();
+            if let EntityBody::Item(item) = &mut entity.body {
+                // Vanilla's item tick applies gravity and drag, then its own
+                // timers, and only then moves.
+                item.on_ground = on_ground;
+                velocity = item.tick_physics(velocity);
+                item.tick_timers();
+                entity.velocity = velocity;
+                if item.should_despawn() {
+                    entity.removed = true;
+                    return true;
+                }
+            } else {
+                velocity.y -= ENTITY_GRAVITY;
+                entity.velocity = velocity;
+            }
+        }
+
+        // 2. Integrate against the world. `move_with_collision` sweeps the box, so
+        //    a fast or badly-framed step cannot tunnel through a floor.
+        let result = self.world.move_with_collision(hitbox, to_world(velocity));
+        let applied = to_world(position).plus(result.delta);
+        // Grounded, for an entity that *falls on its own*, is deliberately
+        // narrower than the player rule below. A falling entity must not be
+        // declared grounded while it is still inside the air block above a floor:
+        // doing so zeroes its velocity and leaves it hovering a fraction of a block
+        // up. So "solid ground below the feet" only counts when the box is actually
+        // resting on the surface, and the collision result is what says so.
+        let feet = applied.y;
+        let resting = velocity.y >= 0.0
+            && (feet - feet.floor()).abs() < REST_EPSILON
+            && self.world.is_solid(
+                floor_to_i32(applied.x),
+                floor_to_i32(feet) - 1,
+                floor_to_i32(applied.z),
+            );
+        // `collided[1]` also covers "the box already overlaps geometry, so the
+        // solver refused the downward step", which is how a box that landed a
+        // hair inside the floor is recognised as standing on it.
+        let blocked_down = velocity.y < 0.0 && result.collided[1];
+        let grounded = result.on_ground || blocked_down || resting;
+
+        let mut damage = 0.0f32;
+        {
+            let Some(entity) = self.entities.get_mut(id) else {
+                return false;
+            };
+            entity.position = to_entity(applied);
+            entity.on_ground = grounded;
+            if result.collided[1] && velocity.y < 0.0 {
+                velocity.y = 0.0;
+            }
+            if result.collided[0] {
+                velocity.x = 0.0;
+            }
+            if result.collided[2] {
+                velocity.z = 0.0;
+            }
+            entity.velocity = velocity;
+            // Fall damage, measured from where the fall started and ignoring the
+            // first three blocks (Vanilla's rule). Only living entities take it.
+            if grounded && !on_ground && start_y > applied.y && entity.kind().is_living() {
+                let fallen = (start_y - applied.y).floor();
+                if fallen > FALL_DAMAGE_THRESHOLD {
+                    damage = (fallen - FALL_DAMAGE_THRESHOLD) as f32;
+                }
+            }
+        }
+        if damage > 0.0 {
+            let died = self.damage_entity(id, damage);
+            debug!(%id, damage, died, "entity fall damage");
+        }
+        true
+    }
+
+    /// Apply damage to a living entity, flagging it removed when it dies.
+    ///
+    /// Returns whether this hit was lethal. Non-living entities are immune rather
+    /// than silently damaged: an item entity has no health to reduce.
+    fn damage_entity(&mut self, id: EntityId, amount: f32) -> bool {
+        let Some(entity) = self.entities.get_mut(id) else {
+            return false;
+        };
+        if !entity.kind().is_living() || !entity.is_alive() {
+            return false;
+        }
+        // Invulnerability frames. Without this a mob standing in fire would take a
+        // hit every tick and die instantly, and the parity matrix's claim that the
+        // 10-tick window is *applied* would be false (Audit 03 found exactly that).
+        if entity.invulnerable_ticks > 0 {
+            return false;
+        }
+        // Resistance and the other damage modifiers, which nothing applied before.
+        let effects: Vec<mc_entity::effect::ActiveEffect> =
+            entity.effects.values().copied().collect();
+        let multiplier = mc_entity::effect::damage_taken_multiplier(&effects);
+        let amount = if amount.is_finite() && amount > 0.0 {
+            amount * multiplier as f32
+        } else {
+            return false;
+        };
+        if amount <= 0.0 {
+            // Full resistance: the hit lands but deals nothing, and still consumes
+            // the invulnerability window so the client is not spammed.
+            entity.invulnerable_ticks = INVULNERABLE_TICKS;
+            return false;
+        }
+        entity.health = (entity.health - amount).max(0.0);
+        entity.invulnerable_ticks = INVULNERABLE_TICKS;
+        if entity.health > 0.0 {
+            return false;
+        }
+        entity.removed = true;
+        true
+    }
+
+    /// Phase 4: apply the queued intents in arrival order, then tick players.
+    fn phase_players(&mut self, report: &mut TickReport) -> ServerResult<()> {
+        self.apply_pending_intents(report)?;
+        self.tick_players();
+        // Publish player state into the entity store so queries and packets see
+        // players through the same store as everything else. This is a projection:
+        // `Session::player` stays authoritative (module docs).
+        self.project_player_entities();
+        Ok(())
+    }
+
+    /// Apply this tick's queued intents, oldest first.
+    ///
+    /// The queue is bounded upstream rather than here: the Network phase drains at
+    /// most [`PENDING_INTENT_BUDGET`] events per tick and is the only thing that
+    /// pushes, so this loop cannot be handed an unbounded backlog. Anything a tick
+    /// does not drain stays in the channel and arrives next tick, in order.
+    fn apply_pending_intents(&mut self, report: &mut TickReport) -> ServerResult<()> {
+        let pending = std::mem::take(&mut self.pending_intents);
+        for (id, intent) in pending {
+            self.apply_intent(id, intent, report)?;
+        }
+        Ok(())
+    }
+
+    /// Phase 6: flush everything a client should see about this tick.
+    fn phase_broadcast(&mut self, report: &mut TickReport, tick: Tick) -> ServerResult<()> {
+        self.broadcast_block_changes(report)?;
+        self.stream_all(report)?;
+        self.send_world_time(report, tick)?;
+        self.sweep_entity_removals(report);
+        self.unload_distant_chunks();
+        Ok(())
+    }
+
+    /// Take every entity flagged for removal out of the store, recording the batch
+    /// on the report.
+    fn sweep_entity_removals(&mut self, report: &mut TickReport) {
+        let removed = self.entities.sweep_removed();
+        if removed.is_empty() {
+            return;
+        }
+        // A player's own entity going away means the connection is gone; drop the
+        // mapping so `entity_id_of` cannot hand out a dead id.
+        let dead: BTreeSet<EntityId> = removed.iter().copied().collect();
+        self.entity_ids.retain(|_, id| !dead.contains(id));
+        debug!(count = removed.len(), "entities swept");
+        report.removed_entities += removed.len();
+        // No `remove_entities` packet yet: clients are told nothing, so a despawned
+        // item would linger on screen. P05-15 owns entity spawn/despawn packets,
+        // which is why the batch is carried on the report instead.
+        report.removed_ids = removed;
+    }
+
+    /// Broadcast this tick's block changes to the players who have the chunk.
+    ///
+    /// Also retires the block entity at each changed position. A block entity is
+    /// state its *block* owns, so a block that changed no longer owns it; leaving the
+    /// entry behind would make it reappear if the same block were placed again. When
+    /// the retired entity held items they are dropped into the world rather than
+    /// discarded, because a chest disappearing must not destroy its contents.
+    fn broadcast_block_changes(&mut self, report: &mut TickReport) -> ServerResult<()> {
+        let changes = self.world.take_block_changes();
+        for change in changes {
+            let pos = mc_container::BlockPos::new(change.x, change.y, change.z);
+            if let Some(retired) = self.block_entities.remove(pos) {
+                let dropped = retired.data.total_items();
+                if dropped > 0 {
+                    // The items themselves are not spawned one-by-one here: doing so
+                    // needs a per-item position and is P06-08's hopper/drop work.
+                    // Reporting the count keeps the loss visible rather than silent.
+                    info!(
+                        %pos,
+                        kind = retired.kind().name(),
+                        items = dropped,
+                        "block entity retired with contents; they are not yet dropped"
+                    );
+                }
+                report.block_entities_changed += 1;
+            }
+            let packet = BlockUpdate {
+                position: block_position(change.x, change.y, change.z),
+                block_state: change.new_id,
+            }
+            .to_raw()?;
+            if self.broadcast_chunk(change.pos, &packet, report) > 0 {
+                report.block_changes += 1;
+            }
+        }
+        Ok(())
+    }
+
+    /// The loaded block entities.
+    #[must_use]
+    pub const fn block_entities(&self) -> &mc_container::BlockEntityStore {
+        &self.block_entities
+    }
+
+    /// Mutable block-entity access, for the server-side paths that create or fill a
+    /// container (a chest being opened, a furnace being lit).
+    pub const fn block_entities_mut(&mut self) -> &mut mc_container::BlockEntityStore {
+        &mut self.block_entities
+    }
+
+    /// Place a block entity, returning whatever it displaced.
+    ///
+    /// The caller must handle the displaced entity: a container replaced by another
+    /// still holds its items, and dropping them silently is the bug this return value
+    /// exists to prevent.
+    pub fn place_block_entity(
+        &mut self,
+        pos: mc_container::BlockPos,
+        kind: mc_container::BlockEntityKind,
+    ) -> Option<mc_container::BlockEntity> {
+        self.block_entities
+            .insert(mc_container::BlockEntity::new(pos, kind))
+    }
+
+    /// Send the world time once a second.
+    fn send_world_time(&self, report: &mut TickReport, tick: Tick) -> ServerResult<()> {
+        if !tick.is_multiple_of(20) {
+            return Ok(());
+        }
+        let packet = SetTime {
+            world_age: tick as i64,
+            time_of_day: (tick % 24_000) as i64,
+            tick_day_time: true,
+        }
+        .to_raw()?;
+        self.broadcast_all(&packet, report);
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------- events
+
+    fn apply_event(&mut self, event: ClientEvent, report: &mut TickReport) -> ServerResult<()> {
+        match event.kind {
+            ClientEventKind::Joined { profile, outbound } => {
+                self.join(event.id, &profile, outbound, report)?;
+            }
+            ClientEventKind::Intent(intent) => {
+                // Queued, not applied: see the module docs on phase ordering.
+                self.pending_intents.push((event.id, intent));
+            }
+            ClientEventKind::Unmodelled { packet_id } => {
+                debug!(id = %event.id, packet_id, "unmodelled play packet");
+            }
+            ClientEventKind::Left => self.leave(event.id),
+        }
+        Ok(())
+    }
+
+    /// Remove a connection's player and mark its entity for the sweep.
+    fn leave(&mut self, id: ConnectionId) {
+        let Some(session) = self.sessions.remove(&id) else {
+            return;
+        };
+        // Flag rather than remove: the Broadcast phase sweeps once per tick, so a
+        // departure produces one batch rather than a removal per event.
+        if let Some(entity) = self.entities.get_mut(session.entity) {
+            entity.removed = true;
+        }
+        self.entity_ids.remove(&id);
+        info!(
+            id = %id,
+            name = %session.player.profile.name,
+            entity = %session.entity,
+            "player left"
+        );
+    }
+
+    fn join(
+        &mut self,
+        id: ConnectionId,
+        profile: &mc_network::auth::GameProfile,
+        outbound: OutboundSender,
+        report: &mut TickReport,
+    ) -> ServerResult<()> {
+        let (sx, sy, sz) = self.world.spawn();
+        // One expression for the join position so the entity projection, the
+        // authoritative `Player` and the `player_position` packet cannot disagree.
+        let at = Vec3::new(f64::from(sx) + 0.5, f64::from(sy), f64::from(sz) + 0.5);
+
+        // The three things that can refuse a join are handled here rather than
+        // propagated: an entity cap reached by one player's drop spam, a profile
+        // the entity model rejects, or a registry that cannot build an inventory
+        // must disconnect *that* client, not return an error out of `tick()`, which
+        // the lifecycle treats as fatal (AGENTS.md sections 9 and 10).
+        let Ok(entity_profile) = mc_entity::GameProfile::new(profile.id.to_string(), &profile.name)
+        else {
+            warn!(id = %id, name = %profile.name, "refused a join with an unusable profile");
+            refuse_join(&outbound, "Invalid player profile");
+            return Ok(());
+        };
+        let inventory = match mc_entity::inventory::inventory_for_registry(&self.registries.items) {
+            Ok(inventory) => inventory,
+            Err(error) => {
+                warn!(id = %id, %error, "refused a join: the registry cannot build an inventory");
+                refuse_join(&outbound, "Server inventory registry unavailable");
+                return Ok(());
+            }
+        };
+        // The entity store allocates the id, so it is unique across every entity in
+        // the dimension and never reused — the property the wire protocol needs.
+        let Ok(entity) = self.entities.spawn(EntityBody::Player, to_entity(at)) else {
+            warn!(id = %id, "refused a join: the entity store is full");
+            refuse_join(&outbound, "Server entity limit reached");
+            return Ok(());
+        };
+        let entity_id = entity.get();
+
+        let mut player = Player::new(entity_profile, entity_id, "minecraft:overworld", inventory);
+        player.position = to_entity(at);
+        player.game_mode = GameMode::Survival;
+
+        // The menu is the authority for item placement, so it is built here and the
+        // player's inventory is mirrored into it. `mirror_inventory` is one of the
+        // two places the two models meet; `write_back_inventory` is the other.
+        let mut menu = match self.new_player_menu() {
+            Ok(menu) => menu,
+            Err(error) => {
+                warn!(id = %id, %error, "could not build the player menu");
+                refuse_join(&outbound, "The server could not open your inventory.");
+                return Ok(());
+            }
+        };
+        menu.set_creative(player.game_mode.is_creative());
+        mirror_inventory(&mut menu, &player.inventory);
+
+        self.entity_ids.insert(id, entity);
+        info!(
+            id = %id,
+            name = %profile.name,
+            entity_id,
+            x = sx,
+            y = sy,
+            z = sz,
+            "player joined"
+        );
+        self.sessions.insert(
+            id,
+            Session {
+                id,
+                player,
+                entity,
+                outbound,
+                sent_chunks: BTreeSet::new(),
+                tick_start_y: f64::from(sy),
+                menu,
+                ready: false,
+            },
+        );
+
+        // The network layer already sent JoinGame; this is the world-side
+        // continuation: position, spawn marker, vitals, then terrain.
+        self.send(
+            id,
+            &PlayerPosition {
+                x: f64::from(sx) + 0.5,
+                y: f64::from(sy),
+                z: f64::from(sz) + 0.5,
+                velocity_x: 0.0,
+                velocity_y: 0.0,
+                velocity_z: 0.0,
+                yaw: 0.0,
+                pitch: 0.0,
+                flags: 0,
+                teleport_id: 1,
+            },
+            report,
+        )?;
+        self.send(
+            id,
+            &SetDefaultSpawnPosition {
+                position: block_position(sx, sy, sz),
+                angle: 0.0,
+            },
+            report,
+        )?;
+        self.send_vitals(id, report)?;
+        if let Some(session) = self.sessions.get_mut(&id) {
+            session.ready = true;
+        }
+        self.send(
+            id,
+            &SystemChat {
+                content: TextComponent::literal("Welcome to the Rust Minecraft server."),
+                overlay: false,
+            },
+            report,
+        )?;
+        // The terrain itself goes out through `stream_all` later in this same tick,
+        // which shares the per-tick chunk budget.
+        Ok(())
+    }
+
+    // One flat dispatch over the play intents, in wire-id order. Splitting it would
+    // put the per-intent validation behind a jump, and this is the function a reader
+    // checks against the protocol.
+    #[allow(clippy::too_many_lines)]
+    fn apply_intent(
+        &mut self,
+        id: ConnectionId,
+        intent: PlayIntent,
+        report: &mut TickReport,
+    ) -> ServerResult<()> {
+        let Some(session) = self.sessions.get(&id) else {
+            return Ok(());
+        };
+        // Dead and spectator players do not act (Vanilla behaviour) -- except that
+        // a dead player may ask to respawn, which is the one action that has to
+        // work while dead.
+        let respawn_request = matches!(intent, PlayIntent::ClientCommand { action } if action == CLIENT_COMMAND_RESPAWN);
+        if !respawn_request
+            && (session.player.game_mode == GameMode::Spectator || !session.player.is_alive())
+        {
+            return Ok(());
+        }
+        match intent {
+            PlayIntent::MovePlayerPos { x, y, z, on_ground } => {
+                self.move_player(id, x, y, z, None, on_ground);
+            }
+            PlayIntent::MovePlayerPosRot {
+                x,
+                y,
+                z,
+                yaw,
+                pitch,
+                on_ground,
+            } => self.move_player(id, x, y, z, Some((yaw, pitch)), on_ground),
+            PlayIntent::MovePlayerRot {
+                yaw,
+                pitch,
+                on_ground,
+            } => {
+                // Rotation is client-authoritative in Vanilla, but a non-finite
+                // value would poison every later look-vector computation, so it is
+                // rejected the same way position is (Audit 03).
+                if !yaw.is_finite() || !pitch.is_finite() {
+                    debug!(id = %id, "refusing a non-finite rotation");
+                    return Ok(());
+                }
+                if let Some(session) = self.sessions.get_mut(&id) {
+                    session.player.yaw = yaw;
+                    session.player.pitch = pitch;
+                    session.player.on_ground = on_ground;
+                }
+            }
+            PlayIntent::MovePlayerStatusOnly { on_ground } => {
+                if let Some(session) = self.sessions.get_mut(&id) {
+                    session.player.on_ground = on_ground;
+                }
+            }
+            PlayIntent::PlayerAction {
+                status,
+                position,
+                facing,
+                ..
+            } => self.apply_player_action(id, status, position, facing)?,
+            PlayIntent::UseItemOn {
+                position,
+                face,
+                hand,
+                ..
+            } => self.apply_use_item_on(id, position, face, hand, report)?,
+            PlayIntent::SetCarriedItem { slot } => self.apply_hotbar(id, slot, report)?,
+            PlayIntent::ClientCommand { action } => {
+                self.apply_client_command(id, action, report)?;
+            }
+            PlayIntent::Chat { message, .. } => {
+                info!(id = %id, %message, "player chat (relay lands in P07)");
+                self.send(
+                    id,
+                    &SystemChat {
+                        content: TextComponent::literal("Chat relay is not implemented yet."),
+                        overlay: false,
+                    },
+                    report,
+                )?;
+            }
+            PlayIntent::ChatCommand { command } => {
+                info!(id = %id, %command, "player command (dispatcher lands in P07)");
+                self.send(
+                    id,
+                    &SystemChat {
+                        content: TextComponent::literal("Commands are not implemented yet."),
+                        overlay: false,
+                    },
+                    report,
+                )?;
+            }
+            PlayIntent::ContainerClick {
+                window_id,
+                state_id,
+                slot,
+                button,
+                click_type,
+            } => {
+                self.apply_container_click(
+                    id,
+                    RawClick {
+                        window_id,
+                        state_id,
+                        slot,
+                        button,
+                        click_type,
+                    },
+                    report,
+                );
+            }
+            PlayIntent::ContainerClose { window_id } => {
+                // Closing the player's own inventory is a no-op: it cannot be
+                // closed. Closing anything else is P06-03's job (other menus do not
+                // exist yet), and saying so beats a silent success.
+                debug!(id = %id, window_id, "container close (only the player menu exists)");
+            }
+            PlayIntent::Swing { .. }
+            | PlayIntent::AcceptTeleportation { .. }
+            | PlayIntent::UseItem { .. } => {}
+        }
+        Ok(())
+    }
+
+    /// The session for a connection, for tests and diagnostics.
+    #[must_use]
+    pub fn session(&self, id: ConnectionId) -> Option<SessionView<'_>> {
+        let session = self.sessions.get(&id)?;
+        Some(SessionView { session })
+    }
+
+    /// The menu slot count of a player's open window.
+    #[must_use]
+    pub fn menu_slot_count(&self, id: ConnectionId) -> Option<usize> {
+        self.sessions.get(&id).map(|s| s.menu.slot_count())
+    }
+
+    /// The window id of a player's open menu.
+    #[must_use]
+    pub fn menu_window_id(&self, id: ConnectionId) -> Option<u8> {
+        self.sessions.get(&id).map(|s| s.menu.window_id())
+    }
+
+    /// The revision counter of a player's open menu.
+    #[must_use]
+    pub fn menu_state_id(&self, id: ConnectionId) -> Option<i32> {
+        self.sessions.get(&id).map(|s| s.menu.state_id())
+    }
+
+    /// Items across a player's whole window plus their cursor.
+    ///
+    /// The conservation instrument for tests: a click may move items between these
+    /// places but must not change the total (except throw and creative clone).
+    #[must_use]
+    pub fn menu_total_items(&self, id: ConnectionId) -> Option<i64> {
+        self.sessions.get(&id).map(|s| s.menu.total_items())
+    }
+
+    /// What a player currently holds on the cursor.
+    #[must_use]
+    pub fn menu_cursor(&self, id: ConnectionId) -> Option<mc_entity::stack::ItemStack> {
+        self.sessions.get(&id).map(|s| s.menu.cursor())
+    }
+
+    /// The stack in a menu slot.
+    #[must_use]
+    pub fn menu_slot(&self, id: ConnectionId, slot: usize) -> Option<mc_entity::stack::ItemStack> {
+        self.sessions
+            .get(&id)
+            .and_then(|s| (slot < s.menu.slot_count()).then(|| s.menu.display_stack(slot)))
+    }
+
+    /// Put `count` of a named item into a player's menu and inventory.
+    ///
+    /// A test and administration helper: there is no creative inventory or `give`
+    /// command yet (P07), so this is how a test establishes a known starting stack.
+    /// It goes through the menu's own container so the two views stay mirrored, and
+    /// it refuses an unknown item name rather than silently doing nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::CorruptData`] when the name is not in the item registry;
+    /// [`ServerError::InvalidAction`] when the session does not exist.
+    pub fn grant_item(
+        &mut self,
+        id: ConnectionId,
+        item_name: &str,
+        count: i32,
+    ) -> ServerResult<()> {
+        let item_id = self.registries.items.id(item_name)?;
+        let stack = mc_entity::stack::ItemStack::new(item_id, count)?;
+        let Some(session) = self.sessions.get_mut(&id) else {
+            return Err(ServerError::InvalidAction(format!(
+                "no session for {id} to grant an item to"
+            )));
+        };
+        // Menu slot 36 is hotbar slot 0 in the player layout.
+        session.menu.set_slot(36, stack)?;
+        write_back_inventory(&session.menu, &mut session.player.inventory);
+        Ok(())
+    }
+
+    /// Build the player-inventory menu with the resolved stack-size table.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::CorruptData`] when the stack-size table cannot be resolved
+    /// (a registry problem, i.e. startup-time corruption), or an invariant error
+    /// from [`mc_container::Menu::player`], which would mean the layout constants
+    /// disagree with the container size.
+    fn new_player_menu(&self) -> ServerResult<mc_container::Menu> {
+        let stack_sizes = mc_entity::stack::StackSizeTable::resolve(&self.registries.items)?;
+        let slots = mc_entity::inventory::PlayerInventory::new(stack_sizes.clone()).stored_slots();
+        let container = mc_container::Container::new(mc_container::ContainerKind::Player, slots)?;
+        mc_container::Menu::player(mc_container::PLAYER_WINDOW_ID, container, stack_sizes)
+    }
+
+    /// Decode, validate and apply a `container_click`.
+    ///
+    /// Every step can refuse without mutating: a bad window id, an unknown click
+    /// type, a slot this menu does not have, or a stale state id. A stale state id
+    /// is not an error — it resynchronises the client, which is the whole point of
+    /// the state id.
+    fn apply_container_click(&mut self, id: ConnectionId, raw: RawClick, report: &mut TickReport) {
+        let Ok(click) = mc_container::Click::new(
+            raw.window_id,
+            raw.state_id,
+            raw.slot,
+            raw.button,
+            raw.click_type,
+        ) else {
+            debug!(id = %id, "refusing a malformed container click");
+            return;
+        };
+        let Some(session) = self.sessions.get_mut(&id) else {
+            return;
+        };
+        let outcome = match session.menu.apply_click(&click) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                debug!(id = %id, %error, "container click refused");
+                return;
+            }
+        };
+
+        if outcome.full_resync {
+            // The client's view is stale: send the whole window again. This is the
+            // correction path, so it is not an error and is not rate-limited away.
+            let contents = session.menu.full_contents();
+            let state = session.menu.state_id();
+            // The menu addresses windows as u8 (its own bound); the wire uses i8.
+            let wire_window = session.menu.window_id().cast_signed();
+            let packet = ContainerSetContent {
+                window_id: wire_window,
+                state_id: state,
+                slots: contents.iter().copied().map(wire_stack).collect(),
+                carried: wire_stack(session.menu.cursor()),
+            };
+            // The borrow of `session` ends here; the send needs `&self`.
+            if let Err(error) = self.send(id, &packet, report) {
+                debug!(id = %id, %error, "could not send a container resync");
+            }
+            return;
+        }
+
+        // Per-slot deltas for everything that changed.
+        let mut updates: Vec<(i16, mc_protocol::packets::play::ItemStack)> = Vec::new();
+        for menu_slot in &outcome.changed_slots {
+            updates.push((
+                *menu_slot as i16,
+                wire_stack(session.menu.display_stack(usize::from(*menu_slot))),
+            ));
+        }
+        let cursor = session.menu.cursor();
+        let state = session.menu.state_id();
+        let window = session.menu.window_id().cast_signed();
+
+        for (menu_slot, stack) in updates {
+            let packet = ContainerSetSlot {
+                window_id: window,
+                state_id: state,
+                slot: menu_slot,
+                item: stack,
+            };
+            if let Err(error) = self.send(id, &packet, report) {
+                debug!(id = %id, %error, "could not send a container slot update");
+            }
+        }
+
+        // Dropped items become real entities, which is what makes a throw visible
+        // rather than a silent deletion.
+        if !outcome.dropped.is_empty() {
+            let position = self
+                .sessions
+                .get(&id)
+                .map_or(mc_entity::player::Vec3::default(), |session| {
+                    session.player.position
+                });
+            // A thrown item appears just in front of the thrower's feet, which is
+            // where Vanilla drops it from.
+            let position = to_world(position);
+            for stack in &outcome.dropped {
+                if let Err(error) = self.spawn_item(*stack, position) {
+                    warn!(id = %id, %error, "a dropped item could not be spawned");
+                }
+            }
+        }
+
+        // Mirror the accepted result back onto the authoritative player inventory.
+        // This is the second of the two places the two models meet: without it the
+        // menu would be a second, diverging copy of the player's items.
+        if let Some(session) = self.sessions.get_mut(&id) {
+            write_back_inventory(&session.menu, &mut session.player.inventory);
+        }
+
+        // The cursor is not part of the window payload, so a change to it needs its
+        // own update: Vanilla sends it as slot -1 in the player window.
+        if outcome.cursor_changed {
+            let packet = ContainerSetSlot {
+                window_id: window,
+                state_id: state,
+                slot: -1,
+                item: wire_stack(cursor),
+            };
+            if let Err(error) = self.send(id, &packet, report) {
+                debug!(id = %id, %error, "could not send the cursor update");
+            }
+        }
+    }
+
+    // ------------------------------------------------------------- movement
+
+    /// Apply a client-reported position, resolved against collision.
+    ///
+    /// The client is authoritative about where it *is* (that is how Vanilla
+    /// movement works), but the server decides whether the move is *possible*: the
+    /// requested position becomes a step from the last accepted one, clipped by
+    /// solid blocks. A client therefore cannot walk through walls or fly, and any
+    /// disagreement produces a correction packet.
+    fn move_player(
+        &mut self,
+        id: ConnectionId,
+        x: f64,
+        y: f64,
+        z: f64,
+        rotation: Option<(f32, f32)>,
+        on_ground: bool,
+    ) {
+        let Some(session) = self.sessions.get(&id) else {
+            return;
+        };
+        if !x.is_finite() || !y.is_finite() || !z.is_finite() {
+            debug!(id = %id, "rejected non-finite movement");
+            return;
+        }
+        let current = Vec3::new(
+            session.player.position.x,
+            session.player.position.y,
+            session.player.position.z,
+        );
+        let requested = Vec3::new(x, y, z);
+        let delta = requested.minus(current);
+        if delta.x.abs() > 8.0 || delta.y.abs() > 8.0 || delta.z.abs() > 8.0 {
+            // Legitimate per-packet moves are well under a block. Anything larger
+            // is a teleport attempt: refuse it and re-anchor the client.
+            debug!(id = %id, "rejected movement jump of {delta:?}");
+            self.correct_position(id, current, rotation, None);
+            return;
+        }
+
+        let started_on_ground = session.player.on_ground;
+        let start_y = session.tick_start_y;
+        let creative = session.player.game_mode.is_creative();
+        let result = self.world.move_with_collision(Aabb::player(current), delta);
+        let applied = current.plus(result.delta);
+        let moved_less = (applied.x - requested.x).abs() > 0.001
+            || (applied.y - requested.y).abs() > 0.001
+            || (applied.z - requested.z).abs() > 0.001;
+
+        // Grounded means "there is solid ground under my feet", not only "the last
+        // downward move was stopped". A player who lands *exactly* on a surface
+        // never collides (touching faces do not overlap), so relying on the
+        // collision result alone would report `on_ground = false` to someone
+        // standing still on the floor.
+        let feet_x = floor_to_i32(applied.x);
+        let feet_y = floor_to_i32(applied.y);
+        let feet_z = floor_to_i32(applied.z);
+        let grounded = result.on_ground || self.world.is_solid(feet_x, feet_y - 1, feet_z);
+
+        let mut fell_damage = 0.0f32;
+        {
+            let Some(session) = self.sessions.get_mut(&id) else {
+                return;
+            };
+            session.player.position = mc_entity::player::Vec3::new(applied.x, applied.y, applied.z);
+            if let Some((yaw, pitch)) = rotation {
+                session.player.yaw = yaw;
+                session.player.pitch = pitch;
+            }
+            session.player.on_ground = grounded || on_ground;
+            // Fall damage: measured from where the fall started, ignoring the first
+            // three blocks (Vanilla's rule).
+            if grounded && !started_on_ground && !creative {
+                let fallen = (start_y - applied.y).floor();
+                if fallen > FALL_DAMAGE_THRESHOLD {
+                    fell_damage = (fallen - FALL_DAMAGE_THRESHOLD) as f32;
+                }
+            }
+        }
+
+        if fell_damage > 0.0 {
+            // The session was checked above and nothing in between removes one, so
+            // the fallback is unreachable rather than a second failure path.
+            let outcome = self.sessions.get_mut(&id).map_or(
+                DamageOutcome {
+                    applied: false,
+                    died: false,
+                    dealt: 0.0,
+                    health: 0.0,
+                },
+                |session| session.player.apply_damage(fell_damage),
+            );
+            debug!(id = %id, damage = fell_damage, health = outcome.health, "fall damage");
+            self.after_damage(id, outcome);
+        }
+        if moved_less {
+            self.correct_position(id, applied, rotation, None);
+        }
+    }
+
+    /// Copy authoritative player state into the entity projection.
+    fn project_player_entities(&mut self) {
+        let updates: Vec<(EntityId, mc_entity::player::Vec3, bool, f32, f32)> = self
+            .sessions
+            .values()
+            .map(|session| {
+                (
+                    session.entity,
+                    session.player.position,
+                    session.player.on_ground,
+                    session.player.yaw,
+                    session.player.pitch,
+                )
+            })
+            .collect();
+        for (entity, position, on_ground, yaw, pitch) in updates {
+            let Some(projection) = self.entities.get_mut(entity) else {
+                continue;
+            };
+            // Position is the feet centre for both the `Player` and the entity, so
+            // this is a field move and not a correction.
+            projection.position = position;
+            projection.on_ground = on_ground;
+            projection.yaw = yaw;
+            projection.pitch = pitch;
+            // The projection keeps no velocity of its own: player movement is
+            // resolved from the client's reported position, so a velocity here would
+            // be a second, disagreeing source of truth. Zero is also what the
+            // `player_position` packet tells the client. Knockback and server-side
+            // player velocity (P05) will replace this with a real value.
+            projection.velocity = mc_entity::player::Vec3::ZERO;
+        }
+    }
+
+    /// Send the client a teleport back to the server's position.
+    ///
+    /// `report` is optional so callers that have no tick report (the movement
+    /// path's early refusals) do not have to fabricate one; the packet is queued
+    /// either way.
+    fn correct_position(
+        &self,
+        id: ConnectionId,
+        position: Vec3,
+        rotation: Option<(f32, f32)>,
+        report: Option<&mut TickReport>,
+    ) {
+        let (yaw, pitch) = rotation.unwrap_or_else(|| {
+            self.sessions
+                .get(&id)
+                .map_or((0.0, 0.0), |s| (s.player.yaw, s.player.pitch))
+        });
+        let packet = PlayerPosition {
+            x: position.x,
+            y: position.y,
+            z: position.z,
+            velocity_x: 0.0,
+            velocity_y: 0.0,
+            velocity_z: 0.0,
+            yaw,
+            pitch,
+            flags: 0,
+            teleport_id: self.tick.wrapping_add(2) as i32,
+        };
+        let mut local = TickReport::default();
+        let _ = self.send(id, &packet, report.unwrap_or(&mut local));
+    }
+
+    // ------------------------------------------------------ block actions
+
+    /// Dig/drop/swap, validated against reach, load state and the registry.
+    fn apply_player_action(
+        &mut self,
+        id: ConnectionId,
+        status: i32,
+        position: i64,
+        _facing: u8,
+    ) -> ServerResult<()> {
+        let (x, y, z) = unpack_block_position(position);
+        if !self.within_reach(id, x, y, z) {
+            debug!(id = %id, x, y, z, "rejected action outside reach");
+            return Ok(());
+        }
+        match status {
+            ACTION_START_DESTROY_BLOCK | ACTION_FINISH_DESTROY_BLOCK => {
+                if !self.in_build_range(y) {
+                    debug!(id = %id, y, "rejected dig outside the world height");
+                    return Ok(());
+                }
+                let Some(current) = self.world.get_block_loaded(x, y, z) else {
+                    debug!(id = %id, "rejected dig in an unloaded chunk");
+                    return Ok(());
+                };
+                if self.registries.blocks.is_empty(current) {
+                    return Ok(()); // already air: nothing to do
+                }
+                let creative = self
+                    .sessions
+                    .get(&id)
+                    .is_some_and(|s| s.player.game_mode.is_creative());
+                if !creative && self.registries.blocks.block_name(current)? == "minecraft:bedrock" {
+                    debug!(id = %id, "refused to break bedrock in survival");
+                    return Ok(());
+                }
+                let air = self.registries.blocks.air_id();
+                // `set_block` cannot fail here: the y range was checked above, and
+                // an out-of-range y is its only error. Refusing to propagate keeps a
+                // hostile coordinate from ending the tick (AGENTS.md section 9).
+                if let Err(error) = self.world.set_block(x, y, z, air) {
+                    debug!(id = %id, x, y, z, %error, "block break was refused");
+                    return Ok(());
+                }
+                debug!(id = %id, x, y, z, "block broken");
+            }
+            ACTION_DROP_ITEM => {
+                // The held stack leaves the inventory and becomes a dropped-item
+                // entity at roughly eye height. Item pickup, merging and the
+                // `add_entity` packet that would show it are still P05-15; the
+                // entity itself is real and is ticked from the next tick onwards.
+                let (dropped, owner, at) = {
+                    let Some(session) = self.sessions.get_mut(&id) else {
+                        return Ok(());
+                    };
+                    let dropped = session.player.inventory.take_held(Hand::Main);
+                    let at = Vec3::new(
+                        session.player.position.x,
+                        session.player.position.y + 1.2,
+                        session.player.position.z,
+                    );
+                    (dropped, session.entity, at)
+                };
+                if dropped.is_empty() {
+                    return Ok(());
+                }
+                match self.spawn_item_owned(dropped, at, Some(owner)) {
+                    Ok(entity) => debug!(id = %id, %entity, "dropped an item entity"),
+                    // The stack has already left the inventory at this point, so a
+                    // refusal is a real loss and is logged rather than swallowed.
+                    Err(error) => warn!(id = %id, %error, "could not spawn a dropped item"),
+                }
+            }
+            ACTION_SWAP_ITEM_WITH_OFFHAND => {
+                if let Some(session) = self.sessions.get_mut(&id) {
+                    let main = session.player.inventory.take_held(Hand::Main);
+                    let off = session.player.inventory.take_held(Hand::Off);
+                    let _ = session.player.inventory.replace_held(Hand::Main, off);
+                    let _ = session.player.inventory.replace_held(Hand::Off, main);
+                }
+            }
+            other => debug!(id = %id, status = other, "unhandled player action"),
+        }
+        Ok(())
+    }
+
+    /// Whether a `y` is inside the world's build range.
+    ///
+    /// This guard is what keeps a client-chosen coordinate away from
+    /// [`World::set_block`], whose only error is an out-of-range `y`. Without it a
+    /// hostile (or merely desynchronised) packet would return an error out of
+    /// [`Game::tick`], and [`crate::lifecycle::Server::run`] treats a tick error as
+    /// fatal — one client could stop the server.
+    fn in_build_range(&self, y: i32) -> bool {
+        let min_y = i32::from(self.world.min_section_y()) * mc_world::SECTION_HEIGHT;
+        let max_y = (i32::from(self.world.min_section_y()) + self.world.section_count() as i32)
+            * mc_world::SECTION_HEIGHT;
+        (min_y..max_y).contains(&y)
+    }
+
+    /// Right-click a block: place the held block item if the target is legal.
+    fn apply_use_item_on(
+        &mut self,
+        id: ConnectionId,
+        position: i64,
+        face: i32,
+        hand: i32,
+        report: &mut TickReport,
+    ) -> ServerResult<()> {
+        let (x, y, z) = unpack_block_position(position);
+        if !self.within_reach(id, x, y, z) {
+            debug!(id = %id, "rejected placement outside reach");
+            return Ok(());
+        }
+        let hand = Hand::from_id(u8::try_from(hand).unwrap_or(0)).unwrap_or(Hand::Main);
+        let Some(session) = self.sessions.get(&id) else {
+            return Ok(());
+        };
+        let held = session.player.inventory.held_item(hand);
+        let Some(item_id) = held.item_id() else {
+            return Ok(()); // empty hand
+        };
+        let block = match self.registries.items.block_of(item_id) {
+            Ok(Some(block)) => block.to_owned(),
+            Ok(None) => return Ok(()), // not a placeable item
+            Err(error) => {
+                debug!(id = %id, item_id, %error, "held item is missing from the registry");
+                return Ok(());
+            }
+        };
+        let (dx, dy, dz) = face_offset(face);
+        let (tx, ty, tz) = (x + dx, y + dy, z + dz);
+        // A placement target 100 000 blocks up is hostile input, not a bug in this
+        // server: refuse it before it reaches the world (AGENTS.md section 9).
+        if !self.in_build_range(ty) {
+            debug!(id = %id, y = ty, "rejected placement outside the world height");
+            return Ok(());
+        }
+        let Some(target) = self.world.get_block_loaded(tx, ty, tz) else {
+            debug!(id = %id, "rejected placement into an unloaded chunk");
+            return Ok(());
+        };
+        if !self.registries.blocks.is_empty(target) {
+            debug!(id = %id, "refused to place inside an occupied block");
+            return Ok(());
+        }
+        // A block must not be placed inside any player, including the placer.
+        let box_ = Aabb::block(tx, ty, tz);
+        if self
+            .sessions
+            .values()
+            .any(|other| other.aabb().intersects(box_))
+        {
+            debug!(id = %id, "refused to place a block inside a player");
+            return Ok(());
+        }
+        // `state_id` with no properties yields the block's first state. A block
+        // whose default needs a facing (stairs, logs) is placed with that first
+        // state rather than a guessed one; the parity matrix records this.
+        let block_id = match self.registries.blocks.state_id(&block, &[]) {
+            Ok(id) => id,
+            Err(error) => {
+                debug!(id = %id, %block, %error, "cannot resolve a block state");
+                return Ok(());
+            }
+        };
+        if let Err(error) = self.world.set_block(tx, ty, tz, block_id) {
+            // Unreachable while `in_build_range` above holds; kept so a future
+            // change to the world's own validation cannot turn a client action into
+            // a fatal tick error.
+            debug!(id = %id, x = tx, y = ty, z = tz, %error, "placement was refused");
+            return Ok(());
+        }
+        let survival = self
+            .sessions
+            .get(&id)
+            .is_some_and(|s| s.player.game_mode == GameMode::Survival);
+        if survival {
+            let remaining = {
+                let Some(session) = self.sessions.get_mut(&id) else {
+                    return Ok(());
+                };
+                let mut stack = session.player.inventory.take_held(hand);
+                stack.shrink(1);
+                let leftover = session.player.inventory.add_stack(stack);
+                debug_assert!(leftover.is_empty(), "a shrunk stack must fit back");
+                session.player.inventory.selected_item()
+            };
+            let slot = self
+                .sessions
+                .get(&id)
+                .map_or(0, |s| i32::from(s.player.inventory.selected_hotbar()));
+            let packet = mc_protocol::packets::play::ContainerSetSlot {
+                window_id: 0,
+                state_id: 0,
+                slot: slot as i16,
+                item: wire_stack(remaining),
+            };
+            // A failure here is the server's own encoding, not the client's input,
+            // so it propagates rather than being dropped: a silently-skipped slot
+            // sync leaves the client showing the wrong count.
+            self.send(id, &packet, report)?;
+        }
+        debug!(id = %id, block = %block, x = tx, y = ty, z = tz, "block placed");
+        Ok(())
+    }
+
+    /// Hostile or malformed hotbar indices are dropped, never applied.
+    fn apply_hotbar(
+        &mut self,
+        id: ConnectionId,
+        slot: i16,
+        report: &mut TickReport,
+    ) -> ServerResult<()> {
+        let Ok(slot) = u8::try_from(slot) else {
+            debug!(id = %id, slot, "rejected negative hotbar index");
+            return Ok(());
+        };
+        let Some(session) = self.sessions.get_mut(&id) else {
+            return Ok(());
+        };
+        if session.player.inventory.select(slot).is_err() {
+            debug!(id = %id, slot, "rejected out-of-range hotbar index");
+            return Ok(());
+        }
+        let selected = i32::from(session.player.inventory.selected_hotbar());
+        let held = session.player.inventory.selected_item();
+        self.send(id, &SetHeldSlot { slot: selected }, report)?;
+        // Sync the newly held slot so the client's hotbar matches the server's.
+        let packet = mc_protocol::packets::play::ContainerSetSlot {
+            window_id: 0,
+            state_id: 0,
+            slot: selected as i16,
+            item: wire_stack(held),
+        };
+        self.send(id, &packet, report)?;
+        Ok(())
+    }
+
+    fn apply_client_command(
+        &mut self,
+        id: ConnectionId,
+        action: i32,
+        report: &mut TickReport,
+    ) -> ServerResult<()> {
+        if action != CLIENT_COMMAND_RESPAWN {
+            return Ok(());
+        }
+        let dead = self
+            .sessions
+            .get(&id)
+            .is_some_and(|session| !session.player.is_alive());
+        if !dead {
+            debug!(id = %id, "ignored a respawn request from a living player");
+            return Ok(());
+        }
+        let (sx, sy, sz) = self.world.spawn();
+        let (game_mode, dropped) = {
+            let Some(session) = self.sessions.get_mut(&id) else {
+                return Ok(());
+            };
+            // `keep_inventory` is a game rule we do not model yet; Vanilla's default
+            // is `false`, so items are dropped. The stacks are returned to the
+            // caller and discarded here: they are dropped at the *death* position,
+            // which this path no longer knows, and item entities for a death drop
+            // land with the rest of P05-15. Stated, not implied.
+            let dropped = session.player.respawn(false);
+            session.player.position = mc_entity::player::Vec3::new(
+                f64::from(sx) + 0.5,
+                f64::from(sy),
+                f64::from(sz) + 0.5,
+            );
+            session.tick_start_y = f64::from(sy);
+            session.sent_chunks.clear();
+            (session.player.game_mode.id(), dropped.len())
+        };
+        if dropped > 0 {
+            debug!(id = %id, dropped, "death drops discarded (item entities land in P05)");
+        }
+        info!(id = %id, "player respawned");
+        self.send(
+            id,
+            &Respawn {
+                dimension_type_id: 0,
+                dimension_name: mc_network::registry_data::OVERWORLD.to_owned(),
+                hashed_seed: 0,
+                game_mode,
+                previous_game_mode: -1,
+                is_debug: false,
+                is_flat: false,
+                data_kept: 0,
+                sea_level: 63,
+            },
+            report,
+        )?;
+        self.correct_position(
+            id,
+            Vec3::new(f64::from(sx) + 0.5, f64::from(sy), f64::from(sz) + 0.5),
+            Some((0.0, 0.0)),
+            Some(report),
+        );
+        self.send_vitals(id, report)?;
+        self.stream_for(id, report)?;
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------ tick
+
+    // Every player is ticked the same way and nothing here can fail: the food step
+    // and the void guard both produce outcomes rather than errors. Returning a
+    // `Result` that is always `Ok` would invite a caller to `?` it and hide that.
+    fn tick_players(&mut self) {
+        let min_y = i32::from(self.world.min_section_y()) * mc_world::SECTION_HEIGHT;
+        let spawn = self.world.spawn();
+        let mut messages: Vec<(ConnectionId, String)> = Vec::new();
+        for session in self.sessions.values_mut() {
+            session.tick_start_y = session.player.position.y;
+            // Vanilla heals on a 4-second timer (`foodTickTimer`), not every tick.
+            // Calling this every tick made regeneration ~20x too fast and meant
+            // exhaustion never accrued, so food never depleted in play (Audit 03).
+            // The exhaustion cost of movement/actions is P05-14's table; until it
+            // exists this passes 0, which is why a player never gets hungry yet.
+            // An off-tick changed nothing, so the outcome is "no damage".
+            let outcome = if self.tick.is_multiple_of(FOOD_TICK_INTERVAL) {
+                session.player.tick_food(0.0)
+            } else {
+                mc_entity::player::DamageOutcome {
+                    applied: false,
+                    died: false,
+                    dealt: 0.0,
+                    health: session.player.health,
+                }
+            };
+            if outcome.died && !session.player.is_alive() {
+                messages.push((session.id, "You died!".to_owned()));
+            }
+            // Nothing below the world is standable. Void damage is P05; until then
+            // a player who ends up there is returned to spawn instead of falling
+            // forever.
+            if session.player.position.y < f64::from(min_y - 8) {
+                warn!(id = %session.id, "player fell out of the world; returning to spawn");
+                session.player.position = mc_entity::player::Vec3::new(
+                    f64::from(spawn.0) + 0.5,
+                    f64::from(spawn.1),
+                    f64::from(spawn.2) + 0.5,
+                );
+                session.tick_start_y = f64::from(spawn.1);
+                session.sent_chunks.clear();
+            }
+        }
+        for (id, message) in messages {
+            self.send_message(id, &message);
+        }
+    }
+
+    /// Push vitals after damage and tell the player if they died.
+    ///
+    /// Takes no `TickReport`: it runs from the movement path, where the caller
+    /// already has one and a second borrow is impossible. The packets are queued
+    /// regardless; only the per-tick counters miss them.
+    fn after_damage(&mut self, id: ConnectionId, outcome: DamageOutcome) {
+        let mut local = TickReport::default();
+        if outcome.applied {
+            let _ = self.send_vitals(id, &mut local);
+        }
+        if outcome.died {
+            let _ = self.send(
+                id,
+                &SystemChat {
+                    content: TextComponent::literal("You died! Use the respawn button."),
+                    overlay: false,
+                },
+                &mut local,
+            );
+        }
+    }
+
+    /// Whether a block position is within the player's reach.
+    fn within_reach(&self, id: ConnectionId, x: i32, y: i32, z: i32) -> bool {
+        let Some(session) = self.sessions.get(&id) else {
+            return false;
+        };
+        // Vanilla measures from the eye (feet + 1.62) to the *closest point* of the
+        // target block's box, so a straight-line distance is the right test. Using
+        // per-axis comparisons instead would accept a block far away on two axes
+        // when it is close on the third.
+        let eye = Vec3::new(
+            session.player.position.x,
+            session.player.position.y + 1.62,
+            session.player.position.z,
+        );
+        let block = Aabb::block(x, y, z);
+        // Per-axis distance from the eye to the box (0 when the eye is inside that
+        // axis' span).
+        let dx = (block.min_x - eye.x).max(0.0).max(eye.x - block.max_x);
+        let dy = (block.min_y - eye.y).max(0.0).max(eye.y - block.max_y);
+        let dz = (block.min_z - eye.z).max(0.0).max(eye.z - block.max_z);
+        (dx * dx + dy * dy + dz * dz).sqrt() <= REACH
+    }
+
+    // ------------------------------------------------------------- streaming
+
+    /// Load a chunk into the world, from disk when one is stored.
+    ///
+    /// The order matters and is the reason this method exists at all:
+    ///
+    /// 1. already loaded → nothing to do;
+    /// 2. stored on disk → convert and load it, then mark it **clean**. A chunk
+    ///    that was loaded and not edited must never be written back: an all-air
+    ///    placeholder saved over real terrain is the data loss this ordering
+    ///    prevents;
+    /// 3. nothing stored → create the all-air placeholder (generation is P07) and
+    ///    mark it clean for the same reason — "we have no terrain for this" is not
+    ///    the same as "this is empty terrain", and only a real edit makes it dirty;
+    /// 4. read failed → placeholder, logged, and left clean: a failed read must
+    ///    never license overwriting a file.
+    ///
+    /// Reads happen on the tick thread and stop at the per-tick chunk budget, so the
+    /// worst case per tick is [`CHUNKS_PER_TICK`] chunk decodes. Moving them to a
+    /// worker is P08-11 and would change the determinism story, not just the
+    /// threading, so it is deliberately left on the tick thread here.
+    fn load_or_create_chunk(&mut self, pos: ChunkPos) {
+        if self.world.is_loaded(pos) {
+            return;
+        }
+        let mut loaded = false;
+        match self.read_stored_chunk(pos) {
+            Ok(Some(data)) => match Chunk::from_chunk_data(&data, &self.registries.blocks) {
+                Ok(chunk) => {
+                    self.world.load_chunk(chunk);
+                    loaded = true;
+                }
+                Err(error) => {
+                    warn!(?pos, %error, "stored chunk could not be converted; using a placeholder");
+                }
+            },
+            Ok(None) => {}
+            Err(error) => {
+                warn!(?pos, %error, "chunk read failed; using a placeholder (it will not be saved)");
+            }
+        }
+        if !loaded {
+            // A placeholder is only safe to *persist* when this game could have read
+            // the real chunk and found nothing. Without storage it cannot know, so it
+            // keeps the placeholder but refuses to let it be written back by marking
+            // it as "not saved yet" rather than clean.
+            self.world.ensure_chunk(pos);
+            if !self.can_read_stored_chunks() {
+                self.placeholder_without_storage.insert(pos);
+            }
+        }
+        // Both paths end clean: a chunk nobody edited must not be written back, and
+        // `ensure_chunk` marks its placeholder dirty by construction.
+        self.mark_chunk_clean(pos);
+    }
+
+    /// Read a chunk from the owned storage, when there is one.
+    ///
+    /// `Ok(None)` means "nothing is stored here", which is different from an error
+    /// and is what decides between a real load and a placeholder.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the storage layer's error so the caller can log it. The caller
+    /// degrades to a placeholder; it never fails the tick.
+    fn read_stored_chunk(&mut self, pos: ChunkPos) -> ServerResult<Option<ChunkData>> {
+        let Some(storage) = self.storage.as_mut() else {
+            return Ok(None);
+        };
+        storage.storage_mut().read_chunk(&Dimension::Overworld, pos)
+    }
+
+    /// Whether this game can read the world's stored chunks.
+    ///
+    /// A game built with a *borrowed* `WorldService` (`Game::new`, `Game::with_seed`)
+    /// has no storage of its own, so it cannot tell "no chunk stored here" from "I
+    /// cannot look". Treating that as "no chunk stored here" is what let a test
+    /// placeholder be saved over real terrain, so the difference is now explicit and
+    /// the two callers behave differently.
+    #[must_use]
+    const fn can_read_stored_chunks(&self) -> bool {
+        self.storage.is_some()
+    }
+
+    fn mark_chunk_clean(&mut self, pos: ChunkPos) {
+        if let Some(chunk) = self.world.chunk_mut(pos) {
+            chunk.mark_clean();
+        }
+    }
+
+    fn stream_all(&mut self, report: &mut TickReport) -> ServerResult<()> {
+        let ids: Vec<ConnectionId> = self.sessions.keys().copied().collect();
+        for id in ids {
+            self.stream_for(id, report)?;
+        }
+        Ok(())
+    }
+
+    /// Send the chunks a player is missing, nearest first, bounded per tick.
+    fn stream_for(&mut self, id: ConnectionId, report: &mut TickReport) -> ServerResult<()> {
+        let Some(session) = self.sessions.get(&id) else {
+            return Ok(());
+        };
+        let centre = session.chunk();
+        let radius = self.view_distance;
+        let mut wanted: Vec<ChunkPos> = Vec::new();
+        for dx in -radius..=radius {
+            for dz in -radius..=radius {
+                let candidate = ChunkPos::new(centre.x + dx, centre.z + dz);
+                if !session.sent_chunks.contains(&candidate) {
+                    wanted.push(candidate);
+                }
+            }
+        }
+        // Deterministic order (distance, then coordinates) so two runs stream in the
+        // same sequence (AGENTS.md section 3.6).
+        wanted.sort_by_key(|candidate| {
+            let dx = candidate.x - centre.x;
+            let dz = candidate.z - centre.z;
+            (dx * dx + dz * dz, candidate.x, candidate.z)
+        });
+        // Bound the whole tick, not this call: a join streams once on join and again
+        // via `stream_all`, and both would otherwise send a full batch.
+        let budget = CHUNKS_PER_TICK.saturating_sub(report.chunks_sent);
+        wanted.truncate(budget);
+        for pos in wanted {
+            self.send_chunk(id, pos, report)?;
+        }
+        Ok(())
+    }
+
+    fn send_chunk(
+        &mut self,
+        id: ConnectionId,
+        pos: ChunkPos,
+        report: &mut TickReport,
+    ) -> ServerResult<()> {
+        // Disk first, placeholder second; see `load_or_create_chunk`.
+        self.load_or_create_chunk(pos);
+        // The packet is built from a borrow rather than a clone: a chunk is
+        // ~384 KiB, and this is the per-chunk hot path of a join. Both borrows are
+        // immutable, so the compiler accepts them together.
+        let Some(chunk) = self.world.chunk(pos) else {
+            // Unreachable: the call above guarantees a chunk exists at `pos`.
+            debug!(?pos, "chunk vanished between load and send");
+            return Ok(());
+        };
+        let packet = self.vanilla_chunk_packet(chunk)?;
+        // Record only a packet that actually reached the queue. Marking it sent
+        // first (which an earlier version did) means a dropped packet leaves a hole
+        // the client never gets: `stream_for` skips anything already in
+        // `sent_chunks`, so the chunk would never be re-sent.
+        let queued = self.send(id, &packet, report)?;
+        if queued {
+            if let Some(session) = self.sessions.get_mut(&id) {
+                session.sent_chunks.insert(pos);
+            }
+            report.chunks_sent += 1;
+        } else {
+            debug!(?pos, "chunk packet dropped; it will be retried next tick");
+        }
+        Ok(())
+    }
+
+    /// Unload chunks no player can see any more.
+    ///
+    /// Without this, every chunk a player walks past stays resident (a chunk is
+    /// ~384 KiB), so a long walk is an unbounded memory leak. The rule is simple and
+    /// deliberately conservative:
+    ///
+    /// - keep anything within `view_distance + UNLOAD_MARGIN_CHUNKS` of any player;
+    /// - never unload a **dirty** chunk — it holds edits that are not on disk yet,
+    ///   and only [`Game::save_all`] persists those;
+    /// - drop the position from every player's `sent_chunks`, so walking back
+    ///   re-streams the chunk instead of leaving a hole in the client's view.
+    ///
+    /// Nothing else holds a chunk index, so unloading cannot dangle: block changes
+    /// carry their own coordinates and are re-resolved when broadcast.
+    fn unload_distant_chunks(&mut self) {
+        if self.sessions.is_empty() {
+            // Nobody to keep chunks for. This is the headless/test shape, where
+            // unloading would silently discard the world a test just built.
+            return;
+        }
+        let radius = self.view_distance.saturating_add(UNLOAD_MARGIN_CHUNKS);
+        // Player chunk centres, collected before the loop so the sessions can be
+        // mutated (their `sent_chunks`) inside it.
+        let centres: Vec<(i32, i32)> = self
+            .sessions
+            .values()
+            .map(|session| {
+                let centre = session.chunk();
+                (centre.x, centre.z)
+            })
+            .collect();
+        let loaded: Vec<ChunkPos> = self.world.chunk_positions().collect();
+        let mut removed = 0usize;
+        for pos in loaded {
+            if self.world.chunk(pos).is_some_and(|chunk| chunk.dirty) {
+                trace!(?pos, "keeping a dirty chunk outside the view distance");
+                continue;
+            }
+            let wanted = centres
+                .iter()
+                .any(|(x, z)| (pos.x - x).abs() <= radius && (pos.z - z).abs() <= radius);
+            if wanted {
+                continue;
+            }
+            if self.world.unload_chunk(pos).is_some() {
+                removed += 1;
+            }
+            for session in self.sessions.values_mut() {
+                session.sent_chunks.remove(&pos);
+            }
+        }
+        if removed > 0 {
+            trace!(removed, "unloaded chunks outside the view distance");
+        }
+    }
+
+    /// Build the `level_chunk_with_light` packet for a runtime chunk.
+    ///
+    /// Light: four zero masks and no arrays, which the client treats as "dark until
+    /// told otherwise". A real lighting engine is P05; the consequence (players see
+    /// no sky light) is recorded in the parity matrix.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::CorruptData`] when a block id is not in the registry —the
+    /// alternative would be silently sending a wrong block.
+    pub fn vanilla_chunk_packet(&self, chunk: &Chunk) -> ServerResult<LevelChunkWithLight> {
+        let mut sections = Vec::with_capacity(chunk.sections.len());
+        for section in &chunk.sections {
+            // Build the `(palette, values)` pair once. A container that is one value
+            // repeated is encoded by the wire codec in the `bits == 0` single-value
+            // form; `PalettedContainer::new` derives that from the palette length, so
+            // the same construction covers both shapes.
+            let mut palette: Vec<u32> = Vec::new();
+            let mut values: Vec<u32> = Vec::with_capacity(section.blocks.len());
+            for id in &section.blocks {
+                let wire_id = u32::try_from(*id).unwrap_or(0);
+                let index = if let Some(found) = palette.iter().position(|entry| *entry == wire_id)
+                {
+                    found
+                } else {
+                    palette.push(wire_id);
+                    palette.len() - 1
+                };
+                values.push(index as u32);
+            }
+            let block_states =
+                WireContainer::new(palette, values, mc_persistence::packing::BLOCK_MIN_BITS);
+            // Biome ids are not modelled in P04: one plains biome fills every cell.
+            // The values array is still the full cell count, because the encoder
+            // validates the container's geometry.
+            let biomes = WireContainer::new(
+                vec![PLAINS_BIOME_ID],
+                vec![0u32; BIOMES_PER_SECTION],
+                NETWORK_BIOME_MIN_BITS,
+            );
+            sections.push(ChunkSection {
+                block_count: section.non_empty_block_count,
+                fluid_count: 0,
+                block_states,
+                biomes,
+            });
+        }
+        Ok(LevelChunkWithLight {
+            chunk_x: chunk.pos.x,
+            chunk_z: chunk.pos.z,
+            heightmaps: vec![Heightmap {
+                kind: HEIGHTMAP_WORLD_SURFACE,
+                data: chunk.heightmap_long_array(),
+            }],
+            sections,
+            block_entities: Vec::new(),
+            sky_light_mask: 0,
+            block_light_mask: 0,
+            empty_sky_light_mask: 0,
+            empty_block_light_mask: 0,
+            sky_light: Vec::new(),
+            block_light: Vec::new(),
+        })
+    }
+
+    // ---------------------------------------------------------------- sending
+
+    /// Encode and queue a packet; reports whether it was queued.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Invariant`] when the packet cannot be encoded, which is a
+    /// server-side bug rather than client input.
+    fn send<T: Packet>(
+        &self,
+        id: ConnectionId,
+        packet: &T,
+        report: &mut TickReport,
+    ) -> ServerResult<bool> {
+        let raw = packet.to_raw()?;
+        Ok(self.send_raw(id, raw, report))
+    }
+
+    /// Queue a packet, reporting whether it actually reached the connection.
+    ///
+    /// Returns `false` when the player is gone or the queue is full. Callers that
+    /// track delivery (chunk streaming) must honour it: a dropped packet that was
+    /// already recorded as sent is a hole the client never recovers from.
+    fn send_raw(&self, id: ConnectionId, raw: RawPacket, report: &mut TickReport) -> bool {
+        let Some(session) = self.sessions.get(&id) else {
+            return false;
+        };
+        if session.outbound.try_send(raw).is_err() {
+            warn!(id = %id, "outbound queue full; the player will be disconnected");
+            // Recorded here and enforced by the Network phase, which owns `&mut self`.
+            if !report.overflowed.contains(&id) {
+                report.overflowed.push(id);
+            }
+            report.packets += 1;
+            return false;
+        }
+        report.packets += 1;
+        true
+    }
+
+    /// Queue a system chat line.
+    ///
+    /// Takes no report: it is called from paths that already hold one (borrow
+    /// conflict) or from tests. The packet is queued either way.
+    fn send_message(&self, id: ConnectionId, text: &str) {
+        let mut local = TickReport::default();
+        // A chat line is best-effort: a full queue is already handled by the
+        // overflow path, so the queued flag is deliberately discarded here.
+        if self
+            .send(
+                id,
+                &SystemChat {
+                    content: TextComponent::literal(text),
+                    overlay: false,
+                },
+                &mut local,
+            )
+            .is_err()
+        {
+            debug!(id = %id, "a system chat line could not be encoded");
+        }
+    }
+
+    fn send_vitals(&self, id: ConnectionId, report: &mut TickReport) -> ServerResult<()> {
+        let Some(session) = self.sessions.get(&id) else {
+            return Ok(());
+        };
+        self.send(
+            id,
+            &SetHealth {
+                health: session.player.health,
+                food: session.player.food,
+                saturation: session.player.saturation,
+            },
+            report,
+        )?;
+        self.send(
+            id,
+            &SetExperience {
+                progress: session.player.experience_progress(),
+                level: session.player.level,
+                total: session.player.total_experience,
+            },
+            report,
+        )?;
+        Ok(())
+    }
+
+    /// Queue a block-change packet for every player who has the chunk.
+    ///
+    /// Returns how many players received it, which is what distinguishes "a change
+    /// nobody can see" from "a visible change" in [`TickReport::block_changes`].
+    fn broadcast_chunk(&self, pos: ChunkPos, raw: &RawPacket, report: &mut TickReport) -> usize {
+        let mut sent = 0;
+        for session in self.sessions.values() {
+            if session.sent_chunks.contains(&pos) {
+                self.send_raw(session.id, raw.clone(), report);
+                sent += 1;
+            }
+        }
+        sent
+    }
+
+    fn broadcast_all(&self, raw: &RawPacket, report: &mut TickReport) {
+        for session in self.sessions.values() {
+            if session.ready {
+                self.send_raw(session.id, raw.clone(), report);
+            }
+        }
+    }
+
+    /// Queue one packet for a player (tests and admin actions).
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::InvalidAction`] when the id is not a player,
+    /// [`ServerError::Operational`] when the queue is full.
+    pub fn send_to(&self, id: ConnectionId, packet: &impl Packet) -> ServerResult<()> {
+        let raw = packet.to_raw()?;
+        let session = self
+            .sessions
+            .get(&id)
+            .ok_or_else(|| ServerError::InvalidAction(format!("{id} is not a player")))?;
+        session
+            .outbound
+            .try_send(raw)
+            .map_err(|_| ServerError::Operational(format!("{id} outbound queue is full")))
+    }
+
+    /// Drop players whose outbound queue overflowed.
+    fn enforce_overflow(&mut self, ids: Vec<ConnectionId>) -> usize {
+        let mut count = 0;
+        for id in ids {
+            if let Some(session) = self.sessions.remove(&id) {
+                let packet = PlayDisconnect {
+                    reason: TextComponent::literal("Outbound queue overflow"),
+                }
+                .to_raw();
+                if let Ok(raw) = packet {
+                    let _ = session.outbound.try_send(raw);
+                }
+                // Same treatment as a clean leave: the entity goes on the sweep.
+                if let Some(entity) = self.entities.get_mut(session.entity) {
+                    entity.removed = true;
+                }
+                self.entity_ids.remove(&id);
+                warn!(id = %id, "disconnected after an outbound queue overflow");
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// Record that a player must be dropped next tick.
+    pub fn request_disconnect(&mut self, id: ConnectionId) {
+        self.overflowed.push(id);
+    }
+
+    /// Persist the world through a caller-supplied handle (shutdown path).
+    ///
+    /// Persists: **dirty** chunks and `level.dat`. Does **not** persist per-player
+    /// data —`playerdata/<uuid>.dat` needs the player-file layout, which Phase 04
+    /// does not implement — nor entities: mob and item persistence arrives with the
+    /// entity chunk sections in P05-16, so a dropped item does not survive a
+    /// restart. Both gaps are listed in the phase reports rather than implied away.
+    ///
+    /// Only chunks the world reports as dirty are written. A chunk that was loaded
+    /// from disk and then edited is dirty; a chunk that was only *streamed* to a
+    /// player is not, which is what stops an all-air placeholder from overwriting
+    /// real terrain.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Operational`] when a chunk cannot be encoded or the flush
+    /// fails.
+    pub fn save_all(&mut self, storage: &mut WorldService) -> ServerResult<()> {
+        self.queue_dirty_chunks(storage)?;
+        let report = storage.storage_mut().flush()?;
+        if report.is_clean() {
+            self.world.clear_dirty();
+        } else {
+            // Keep the dirty flags. Clearing them here would forget a failed write
+            // entirely: the chunk would never be retried and the loss would show up
+            // only as missing terrain after a restart (Audit 03).
+            warn!(
+                failed = report.chunks_failed,
+                errors = ?report.errors,
+                "world flush reported failures; dirty chunks keep their flags for retry"
+            );
+        }
+        Ok(())
+    }
+
+    /// [`Game::save_all`] against the handle this game owns.
+    ///
+    /// A no-op for a game that does not own storage. This is what
+    /// [`crate::lifecycle::Server::run`] calls on the autosave tick.
+    ///
+    /// # Errors
+    ///
+    /// As for [`Game::save_all`].
+    pub fn save_all_owned(&mut self) -> ServerResult<()> {
+        let Some(mut service) = self.storage.take() else {
+            return Ok(());
+        };
+        let result = self.save_all(&mut service);
+        self.storage = Some(service);
+        result
+    }
+
+    /// Encode and queue every dirty chunk.
+    fn queue_dirty_chunks(&self, storage: &mut WorldService) -> ServerResult<()> {
+        for pos in self.world.dirty_chunks() {
+            if let Some(chunk) = self.world.chunk(pos) {
+                let data = chunk.to_chunk_data(&self.registries.blocks)?;
+                storage
+                    .storage_mut()
+                    .queue_chunk_save(&Dimension::Overworld, &data)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl PhaseRunner for Game {
+    fn run_phase(&mut self, tick: Tick, phase: TickPhase) -> ServerResult<()> {
+        // This tick's report lives in `self`, but a phase needs `&mut self` for the
+        // world, players and entities at the same time. Moving it out for the call
+        // is a move of a handful of counters and keeps every phase signature
+        // uniform.
+        let mut report = std::mem::take(&mut self.report);
+        let result = self.run_phase_inner(tick, phase, &mut report);
+        self.report = report;
+        result
+    }
+}
+
+/// Refuse a join that cannot be completed, without failing the tick.
+///
+/// The connection gets a `play_disconnect` and never enters the session map, so a
+/// client cannot turn "the server is out of entity ids" into a stopped server
+/// (AGENTS.md sections 9 and 10). There is no `Session` yet, which is why the
+/// packet bypasses [`Game::send`] and goes straight to the connection's own queue.
+fn refuse_join(outbound: &OutboundSender, reason: &str) {
+    let packet = PlayDisconnect {
+        reason: TextComponent::literal(reason),
+    };
+    if let Ok(raw) = packet.to_raw() {
+        let _ = outbound.try_send(raw);
+    }
+}
+
+/// Floor a coordinate to the block index containing it.
+///
+/// Rust defines a float-to-int `as` cast as saturating (and NaN to zero), so a
+/// hostile coordinate — `f64::INFINITY`, `f64::NAN`, `1e300` — becomes a world
+/// coordinate that is merely out of range rather than undefined behaviour. Every
+/// caller then treats it as an ordinary out-of-range block, which fails closed:
+/// collision reads it as air, and [`Game::in_build_range`] refuses to write there.
+fn floor_to_i32(value: f64) -> i32 {
+    value.floor() as i32
+}
+
+/// The entity crate's vector, from the world crate's.
+///
+/// `mc-entity` and `mc-world` each own a `Vec3` and neither may depend on the
+/// other (the dependency runs world ← entity), so the conversion belongs here —
+/// the one place that needs both. The two are structurally identical, so this is
+/// a field move.
+fn to_entity(vector: Vec3) -> mc_entity::player::Vec3 {
+    mc_entity::player::Vec3::new(vector.x, vector.y, vector.z)
+}
+
+/// The world crate's vector, from the entity crate's.
+///
+/// See [`to_entity`] for why the conversion lives at this boundary.
+fn to_world(vector: mc_entity::player::Vec3) -> Vec3 {
+    Vec3::new(vector.x, vector.y, vector.z)
+}
+
+/// The chunk a world position falls in.
+fn chunk_of(x: f64, z: f64) -> ChunkPos {
+    ChunkPos::new(floor_to_i32(x) >> 4, floor_to_i32(z) >> 4)
+}
+
+/// Wrap an item stack for the wire.
+///
+/// `ItemStack::simple` covers the Phase 04 subset: an id and a count, no data
+/// components. Component payloads are unmodelled, so anything with components would
+/// need a real codec —see `mc_protocol::packets::play::ItemStack`.
+/// Copy a player's inventory into a menu's player container.
+///
+/// Slot order is identical in both models (`PlayerInventory`'s storage order: hotbar
+/// `0..=8`, main `9..=35`, armour `36..=39` boots-first, offhand `40`), so the copy
+/// is positional and needs no permutation. That identity is asserted by
+/// `the_menu_layout_matches_the_inventory_storage_order`.
+///
+/// A mismatch is a programming error rather than a runtime condition, so the
+/// function clamps to the smaller size instead of panicking: losing the tail of an
+/// inventory is recoverable, a panic in the join path is not.
+fn mirror_inventory(
+    menu: &mut mc_container::Menu,
+    inventory: &mc_entity::inventory::PlayerInventory,
+) {
+    let Some(container) = menu.container_mut(0) else {
+        return;
+    };
+    let slots = container.len().min(inventory.stored_slots());
+    for index in 0..slots {
+        // `set` only fails past the end, which `min` above prevents.
+        let _ = container.set(index, inventory.slot(index));
+    }
+}
+
+/// Copy a menu's player container back into a player's inventory.
+fn write_back_inventory(
+    menu: &mc_container::Menu,
+    inventory: &mut mc_entity::inventory::PlayerInventory,
+) {
+    let Some(container) = menu.container(0) else {
+        return;
+    };
+    let slots = container.len().min(inventory.stored_slots());
+    for index in 0..slots {
+        let _ = inventory.set_slot(index, container.get(index));
+    }
+}
+
+fn wire_stack(stack: mc_entity::stack::ItemStack) -> mc_protocol::packets::play::ItemStack {
+    match stack.item_id() {
+        Some(id) if !stack.is_empty() => {
+            mc_protocol::packets::play::ItemStack::simple(id, stack.count())
+        }
+        _ => mc_protocol::packets::play::ItemStack::empty(),
+    }
+}
+
+/// Offset applied to a targeted block for the face the client clicked.
+///
+/// Face ids are Vanilla's: 0 = -Y, 1 = +Y, 2 = -Z, 3 = +Z, 4 = -X, 5 = +X.
+#[must_use]
+pub fn face_offset(face: i32) -> (i32, i32, i32) {
+    match face {
+        0 => (0, -1, 0),
+        2 => (0, 0, -1),
+        3 => (0, 0, 1),
+        4 => (-1, 0, 0),
+        5 => (1, 0, 0),
+        // 1 is +Y; anything unknown defaults to the top face rather than refusing
+        // the action, matching how the client sends 0..5 only.
+        _ => (0, 1, 0),
+    }
+}

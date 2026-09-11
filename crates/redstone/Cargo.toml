@@ -1,0 +1,25 @@
+[package]
+name = "mc-redstone"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mc-core = { path = "../core" }
+mc-registry = { path = "../registry" }
+# `mc-world` is the layer below: it owns the chunk/block model the algorithm has to
+# read and write. It depends on core/nbt/persistence/registry only, so the
+# dependency is acyclic and this crate can implement its own `BlockView` trait for
+# `mc_world::World` instead of forcing callers to adapt it. Phase 06 wires the
+# redstone queue into the server's tick loop; nothing depends on `mc-redstone` yet.
+mc-world = { path = "../world" }
+tracing.workspace = true
+
+[dev-dependencies]
+# Only so the integration test can name `Dimension` when constructing an `mc_world::World`;
+# `mc-world` does not re-export it. The library itself needs nothing from persistence, and this
+# does not create a cycle: persistence depends on core and nbt only.
+mc-persistence = { path = "../persistence" }

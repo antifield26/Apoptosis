@@ -1,0 +1,43 @@
+# MinecraftServer — workspace root (virtual manifest).
+# Phase 01 (P01-01): workspace + shared package metadata + lint contract.
+#
+# License: UNDECIDED, see docs/adr/ADR-0001-system-architecture.md R-09.
+# Until the owner decides, GPL/AGPL-licensed reuse is forbidden
+# (docs/legal/third-party.md, section 2). Hence no `license` field below.
+
+[workspace]
+resolver = "2"
+members = ["crates/*", "apps/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98.1"
+
+# Quality gate shared by every crate (DoD item 9):
+# `cargo fmt --check` + `cargo clippy -- -D warnings` must pass.
+# `unsafe_code = "forbid"`: any future justified use (AGENTS.md section 2)
+# must first relax this gate with an ADR, not a silent allow.
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+derivable_impls = "allow"
+
+# Shared dependency pins. Added only at adoption time with a
+# docs/legal/third-party.md row (P00-09 policy). Caret reqs + committed
+# Cargo.lock give reproducible builds; see rust-toolchain.toml for the compiler pin.
+[workspace.dependencies]
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+tokio = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+flate2 = "1"
+uuid = "1"
+md-5 = "0.10"

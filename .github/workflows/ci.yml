@@ -1,0 +1,56 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check-x86_64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo build --workspace --release
+
+  check-aarch64:
+    # P01-11: Pi-5 target must at least typecheck + clippy-clean on every push.
+    # Full linking needs aarch64 libraries (this runner provides them); local
+    # Windows hosts without one should run the equivalent:
+    #   cargo check --target aarch64-unknown-linux-gnu --workspace --all-targets
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          components: rustfmt, clippy
+          targets: aarch64-unknown-linux-gnu
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --target aarch64-unknown-linux-gnu -- -D warnings
+      - run: cargo test --workspace
+
+  dependency-policy:
+    # P01-03 / ADR-0001 D-08: the licence/dependency gate the policy promises.
+    # Policy and local usage: docs/operations/DEPENDENCY-POLICY.md.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+      - uses: taiki-e/install-action@cargo-deny
+      - run: cargo deny --all-features check licenses bans sources
+      # Advisories are reported but not enforced: no triage process exists yet,
+      # and failing on an unfixed upstream advisory would block unrelated work.
+      # Tracked in docs/operations/DEPENDENCY-POLICY.md.
+      - run: cargo deny --all-features check advisories
+        continue-on-error: true

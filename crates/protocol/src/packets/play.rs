@@ -1,0 +1,3623 @@
+//! Play-state packets (Phase-02 plumbing subset plus the Phase-04 world codecs).
+//!
+//! ## Where these wire shapes come from
+//!
+//! Packet **ids** are not transcribed here: every `impl Packet` names a
+//! constant from [`crate::ids`], whose values are machine-extracted from the
+//! official 26.1.2 server jar's `ProtocolInfoBuilder` registration order
+//! (`docs/protocol/packet-ids-775.tsv`, asserted by
+//! `crates/protocol/tests/packet_ids.rs`).
+//!
+//! **Field order** for the Phase-04 packets below (chunk, block, entity,
+//! inventory, respawn, chat) was verified against the official 26.1.2 server
+//! jar in this project; the shapes are reproduced field by field in the doc
+//! comment of each packet. Every one of them is covered by an encode → decode →
+//! compare round trip plus a hostile-input test in the module test block, so a
+//! drift in either direction fails the build rather than reaching the wire.
+//!
+//! Two caveats are recorded rather than implied away (AGENTS.md section 3.3):
+//!
+//! - there is no real 26.1.2 client in this environment
+//!   (`docs/protocol/26.1.2-wire-notes.md` section 7), so "the client accepts
+//!   it" is *not* what these tests establish — only that our encoder and
+//!   decoder agree and that malformed input is refused;
+//! - item **data component** payloads and entity metadata values beyond
+//!   [`MetadataValue`] are unmodelled. Both are carried as opaque
+//!   pre-encoded bytes/types and are rejected with an explicit error instead of
+//!   being guessed at.
+
+use super::Packet;
+use crate::ids::{clientbound, serverbound};
+use crate::nbt::Nbt;
+use crate::text::TextComponent;
+use crate::wire::{PacketReader, PacketWriter};
+use mc_core::error::{ServerError, ServerResult};
+use mc_persistence::packing;
+
+// ---------------------------------------------------------------------------
+// Shared validation helpers
+// ---------------------------------------------------------------------------
+
+/// Largest palette accepted in a network paletted container.
+///
+/// A block-state palette cannot exceed one entry per block state in the
+/// registry, and `bits` is capped at [`mc_persistence::packing::MAX_BITS`] = 32
+/// anyway; the explicit cap keeps a hostile length from being used as an
+/// allocation hint before the bits check rejects it.
+pub const MAX_PALETTE_LEN: usize = 1 << 16;
+
+/// Largest section count accepted in a `chunk data` blob.
+///
+/// The 26.1 overworld is 24 sections tall with room for expansion; the cap is
+/// generous but keeps the section loop bounded independently of the frame cap.
+pub const MAX_CHUNK_SECTIONS: usize = 1024;
+
+/// Largest heightmap count accepted in one chunk.
+pub const MAX_HEIGHTMAPS: usize = 16;
+
+/// Largest long count accepted in one heightmap.
+///
+/// A heightmap holds one column per horizontal position, packed 9 entries to a
+/// `long` in vanilla; the cap is far above that but still bounds the loop.
+pub const MAX_HEIGHTMAP_LONGS: usize = 4096;
+
+/// Largest block-entity count accepted in one chunk.
+pub const MAX_BLOCK_ENTITIES: usize = 4096;
+
+/// Read a `VarInt` count and reject it unless it is inside `0..=max`.
+///
+/// Every counted wire list goes through here, so a hostile count can never be
+/// turned into `Vec::with_capacity` before it has been range-checked.
+fn read_count(reader: &mut PacketReader<'_>, what: &str, max: usize) -> ServerResult<usize> {
+    let raw = reader.read_varint()?;
+    if raw < 0 || raw as usize > max {
+        return Err(ServerError::Protocol(format!(
+            "{what} count {raw} is outside 0..={max}"
+        )));
+    }
+    Ok(raw as usize)
+}
+
+/// Convert a server-authored collection length into the wire `VarInt`.
+///
+/// # Errors
+///
+/// [`ServerError::Invariant`] when the length exceeds `i32::MAX`.
+fn packed_len(len: usize) -> ServerResult<i32> {
+    i32::try_from(len)
+        .map_err(|_| ServerError::Invariant(format!("length {len} does not fit a VarInt")))
+}
+
+/// Re-layer a [`mc_persistence::packing`] failure as malformed wire input.
+///
+/// The packing module reports `CorruptData` because its primary caller reads
+/// disk chunks; the same condition arriving here came off the network, and
+/// `ServerError::Protocol` is what the connection layer acts on (AGENTS.md
+/// section 9).
+fn packing_error(error: ServerError) -> ServerError {
+    match error {
+        ServerError::CorruptData(message) => ServerError::Protocol(message),
+        other => other,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Block positions
+// ---------------------------------------------------------------------------
+
+/// Bits of the y coordinate in a packed block position.
+const POSITION_Y_BITS: u32 = 12;
+
+/// Bits of an x/z coordinate in a packed block position.
+const POSITION_HORIZONTAL_BITS: u32 = 26;
+
+/// Bit offset of the x field in a packed block position.
+const POSITION_X_SHIFT: u32 = 38;
+
+/// Bit offset of the z field in a packed block position.
+const POSITION_Z_SHIFT: u32 = 12;
+
+/// Mask selecting an x/z field before it is shifted into place.
+const POSITION_HORIZONTAL_MASK: i64 = (1 << POSITION_HORIZONTAL_BITS) - 1;
+
+/// Mask selecting the y field in place.
+const POSITION_Y_MASK: i64 = (1 << POSITION_Y_BITS) - 1;
+
+/// Pack a block position the way `net.minecraft.core.BlockPos.asLong` does
+/// (`((x & 0x3FFFFFF) << 38) | ((z & 0x3FFFFFF) << 12) | (y & 0xFFF)`).
+///
+/// The coordinate ranges are ±33 554 431 horizontally and ±2048 vertically;
+/// values outside a field's width are truncated into it, exactly as the vanilla
+/// bit operations do. Callers validate gameplay-coordinate bounds separately —
+/// this is the wire encoding, not a range check.
+#[must_use]
+pub const fn block_position(x: i32, y: i32, z: i32) -> i64 {
+    let x = (x as i64 & POSITION_HORIZONTAL_MASK) << POSITION_X_SHIFT;
+    let z = (z as i64 & POSITION_HORIZONTAL_MASK) << POSITION_Z_SHIFT;
+    let y = y as i64 & POSITION_Y_MASK;
+    x | z | y
+}
+
+/// Inverse of [`block_position`], sign-extending each field.
+///
+/// Shifting a field up to the top of the 64-bit word and back down with an
+/// arithmetic right shift *is* the sign extension, so a negative x, y or z
+/// comes back negative instead of picking up the neighbouring field's bits.
+#[must_use]
+pub const fn unpack_block_position(packed: i64) -> (i32, i32, i32) {
+    let x = (packed << (64 - POSITION_HORIZONTAL_BITS - POSITION_X_SHIFT))
+        >> (64 - POSITION_HORIZONTAL_BITS);
+    let z = (packed << (64 - POSITION_HORIZONTAL_BITS - POSITION_Z_SHIFT))
+        >> (64 - POSITION_HORIZONTAL_BITS);
+    let y = (packed << (64 - POSITION_Y_BITS)) >> (64 - POSITION_Y_BITS);
+    (x as i32, y as i32, z as i32)
+}
+
+/// `minecraft:login` / `JoinGame` (clientbound 49).
+///
+/// Field order verified against the 26.1 reference writer
+/// (`pumpkin-protocol/src/java/client/play/login.rs:218-378`, version gates for
+/// `>= 1.26.2` excluded because protocol 775 predates them).
+#[allow(clippy::struct_excessive_bools)] // The vanilla packet really is this boolean-heavy.
+#[derive(Debug, Clone, PartialEq)]
+pub struct JoinGame {
+    /// Entity id assigned to the player.
+    pub entity_id: i32,
+    /// Hardcore flag.
+    pub hardcore: bool,
+    /// All dimension names known to the server.
+    pub dimension_names: Vec<String>,
+    /// Advertised player slot count.
+    pub max_players: i32,
+    /// Chunk view distance.
+    pub view_distance: i32,
+    /// Entity simulation distance.
+    pub simulation_distance: i32,
+    /// Hide F3 debug details.
+    pub reduced_debug_info: bool,
+    /// Show the respawn screen on death.
+    pub enable_respawn_screen: bool,
+    /// Limited crafting (recipe book gating).
+    pub limited_crafting: bool,
+    /// Index into the synced `minecraft:dimension_type` registry.
+    pub dimension_type_id: i32,
+    /// Key of the dimension the player spawns in.
+    pub dimension_name: String,
+    /// Hashed world seed shown to the client.
+    pub hashed_seed: i64,
+    /// Game mode id (0 survival, 1 creative, ...).
+    pub game_mode: u8,
+    /// Previous game mode id (-1 for none).
+    pub previous_game_mode: i8,
+    /// Debug world flag.
+    pub is_debug: bool,
+    /// Flat world flag.
+    pub is_flat: bool,
+    /// Last death location (dimension, packed block position).
+    pub death_location: Option<(String, i64)>,
+    /// Respawn-anchor cooldown in ticks.
+    pub portal_cooldown: i32,
+    /// Sea level used for rendering.
+    pub sea_level: i32,
+    /// Enforce signed chat.
+    pub enforce_secure_chat: bool,
+}
+
+impl Packet for JoinGame {
+    const ID: i32 = clientbound::play::LOGIN;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let entity_id = reader.read_i32()?;
+        let hardcore = reader.read_bool()?;
+        let dimension_count = reader.read_varint()?;
+        if !(0..=64).contains(&dimension_count) {
+            return Err(ServerError::Protocol(format!(
+                "dimension count out of range: {dimension_count}"
+            )));
+        }
+        let mut dimension_names = Vec::with_capacity(dimension_count as usize);
+        for _ in 0..dimension_count {
+            dimension_names.push(reader.read_string(crate::MAX_IDENTIFIER_LEN)?);
+        }
+        let max_players = reader.read_varint()?;
+        let view_distance = reader.read_varint()?;
+        let simulation_distance = reader.read_varint()?;
+        let reduced_debug_info = reader.read_bool()?;
+        let enable_respawn_screen = reader.read_bool()?;
+        let limited_crafting = reader.read_bool()?;
+        let dimension_type_id = reader.read_varint()?;
+        let dimension_name = reader.read_string(crate::MAX_IDENTIFIER_LEN)?;
+        let hashed_seed = reader.read_i64()?;
+        let game_mode = reader.read_u8()?;
+        let previous_game_mode = reader.read_i8()?;
+        let is_debug = reader.read_bool()?;
+        let is_flat = reader.read_bool()?;
+        let death_location = if reader.read_bool()? {
+            let dimension = reader.read_string(crate::MAX_IDENTIFIER_LEN)?;
+            let position = reader.read_i64()?;
+            Some((dimension, position))
+        } else {
+            None
+        };
+        let portal_cooldown = reader.read_varint()?;
+        let sea_level = reader.read_varint()?;
+        let enforce_secure_chat = reader.read_bool()?;
+        Ok(Self {
+            entity_id,
+            hardcore,
+            dimension_names,
+            max_players,
+            view_distance,
+            simulation_distance,
+            reduced_debug_info,
+            enable_respawn_screen,
+            limited_crafting,
+            dimension_type_id,
+            dimension_name,
+            hashed_seed,
+            game_mode,
+            previous_game_mode,
+            is_debug,
+            is_flat,
+            death_location,
+            portal_cooldown,
+            sea_level,
+            enforce_secure_chat,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_i32(self.entity_id);
+        writer.write_bool(self.hardcore);
+        writer.write_varint(i32::try_from(self.dimension_names.len()).unwrap_or(i32::MAX));
+        for name in &self.dimension_names {
+            writer.write_string(name)?;
+        }
+        writer.write_varint(self.max_players);
+        writer.write_varint(self.view_distance);
+        writer.write_varint(self.simulation_distance);
+        writer.write_bool(self.reduced_debug_info);
+        writer.write_bool(self.enable_respawn_screen);
+        writer.write_bool(self.limited_crafting);
+        writer.write_varint(self.dimension_type_id);
+        writer.write_string(&self.dimension_name)?;
+        writer.write_i64(self.hashed_seed);
+        writer.write_u8(self.game_mode);
+        writer.write_i8(self.previous_game_mode);
+        writer.write_bool(self.is_debug);
+        writer.write_bool(self.is_flat);
+        match &self.death_location {
+            Some((dimension, position)) => {
+                writer.write_bool(true);
+                writer.write_string(dimension)?;
+                writer.write_i64(*position);
+            }
+            None => writer.write_bool(false),
+        }
+        writer.write_varint(self.portal_cooldown);
+        writer.write_varint(self.sea_level);
+        writer.write_bool(self.enforce_secure_chat);
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:keep_alive` (clientbound 44 / serverbound 28).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeepAlive {
+    /// Opaque id echoed by the peer.
+    pub id: i64,
+}
+
+impl Packet for KeepAlive {
+    const ID: i32 = clientbound::play::KEEP_ALIVE;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        Ok(Self {
+            id: PacketReader::new(payload).read_i64()?,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_i64(self.id);
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:disconnect` (play clientbound 32). NBT text component.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayDisconnect {
+    /// Reason shown to the client.
+    pub reason: TextComponent,
+}
+
+impl Packet for PlayDisconnect {
+    const ID: i32 = clientbound::play::DISCONNECT;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut rest = payload;
+        let nbt = Nbt::read_network(&mut rest)?;
+        Ok(Self {
+            reason: super::config::text_from_nbt(&nbt)?,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        let mut encoded = Vec::new();
+        self.reason.to_nbt().write_network(&mut encoded)?;
+        writer.write_bytes(&encoded);
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:set_chunk_cache_center` (clientbound 94).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SetChunkCacheCenter {
+    /// Chunk x.
+    pub x: i32,
+    /// Chunk z.
+    pub z: i32,
+}
+
+impl Packet for SetChunkCacheCenter {
+    const ID: i32 = clientbound::play::SET_CHUNK_CACHE_CENTER;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        Ok(Self {
+            x: reader.read_varint()?,
+            z: reader.read_varint()?,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.x);
+        writer.write_varint(self.z);
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:set_chunk_cache_radius` (clientbound 95).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SetChunkCacheRadius {
+    /// View distance in chunks.
+    pub radius: i32,
+}
+
+impl Packet for SetChunkCacheRadius {
+    const ID: i32 = clientbound::play::SET_CHUNK_CACHE_RADIUS;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        Ok(Self {
+            radius: PacketReader::new(payload).read_varint()?,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.radius);
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:configuration_acknowledged` (serverbound 16). Empty payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ConfigurationAcknowledged;
+
+impl Packet for ConfigurationAcknowledged {
+    const ID: i32 = serverbound::play::CONFIGURATION_ACKNOWLEDGED;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        if payload.is_empty() {
+            Ok(Self)
+        } else {
+            Err(ServerError::Protocol(
+                "configuration acknowledged must be empty".to_owned(),
+            ))
+        }
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        Ok(PacketWriter::new().finish())
+    }
+}
+
+/// `minecraft:start_configuration` (clientbound 118). Empty payload.
+///
+/// Sent when the server moves a play connection back into the configuration
+/// state (Play → Configuration re-entry).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct StartConfiguration;
+
+impl Packet for StartConfiguration {
+    const ID: i32 = clientbound::play::START_CONFIGURATION;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        if payload.is_empty() {
+            Ok(Self)
+        } else {
+            Err(ServerError::Protocol(
+                "start configuration must be empty".to_owned(),
+            ))
+        }
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        Ok(PacketWriter::new().finish())
+    }
+}
+
+/// `minecraft:ping_request` (serverbound play 38).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayPingRequest {
+    /// Payload echoed back by the server.
+    pub id: i32,
+}
+
+impl Packet for PlayPingRequest {
+    const ID: i32 = serverbound::play::PING_REQUEST;
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        Ok(Self {
+            id: PacketReader::new(payload).read_i32()?,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_i32(self.id);
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:pong_response` (clientbound 62).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayPong {
+    /// Payload echoed from [`PlayPingRequest`].
+    pub id: i32,
+}
+
+impl Packet for PlayPong {
+    const ID: i32 = clientbound::play::PONG_RESPONSE;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        Ok(Self {
+            id: PacketReader::new(payload).read_i32()?,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_i32(self.id);
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:player_position` / teleport (clientbound 72).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlayerPosition {
+    /// Absolute x.
+    pub x: f64,
+    /// Absolute y.
+    pub y: f64,
+    /// Absolute z.
+    pub z: f64,
+    /// Velocity x.
+    pub velocity_x: f64,
+    /// Velocity y.
+    pub velocity_y: f64,
+    /// Velocity z.
+    pub velocity_z: f64,
+    /// Yaw degrees.
+    pub yaw: f32,
+    /// Pitch degrees.
+    pub pitch: f32,
+    /// Relative position/rotation flags.
+    pub flags: i32,
+    /// Teleport id to acknowledge.
+    pub teleport_id: i32,
+}
+
+impl Packet for PlayerPosition {
+    const ID: i32 = clientbound::play::PLAYER_POSITION;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        Ok(Self {
+            x: reader.read_f64()?,
+            y: reader.read_f64()?,
+            z: reader.read_f64()?,
+            velocity_x: reader.read_f64()?,
+            velocity_y: reader.read_f64()?,
+            velocity_z: reader.read_f64()?,
+            yaw: reader.read_f32()?,
+            pitch: reader.read_f32()?,
+            flags: reader.read_i32()?,
+            teleport_id: reader.read_varint()?,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_f64(self.x);
+        writer.write_f64(self.y);
+        writer.write_f64(self.z);
+        writer.write_f64(self.velocity_x);
+        writer.write_f64(self.velocity_y);
+        writer.write_f64(self.velocity_z);
+        writer.write_f32(self.yaw);
+        writer.write_f32(self.pitch);
+        writer.write_i32(self.flags);
+        writer.write_varint(self.teleport_id);
+        Ok(writer.finish())
+    }
+}
+
+/// Block states in one chunk section (16×16×16).
+pub const BLOCKS_PER_SECTION: usize = packing::BLOCK_ENTRIES;
+
+/// Biomes in one chunk section (4×4×4).
+pub const BIOMES_PER_SECTION: usize = packing::BIOME_ENTRIES;
+
+/// Minimum bit width for a **network** biome palette.
+///
+/// The disk form uses 1 ([`mc_persistence::packing::BIOME_MIN_BITS`]) but the
+/// network `Strategy.createForBiomes` uses **2**
+/// (`docs/protocol/chunk-wire-format.md` section 7), so a disk container's width
+/// must not be reused verbatim on the wire. Block states agree at 4 in both
+/// forms, which is why only the biome side needs its own constant.
+pub const NETWORK_BIOME_MIN_BITS: u32 = 2;
+
+/// Bytes in one light array (2048 = 16³ nibbles).
+pub const LIGHT_ARRAY_BYTES: usize = 2048;
+
+/// Highest light-section bit a mask may use.
+///
+/// Bit `i` of a mask corresponds to light section `i - 1` — section 0 is bit 1
+/// and bit 0 covers the layer below the world
+/// (`docs/protocol/chunk-wire-format.md` section 6). The value is one below the
+/// `i32` sign bit so `1 << (MAX_LIGHT_SECTIONS + 1)` is still a defined shift
+/// while a full positive `i32` mask cannot be silently truncated.
+pub const MAX_LIGHT_SECTIONS: u32 = 30;
+
+/// A paletted container in its **network** form.
+///
+/// ```text
+/// u8   bits_per_entry
+/// bits == 0:  VarInt single global palette id      (the whole container)
+/// bits != 0:  VarInt palette length
+///             VarInt global palette id   × length
+///             i64    packed indices      × longs_needed(entries, bits)
+/// ```
+///
+/// Verified from the jar as `PalettedContainer$Data.write`
+/// (`docs/protocol/chunk-wire-format.md` section 5). Two details matter and are
+/// easy to get wrong:
+///
+/// - the storage array is `writeFixedSizeLongArray`: **raw longs with no**
+///   `VarInt` length prefix. The count is derived from `bits` and the container's
+///   cell count (4096 block states, 64 biomes). Only a heightmap's long array
+///   carries a length prefix.
+/// - `bits == 0` is the single-value form: one global palette id and **no**
+///   palette and **no** array. It is not "the minimum width for a 1-entry
+///   palette" — `bits_for` would answer 4 there, and a 4-bit container does
+///   carry an array.
+///
+/// `palette` and `values` are the **decompressed** form: exactly
+/// [`BLOCKS_PER_SECTION`] (or [`BIOMES_PER_SECTION`]) palette indices, one per
+/// cell, which is what the world layer works with. Packing is delegated to
+/// [`mc_persistence::packing`] — LSB-first, values never spanning a `long`
+/// boundary — rather than reimplemented here, so the disk and network forms
+/// cannot drift apart (P03-10).
+///
+/// [`PalettedContainer::decode`] re-derives the bit width from the palette and
+/// rejects a mismatch: nothing in this version lets a peer widen a container.
+///
+/// The biome minimum on the network is [`NETWORK_BIOME_MIN_BITS`] (2), **not**
+/// the disk constant — see that constant's docs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PalettedContainer {
+    /// Global palette ids present in this container.
+    pub palette: Vec<u32>,
+    /// One palette index per cell, in vanilla scan order.
+    pub values: Vec<u32>,
+    /// Bit width used on the wire (`0` selects the single-value form).
+    pub bits: u32,
+}
+
+impl PalettedContainer {
+    /// Wrap an existing `(palette, values)` pair, deriving the bit width.
+    ///
+    /// A container that is one value repeated — the common case for air, and for
+    /// a biome section — is encoded as the **single-value** form: `bits = 0` with
+    /// the one global palette id and **no** index array. That form is not a
+    /// minimum-width choice, it is a different layout, which is why
+    /// [`mc_persistence::packing::bits_for`]'s `max(min_bits, …)` result is
+    /// ignored for it: a palette of one still yields a 4-bit width there, and a
+    /// 4-bit width *does* carry an array.
+    ///
+    /// `min_bits` is [`mc_persistence::packing::BLOCK_MIN_BITS`] for block
+    /// states and `BIOME_MIN_BITS` for biomes.
+    #[must_use]
+    pub fn new(palette: Vec<u32>, values: Vec<u32>, min_bits: u32) -> Self {
+        let bits = Self::canonical_bits(&palette, min_bits);
+        Self {
+            palette,
+            values,
+            bits,
+        }
+    }
+
+    /// The wire bit width for a palette: `0` for the single-value form,
+    /// otherwise the minimum width for the palette length.
+    fn canonical_bits(palette: &[u32], min_bits: u32) -> u32 {
+        if palette.len() <= 1 {
+            0
+        } else {
+            packing::bits_for(palette.len(), min_bits)
+        }
+    }
+
+    /// Encode the container, returning the number of bytes written.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Invariant`] when the palette or width is not encodable
+    /// (server-authored data, so this is a bug rather than bad input).
+    pub fn encode(&self, writer: &mut PacketWriter) -> ServerResult<usize> {
+        if self.palette.len() > MAX_PALETTE_LEN {
+            return Err(ServerError::Invariant(format!(
+                "palette of {} entries exceeds the {MAX_PALETTE_LEN}-entry limit",
+                self.palette.len()
+            )));
+        }
+        if self.bits == 0 && self.palette.len() > 1 {
+            return Err(ServerError::Invariant(format!(
+                "single-value container with a {}-entry palette",
+                self.palette.len()
+            )));
+        }
+        let before = writer.len();
+        writer.write_u8(self.bits as u8);
+        if self.bits == 0 {
+            // Single-value form: the whole container is one palette id, written
+            // once, with no data array at all.
+            let first = self.palette.first().copied().unwrap_or(0);
+            writer.write_varint(first as i32);
+            return Ok(writer.len() - before);
+        }
+        if self.palette.is_empty() {
+            return Err(ServerError::Invariant(
+                "indexed container with an empty palette".to_owned(),
+            ));
+        }
+        writer.write_varint(packed_len(self.palette.len())?);
+        for entry in &self.palette {
+            writer.write_varint(*entry as i32);
+        }
+        // `writeFixedSizeLongArray`: raw longs, no length prefix.
+        let packed = packing::pack(&self.values, self.bits)?;
+        for long in &packed {
+            writer.write_i64(*long);
+        }
+        Ok(writer.len() - before)
+    }
+
+    /// Decode a container with `entries` cells and `min_bits` minimum width.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] for a truncated payload, an out-of-range
+    /// palette length or bit width, a bit width that disagrees with the palette,
+    /// or an index outside the palette.
+    pub fn decode(
+        reader: &mut PacketReader<'_>,
+        entries: usize,
+        min_bits: u32,
+    ) -> ServerResult<Self> {
+        let bits = u32::from(reader.read_u8()?);
+        if bits == 0 {
+            // Single-value form: one global palette id, no palette and no index
+            // array. `entries` is the whole container, so the decoded value list
+            // is that many copies of the id.
+            let value = reader.read_varint()?;
+            if value < 0 {
+                return Err(ServerError::Protocol(format!(
+                    "single-value palette id {value} is negative"
+                )));
+            }
+            let value = value as u32;
+            return Ok(Self {
+                palette: vec![value],
+                values: vec![value; entries],
+                bits,
+            });
+        }
+        if !(1..=packing::MAX_BITS).contains(&bits) {
+            return Err(ServerError::Protocol(format!(
+                "paletted container declares {bits} bits per entry"
+            )));
+        }
+        let palette_len = read_count(reader, "palette", MAX_PALETTE_LEN)?;
+        let mut palette = Vec::with_capacity(palette_len);
+        for _ in 0..palette_len {
+            let id = reader.read_varint()?;
+            if id < 0 {
+                return Err(ServerError::Protocol(format!(
+                    "palette entry {id} is negative"
+                )));
+            }
+            palette.push(id as u32);
+        }
+        if palette.is_empty() {
+            return Err(ServerError::Protocol(
+                "paletted container has an empty palette but stores indices".to_owned(),
+            ));
+        }
+        // Any indexed container has a palette of at least two, and its width must
+        // be exactly the minimum for that length: `bits` is not an independent
+        // field that a peer may choose to widen.
+        let derived = Self::canonical_bits(&palette, min_bits);
+        if bits != derived {
+            return Err(ServerError::Protocol(format!(
+                "paletted container declares {bits} bits for a {}-entry palette (expected {derived})",
+                palette.len()
+            )));
+        }
+        // `writeFixedSizeLongArray`: the count is not on the wire, it is derived
+        // from the width and the container's cell count.
+        let longs = packing::longs_needed(entries, bits);
+        let mut data = Vec::with_capacity(longs);
+        for _ in 0..longs {
+            data.push(reader.read_i64()?);
+        }
+        let values = packing::unpack(&data, bits, entries).map_err(packing_error)?;
+        for value in &values {
+            if *value as usize >= palette.len() {
+                return Err(ServerError::Protocol(format!(
+                    "palette index {value} is outside a {}-entry palette",
+                    palette.len()
+                )));
+            }
+        }
+        Ok(Self {
+            palette,
+            values,
+            bits,
+        })
+    }
+}
+
+/// One 16×16×16 chunk section as it appears inside `chunk data`.
+///
+/// `LevelChunkSection.write`, verified from the jar
+/// (`docs/protocol/chunk-wire-format.md` section 4):
+///
+/// ```text
+/// i16  non-empty block count
+/// i16  fluid count
+/// <PalettedContainer> block states  (4096 cells)
+/// <PalettedContainer> biomes        (64 cells)
+/// ```
+///
+/// The **fluid count** is easy to miss: an earlier brief omitted it, and a
+/// section without it desynchronises every following byte of the chunk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChunkSection {
+    /// Non-empty (non-air) block count, `0..=4096`.
+    pub block_count: i16,
+    /// Non-empty fluid count, `0..=4096`.
+    pub fluid_count: i16,
+    /// Block states, [`BLOCKS_PER_SECTION`] cells.
+    pub block_states: PalettedContainer,
+    /// Biomes, [`BIOMES_PER_SECTION`] cells.
+    pub biomes: PalettedContainer,
+}
+
+/// One block entity inside a chunk.
+///
+/// `BlockEntityInfo.LIST_STREAM_CODEC`: `packedXZ` and `y` are each a 16-bit
+/// field, then a `VarInt` type id and the payload NBT. Both coordinates are
+/// modelled as the raw `u16` the wire carries; `packed_xz` is `x << 4 | z` with
+/// both in `0..=15`, so its sign bit is never set, and `y` is reinterpreted by
+/// the world layer with the dimension's own range.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChunkBlockEntity {
+    /// Packed horizontal offset: `x << 4 | z`, each `0..=15`.
+    pub packed_xz: u16,
+    /// Block entity y.
+    pub y: u16,
+    /// Block entity type registry id.
+    pub type_id: i32,
+    /// Block entity payload (nameless network NBT compound).
+    pub data: Nbt,
+}
+
+/// One heightmap: a `Heightmap.Types` id plus its packed columns.
+///
+/// The wire carries an integer id, not a name
+/// (`ByteBufCodecs.idMapper(BY_ID, Types::id)` → `VarInt.write(buf, Types::id)`),
+/// so the constants below are the ids the client resolves. They come from
+/// `docs/protocol/heightmap-types.tsv`, read from `Heightmap$Types.class` in
+/// `server-26.1.2.jar` (sha1 `83eb1106…`; the `97ccd4c0…` hash in the task
+/// header is the *outer* bundler jar, and the TSV records that the inner jar is
+/// byte-identical to the bundler's own copy).
+///
+/// Note there are exactly six types and **no** `LIGHT_BLOCKING`: that identifier
+/// exists only as a legacy on-disk key written by `HeightmapRenamingFix`.
+/// `kind` is kept as a raw `i32` so an unknown id round-trips instead of being
+/// dropped — the client itself decodes out-of-range ids leniently to id 0
+/// (`ByIdMap.OutOfBoundsStrategy.ZERO`), so a peer may legally send one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Heightmap {
+    /// `Heightmap.Types` id, see [`HEIGHTMAP_WORLD_SURFACE`] and friends.
+    pub kind: i32,
+    /// Packed height columns. The count **is** on the wire for heightmaps
+    /// (`ByteBufCodecs.LONG_ARRAY` → `FriendlyByteBuf.writeLongArray`), unlike a
+    /// paletted container's storage array.
+    pub data: Vec<i64>,
+}
+
+/// `Heightmap.Types` id for `WORLD_SURFACE_WG`.
+pub const HEIGHTMAP_WORLD_SURFACE_WG: i32 = 0;
+/// `Heightmap.Types` id for `WORLD_SURFACE` — the type Phase 04 sends.
+pub const HEIGHTMAP_WORLD_SURFACE: i32 = 1;
+/// `Heightmap.Types` id for `OCEAN_FLOOR_WG`.
+pub const HEIGHTMAP_OCEAN_FLOOR_WG: i32 = 2;
+/// `Heightmap.Types` id for `OCEAN_FLOOR`.
+pub const HEIGHTMAP_OCEAN_FLOOR: i32 = 3;
+/// `Heightmap.Types` id for `MOTION_BLOCKING`.
+pub const HEIGHTMAP_MOTION_BLOCKING: i32 = 4;
+/// `Heightmap.Types` id for `MOTION_BLOCKING_NO_LEAVES`.
+pub const HEIGHTMAP_MOTION_BLOCKING_NO_LEAVES: i32 = 5;
+
+/// Sections in an overworld chunk column (384 blocks / 16).
+///
+/// The section blob has **no** count prefix, so this is what a decoder needs to
+/// know how many sections to read; a taller or shorter dimension supplies its
+/// own value to [`LevelChunkWithLight::decode_chunk_data`].
+pub const OVERWORLD_SECTIONS: usize = 24;
+
+/// A `LevelChunkWithLight` payload (clientbound, play).
+///
+/// ```text
+/// i32     chunk_x
+/// i32     chunk_z
+/// VarInt  heightmap count
+///           per entry: VarInt Heightmap.Types id
+///                      VarInt long count
+///                      i64    × count              (raw)
+/// VarInt  data size (bytes)
+/// byte[]  chunk data:
+///           per section (fixed count, no prefix):
+///             i16 block_count, i16 fluid_count,
+///             block states container, biomes container
+/// VarInt  block_entity count
+///           per entry: u16 packed xz, u16 y, VarInt type id, NBT data
+/// VarInt  sky light mask          \
+/// VarInt  block light mask         |  bit i ↔ light section i - 1
+/// VarInt  empty sky light mask     |
+/// VarInt  empty block light mask  /
+/// VarInt  sky light array count
+///           per array: VarInt 2048, byte[2048]
+/// VarInt  block light array count
+///           per array: VarInt 2048, byte[2048]
+/// ```
+///
+/// Verified from the jar — see `docs/protocol/chunk-wire-format.md` for the
+/// class and method behind every line. Three things the earlier description got
+/// wrong and this implementation follows the jar on: the section blob has no
+/// count prefix, each section carries a fluid count after the block count, and
+/// the heightmaps are a numeric map rather than an NBT compound.
+///
+/// The light *masks* are not derivable from the arrays (a set bit with no array
+/// means "fully lit", a set bit in an *empty* mask means "fully dark"), so they
+/// are carried verbatim and checked for consistency against the array counts:
+/// the arrays carry no section index of their own, so a mismatch is
+/// unrecoverable rather than cosmetic. Phase 04 sends all four masks and both
+/// array counts as `0`, which leaves the chunk dark until a `light_update`
+/// arrives — recorded as a known limitation, not hidden.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LevelChunkWithLight {
+    /// Chunk x (in chunks).
+    pub chunk_x: i32,
+    /// Chunk z (in chunks).
+    pub chunk_z: i32,
+    /// Heightmaps in wire order. A `Map` on the wire, so a repeated id is
+    /// possible and preserved here rather than collapsed.
+    pub heightmaps: Vec<Heightmap>,
+    /// Sections bottom-to-top, including empty ones.
+    pub sections: Vec<ChunkSection>,
+    /// Block entities in this chunk.
+    pub block_entities: Vec<ChunkBlockEntity>,
+    /// Bit `i` set ⇒ an array for light section `i - 1` follows.
+    pub sky_light_mask: i32,
+    /// Bit `i` set ⇒ an array for light section `i - 1` follows.
+    pub block_light_mask: i32,
+    /// Bit `i` set ⇒ light section `i - 1` is uniformly sky-lit.
+    pub empty_sky_light_mask: i32,
+    /// Bit `i` set ⇒ light section `i - 1` is uniformly dark.
+    pub empty_block_light_mask: i32,
+    /// Sky-light arrays, in ascending mask-bit order.
+    pub sky_light: Vec<Vec<u8>>,
+    /// Block-light arrays, in ascending mask-bit order.
+    pub block_light: Vec<Vec<u8>>,
+}
+
+/// Encode a heightmap list (`VarInt` count, then id + length + longs each).
+///
+/// # Errors
+///
+/// [`ServerError::Invariant`] when a list length does not fit a `VarInt`.
+fn encode_heightmaps(writer: &mut PacketWriter, heightmaps: &[Heightmap]) -> ServerResult<()> {
+    writer.write_varint(packed_len(heightmaps.len())?);
+    for heightmap in heightmaps {
+        writer.write_varint(heightmap.kind);
+        writer.write_varint(packed_len(heightmap.data.len())?);
+        for long in &heightmap.data {
+            writer.write_i64(*long);
+        }
+    }
+    Ok(())
+}
+
+/// Decode a heightmap list.
+///
+/// # Errors
+///
+/// [`ServerError::Protocol`] on a hostile entry or long count, or truncation.
+fn decode_heightmaps(reader: &mut PacketReader<'_>) -> ServerResult<Vec<Heightmap>> {
+    let count = read_count(reader, "heightmap", MAX_HEIGHTMAPS)?;
+    let mut heightmaps = Vec::with_capacity(count);
+    for _ in 0..count {
+        let kind = reader.read_varint()?;
+        let long_count = read_count(reader, "heightmap long", MAX_HEIGHTMAP_LONGS)?;
+        let mut data = Vec::with_capacity(long_count);
+        for _ in 0..long_count {
+            data.push(reader.read_i64()?);
+        }
+        heightmaps.push(Heightmap { kind, data });
+    }
+    Ok(heightmaps)
+}
+
+impl LevelChunkWithLight {
+    /// Encode the `chunk data` blob (sections only), returning the bytes.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Invariant`] when a section's containers do not have the
+    /// exact cell count the format requires, or a count is out of `0..=4096`.
+    pub fn encode_chunk_data(sections: &[ChunkSection]) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        for section in sections {
+            // A bad count here is server-authored data, so the shared check's
+            // `Protocol` verdict is re-labelled as the invariant violation it is.
+            validate_section_counts(section)
+                .map_err(|error| ServerError::Invariant(error.to_string()))?;
+            writer.write_i16(section.block_count);
+            writer.write_i16(section.fluid_count);
+            section.block_states.encode(&mut writer)?;
+            section.biomes.encode(&mut writer)?;
+        }
+        Ok(writer.finish())
+    }
+
+    /// Decode a `chunk data` blob holding exactly `sections_per_chunk` sections.
+    ///
+    /// The count is a parameter because the blob does not carry one: it is
+    /// implied by the dimension's height ([`OVERWORLD_SECTIONS`] for the
+    /// overworld). A blob that does not end exactly at the last section is
+    /// rejected rather than partially accepted.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] on a hostile block/fluid count or container, a
+    /// truncated blob, or trailing bytes.
+    pub fn decode_chunk_data(
+        bytes: &[u8],
+        sections_per_chunk: usize,
+    ) -> ServerResult<Vec<ChunkSection>> {
+        if sections_per_chunk > MAX_CHUNK_SECTIONS {
+            return Err(ServerError::Protocol(format!(
+                "chunk declares {sections_per_chunk} sections, above the \
+                 {MAX_CHUNK_SECTIONS}-section limit"
+            )));
+        }
+        let mut reader = PacketReader::new(bytes);
+        let mut sections = Vec::with_capacity(sections_per_chunk);
+        for _ in 0..sections_per_chunk {
+            let block_count = reader.read_i16()?;
+            let fluid_count = reader.read_i16()?;
+            let section = ChunkSection {
+                block_count,
+                fluid_count,
+                block_states: PalettedContainer::decode(
+                    &mut reader,
+                    BLOCKS_PER_SECTION,
+                    packing::BLOCK_MIN_BITS,
+                )?,
+                biomes: PalettedContainer::decode(
+                    &mut reader,
+                    BIOMES_PER_SECTION,
+                    NETWORK_BIOME_MIN_BITS,
+                )?,
+            };
+            validate_section_counts(&section)
+                .map_err(|error| ServerError::Protocol(error.to_string()))?;
+            sections.push(section);
+        }
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "chunk data has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(sections)
+    }
+}
+
+/// Check the two section counters and the container cell counts.
+///
+/// Used by both directions: the counters are `i16` on the wire but describe a
+/// 4096-block volume, so out-of-range values are malformed in either direction.
+fn validate_section_counts(section: &ChunkSection) -> ServerResult<()> {
+    let max = BLOCKS_PER_SECTION as i16;
+    if !(0..=max).contains(&section.block_count) {
+        return Err(ServerError::Protocol(format!(
+            "section block count {} is outside 0..={max}",
+            section.block_count
+        )));
+    }
+    if !(0..=max).contains(&section.fluid_count) {
+        return Err(ServerError::Protocol(format!(
+            "section fluid count {} is outside 0..={max}",
+            section.fluid_count
+        )));
+    }
+    if section.block_states.values.len() != BLOCKS_PER_SECTION {
+        return Err(ServerError::Protocol(format!(
+            "block states hold {} cells, expected {BLOCKS_PER_SECTION}",
+            section.block_states.values.len()
+        )));
+    }
+    if section.biomes.values.len() != BIOMES_PER_SECTION {
+        return Err(ServerError::Protocol(format!(
+            "biomes hold {} cells, expected {BIOMES_PER_SECTION}",
+            section.biomes.values.len()
+        )));
+    }
+    Ok(())
+}
+
+impl Packet for LevelChunkWithLight {
+    const ID: i32 = clientbound::play::LEVEL_CHUNK_WITH_LIGHT;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let chunk_x = reader.read_i32()?;
+        let chunk_z = reader.read_i32()?;
+        let heightmaps = decode_heightmaps(&mut reader)?;
+        let size = reader.read_varint()?;
+        if size < 0 {
+            return Err(ServerError::Protocol(format!(
+                "chunk data size {size} is negative"
+            )));
+        }
+        let data = reader.read_bytes(size as usize)?;
+        // The blob has no section count of its own; the dimension supplies it.
+        let sections = Self::decode_chunk_data(data, OVERWORLD_SECTIONS)?;
+        let block_entity_count = read_count(&mut reader, "block entity", MAX_BLOCK_ENTITIES)?;
+        let mut block_entities = Vec::with_capacity(block_entity_count);
+        for _ in 0..block_entity_count {
+            let packed_xz = reader.read_u16()?;
+            let y = reader.read_u16()?;
+            let type_id = reader.read_varint()?;
+            let mut rest = reader.remaining_slice();
+            let data = Nbt::read_network(&mut rest)?;
+            let consumed = reader.remaining() - rest.len();
+            reader.advance(consumed)?;
+            block_entities.push(ChunkBlockEntity {
+                packed_xz,
+                y,
+                type_id,
+                data,
+            });
+        }
+        let sky_light_mask = read_light_mask(&mut reader, "sky light")?;
+        let block_light_mask = read_light_mask(&mut reader, "block light")?;
+        let empty_sky_light_mask = read_light_mask(&mut reader, "empty sky light")?;
+        let empty_block_light_mask = read_light_mask(&mut reader, "empty block light")?;
+        let sky_light = decode_light_arrays(&mut reader, sky_light_mask)?;
+        let block_light = decode_light_arrays(&mut reader, block_light_mask)?;
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "level_chunk_with_light has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self {
+            chunk_x,
+            chunk_z,
+            heightmaps,
+            sections,
+            block_entities,
+            sky_light_mask,
+            block_light_mask,
+            empty_sky_light_mask,
+            empty_block_light_mask,
+            sky_light,
+            block_light,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_i32(self.chunk_x);
+        writer.write_i32(self.chunk_z);
+        encode_heightmaps(&mut writer, &self.heightmaps)?;
+        let data = Self::encode_chunk_data(&self.sections)?;
+        writer.write_varint(packed_len(data.len())?);
+        writer.write_bytes(&data);
+        encode_block_entities(&mut writer, &self.block_entities)?;
+        writer.write_varint(self.sky_light_mask);
+        writer.write_varint(self.block_light_mask);
+        writer.write_varint(self.empty_sky_light_mask);
+        writer.write_varint(self.empty_block_light_mask);
+        encode_light_arrays(&mut writer, &self.sky_light)?;
+        encode_light_arrays(&mut writer, &self.block_light)?;
+        Ok(writer.finish())
+    }
+}
+
+/// Append the block-entity list (`count`, then `u16 xz`, `u16 y`, `VarInt` type
+/// id and nameless NBT per entry).
+fn encode_block_entities(
+    writer: &mut PacketWriter,
+    block_entities: &[ChunkBlockEntity],
+) -> ServerResult<()> {
+    writer.write_varint(packed_len(block_entities.len())?);
+    let mut nbt_bytes = Vec::new();
+    for entity in block_entities {
+        writer.write_u16(entity.packed_xz);
+        writer.write_u16(entity.y);
+        writer.write_varint(entity.type_id);
+        nbt_bytes.clear();
+        entity.data.write_network(&mut nbt_bytes)?;
+        writer.write_bytes(&nbt_bytes);
+    }
+    Ok(())
+}
+
+/// Append a light-array section (`VarInt` count, then `VarInt 2048` + the bytes).
+///
+/// The `2048` length prefix is redundant but mandatory, and is written
+/// explicitly rather than derived from `array.len()` so a caller cannot
+/// accidentally emit an array the client will slice wrongly.
+fn encode_light_arrays(writer: &mut PacketWriter, arrays: &[Vec<u8>]) -> ServerResult<()> {
+    writer.write_varint(packed_len(arrays.len())?);
+    for array in arrays {
+        if array.len() != LIGHT_ARRAY_BYTES {
+            return Err(ServerError::Invariant(format!(
+                "light array of {} bytes, expected {LIGHT_ARRAY_BYTES}",
+                array.len()
+            )));
+        }
+        writer.write_varint(LIGHT_ARRAY_BYTES as i32);
+        writer.write_bytes(array);
+    }
+    Ok(())
+}
+
+/// Read a light-array section and check the count against the mask that indexes
+/// it (the arrays carry no section index of their own).
+fn decode_light_arrays(reader: &mut PacketReader<'_>, mask: i32) -> ServerResult<Vec<Vec<u8>>> {
+    // A mask can set at most `MAX_LIGHT_SECTIONS + 1` bits, so that is the
+    // largest array count that can ever be consistent with one.
+    let count = read_count(reader, "light array", MAX_LIGHT_SECTIONS as usize + 1)?;
+    let expected = mask.count_ones() as usize;
+    if count != expected {
+        return Err(ServerError::Protocol(format!(
+            "light mask has {expected} sections set but {count} arrays follow"
+        )));
+    }
+    let mut arrays = Vec::with_capacity(count);
+    for _ in 0..count {
+        let len = reader.read_varint()?;
+        if len != LIGHT_ARRAY_BYTES as i32 {
+            return Err(ServerError::Protocol(format!(
+                "light array declares {len} bytes, expected {LIGHT_ARRAY_BYTES}"
+            )));
+        }
+        let bytes = reader.read_bytes(LIGHT_ARRAY_BYTES)?;
+        arrays.push(bytes.to_vec());
+    }
+    Ok(arrays)
+}
+
+/// Read and range-check one light mask.
+fn read_light_mask(reader: &mut PacketReader<'_>, what: &str) -> ServerResult<i32> {
+    let mask = reader.read_varint()?;
+    if mask < 0 {
+        return Err(ServerError::Protocol(format!(
+            "{what} mask {mask} is negative"
+        )));
+    }
+    if mask >> (MAX_LIGHT_SECTIONS + 1) != 0 {
+        return Err(ServerError::Protocol(format!(
+            "{what} mask {mask:#x} sets bits beyond section {MAX_LIGHT_SECTIONS}"
+        )));
+    }
+    Ok(mask)
+}
+
+/// A single block change (`minecraft:block_update`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockUpdate {
+    /// Packed block position, see [`block_position`].
+    pub position: i64,
+    /// Global block state id.
+    pub block_state: i32,
+}
+
+impl Packet for BlockUpdate {
+    const ID: i32 = clientbound::play::BLOCK_UPDATE;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let position = reader.read_i64()?;
+        let block_state = reader.read_varint()?;
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "block_update has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self {
+            position,
+            block_state,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_i64(self.position);
+        writer.write_varint(self.block_state);
+        Ok(writer.finish())
+    }
+}
+
+/// A batch of block changes in one section (`minecraft:section_blocks_update`).
+///
+/// Vanilla packs many block changes into one packet, which maps cleanly onto a
+/// tick's worth of edits to a single section. The leading count is the only
+/// structure: every entry has the same two fields as [`BlockUpdate`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionBlocksUpdate {
+    /// Changes, each as a packed position plus a global block state id.
+    pub updates: Vec<BlockUpdate>,
+}
+
+/// Largest number of block changes accepted in one [`SectionBlocksUpdate`].
+///
+/// A section holds [`BLOCKS_PER_SECTION`] blocks, so a larger batch cannot
+/// describe a real change set; the cap also bounds the decode loop before the
+/// frame-size cap would.
+pub const MAX_SECTION_UPDATES: usize = BLOCKS_PER_SECTION;
+
+impl Packet for SectionBlocksUpdate {
+    const ID: i32 = clientbound::play::SECTION_BLOCKS_UPDATE;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let count = read_count(&mut reader, "section update", MAX_SECTION_UPDATES)?;
+        let mut updates = Vec::with_capacity(count);
+        for _ in 0..count {
+            updates.push(BlockUpdate {
+                position: reader.read_i64()?,
+                block_state: reader.read_varint()?,
+            });
+        }
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "section_blocks_update has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self { updates })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(packed_len(self.updates.len())?);
+        for update in &self.updates {
+            writer.write_i64(update.position);
+            writer.write_varint(update.block_state);
+        }
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:set_default_spawn_position` (clientbound play).
+///
+/// Body: packed block position, `f32` spawn angle. The angle is what the client
+/// uses to orient a new player; it is sent for all game modes even though it
+/// only matters for adventure/spawn-facing behaviour.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SetDefaultSpawnPosition {
+    /// Packed block position, see [`block_position`].
+    pub position: i64,
+    /// Spawn yaw in degrees.
+    pub angle: f32,
+}
+
+impl Packet for SetDefaultSpawnPosition {
+    const ID: i32 = clientbound::play::SET_DEFAULT_SPAWN_POSITION;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let position = reader.read_i64()?;
+        let angle = reader.read_f32()?;
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "set_default_spawn_position has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self { position, angle })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_i64(self.position);
+        writer.write_f32(self.angle);
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:set_health` (clientbound play).
+///
+/// Body: `f32` health, `VarInt` food level, `f32` saturation. The client does
+/// not simulate any of the three — they are pure display state — so they are
+/// sent as-is and never derived from one another here.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SetHealth {
+    /// Current health (`0.0..=max_health`).
+    pub health: f32,
+    /// Food level (`0..=20`).
+    pub food: i32,
+    /// Food saturation (`0.0..=food`).
+    pub saturation: f32,
+}
+
+impl Packet for SetHealth {
+    const ID: i32 = clientbound::play::SET_HEALTH;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let health = reader.read_f32()?;
+        let food = reader.read_varint()?;
+        let saturation = reader.read_f32()?;
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "set_health has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self {
+            health,
+            food,
+            saturation,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_f32(self.health);
+        writer.write_varint(self.food);
+        writer.write_f32(self.saturation);
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:set_experience` (clientbound play).
+///
+/// Body: `f32` bar progress (`0.0..1.0`), `VarInt` level, `VarInt` total
+/// experience. The three are independent fields on the wire: the client
+/// renders the bar from `progress` directly, so the server must keep them
+/// consistent itself.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SetExperience {
+    /// Progress towards the next level (`0.0..1.0`).
+    pub progress: f32,
+    /// Experience level.
+    pub level: i32,
+    /// Total experience accumulated.
+    pub total: i32,
+}
+
+impl Packet for SetExperience {
+    const ID: i32 = clientbound::play::SET_EXPERIENCE;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let progress = reader.read_f32()?;
+        let level = reader.read_varint()?;
+        let total = reader.read_varint()?;
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "set_experience has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self {
+            progress,
+            level,
+            total,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_f32(self.progress);
+        writer.write_varint(self.level);
+        writer.write_varint(self.total);
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:set_time` (clientbound play).
+///
+/// Body: `i64` world age, `i64` time of day, `bool` tick day time.
+///
+/// World age is monotonic and drives weather/statistics; time of day may be
+/// negative for a fixed-time world, and the trailing flag decides whether the
+/// client keeps advancing the day/night cycle on its own. All three are
+/// explicit here for the same reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SetTime {
+    /// Ticks the world has existed.
+    pub world_age: i64,
+    /// Time of day in ticks (`0` is sunrise; `6000` noon, `18000` midnight).
+    pub time_of_day: i64,
+    /// Whether the client should keep ticking the day/night cycle.
+    pub tick_day_time: bool,
+}
+
+impl Packet for SetTime {
+    const ID: i32 = clientbound::play::SET_TIME;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let world_age = reader.read_i64()?;
+        let time_of_day = reader.read_i64()?;
+        let tick_day_time = reader.read_bool()?;
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "set_time has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self {
+            world_age,
+            time_of_day,
+            tick_day_time,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_i64(self.world_age);
+        writer.write_i64(self.time_of_day);
+        writer.write_bool(self.tick_day_time);
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:set_held_slot` (clientbound play).
+///
+/// Body: `VarInt` hotbar slot (`0..=8`). Sent when the server changes the
+/// selection itself (after a respawn, or a swap); the client's own
+/// `set_carried_item` is serverbound and modelled as
+/// [`PlayIntent::SetCarriedItem`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SetHeldSlot {
+    /// Selected hotbar slot.
+    pub slot: i32,
+}
+
+impl Packet for SetHeldSlot {
+    const ID: i32 = clientbound::play::SET_HELD_SLOT;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let slot = reader.read_varint()?;
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "set_held_slot has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self { slot })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.slot);
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:game_event` (clientbound play).
+///
+/// Body: `u8` event id, `f32` value. One packet carries weather transitions
+/// (rain/thunder start and stop) and game-mode changes; the value is a
+/// game-mode id for the mode events and an unused `0.0` for most others.
+/// A `u8` id means a reader must not treat an unknown id as fatal — new event
+/// ids are additive.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GameEvent {
+    /// Event id (`0` no respawn block available, `1` begin raining, …).
+    pub event: u8,
+    /// Event payload; `f32` because the mode-change events reuse the field as
+    /// a game-mode id.
+    pub value: f32,
+}
+
+impl Packet for GameEvent {
+    const ID: i32 = clientbound::play::GAME_EVENT;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let event = reader.read_u8()?;
+        let value = reader.read_f32()?;
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "game_event has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self { event, value })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_u8(self.event);
+        writer.write_f32(self.value);
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:respawn` (clientbound play).
+///
+/// Body, mirroring the dimension/game-mode part of [`JoinGame`] so the two
+/// cannot disagree:
+///
+/// ```text
+/// VarInt      dimension type id      (index into minecraft:dimension_type)
+/// Identifier  dimension name
+/// i64         hashed seed
+/// u8          game mode
+/// i8          previous game mode     (-1 for none)
+/// bool        is debug
+/// bool        is flat
+/// u8          data kept flags        (0 = keep metadata, the vanilla default)
+/// VarInt      sea level
+/// ```
+///
+/// The trailing `data kept` byte and `sea level` are what distinguish this from
+/// the older respawn shape; both are sent even when a client would ignore them.
+#[allow(clippy::struct_excessive_bools)] // Mirrors JoinGame, which is genuinely boolean-heavy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Respawn {
+    /// Index into the synced `minecraft:dimension_type` registry.
+    pub dimension_type_id: i32,
+    /// Key of the dimension the player respawns into.
+    pub dimension_name: String,
+    /// Hashed world seed shown to the client.
+    pub hashed_seed: i64,
+    /// Game mode id (0 survival, 1 creative, …).
+    pub game_mode: u8,
+    /// Previous game mode id (`-1` for none).
+    pub previous_game_mode: i8,
+    /// Debug world flag.
+    pub is_debug: bool,
+    /// Flat world flag.
+    pub is_flat: bool,
+    /// Which player metadata the client keeps across the respawn; `0` is
+    /// "keep metadata", which is what a normal death respawn sends.
+    pub data_kept: u8,
+    /// Sea level used for rendering.
+    pub sea_level: i32,
+}
+
+impl Packet for Respawn {
+    const ID: i32 = clientbound::play::RESPAWN;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let dimension_type_id = reader.read_varint()?;
+        let dimension_name = reader.read_string(crate::MAX_IDENTIFIER_LEN)?;
+        let hashed_seed = reader.read_i64()?;
+        let game_mode = reader.read_u8()?;
+        let previous_game_mode = reader.read_i8()?;
+        let is_debug = reader.read_bool()?;
+        let is_flat = reader.read_bool()?;
+        let data_kept = reader.read_u8()?;
+        let sea_level = reader.read_varint()?;
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "respawn has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self {
+            dimension_type_id,
+            dimension_name,
+            hashed_seed,
+            game_mode,
+            previous_game_mode,
+            is_debug,
+            is_flat,
+            data_kept,
+            sea_level,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.dimension_type_id);
+        writer.write_string(&self.dimension_name)?;
+        writer.write_i64(self.hashed_seed);
+        writer.write_u8(self.game_mode);
+        writer.write_i8(self.previous_game_mode);
+        writer.write_bool(self.is_debug);
+        writer.write_bool(self.is_flat);
+        writer.write_u8(self.data_kept);
+        writer.write_varint(self.sea_level);
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:system_chat` (clientbound play).
+///
+/// Body: a nameless network-NBT text component, then `bool` overlay. When
+/// `overlay` is set the client draws the message above the hotbar (the vanilla
+/// "action bar") and it is *not* added to chat history.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SystemChat {
+    /// Component to display.
+    pub content: TextComponent,
+    /// Draw above the hotbar instead of in the chat box.
+    pub overlay: bool,
+}
+
+impl Packet for SystemChat {
+    const ID: i32 = clientbound::play::SYSTEM_CHAT;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut rest = payload;
+        let nbt = Nbt::read_network(&mut rest)?;
+        let content = super::config::text_from_nbt(&nbt)?;
+        let overlay = PacketReader::new(rest).read_bool()?;
+        Ok(Self { content, overlay })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        let mut nbt_bytes = Vec::new();
+        self.content.to_nbt().write_network(&mut nbt_bytes)?;
+        writer.write_bytes(&nbt_bytes);
+        writer.write_bool(self.overlay);
+        Ok(writer.finish())
+    }
+}
+
+/// Wire type id for [`MetadataValue::Byte`].
+pub const METADATA_TYPE_BYTE: i32 = 0;
+/// Wire type id for [`MetadataValue::VarInt`].
+pub const METADATA_TYPE_VARINT: i32 = 1;
+/// Wire type id for [`MetadataValue::Float`].
+pub const METADATA_TYPE_FLOAT: i32 = 3;
+
+/// Terminator that ends a metadata entry list.
+pub const METADATA_TERMINATOR: u8 = 0xFF;
+
+/// One entity metadata value.
+///
+/// Only the three shapes Phase 04 sends are modelled. Vanilla's remaining type
+/// ids (2, 4, 5, 6, 7, …: `VarLong`, string, component, item stack, …) are
+/// deliberately **not** decoded here: a wrong guess would silently misparse a
+/// later entry and desynchronise the rest of the list, so
+/// [`SetEntityData::decode`] rejects them with an explicit error instead
+/// (AGENTS.md section 3.3). Adding one is a new variant plus its `type_id`
+/// arm.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MetadataValue {
+    /// Type id [`METADATA_TYPE_BYTE`]: a signed byte held as its raw `u8`.
+    Byte(u8),
+    /// Type id [`METADATA_TYPE_VARINT`].
+    VarInt(i32),
+    /// Type id [`METADATA_TYPE_FLOAT`].
+    Float(f32),
+}
+
+impl MetadataValue {
+    /// The wire type id written before the value.
+    #[must_use]
+    pub const fn type_id(self) -> i32 {
+        match self {
+            Self::Byte(_) => METADATA_TYPE_BYTE,
+            Self::VarInt(_) => METADATA_TYPE_VARINT,
+            Self::Float(_) => METADATA_TYPE_FLOAT,
+        }
+    }
+
+    /// Write the value (not the index or type id) to `writer`.
+    pub fn encode(self, writer: &mut PacketWriter) {
+        match self {
+            Self::Byte(value) => writer.write_u8(value),
+            Self::VarInt(value) => writer.write_varint(value),
+            Self::Float(value) => writer.write_f32(value),
+        }
+    }
+
+    /// Read a value of the given wire type id.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] for an unmodelled type id or a truncated value.
+    pub fn decode(reader: &mut PacketReader<'_>, type_id: i32) -> ServerResult<Self> {
+        match type_id {
+            METADATA_TYPE_BYTE => Ok(Self::Byte(reader.read_u8()?)),
+            METADATA_TYPE_VARINT => Ok(Self::VarInt(reader.read_varint()?)),
+            METADATA_TYPE_FLOAT => Ok(Self::Float(reader.read_f32()?)),
+            other => Err(ServerError::Protocol(format!(
+                "unmodelled entity metadata type id {other}"
+            ))),
+        }
+    }
+}
+
+/// `minecraft:set_entity_data` (clientbound play).
+///
+/// Body: `VarInt` entity id, then metadata entries terminated by
+/// [`METADATA_TERMINATOR`]:
+///
+/// ```text
+/// per entry: u8 index, VarInt type id, <value>
+/// end:       u8 0xFF
+/// ```
+///
+/// The index is the metadata field slot (health, air, custom name, …), not a
+/// sequence number; slots may be sent in any order and a later packet may
+/// resend a slot. The terminator is mandatory — a payload that simply runs out
+/// of bytes is an error, because a client would keep reading.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetEntityData {
+    /// Entity the entries apply to.
+    pub entity_id: i32,
+    /// `(index, value)` pairs in wire order.
+    pub entries: Vec<(u8, MetadataValue)>,
+}
+
+impl Packet for SetEntityData {
+    const ID: i32 = clientbound::play::SET_ENTITY_DATA;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let entity_id = reader.read_varint()?;
+        let mut entries = Vec::new();
+        loop {
+            let index = reader.read_u8()?;
+            if index == METADATA_TERMINATOR {
+                break;
+            }
+            if entries.len() >= MAX_METADATA_ENTRIES {
+                return Err(ServerError::Protocol(format!(
+                    "more than {MAX_METADATA_ENTRIES} metadata entries without a terminator"
+                )));
+            }
+            let type_id = reader.read_varint()?;
+            entries.push((index, MetadataValue::decode(&mut reader, type_id)?));
+        }
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "set_entity_data has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self { entity_id, entries })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.entity_id);
+        for (index, value) in &self.entries {
+            writer.write_u8(*index);
+            writer.write_varint(value.type_id());
+            value.encode(&mut writer);
+        }
+        writer.write_u8(METADATA_TERMINATOR);
+        Ok(writer.finish())
+    }
+}
+
+/// Cap on metadata entries in one [`SetEntityData`].
+///
+/// Vanilla's entity data table has well under a hundred slots; the cap only
+/// exists so a payload that never reaches its terminator cannot loop forever.
+pub const MAX_METADATA_ENTRIES: usize = 256;
+
+/// An item stack as it appears in inventory packets (protocol 775).
+///
+/// ```text
+/// VarInt item id        (0 = empty; nothing follows)
+/// if id != 0:
+///   VarInt count
+///   VarInt number of data components
+///   per component: VarInt type id, then component data
+/// ```
+///
+/// Protocol 775 does **not** carry the pre-1.20.5 `slot` / `change count` bytes
+/// after the count. Data component payloads are not modelled here: each is
+/// carried as pre-encoded bytes, which keeps the encoder honest about the
+/// framing it *does* know (id, count, component count, component type id)
+/// without inventing component codecs for Phase 04. The empty stack is
+/// `item_id == 0`, and then `count`/`components` must be empty too.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ItemStack {
+    /// Item registry id; `0` means "empty stack".
+    pub item_id: i32,
+    /// Stack size; ignored when `item_id` is 0.
+    pub count: i32,
+    /// `(component type id, pre-encoded component data)` pairs.
+    pub components: Vec<(i32, Vec<u8>)>,
+}
+
+impl ItemStack {
+    /// The empty stack (`item_id == 0`), written as a bare `VarInt 0`.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            item_id: 0,
+            count: 0,
+            components: Vec::new(),
+        }
+    }
+
+    /// Whether this stack encodes as a bare `VarInt 0`.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.item_id == 0
+    }
+
+    /// A stack with `count` items and no data components.
+    #[must_use]
+    pub const fn simple(item_id: i32, count: i32) -> Self {
+        Self {
+            item_id,
+            count,
+            components: Vec::new(),
+        }
+    }
+
+    /// Encode the stack, returning the number of bytes written.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Invariant`] for a negative count or a component count
+    /// that does not fit a `VarInt` (server-authored data).
+    pub fn encode(&self, writer: &mut PacketWriter) -> ServerResult<usize> {
+        let before = writer.len();
+        writer.write_varint(self.item_id);
+        if self.is_empty() {
+            return Ok(writer.len() - before);
+        }
+        if self.count < 0 {
+            return Err(ServerError::Invariant(format!(
+                "item stack count {} is negative",
+                self.count
+            )));
+        }
+        writer.write_varint(self.count);
+        writer.write_varint(packed_len(self.components.len())?);
+        for (type_id, data) in &self.components {
+            writer.write_varint(*type_id);
+            writer.write_bytes(data);
+        }
+        Ok(writer.len() - before)
+    }
+
+    /// Decode one stack.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] for a negative item id, an absurd component
+    /// count, or a truncated payload.
+    pub fn decode(reader: &mut PacketReader<'_>) -> ServerResult<Self> {
+        let item_id = reader.read_varint()?;
+        if item_id < 0 {
+            return Err(ServerError::Protocol(format!(
+                "item stack id {item_id} is negative"
+            )));
+        }
+        if item_id == 0 {
+            return Ok(Self::empty());
+        }
+        let count = reader.read_varint()?;
+        let component_count = read_count(reader, "item component", MAX_ITEM_COMPONENTS)?;
+        // Component payload lengths are not self-describing in a way this crate
+        // models, so each component owns the bytes it declares. Without a
+        // length field the only safe assumption is "the rest of the packet",
+        // which is why this decoder accepts at most one component and rejects
+        // anything else rather than guessing.
+        if component_count > 0 {
+            return Err(ServerError::Protocol(format!(
+                "{component_count} item data components present but component \
+                 payload framing is unmodelled"
+            )));
+        }
+        Ok(Self {
+            item_id,
+            count,
+            components: Vec::new(),
+        })
+    }
+}
+
+/// Cap on data components in one [`ItemStack`].
+///
+/// Only `0` is currently decodable (see [`ItemStack::decode`]); the constant
+/// exists so the rejection message is a range check rather than a magic number.
+pub const MAX_ITEM_COMPONENTS: usize = 1024;
+
+/// `minecraft:container_set_slot` (clientbound play).
+///
+/// Body: `i8` window id, `VarInt` state id, `i16` slot index, then the
+/// [`ItemStack`]. Window `0` is the player inventory, `-1` the cursor, and
+/// `-2` the crafting output in vanilla; the state id is echoed by the client in
+/// `container_click` so a stale click can be detected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContainerSetSlot {
+    /// Window the slot belongs to.
+    pub window_id: i8,
+    /// Inventory state id the client last acknowledged.
+    pub state_id: i32,
+    /// Slot index within the window.
+    pub slot: i16,
+    /// New contents of the slot.
+    pub item: ItemStack,
+}
+
+impl Packet for ContainerSetSlot {
+    const ID: i32 = clientbound::play::CONTAINER_SET_SLOT;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let window_id = reader.read_i8()?;
+        let state_id = reader.read_varint()?;
+        let slot = reader.read_i16()?;
+        let item = ItemStack::decode(&mut reader)?;
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "container_set_slot has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self {
+            window_id,
+            state_id,
+            slot,
+            item,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_i8(self.window_id);
+        writer.write_varint(self.state_id);
+        writer.write_i16(self.slot);
+        self.item.encode(&mut writer)?;
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:container_set_content` (clientbound play).
+///
+/// Body: `i8` window id, `VarInt` state id, `VarInt` slot count, that many
+/// [`ItemStack`]s, then the carried (cursor) stack. The carried stack is
+/// **not** part of the count — it is written unconditionally, even when empty —
+/// so an off-by-one here shifts every remaining stack.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContainerSetContent {
+    /// Window being filled.
+    pub window_id: i8,
+    /// Inventory state id the client last acknowledged.
+    pub state_id: i32,
+    /// Contents of the window's slots, in slot-index order.
+    pub slots: Vec<ItemStack>,
+    /// Stack held on the cursor.
+    pub carried: ItemStack,
+}
+
+/// Largest slot count accepted in one [`ContainerSetContent`].
+///
+/// A large chest holds 54 slots and the player inventory 46; the cap leaves
+/// room for any container vanilla currently defines.
+pub const MAX_CONTAINER_SLOTS: usize = 256;
+
+impl Packet for ContainerSetContent {
+    const ID: i32 = clientbound::play::CONTAINER_SET_CONTENT;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let window_id = reader.read_i8()?;
+        let state_id = reader.read_varint()?;
+        let count = read_count(&mut reader, "container slot", MAX_CONTAINER_SLOTS)?;
+        let mut slots = Vec::with_capacity(count);
+        for _ in 0..count {
+            slots.push(ItemStack::decode(&mut reader)?);
+        }
+        let carried = ItemStack::decode(&mut reader)?;
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "container_set_content has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self {
+            window_id,
+            state_id,
+            slots,
+            carried,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_i8(self.window_id);
+        writer.write_varint(self.state_id);
+        writer.write_varint(packed_len(self.slots.len())?);
+        for slot in &self.slots {
+            slot.encode(&mut writer)?;
+        }
+        self.carried.encode(&mut writer)?;
+        Ok(writer.finish())
+    }
+}
+
+/// Longest chat message Vanilla accepts (`writeUtf(message, 256)` in
+/// `ServerboundChatPacket.write`, verified from the 26.1.2 jar).
+pub const CHAT_MAX_CHARS: usize = 256;
+
+/// Longest command string; Vanilla reads it with the default `writeUtf` cap.
+pub const COMMAND_MAX_CHARS: usize = 32_500;
+
+/// Length of a chat `MessageSignature` (a 256-byte salt signature).
+pub const SIGNATURE_LEN: usize = 256;
+
+/// Upper bound on acknowledged last-seen messages in one chat packet.
+///
+/// Vanilla's `LastSeenMessages.Update` holds at most 20 entries; the cap keeps a
+/// hostile count from driving a large loop.
+pub const LAST_SEEN_MAX: i32 = 20;
+
+/// Player hand (`0` main, `1` off).
+pub const HAND_MAIN: i32 = 0;
+/// Off hand.
+pub const HAND_OFF: i32 = 1;
+
+/// Decoded serverbound play intents.
+///
+/// Phase 02 recognised these but did not simulate them; Phase 04 feeds the
+/// movement/interaction variants into the world and answers the rest.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlayIntent {
+    /// Player movement (position only).
+    MovePlayerPos {
+        /// Absolute x.
+        x: f64,
+        /// Feet y.
+        y: f64,
+        /// Absolute z.
+        z: f64,
+        /// Whether the client claims to be on the ground.
+        on_ground: bool,
+    },
+    /// Player movement (position + rotation).
+    MovePlayerPosRot {
+        /// Absolute x.
+        x: f64,
+        /// Feet y.
+        y: f64,
+        /// Absolute z.
+        z: f64,
+        /// Yaw degrees.
+        yaw: f32,
+        /// Pitch degrees.
+        pitch: f32,
+        /// Whether the client claims to be on the ground.
+        on_ground: bool,
+    },
+    /// Player rotation only.
+    MovePlayerRot {
+        /// Yaw degrees.
+        yaw: f32,
+        /// Pitch degrees.
+        pitch: f32,
+        /// Whether the client claims to be on the ground.
+        on_ground: bool,
+    },
+    /// Ground state only.
+    MovePlayerStatusOnly {
+        /// Whether the client claims to be on the ground.
+        on_ground: bool,
+    },
+    /// Teleport acknowledgement.
+    AcceptTeleportation {
+        /// Acknowledged teleport id.
+        teleport_id: i32,
+    },
+    /// A player action (dig/place intent).
+    PlayerAction {
+        /// Action id.
+        status: i32,
+        /// Packed block position.
+        position: i64,
+        /// Face id.
+        facing: u8,
+        /// Action sequence number.
+        sequence: i32,
+    },
+    /// A client command (e.g. respawn).
+    ClientCommand {
+        /// Command action id.
+        action: i32,
+    },
+    /// Chat message body.
+    ///
+    /// 1.19+ `serverbound:chat` carries a signature payload after the string
+    /// (timestamp, salt, signature, last-seen update). Phase 04 does not process
+    /// signed chat, but the trailing bytes are consumed and validated so a
+    /// malformed payload is rejected here instead of being silently truncated.
+    Chat {
+        /// Raw message text.
+        message: String,
+        /// Unix milliseconds the client says it sent the message.
+        timestamp_millis: i64,
+        /// Signature salt.
+        salt: i64,
+        /// Whether a 256-byte signature followed.
+        signed: bool,
+        /// Number of acknowledged last-seen messages.
+        last_seen_count: i32,
+    },
+    /// Chat command without the leading slash.
+    ChatCommand {
+        /// Raw command text.
+        command: String,
+    },
+    /// Arm swing (main or off hand).
+    Swing {
+        /// Hand id: 0 main, 1 off.
+        hand: i32,
+    },
+    /// Block placement / item use on a block.
+    UseItemOn {
+        /// Hand id: 0 main, 1 off.
+        hand: i32,
+        /// Packed block position.
+        position: i64,
+        /// Face clicked (0..5, `-1` for inside).
+        face: i32,
+        /// Cursor position within the block, per axis (0.0..1.0).
+        cursor_x: f32,
+        /// Cursor y.
+        cursor_y: f32,
+        /// Cursor z.
+        cursor_z: f32,
+        /// Whether the click landed inside the block shape.
+        inside_block: bool,
+        /// Action sequence number (echoed back in block-change acks).
+        sequence: i32,
+    },
+    /// Item use in air (no block target).
+    UseItem {
+        /// Hand id: 0 main, 1 off.
+        hand: i32,
+        /// Action sequence number.
+        sequence: i32,
+        /// Player yaw at use time.
+        yaw: f32,
+        /// Player pitch at use time.
+        pitch: f32,
+    },
+    /// Hotbar slot selection.
+    SetCarriedItem {
+        /// Newly selected hotbar slot (0..8).
+        slot: i16,
+    },
+    /// Container/window close.
+    ContainerClose {
+        /// Window id (0 is the player inventory).
+        window_id: u8,
+    },
+    /// A click inside an open container window.
+    ///
+    /// Carries the **raw wire integers**; interpreting them is
+    /// `mc_container::Click`'s job, not this crate's, so that the protocol layer
+    /// stays free of gameplay dependencies and the validation lives next to the
+    /// state it validates against.
+    ///
+    /// The packet also carries two trailing fields (`changedSlots` and
+    /// `carriedItem`, each a `HashedStack`) that the client fills with a *prediction*
+    /// of the slots it believes it changed. They are **not decoded**: they are a
+    /// desync-detection optimisation, not the authority mechanism (the state id is),
+    /// and the frame is length-delimited so the unread bytes are discarded safely.
+    /// Recorded as a parity gap rather than guessed at.
+    ContainerClick {
+        /// Window id (`0` is the player inventory).
+        window_id: i32,
+        /// The server revision the client believes it is looking at.
+        state_id: i32,
+        /// Menu slot, or `-1` for a click outside the window.
+        slot: i16,
+        /// Button; its meaning depends on `click_type`.
+        button: i8,
+        /// `ContainerInput` ordinal: 0 pickup, 1 quick-move, 2 swap, 3 clone,
+        /// 4 throw, 5 quick-craft, 6 pickup-all.
+        click_type: i32,
+    },
+}
+
+impl PlayIntent {
+    /// Decode a serverbound play packet by id; `None` for unmodelled ids.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] when a *recognized* packet is malformed.
+    // One flat dispatch over every serverbound play packet. Splitting it would put
+    // the per-packet field order — the part that must match the jar — behind a jump,
+    // and the whole point of this function is that one can read a packet's layout
+    // top to bottom.
+    #[allow(clippy::too_many_lines)]
+    pub fn decode(id: i32, payload: &[u8]) -> ServerResult<Option<Self>> {
+        let mut reader = PacketReader::new(payload);
+        let intent = match id {
+            serverbound::play::MOVE_PLAYER_POS => Some(Self::MovePlayerPos {
+                x: reader.read_f64()?,
+                y: reader.read_f64()?,
+                z: reader.read_f64()?,
+                on_ground: reader.read_bool()?,
+            }),
+            serverbound::play::MOVE_PLAYER_POS_ROT => Some(Self::MovePlayerPosRot {
+                x: reader.read_f64()?,
+                y: reader.read_f64()?,
+                z: reader.read_f64()?,
+                yaw: reader.read_f32()?,
+                pitch: reader.read_f32()?,
+                on_ground: reader.read_bool()?,
+            }),
+            serverbound::play::MOVE_PLAYER_ROT => Some(Self::MovePlayerRot {
+                yaw: reader.read_f32()?,
+                pitch: reader.read_f32()?,
+                on_ground: reader.read_bool()?,
+            }),
+            serverbound::play::MOVE_PLAYER_STATUS_ONLY => Some(Self::MovePlayerStatusOnly {
+                on_ground: reader.read_bool()?,
+            }),
+            serverbound::play::ACCEPT_TELEPORTATION => Some(Self::AcceptTeleportation {
+                teleport_id: reader.read_varint()?,
+            }),
+            serverbound::play::PLAYER_ACTION => Some(Self::PlayerAction {
+                status: reader.read_varint()?,
+                position: reader.read_i64()?,
+                facing: reader.read_u8()?,
+                sequence: reader.read_varint()?,
+            }),
+            serverbound::play::CLIENT_COMMAND => Some(Self::ClientCommand {
+                action: reader.read_varint()?,
+            }),
+            serverbound::play::CHAT => {
+                // Full 1.19+ shape: `message`, `timestamp`, `salt`,
+                // `signature` (optional 256-byte array), `last_seen` update.
+                let message = reader.read_string(CHAT_MAX_CHARS)?;
+                let timestamp_millis = reader.read_i64()?;
+                let salt = reader.read_i64()?;
+                let signed = match reader.read_u8()? {
+                    1 => {
+                        reader.read_bytes(SIGNATURE_LEN)?;
+                        true
+                    }
+                    _ => false,
+                };
+                // `LastSeenMessages.Update`: a VarInt count, then that many entries
+                // of (VarInt id, 256-byte signature). Bounded like everything else.
+                let last_seen_count = reader.read_varint()?;
+                if !(0..=LAST_SEEN_MAX).contains(&last_seen_count) {
+                    return Err(ServerError::Protocol(format!(
+                        "chat last_seen count {last_seen_count} out of range"
+                    )));
+                }
+                for _ in 0..last_seen_count {
+                    let _ = reader.read_varint()?;
+                    reader.read_bytes(SIGNATURE_LEN)?;
+                }
+                Some(Self::Chat {
+                    message,
+                    timestamp_millis,
+                    salt,
+                    signed,
+                    last_seen_count,
+                })
+            }
+            serverbound::play::CHAT_COMMAND => Some(Self::ChatCommand {
+                command: reader.read_string(COMMAND_MAX_CHARS)?,
+            }),
+            serverbound::play::SWING => Some(Self::Swing {
+                hand: reader.read_varint()?,
+            }),
+            serverbound::play::USE_ITEM_ON => Some(Self::UseItemOn {
+                hand: reader.read_varint()?,
+                position: reader.read_i64()?,
+                face: reader.read_varint()?,
+                cursor_x: reader.read_f32()?,
+                cursor_y: reader.read_f32()?,
+                cursor_z: reader.read_f32()?,
+                inside_block: reader.read_bool()?,
+                sequence: reader.read_varint()?,
+            }),
+            serverbound::play::USE_ITEM => Some(Self::UseItem {
+                hand: reader.read_varint()?,
+                sequence: reader.read_varint()?,
+                yaw: reader.read_f32()?,
+                pitch: reader.read_f32()?,
+            }),
+            serverbound::play::SET_CARRIED_ITEM => Some(Self::SetCarriedItem {
+                slot: reader.read_i16()?,
+            }),
+            serverbound::play::CONTAINER_CLOSE => Some(Self::ContainerClose {
+                window_id: reader.read_u8()?,
+            }),
+            // Field order verified from the jar (see the variant's doc comment).
+            // The two trailing `HashedStack` fields are intentionally left unread.
+            serverbound::play::CONTAINER_CLICK => Some(Self::ContainerClick {
+                window_id: reader.read_varint()?,
+                state_id: reader.read_varint()?,
+                slot: reader.read_i16()?,
+                button: reader.read_i8()?,
+                click_type: reader.read_varint()?,
+            }),
+            _ => None,
+        };
+        Ok(intent)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        COMMAND_MAX_CHARS, ConfigurationAcknowledged, JoinGame, KeepAlive, PlayDisconnect,
+        PlayIntent, PlayPingRequest, PlayPong, PlayerPosition, SIGNATURE_LEN, SetChunkCacheCenter,
+        SetChunkCacheRadius,
+    };
+    use crate::packets::Packet;
+    use crate::text::TextComponent;
+
+    fn sample_join_game() -> JoinGame {
+        JoinGame {
+            entity_id: 1,
+            hardcore: false,
+            dimension_names: vec!["minecraft:overworld".to_owned()],
+            max_players: 10,
+            view_distance: 8,
+            simulation_distance: 8,
+            reduced_debug_info: false,
+            enable_respawn_screen: true,
+            limited_crafting: false,
+            dimension_type_id: 0,
+            dimension_name: "minecraft:overworld".to_owned(),
+            hashed_seed: 12345,
+            game_mode: 0,
+            previous_game_mode: -1,
+            is_debug: false,
+            is_flat: false,
+            death_location: None,
+            portal_cooldown: 0,
+            sea_level: 63,
+            enforce_secure_chat: false,
+        }
+    }
+
+    #[test]
+    fn join_game_round_trip() {
+        let packet = sample_join_game();
+        let bytes = packet.encode().expect("encodes");
+        assert_eq!(JoinGame::decode(&bytes).expect("decodes"), packet);
+    }
+
+    #[test]
+    fn join_game_rejects_hostile_dimension_count() {
+        let mut writer = crate::wire::PacketWriter::new();
+        writer.write_i32(1);
+        writer.write_bool(false);
+        writer.write_varint(1000);
+        assert!(JoinGame::decode(&writer.finish()).is_err());
+    }
+
+    #[test]
+    fn keep_alive_round_trip() {
+        let packet = KeepAlive { id: -1 };
+        assert_eq!(
+            KeepAlive::decode(&packet.encode().expect("encodes")).expect("decodes"),
+            packet
+        );
+    }
+
+    #[test]
+    fn play_disconnect_round_trip() {
+        let packet = PlayDisconnect {
+            reason: TextComponent::literal("kicked"),
+        };
+        assert_eq!(
+            PlayDisconnect::decode(&packet.encode().expect("encodes")).expect("decodes"),
+            packet
+        );
+    }
+
+    #[test]
+    fn cache_packets_round_trip() {
+        let center = SetChunkCacheCenter { x: -3, z: 7 };
+        assert_eq!(
+            SetChunkCacheCenter::decode(&center.encode().expect("encodes")).expect("decodes"),
+            center
+        );
+        let radius = SetChunkCacheRadius { radius: 8 };
+        assert_eq!(
+            SetChunkCacheRadius::decode(&radius.encode().expect("encodes")).expect("decodes"),
+            radius
+        );
+    }
+
+    #[test]
+    fn configuration_acknowledged_is_empty() {
+        assert_eq!(
+            ConfigurationAcknowledged.encode().expect("encodes"),
+            Vec::<u8>::new()
+        );
+        assert!(ConfigurationAcknowledged::decode(&[0x01]).is_err());
+    }
+
+    #[test]
+    fn ping_pong_round_trip() {
+        let request = PlayPingRequest { id: 42 };
+        let bytes = request.encode().expect("encodes");
+        assert_eq!(PlayPingRequest::decode(&bytes).expect("decodes"), request);
+
+        let answer = PlayPong { id: 42 };
+        let bytes = answer.encode().expect("encodes");
+        assert_eq!(PlayPong::decode(&bytes).expect("decodes"), answer);
+    }
+
+    #[test]
+    fn player_position_round_trip() {
+        let packet = PlayerPosition {
+            x: 1.5,
+            y: 64.0,
+            z: -7.25,
+            velocity_x: 0.0,
+            velocity_y: 0.0,
+            velocity_z: 0.0,
+            yaw: 90.0,
+            pitch: 10.0,
+            flags: 0,
+            teleport_id: 3,
+        };
+        assert_eq!(
+            PlayerPosition::decode(&packet.encode().expect("encodes")).expect("decodes"),
+            packet
+        );
+    }
+
+    #[test]
+    fn play_intent_decodes_movement_and_ignores_unknown() {
+        let mut writer = crate::wire::PacketWriter::new();
+        writer.write_f64(0.5);
+        writer.write_f64(64.0);
+        writer.write_f64(-0.5);
+        writer.write_f32(45.0);
+        writer.write_f32(-10.0);
+        writer.write_bool(true);
+        let bytes = writer.finish();
+        let intent = PlayIntent::decode(crate::ids::serverbound::play::MOVE_PLAYER_POS_ROT, &bytes)
+            .expect("decodes")
+            .expect("recognized");
+        assert!(matches!(intent, PlayIntent::MovePlayerPosRot { .. }));
+
+        assert!(
+            PlayIntent::decode(999, &[])
+                .expect("unknown is ignored")
+                .is_none()
+        );
+        assert!(
+            PlayIntent::decode(crate::ids::serverbound::play::MOVE_PLAYER_POS, &[0x00]).is_err()
+        );
+    }
+
+    #[test]
+    fn chat_decodes_the_full_signed_payload() {
+        use crate::wire::PacketWriter;
+        let mut writer = PacketWriter::new();
+        writer.write_string("hello world").expect("string");
+        writer.write_i64(1_700_000_000_000);
+        writer.write_i64(-42);
+        writer.write_u8(0); // no signature
+        writer.write_varint(0); // no last-seen entries
+        let bytes = writer.finish();
+        let intent = PlayIntent::decode(crate::ids::serverbound::play::CHAT, &bytes)
+            .expect("decodes")
+            .expect("recognized");
+        assert_eq!(
+            intent,
+            PlayIntent::Chat {
+                message: "hello world".to_owned(),
+                timestamp_millis: 1_700_000_000_000,
+                salt: -42,
+                signed: false,
+                last_seen_count: 0,
+            }
+        );
+
+        // With a signature and two last-seen entries.
+        let mut writer = PacketWriter::new();
+        writer.write_string("signed").expect("string");
+        writer.write_i64(1);
+        writer.write_i64(2);
+        writer.write_u8(1);
+        writer.write_bytes(&[0xAB; SIGNATURE_LEN]);
+        writer.write_varint(2);
+        for _ in 0..2 {
+            writer.write_varint(7);
+            writer.write_bytes(&[0xCD; SIGNATURE_LEN]);
+        }
+        let bytes = writer.finish();
+        let intent = PlayIntent::decode(crate::ids::serverbound::play::CHAT, &bytes)
+            .expect("decodes")
+            .expect("recognized");
+        assert_eq!(
+            intent,
+            PlayIntent::Chat {
+                message: "signed".to_owned(),
+                timestamp_millis: 1,
+                salt: 2,
+                signed: true,
+                last_seen_count: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn chat_rejects_a_hostile_last_seen_count() {
+        use crate::wire::PacketWriter;
+        let mut writer = PacketWriter::new();
+        writer.write_string("x").expect("string");
+        writer.write_i64(0);
+        writer.write_i64(0);
+        writer.write_u8(0);
+        writer.write_varint(1_000_000); // absurd
+        let bytes = writer.finish();
+        assert!(
+            PlayIntent::decode(crate::ids::serverbound::play::CHAT, &bytes).is_err(),
+            "an out-of-range last-seen count must be rejected, not looped over"
+        );
+    }
+
+    #[test]
+    fn chat_command_allows_vanilla_length_commands() {
+        use crate::wire::PacketWriter;
+        let command = "x".repeat(COMMAND_MAX_CHARS);
+        let mut writer = PacketWriter::new();
+        writer.write_string(&command).expect("string");
+        let bytes = writer.finish();
+        let intent = PlayIntent::decode(crate::ids::serverbound::play::CHAT_COMMAND, &bytes)
+            .expect("decodes")
+            .expect("recognized");
+        assert_eq!(
+            intent,
+            PlayIntent::ChatCommand {
+                command: command.clone()
+            }
+        );
+        assert_eq!(command.chars().count(), COMMAND_MAX_CHARS);
+    }
+
+    #[test]
+    fn interaction_intents_decode() {
+        use crate::ids::serverbound::play as ids;
+        use crate::wire::PacketWriter;
+
+        let mut writer = PacketWriter::new();
+        writer.write_varint(0);
+        writer.write_i64(1234);
+        writer.write_varint(1);
+        writer.write_f32(0.5);
+        writer.write_f32(0.5);
+        writer.write_f32(0.5);
+        writer.write_bool(false);
+        writer.write_varint(9);
+        let bytes = writer.finish();
+        let intent = PlayIntent::decode(ids::USE_ITEM_ON, &bytes)
+            .expect("decodes")
+            .expect("recognized");
+        assert_eq!(
+            intent,
+            PlayIntent::UseItemOn {
+                hand: 0,
+                position: 1234,
+                face: 1,
+                cursor_x: 0.5,
+                cursor_y: 0.5,
+                cursor_z: 0.5,
+                inside_block: false,
+                sequence: 9,
+            }
+        );
+
+        let mut writer = PacketWriter::new();
+        writer.write_varint(1);
+        let bytes = writer.finish();
+        assert_eq!(
+            PlayIntent::decode(ids::SWING, &bytes)
+                .expect("decodes")
+                .expect("recognized"),
+            PlayIntent::Swing { hand: 1 }
+        );
+
+        let mut writer = PacketWriter::new();
+        writer.write_i16(4);
+        let bytes = writer.finish();
+        assert_eq!(
+            PlayIntent::decode(ids::SET_CARRIED_ITEM, &bytes)
+                .expect("decodes")
+                .expect("recognized"),
+            PlayIntent::SetCarriedItem { slot: 4 }
+        );
+
+        // Truncated payloads are errors, not panics.
+        assert!(PlayIntent::decode(ids::USE_ITEM_ON, &[0x00]).is_err());
+        assert!(PlayIntent::decode(ids::SET_CARRIED_ITEM, &[0x01]).is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 04: block positions, chunks/blocks, entity + inventory state
+    // -----------------------------------------------------------------------
+
+    use super::{
+        BIOMES_PER_SECTION, BLOCKS_PER_SECTION, BlockUpdate, ChunkBlockEntity, ChunkSection,
+        ContainerSetContent, ContainerSetSlot, GameEvent, HEIGHTMAP_MOTION_BLOCKING, Heightmap,
+        ItemStack, LevelChunkWithLight, METADATA_TERMINATOR, MetadataValue, NETWORK_BIOME_MIN_BITS,
+        OVERWORLD_SECTIONS, PalettedContainer, Respawn, SectionBlocksUpdate,
+        SetDefaultSpawnPosition, SetEntityData, SetExperience, SetHealth, SetHeldSlot, SetTime,
+        SystemChat, block_position, packing, unpack_block_position,
+    };
+    use crate::nbt::Nbt;
+    use crate::wire::PacketWriter;
+
+    /// A section whose whole volume is one block state and one biome, i.e. the
+    /// single-value paletted form (`bits == 0`, no data array).
+    fn uniform_section(block_state: u32, biome: u32) -> ChunkSection {
+        ChunkSection {
+            block_count: 0,
+            fluid_count: 0,
+            block_states: PalettedContainer::new(
+                vec![block_state],
+                vec![block_state; BLOCKS_PER_SECTION],
+                packing::BLOCK_MIN_BITS,
+            ),
+            biomes: PalettedContainer::new(
+                vec![biome],
+                vec![biome; BIOMES_PER_SECTION],
+                NETWORK_BIOME_MIN_BITS,
+            ),
+        }
+    }
+
+    /// A full overworld column: one real section followed by 23 empty ones,
+    /// because the blob carries no count and a decoder always reads 24.
+    fn overworld_sections() -> Vec<ChunkSection> {
+        let mut sections: Vec<ChunkSection> = (0..OVERWORLD_SECTIONS)
+            .map(|_| uniform_section(0, 1))
+            .collect();
+        sections[0] = uniform_section(9, 1);
+        sections
+    }
+    /// A chunk with a full section column, one block entity, one sky-light
+    /// array for light section 0 (mask bit 1) and no block light.
+    fn sample_chunk() -> LevelChunkWithLight {
+        LevelChunkWithLight {
+            chunk_x: -3,
+            chunk_z: 12,
+            heightmaps: vec![Heightmap {
+                kind: super::HEIGHTMAP_WORLD_SURFACE,
+                data: vec![7, 0, 1],
+            }],
+            sections: overworld_sections(),
+            block_entities: vec![ChunkBlockEntity {
+                packed_xz: 5,
+                y: 70,
+                type_id: 4,
+                data: Nbt::Compound(vec![(
+                    "id".to_owned(),
+                    Nbt::String("minecraft:chest".to_owned()),
+                )]),
+            }],
+            sky_light_mask: 0b10,
+            block_light_mask: 0,
+            empty_sky_light_mask: 0,
+            empty_block_light_mask: 0,
+            sky_light: vec![vec![0xAA; super::LIGHT_ARRAY_BYTES]],
+            block_light: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn block_position_round_trips_positive_and_negative_coordinates() {
+        for (x, y, z) in [
+            (0, 0, 0),
+            (1, 64, -1),
+            (-1, -1, -1),
+            (33_554_431, 2047, 33_554_431),
+            (-33_554_432, -2048, -33_554_432),
+            (-1000, 255, 1000),
+        ] {
+            assert_eq!(
+                unpack_block_position(block_position(x, y, z)),
+                (x, y, z),
+                "({x}, {y}, {z}) must survive the packed form"
+            );
+        }
+    }
+
+    #[test]
+    fn block_position_matches_the_vanilla_bit_layout() {
+        // ((x & 0x3FFFFFF) << 38) | ((z & 0x3FFFFFF) << 12) | (y & 0xFFF).
+        // For (1, 2, 3): (1 << 38) | (3 << 12) | 2
+        //              = 274_877_906_944 + 12_288 + 2
+        //              = 274_877_919_234.
+        assert_eq!(block_position(1, 2, 3), 274_877_919_234);
+        // Each field lands only in its own bits, so the three fields cannot
+        // bleed into one another.
+        assert_eq!(block_position(1, 0, 0), 1_i64 << 38);
+        assert_eq!(block_position(0, 0, 1), 1_i64 << 12);
+        assert_eq!(block_position(0, 1, 0), 1);
+        // Field boundaries, each checked against the exact bit it must set. The
+        // x field is 26 bits at 38..63 and z is 26 bits at 12..37, so each
+        // field's own sign bit is 25 bits above its base; y is 12 bits at 0..11.
+        assert_eq!(block_position(-33_554_432, 0, 0), i64::MIN, "x sign bit");
+        assert_eq!(block_position(33_554_431, 0, 0), 0x1FF_FFFF_i64 << 38);
+        assert_eq!(block_position(0, -2048, 0), 1 << 11, "y sign bit");
+        assert_eq!(block_position(0, 2047, 0), 0x7FF);
+        assert_eq!(block_position(0, 0, -33_554_432), 1 << 37, "z sign bit");
+        assert_eq!(block_position(0, 0, 33_554_431), 0x1FF_FFFF_i64 << 12);
+        // A container id of -1 fills every field, which is the all-ones word.
+        assert_eq!(block_position(-1, -1, -1) as u64, u64::MAX);
+        // Negative coordinates sign-extend, not zero-extend.
+        assert_eq!(
+            unpack_block_position(block_position(-1, -1, -1)),
+            (-1, -1, -1)
+        );
+        assert_eq!(unpack_block_position(0), (0, 0, 0));
+    }
+
+    #[test]
+    fn block_update_golden_bytes() {
+        // block_position(1, 64, -1) = (1 << 38) | ((-1 & 0x3FFFFFF) << 12) | 64
+        //                           = 274_877_906_944 + 274_877_902_848 + 64
+        //                           = 549_755_809_856
+        //                           = 0x0000_007F_FFFF_F040.
+        assert_eq!(block_position(1, 64, -1), 549_755_809_856);
+        let packet = BlockUpdate {
+            position: block_position(1, 64, -1),
+            block_state: 14,
+        };
+        let body = packet.encode().expect("encodes");
+        let expected = [
+            0x00, 0x00, 0x00, 0x7F, 0xFF, 0xFF, 0xF0, 0x40, // packed position
+            0x0E, // VarInt 14
+        ];
+        assert_eq!(body, expected);
+        assert_eq!(BlockUpdate::decode(&expected).expect("decodes"), packet);
+
+        // The packed form decomposes back to the coordinates it came from, so
+        // the golden bytes above are not merely self-consistent.
+        assert_eq!(unpack_block_position(549_755_809_856), (1, 64, -1));
+
+        // Framing pairs the body with the id from the jar-extracted table.
+        let raw = packet.to_raw().expect("raw");
+        assert_eq!(raw.id, BlockUpdate::ID);
+        assert_eq!(raw.id, 8);
+        assert_eq!(raw.payload, expected);
+    }
+
+    #[test]
+    fn section_blocks_update_round_trip() {
+        let packet = SectionBlocksUpdate {
+            updates: vec![
+                BlockUpdate {
+                    position: block_position(0, 64, 0),
+                    block_state: 1,
+                },
+                BlockUpdate {
+                    position: block_position(15, 65, 15),
+                    block_state: 4096,
+                },
+            ],
+        };
+        let body = packet.encode().expect("encodes");
+        assert_eq!(body[0], 0x02, "leading count is 2");
+        assert_eq!(SectionBlocksUpdate::decode(&body).expect("decodes"), packet);
+        // One position plus one VarInt per entry after the count.
+        assert_eq!(body.len(), 1 + (8 + 1) + (8 + 2));
+
+        assert!(SectionBlocksUpdate::decode(&[]).is_err(), "no count");
+        assert!(
+            SectionBlocksUpdate::decode(&[0x02, 0x00]).is_err(),
+            "count larger than the entries present"
+        );
+    }
+
+    /// Golden bytes for the single-value form. A uniform container is *not*
+    /// written as a 4-bit palette of one with an index array: `bits = 0` means
+    /// one global palette id and nothing else.
+    #[test]
+    fn paletted_container_single_value_golden_bytes() {
+        // blocks = minecraft:air (state 0), biomes = minecraft:plains (id 1).
+        let container = PalettedContainer::new(
+            vec![0],
+            vec![0; BLOCKS_PER_SECTION],
+            packing::BLOCK_MIN_BITS,
+        );
+        assert_eq!(container.bits, 0);
+        let mut writer = PacketWriter::new();
+        container.encode(&mut writer).expect("encodes");
+        assert_eq!(writer.finish(), [0x00, 0x00]);
+
+        let mut reader = crate::wire::PacketReader::new(&[0x00, 0x00]);
+        let decoded =
+            PalettedContainer::decode(&mut reader, BLOCKS_PER_SECTION, packing::BLOCK_MIN_BITS)
+                .expect("decodes");
+        assert_eq!(decoded, container);
+        assert!(reader.is_empty());
+    }
+
+    /// Golden bytes for the multi-entry form: an all-zero 40-cell container on a
+    /// 2-entry palette packs into 3 longs at the 4-bit minimum (16 values per
+    /// long, `ceil(40 / 16) = 3`) and, per `writeFixedSizeLongArray`, those longs
+    /// follow the palette with **no length prefix**. Pinned as bits, palette,
+    /// then exactly 24 zero bytes, so both a stray length prefix and a
+    /// byte-order regression fail here.
+    #[test]
+    fn paletted_container_multi_entry_golden_bytes() {
+        let palette = vec![0, 5];
+        let container =
+            PalettedContainer::new(palette.clone(), vec![0; 40], packing::BLOCK_MIN_BITS);
+        assert_eq!(container.bits, 4);
+        let mut writer = PacketWriter::new();
+        container.encode(&mut writer).expect("encodes");
+        let body = writer.finish();
+        assert_eq!(
+            &body[..4],
+            &[
+                0x04, // 4 bits per entry
+                0x02, // palette length
+                0x00, 0x05, // palette ids
+            ]
+        );
+        assert_eq!(
+            body.len(),
+            4 + 3 * 8,
+            "the 3 storage longs are raw: no VarInt length in front of them"
+        );
+        assert!(
+            body[4..].iter().all(|byte| *byte == 0),
+            "an all-index-0 container must pack to zero longs"
+        );
+
+        let mut reader = crate::wire::PacketReader::new(&body);
+        let decoded =
+            PalettedContainer::decode(&mut reader, 40, packing::BLOCK_MIN_BITS).expect("decodes");
+        assert_eq!(decoded.palette, palette);
+        assert_eq!(decoded.values, vec![0; 40]);
+        assert!(reader.is_empty());
+    }
+
+    #[test]
+    fn paletted_container_round_trips_a_multi_entry_palette() {
+        let palette = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let values: Vec<u32> = (0..BLOCKS_PER_SECTION)
+            .map(|index| (index % palette.len()) as u32)
+            .collect();
+        let container = PalettedContainer::new(palette, values, packing::BLOCK_MIN_BITS);
+        assert_eq!(container.bits, 5, "17 palette entries need 5 bits");
+        let mut writer = PacketWriter::new();
+        container.encode(&mut writer).expect("encodes");
+        let body = writer.finish();
+
+        let mut reader = crate::wire::PacketReader::new(&body);
+        let decoded =
+            PalettedContainer::decode(&mut reader, BLOCKS_PER_SECTION, packing::BLOCK_MIN_BITS)
+                .expect("decodes");
+        assert_eq!(decoded, container);
+        assert!(reader.is_empty());
+    }
+
+    #[test]
+    fn biome_minimum_bit_width_is_two_on_the_network() {
+        // A 2-entry biome palette at the network minimum: 2 bits, 32 values per
+        // long, `ceil(64 / 32) = 2` longs. At the disk minimum of 1 it would be
+        // 1 bit and 1 long, so this pins the network-specific value.
+        let palette = vec![1, 2];
+        let container = PalettedContainer::new(
+            palette.clone(),
+            vec![1; BIOMES_PER_SECTION],
+            NETWORK_BIOME_MIN_BITS,
+        );
+        assert_eq!(container.bits, 2);
+        let mut writer = PacketWriter::new();
+        container.encode(&mut writer).expect("encodes");
+        let body = writer.finish();
+        assert_eq!(&body[..4], &[0x02, 0x02, 0x01, 0x02]);
+        assert_eq!(body.len(), 4 + 2 * 8);
+
+        let mut reader = crate::wire::PacketReader::new(&body);
+        let decoded =
+            PalettedContainer::decode(&mut reader, BIOMES_PER_SECTION, NETWORK_BIOME_MIN_BITS)
+                .expect("decodes");
+        assert_eq!(decoded, container);
+
+        // The same bytes read with the disk minimum are rejected rather than
+        // silently reinterpreted.
+        let mut reader = crate::wire::PacketReader::new(&body);
+        assert!(
+            PalettedContainer::decode(&mut reader, BIOMES_PER_SECTION, packing::BIOME_MIN_BITS)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn paletted_container_rejects_the_single_value_id_zero_and_one() {
+        // bits = 0, single palette id 1: 64 biome cells of value 1.
+        let mut reader = crate::wire::PacketReader::new(&[0x00, 0x01]);
+        let container =
+            PalettedContainer::decode(&mut reader, BIOMES_PER_SECTION, NETWORK_BIOME_MIN_BITS)
+                .expect("decodes");
+        assert_eq!(container.values, vec![1; BIOMES_PER_SECTION]);
+        assert_eq!(container.bits, 0);
+    }
+
+    #[test]
+    fn chunk_data_round_trips_and_matches_the_wire_shape() {
+        let sections = vec![uniform_section(0, 1)];
+        let blob = LevelChunkWithLight::encode_chunk_data(&sections).expect("encodes");
+        assert_eq!(
+            blob,
+            [
+                0x00, 0x00, // block count 0
+                0x00, 0x00, // fluid count 0
+                0x00, 0x00, // block states: bits 0, palette id 0
+                0x00, 0x01, // biomes: bits 0, palette id 1
+            ]
+        );
+        assert_eq!(
+            LevelChunkWithLight::decode_chunk_data(&blob, 1).expect("decodes"),
+            sections
+        );
+    }
+
+    #[test]
+    fn chunk_data_has_no_section_count_prefix() {
+        // Two sections cost exactly twice one, and the first four bytes of the
+        // blob are the first section's counters: if a count prefix were written
+        // the leading byte would be 0x02 instead of the block count.
+        let one =
+            LevelChunkWithLight::encode_chunk_data(&[uniform_section(0, 1)]).expect("encodes");
+        let two =
+            LevelChunkWithLight::encode_chunk_data(&[uniform_section(0, 1), uniform_section(0, 1)])
+                .expect("encodes");
+        assert_eq!(two.len(), 2 * one.len());
+        assert_eq!(&two[..one.len()], &one[..]);
+        assert_eq!(
+            two[0], 0x00,
+            "first byte is the block count, not a count prefix"
+        );
+    }
+
+    #[test]
+    fn level_chunk_with_light_round_trip() {
+        let packet = sample_chunk();
+        let body = packet.encode().expect("encodes");
+        assert_eq!(body[0..4], [0xFF, 0xFF, 0xFF, 0xFD], "chunk x is -3");
+        assert_eq!(body[4..8], [0x00, 0x00, 0x00, 0x0C], "chunk z is 12");
+        // Heightmaps: one entry, id HEIGHTMAP_WORLD_SURFACE (1), 3 longs.
+        assert_eq!(&body[8..11], &[0x01, 0x01, 0x03]);
+        assert_eq!(LevelChunkWithLight::decode(&body).expect("decodes"), packet);
+
+        let raw = packet.to_raw().expect("raw");
+        assert_eq!(raw.id, LevelChunkWithLight::ID);
+        assert_eq!(raw.id, 45);
+    }
+
+    #[test]
+    fn level_chunk_with_light_light_mask_carries_full_array_count() {
+        let mut packet = sample_chunk();
+        packet.sky_light_mask = 0b101;
+        packet.sky_light = vec![
+            vec![0x00; super::LIGHT_ARRAY_BYTES],
+            vec![0xFF; super::LIGHT_ARRAY_BYTES],
+        ];
+        let body = packet.encode().expect("encodes");
+        assert_eq!(LevelChunkWithLight::decode(&body).expect("decodes"), packet);
+        // The tail is: sky array count, then each array as `VarInt 2048` + the
+        // 2048 bytes, then the block array count. Every length prefix is
+        // explicit rather than derived from the array.
+        let sky_count = 1;
+        let count_len = 2; // VarInt 2048
+        let tail_len = sky_count + 2 * (count_len + super::LIGHT_ARRAY_BYTES) + 1;
+        let tail = &body[body.len() - tail_len..];
+        assert_eq!(tail[0], 0x02, "two sky-light arrays follow");
+        assert_eq!(&tail[1..3], &[0x80, 0x10], "VarInt 2048");
+        assert!(
+            tail[3..3 + super::LIGHT_ARRAY_BYTES]
+                .iter()
+                .all(|b| *b == 0x00)
+        );
+        let second = 3 + super::LIGHT_ARRAY_BYTES;
+        assert_eq!(&tail[second..second + 2], &[0x80, 0x10], "VarInt 2048");
+        assert!(
+            tail[second + 2..second + 2 + super::LIGHT_ARRAY_BYTES]
+                .iter()
+                .all(|b| *b == 0xFF)
+        );
+        assert_eq!(
+            *tail.last().expect("non-empty"),
+            0x00,
+            "no block-light arrays"
+        );
+    }
+
+    #[test]
+    fn level_chunk_with_light_rejects_a_truncated_light_array() {
+        let mut packet = sample_chunk();
+        packet.sky_light = vec![vec![0xAA; super::LIGHT_ARRAY_BYTES - 1]];
+        assert!(packet.encode().is_err(), "a short array is a server bug");
+
+        // And on the wire: correct mask and count, an array that ends early.
+        let mut writer = PacketWriter::new();
+        writer.write_varint(1);
+        writer.write_varint(super::LIGHT_ARRAY_BYTES as i32);
+        writer.write_bytes(&[0xAA; super::LIGHT_ARRAY_BYTES - 1]);
+        assert!(
+            super::decode_light_arrays(&mut crate::wire::PacketReader::new(&writer.finish()), 0b1)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn level_chunk_with_light_rejects_a_light_mask_count_mismatch() {
+        // Mask says two sections have arrays; one array follows.
+        let mut writer = PacketWriter::new();
+        writer.write_varint(1);
+        writer.write_varint(super::LIGHT_ARRAY_BYTES as i32);
+        writer.write_bytes(&[0x00; super::LIGHT_ARRAY_BYTES]);
+        assert!(
+            super::decode_light_arrays(&mut crate::wire::PacketReader::new(&writer.finish()), 0b11)
+                .is_err(),
+            "arrays carry no section index, so the count must match the mask"
+        );
+    }
+
+    #[test]
+    fn level_chunk_with_light_hostile_inputs_are_errors_not_panics() {
+        let body = sample_chunk().encode().expect("encodes");
+        // Every truncation of a valid packet must fail, never panic.
+        for len in 0..body.len() {
+            assert!(
+                LevelChunkWithLight::decode(&body[..len]).is_err(),
+                "a payload truncated to {len} bytes must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn chunk_decode_rejects_an_absurd_palette_length() {
+        // One section: block count 0, fluid count 0, then block states declaring
+        // a 4-bit-wide palette of 100_000 entries with nothing behind it.
+        let blob = [
+            0x00, 0x00, // block count 0
+            0x00, 0x00, // fluid count 0
+            0x04, // bits = 4
+            0xA0, 0x8D, 0x06, // VarInt 100_000 palette entries
+        ];
+        assert!(
+            LevelChunkWithLight::decode_chunk_data(&blob, 1).is_err(),
+            "an absurd palette length must be refused, not allocated for"
+        );
+    }
+
+    #[test]
+    fn chunk_decode_rejects_a_truncated_long_array() {
+        // A self-consistent 4-bit header for a 2-entry block-state palette.
+        // `longs_needed(4096, 4)` is 256, so a container cut short of that is
+        // malformed — and the count is not on the wire to be trusted instead.
+        let header = [
+            0x00, 0x00, // block count 0
+            0x00, 0x00, // fluid count 0
+            0x04, // 4 bits per entry
+            0x02, // palette length 2
+            0x00, 0x05, // palette ids
+        ];
+        let mut one_long = header.to_vec();
+        one_long.extend_from_slice(&0_i64.to_be_bytes());
+        assert!(
+            LevelChunkWithLight::decode_chunk_data(&one_long, 1).is_err(),
+            "a 4096-cell container cannot be indexed by a single long"
+        );
+
+        // The same header with exactly the right array, then a biome container,
+        // decodes — so the rejection above is about the array length only.
+        let mut valid = header.to_vec();
+        valid.extend(std::iter::repeat_n(0_u8, 256 * 8));
+        valid.extend_from_slice(&[0x00, 0x01]); // biomes: single-value id 1
+        assert_eq!(
+            LevelChunkWithLight::decode_chunk_data(&valid, 1).expect("decodes"),
+            vec![ChunkSection {
+                block_count: 0,
+                fluid_count: 0,
+                block_states: PalettedContainer {
+                    palette: vec![0, 5],
+                    values: vec![0; BLOCKS_PER_SECTION],
+                    bits: 4,
+                },
+                biomes: PalettedContainer {
+                    palette: vec![1],
+                    values: vec![1; BIOMES_PER_SECTION],
+                    bits: 0,
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn chunk_decode_rejects_out_of_range_section_counts() {
+        // A section whose non-air count exceeds the 4096 blocks it can hold.
+        let over = [0x10, 0x01, 0x00, 0x00]; // i16 0x1001 = 4097
+        assert!(
+            LevelChunkWithLight::decode_chunk_data(&over, 1).is_err(),
+            "block count 4097 is outside 0..=4096"
+        );
+        // And the fluid count is checked the same way: 0x1001 in the second
+        // short, with a legal block count in front of it.
+        let fluid_over = [0x00, 0x00, 0x10, 0x01];
+        assert!(
+            LevelChunkWithLight::decode_chunk_data(&fluid_over, 1).is_err(),
+            "fluid count 4097 is outside 0..=4096"
+        );
+        // The largest legal counters still parse (and then fail for the missing
+        // containers, not for the counters).
+        let legal = [0x10, 0x00, 0x10, 0x00];
+        assert!(LevelChunkWithLight::decode_chunk_data(&legal, 1).is_err());
+    }
+
+    #[test]
+    fn chunk_decode_rejects_trailing_bytes() {
+        let mut blob =
+            LevelChunkWithLight::encode_chunk_data(&[uniform_section(0, 1)]).expect("encodes");
+        assert!(LevelChunkWithLight::decode_chunk_data(&blob, 1).is_ok());
+        blob.push(0x00);
+        assert!(
+            LevelChunkWithLight::decode_chunk_data(&blob, 1).is_err(),
+            "a self-contained blob must be consumed exactly"
+        );
+        // A blob for one section read as two runs out of bytes.
+        let one =
+            LevelChunkWithLight::encode_chunk_data(&[uniform_section(0, 1)]).expect("encodes");
+        assert!(LevelChunkWithLight::decode_chunk_data(&one, 2).is_err());
+    }
+
+    #[test]
+    fn level_chunk_with_light_rejects_a_hostile_heightmap_length() {
+        // One heightmap whose long count is absurd, with no longs behind it.
+        let mut writer = PacketWriter::new();
+        writer.write_i32(0);
+        writer.write_i32(0);
+        writer.write_varint(1); // one heightmap
+        writer.write_varint(HEIGHTMAP_MOTION_BLOCKING);
+        writer.write_varint(i32::MAX);
+        assert!(LevelChunkWithLight::decode(&writer.finish()).is_err());
+
+        // An absurd heightmap *count* is refused before any allocation.
+        let mut writer = PacketWriter::new();
+        writer.write_i32(0);
+        writer.write_i32(0);
+        writer.write_varint(1_000_000);
+        assert!(LevelChunkWithLight::decode(&writer.finish()).is_err());
+    }
+
+    #[test]
+    fn level_chunk_with_light_accepts_the_phase_04_zero_light_form() {
+        // What Phase 04 actually sends: four zero masks and no arrays.
+        let mut packet = sample_chunk();
+        packet.sky_light_mask = 0;
+        packet.block_light_mask = 0;
+        packet.empty_sky_light_mask = 0;
+        packet.empty_block_light_mask = 0;
+        packet.sky_light = Vec::new();
+        packet.block_light = Vec::new();
+        let body = packet.encode().expect("encodes");
+        assert_eq!(LevelChunkWithLight::decode(&body).expect("decodes"), packet);
+        // ...ends with five zero VarInts: four masks and two array counts.
+        let tail = &body[body.len() - 6..];
+        assert_eq!(tail, [0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn level_chunk_with_light_rejects_a_hostile_light_mask() {
+        // A negative mask is not a valid bitset for this field: the five bytes
+        // are the 5-byte VarInt form of -1.
+        let negative = [0xFF, 0xFF, 0xFF, 0xFF, 0x0F];
+        assert!(
+            super::read_light_mask(&mut crate::wire::PacketReader::new(&negative), "sky").is_err()
+        );
+
+        // A mask that sets bits above the last light section is refused too.
+        let mut beyond = PacketWriter::new();
+        beyond.write_varint(1 << (super::MAX_LIGHT_SECTIONS + 1));
+        let beyond = beyond.finish();
+        assert!(
+            super::read_light_mask(&mut crate::wire::PacketReader::new(&beyond), "sky").is_err()
+        );
+
+        // The all-zero mask Phase 04 sends is accepted.
+        assert_eq!(
+            super::read_light_mask(&mut crate::wire::PacketReader::new(&[0x00]), "sky")
+                .expect("zero mask"),
+            0
+        );
+    }
+
+    /// Pins the six `Heightmap.Types` ids to `docs/protocol/heightmap-types.tsv`.
+    ///
+    /// These are the whole reason heights can render wrongly without any error:
+    /// the wire carries an integer, so a wrong constant is silent. There are
+    /// exactly six types and no `LIGHT_BLOCKING`.
+    #[test]
+    fn heightmap_ids_match_the_extracted_table() {
+        assert_eq!(super::HEIGHTMAP_WORLD_SURFACE_WG, 0);
+        assert_eq!(super::HEIGHTMAP_WORLD_SURFACE, 1);
+        assert_eq!(super::HEIGHTMAP_OCEAN_FLOOR_WG, 2);
+        assert_eq!(super::HEIGHTMAP_OCEAN_FLOOR, 3);
+        assert_eq!(super::HEIGHTMAP_MOTION_BLOCKING, 4);
+        assert_eq!(super::HEIGHTMAP_MOTION_BLOCKING_NO_LEAVES, 5);
+    }
+
+    #[test]
+    fn heightmaps_round_trip_with_an_explicit_long_count() {
+        let packet = LevelChunkWithLight {
+            heightmaps: vec![
+                Heightmap {
+                    kind: super::HEIGHTMAP_WORLD_SURFACE,
+                    data: vec![-1, 0, 1],
+                },
+                Heightmap {
+                    kind: super::HEIGHTMAP_MOTION_BLOCKING,
+                    data: Vec::new(),
+                },
+            ],
+            ..sample_chunk()
+        };
+        let body = packet.encode().expect("encodes");
+        // Two entries: id 1 with 3 longs, then id 4 with 0 longs.
+        assert_eq!(&body[8..12], &[0x02, 0x01, 0x03, 0xFF]);
+        assert_eq!(LevelChunkWithLight::decode(&body).expect("decodes"), packet);
+
+        // An unknown id survives the round trip rather than being dropped: the
+        // client decodes out-of-range ids leniently, so a peer may send one.
+        let unknown = LevelChunkWithLight {
+            heightmaps: vec![Heightmap {
+                kind: 99,
+                data: vec![0],
+            }],
+            ..sample_chunk()
+        };
+        assert_eq!(
+            LevelChunkWithLight::decode(&unknown.encode().expect("encodes")).expect("decodes"),
+            unknown
+        );
+    }
+
+    #[test]
+    fn set_health_set_experience_and_set_time_round_trip() {
+        let health = SetHealth {
+            health: 19.5,
+            food: 20,
+            saturation: 5.0,
+        };
+        assert_eq!(
+            SetHealth::decode(&health.encode().expect("encodes")).expect("decodes"),
+            health
+        );
+
+        let experience = SetExperience {
+            progress: 0.25,
+            level: 30,
+            total: 1395,
+        };
+        assert_eq!(
+            SetExperience::decode(&experience.encode().expect("encodes")).expect("decodes"),
+            experience
+        );
+
+        let time = SetTime {
+            world_age: 12_345,
+            time_of_day: -6_000,
+            tick_day_time: true,
+        };
+        assert_eq!(
+            SetTime::decode(&time.encode().expect("encodes")).expect("decodes"),
+            time
+        );
+        assert!(
+            SetTime::decode(&time.encode().expect("encodes")[..8]).is_err(),
+            "a payload cut mid-field is an error"
+        );
+    }
+
+    #[test]
+    fn set_held_slot_game_event_and_spawn_position_round_trip() {
+        let held = SetHeldSlot { slot: 8 };
+        assert_eq!(
+            SetHeldSlot::decode(&held.encode().expect("encodes")).expect("decodes"),
+            held
+        );
+
+        let event = GameEvent {
+            event: 1,
+            value: 0.0,
+        };
+        assert_eq!(
+            GameEvent::decode(&event.encode().expect("encodes")).expect("decodes"),
+            event
+        );
+        assert_eq!(
+            event.encode().expect("encodes"),
+            [0x01, 0x00, 0x00, 0x00, 0x00],
+            "u8 id then f32 value"
+        );
+
+        let spawn = SetDefaultSpawnPosition {
+            position: block_position(0, 64, 0),
+            angle: 90.0,
+        };
+        assert_eq!(
+            SetDefaultSpawnPosition::decode(&spawn.encode().expect("encodes")).expect("decodes"),
+            spawn
+        );
+        assert!(SetDefaultSpawnPosition::decode(&[0x00; 4]).is_err());
+    }
+
+    #[test]
+    fn respawn_round_trip_and_rejects_truncation() {
+        let packet = Respawn {
+            dimension_type_id: 0,
+            dimension_name: "minecraft:overworld".to_owned(),
+            hashed_seed: -4_242_424_242,
+            game_mode: 0,
+            previous_game_mode: -1,
+            is_debug: false,
+            is_flat: false,
+            data_kept: 0,
+            sea_level: 63,
+        };
+        let body = packet.encode().expect("encodes");
+        // Mirror of JoinGame's dimension/seed/mode block: VarInt 0, the 19-byte
+        // identifier, then the seed, modes, flags, data-kept byte and sea level.
+        assert_eq!(body[0], 0x00);
+        assert_eq!(body[1], 0x13);
+        assert_eq!(body.len(), 1 + 1 + 19 + 8 + 1 + 1 + 1 + 1 + 1 + 1);
+        assert_eq!(Respawn::decode(&body).expect("decodes"), packet);
+
+        for len in 0..body.len() {
+            assert!(
+                Respawn::decode(&body[..len]).is_err(),
+                "truncation at {len} bytes must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn system_chat_round_trip_and_hostile_input() {
+        let packet = SystemChat {
+            content: TextComponent::literal("hello"),
+            overlay: false,
+        };
+        let body = packet.encode().expect("encodes");
+        assert_eq!(SystemChat::decode(&body).expect("decodes"), packet);
+
+        let action_bar = SystemChat {
+            content: TextComponent::literal("+5 XP"),
+            overlay: true,
+        };
+        assert_eq!(
+            SystemChat::decode(&action_bar.encode().expect("encodes")).expect("decodes"),
+            action_bar
+        );
+
+        assert!(SystemChat::decode(&[]).is_err(), "missing NBT root");
+        assert!(
+            SystemChat::decode(&body[..body.len() - 1]).is_err(),
+            "missing overlay flag"
+        );
+    }
+
+    #[test]
+    fn set_entity_data_round_trip_and_golden_bytes() {
+        let packet = SetEntityData {
+            entity_id: 7,
+            entries: vec![
+                (8, MetadataValue::Byte(3)),
+                (9, MetadataValue::VarInt(300)),
+                (10, MetadataValue::Float(1.0)),
+            ],
+        };
+        let body = packet.encode().expect("encodes");
+        let expected = [
+            0x07, // entity id
+            0x08,
+            0x00,
+            0x03, // index 8, type 0 (byte), value 3
+            0x09,
+            0x01,
+            0xAC,
+            0x02, // index 9, type 1 (VarInt), value 300
+            0x0A,
+            0x03,
+            0x3F,
+            0x80,
+            0x00,
+            0x00, // index 10, type 3 (float), 1.0
+            METADATA_TERMINATOR,
+        ];
+        assert_eq!(body, expected);
+        assert_eq!(SetEntityData::decode(&expected).expect("decodes"), packet);
+    }
+
+    #[test]
+    fn set_entity_data_rejects_unterminated_and_unmodelled_payloads() {
+        // Missing terminator: the reader runs out of bytes instead of looping.
+        let unterminated = [0x07, 0x08, 0x00, 0x03];
+        assert!(SetEntityData::decode(&unterminated).is_err());
+
+        // Type id 2 (VarLong) is not modelled: reject rather than misparse.
+        let unmodelled = [0x07, 0x08, 0x02, 0x00, METADATA_TERMINATOR];
+        assert!(SetEntityData::decode(&unmodelled).is_err());
+
+        // An empty entry list is legal (just the id and the terminator).
+        assert_eq!(
+            SetEntityData::decode(&[0x07, METADATA_TERMINATOR]).expect("decodes"),
+            SetEntityData {
+                entity_id: 7,
+                entries: Vec::new()
+            }
+        );
+    }
+
+    #[test]
+    fn metadata_entry_indices_keep_the_high_bit_clear() {
+        // 0xFF is the terminator, so index 255 cannot be encoded as an index.
+        let packet = SetEntityData {
+            entity_id: 1,
+            entries: vec![(0xFE, MetadataValue::Byte(0x80))],
+        };
+        let body = packet.encode().expect("encodes");
+        assert_eq!(body.last(), Some(&METADATA_TERMINATOR));
+        assert_eq!(
+            SetEntityData::decode(&body).expect("decodes").entries[0].0,
+            0xFE
+        );
+    }
+
+    #[test]
+    fn item_stack_empty_and_simple_round_trip() {
+        let empty = ItemStack::empty();
+        let mut writer = PacketWriter::new();
+        assert_eq!(empty.encode(&mut writer).expect("encodes"), 1);
+        assert_eq!(writer.finish(), [0x00], "empty is a bare VarInt 0");
+
+        let simple = ItemStack::simple(5, 3);
+        let mut writer = PacketWriter::new();
+        simple.encode(&mut writer).expect("encodes");
+        let body = writer.finish();
+        // id 5, count 3, zero components.
+        assert_eq!(body, [0x05, 0x03, 0x00]);
+        let mut reader = crate::wire::PacketReader::new(&body);
+        assert_eq!(ItemStack::decode(&mut reader).expect("decodes"), simple);
+        assert!(reader.is_empty());
+    }
+
+    #[test]
+    fn item_stack_encodes_unmodelled_components_and_refuses_to_guess_them() {
+        let with_component = ItemStack {
+            item_id: 5,
+            count: 1,
+            components: vec![(7, vec![0xAA, 0xBB])],
+        };
+        let mut writer = PacketWriter::new();
+        with_component.encode(&mut writer).expect("encodes");
+        let body = writer.finish();
+        assert_eq!(body, [0x05, 0x01, 0x01, 0x07, 0xAA, 0xBB]);
+
+        let mut reader = crate::wire::PacketReader::new(&body);
+        assert!(
+            ItemStack::decode(&mut reader).is_err(),
+            "component payload framing is unmodelled, so it must be refused"
+        );
+        assert!(ItemStack::decode(&mut crate::wire::PacketReader::new(&[0x05])).is_err());
+    }
+
+    #[test]
+    fn container_set_slot_round_trip() {
+        let packet = ContainerSetSlot {
+            window_id: 0,
+            state_id: 1,
+            slot: 36,
+            item: ItemStack::simple(5, 3),
+        };
+        let body = packet.encode().expect("encodes");
+        assert_eq!(body, [0x00, 0x01, 0x00, 0x24, 0x05, 0x03, 0x00]);
+        assert_eq!(ContainerSetSlot::decode(&body).expect("decodes"), packet);
+
+        let empty = ContainerSetSlot {
+            window_id: -1,
+            state_id: 0,
+            slot: -1,
+            item: ItemStack::empty(),
+        };
+        assert_eq!(
+            ContainerSetSlot::decode(&empty.encode().expect("encodes")).expect("decodes"),
+            empty
+        );
+        assert!(ContainerSetSlot::decode(&[0x00, 0x01]).is_err());
+    }
+
+    #[test]
+    fn container_set_content_round_trip_and_carried_stack_is_outside_the_count() {
+        let packet = ContainerSetContent {
+            window_id: 0,
+            state_id: 2,
+            slots: vec![ItemStack::empty(), ItemStack::simple(1, 64)],
+            carried: ItemStack::simple(2, 1),
+        };
+        let body = packet.encode().expect("encodes");
+        assert_eq!(
+            body,
+            [
+                0x00, // window id
+                0x02, // state id
+                0x02, // two slots
+                0x00, // slot 0 empty
+                0x01, 0x40, 0x00, // slot 1: id 1, count 64, no components
+                0x02, 0x01, 0x00, // carried: id 2, count 1
+            ]
+        );
+        assert_eq!(ContainerSetContent::decode(&body).expect("decodes"), packet);
+
+        // A payload that stops after the counted slots has no carried stack.
+        assert!(ContainerSetContent::decode(&body[..6]).is_err());
+        // And a count that exceeds the frame is refused before allocating.
+        assert!(ContainerSetContent::decode(&[0x00, 0x02, 0xFF, 0xFF, 0x7F]).is_err());
+    }
+}

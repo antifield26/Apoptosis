@@ -1,0 +1,7 @@
+# Golden bytes: login handshake packet body, protocol 775, address "localhost",
+# port 25565, intent 2 (login). Hand-assembled from the wire spec; the test
+# decodes it and compares re-encoded output byte-for-byte.
+87 06
+09 6C 6F 63 61 6C 68 6F 73 74
+63 DD
+02

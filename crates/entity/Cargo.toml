@@ -1,0 +1,22 @@
+[package]
+name = "mc-entity"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mc-core = { path = "../core" }
+# `mc-world` is the layer below: it owns the geometry primitives (`Aabb`, `Vec3`)
+# and the collision solver. Entities sit on that, so the dependency is acyclic and
+# avoids a second, subtly different `Aabb` implementation (Audit 02 flagged the
+# duplicate-type risk; this resolves it in favour of one implementation).
+mc-world = { path = "../world" }
+mc-nbt = { path = "../nbt" }
+mc-registry = { path = "../registry" }
+tracing.workspace = true
+
+[dev-dependencies]
+mc-test-support = { path = "../test-support" }

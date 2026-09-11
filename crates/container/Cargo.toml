@@ -1,0 +1,17 @@
+[package]
+name = "mc-container"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mc-core = { path = "../core" }
+mc-entity = { path = "../entity" }
+mc-registry = { path = "../registry" }
+tracing.workspace = true
+
+[dev-dependencies]
+mc-test-support = { path = "../test-support" }

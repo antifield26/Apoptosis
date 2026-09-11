@@ -1,0 +1,131 @@
+# Heightmap.Types ordinals for protocol 775 (Minecraft Java 26.1.2).
+#
+# ---------------------------------------------------------------------------
+# SOURCE / PROVENANCE
+# ---------------------------------------------------------------------------
+# Class read: net/minecraft/world/level/levelgen/Heightmap$Types.class
+# From jar:   server-26.1.2.jar
+#             sha1 83eb1106f12f24c9127ce22070d71853157af127  (24555215 bytes)
+# That inner jar is byte-identical (same sha1, same size) to the entry
+# META-INF/versions/26.1.2/server-26.1.2.jar inside the official outer bundler
+# server.jar sha1 97ccd4c0ed3f81bbb7bfacddd1090b0c56f9bc51, so the class read here
+# is official 26.1.2 server code.
+# NOTE: the sha1 quoted in the original task header (97ccd4c0...) is the OUTER
+# bundler jar, not the inner jar that actually contains the class. Both are given
+# above. The inner jar was verified equal to the bundler's own copy, so this is
+# not a substitution.
+# Version confirmed from version.json inside the inner jar:
+#   id=26.1.2  protocol_version=775  world_version=4790  series_id=main  stable=true
+#
+# ---------------------------------------------------------------------------
+# HOW THE ORDINALS WERE READ
+# ---------------------------------------------------------------------------
+# javap -p -c -constants on Heightmap$Types.class. The static initialiser builds
+# each constant as:
+#   new Heightmap$Types  <name String>  <ordinal int>  <id int>
+#                        <serializationKey String>  <Usage>  <Predicate>
+# followed by  putstatic Heightmap$Types.<NAME>
+# All six ordinals are emitted as iconst_N (N = 0..5). Three independent orderings
+# were extracted and cross-compared; see CROSS-CHECK below.
+#
+# ---------------------------------------------------------------------------
+# WHAT THE WIRE ACTUALLY CARRIES
+# ---------------------------------------------------------------------------
+# The task header says STREAM_CODEC puts the ordinal on the wire. Precisely, it
+# puts the constructor's *id* argument on the wire. <clinit> ends with:
+#   BY_ID        = ByIdMap.continuous(Types::id, values(),
+#                                     ByIdMap.OutOfBoundsStrategy.ZERO)
+#   STREAM_CODEC = ByteBufCodecs.idMapper(BY_ID, Types::id)
+# ByteBufCodecs.idMapper returns an anonymous StreamCodec (ByteBufCodecs$28) whose
+# encode() is  VarInt.write(buf, Types::id)  and whose decode() is
+# VarInt.read(buf) -> BY_ID.apply(int).
+# In this jar every constant is constructed with id == ordinal (0..5), so the
+# VarInt value is identical either way and this table IS correct as wire values.
+# The distinction matters only if a future build decouples id from ordinal.
+#
+# ---------------------------------------------------------------------------
+# COLUMN 3 IS DERIVED, NOT JAR-CONFIRMED   *** READ THIS ***
+# ---------------------------------------------------------------------------
+# The task header expected lowercase serialized names. The jar does NOT contain
+# them. A byte scan of all 16461 entries of the inner jar (every file, not just
+# classes) found ZERO occurrences of:
+#   world_surface_wg, world_surface, ocean_floor_wg, ocean_floor,
+#   motion_blocking, motion_blocking_no_leaves, light_blocking
+# The only lowercase "ocean_floor" hits were 3 unrelated occurrences of the ruined
+# portal placement value "on_ocean_floor" (RuinedPortalPiece$VerticalPlacement and
+# two worldgen/structure/*.json files) - not heightmap names.
+#
+# Instead, the jar's serializationKey strings are UPPERCASE. The six String
+# constants in the whole Heightmap$Types class file are exactly:
+#   WORLD_SURFACE_WG, WORLD_SURFACE, OCEAN_FLOOR_WG, OCEAN_FLOOR,
+#   MOTION_BLOCKING, MOTION_BLOCKING_NO_LEAVES
+# each loaded twice per constant in <clinit>: once as the Enum name, once as the
+# serializationKey constructor argument.
+# getSerializedName() returns the serializationKey field unchanged (the bytecode is
+# `getfield serializationKey; areturn` - no toLowerCase anywhere in the class), and
+# CODEC = StringRepresentable.fromEnum(values()); fromEnum delegates to
+# fromEnumWithMapping(values, identity) - its synthetic lambda$fromEnum$0 is a plain
+# `return arg`, i.e. no case mapping. So the JSON/NBT codec keys are the UPPERCASE
+# strings listed above.
+#
+# => Column 3 below is the constant name lowercased (DERIVED), supplied only because
+#    the requested file format asks for it. It is NOT a jar-confirmed identifier.
+#    It has no confirmed use on the wire (the wire carries an integer, no name) and
+#    it is NOT the codec key. Do not use column 3 as an NBT/JSON key.
+#
+# ---------------------------------------------------------------------------
+# CROSS-CHECK: declaration order vs ordinal  --  AGREED
+# ---------------------------------------------------------------------------
+# (a) javap -p public static final field declaration order,
+# (b) <clinit> new/putstatic sequence with its iconst ordinal operands,
+# (c) $values() array fill order (iconst index -> getstatic field), which is what
+#     the JVM actually uses to assign Enum.ordinal().
+# All three produce the same 6 constants in the same order. No disagreement.
+#
+# ---------------------------------------------------------------------------
+# LIGHT_BLOCKING  --  NOT A MEMBER OF THIS ENUM
+# ---------------------------------------------------------------------------
+# The enum has exactly 6 constants and NO LIGHT_BLOCKING member.
+# The identifier "LIGHT_BLOCKING" occurs in exactly ONE class in the whole jar:
+#   net/minecraft/util/datafix/fixes/HeightmapRenamingFix.class
+# where it is a String constant used as a *write target* while migrating the legacy
+# pre-flattening "Heightmaps.LIGHT" key:
+#   Dynamic.remove("LIGHT") ... Dynamic.set("LIGHT_BLOCKING", <old value>)
+# That fix class is live: it is referenced from
+# net/minecraft/util/datafix/DataFixers.class (i.e. registered in the fix chain).
+# The same fix also writes LIQUID -> WORLD_SURFACE_WG, SOLID -> OCEAN_FLOOR_WG and
+# OCEAN_FLOOR, RAIN -> MOTION_BLOCKING and MOTION_BLOCKING_NO_LEAVES.
+# Nothing in the jar shows 26.1.2 reading/decoding LIGHT_BLOCKING: it is not one of
+# the six serializationKey strings and it is not in the enum. Treat it as a legacy
+# on-disk key emitted by a datafixer, not as a protocol value.
+# (Per instructions, no further interpretation is offered - the above is what the
+#  constants/bytecode show.)
+#
+# ---------------------------------------------------------------------------
+# Format: <ordinal>	<constant name>	<wire name, lowercase DERIVED - see above>
+# ---------------------------------------------------------------------------
+0	WORLD_SURFACE_WG	world_surface_wg
+1	WORLD_SURFACE	world_surface
+2	OCEAN_FLOOR_WG	ocean_floor_wg
+3	OCEAN_FLOOR	ocean_floor
+4	MOTION_BLOCKING	motion_blocking
+5	MOTION_BLOCKING_NO_LEAVES	motion_blocking_no_leaves
+#
+# ---------------------------------------------------------------------------
+# NOTES / LIMITS OF VERIFICATION
+# ---------------------------------------------------------------------------
+# * 6 rows total. There is no light_blocking row. The illustrative table in the task
+#   header (which also placed WORLD_SURFACE at ordinal 0) does not match this jar:
+#   ordinal 0 is WORLD_SURFACE_WG, and the two *_WG variants are real members.
+# * Decode is lenient: ByIdMap.continuous(..., OutOfBoundsStrategy.ZERO) means an
+#   out-of-range VarInt decodes to index 0 of the id-sorted array, i.e. id 0 =
+#   WORLD_SURFACE_WG, instead of throwing.
+# * The Usage field (WORLDGEN / LIVE_WORLD / CLIENT, ordinals 0/1/2, verified from
+#   Heightmap$Usage.class) and the derived sendToClient()/keepAfterWorldgen() helpers
+#   are NOT part of the wire value and are not tabulated here.
+# * NOT VERIFIED: any component that expects lowercase heightmap ids. The command
+#   argument net/minecraft/commands/arguments/HeightmapTypeArgument.class does call
+#   String.toLowerCase(Locale) on its input, but that is Brigadier command-input
+#   normalisation and is not evidence about serializationKey or about the wire.
+# * NOT VERIFIED: whether a client build of 26.1.2 agrees byte-for-byte; only the
+#   server jar was inspected.

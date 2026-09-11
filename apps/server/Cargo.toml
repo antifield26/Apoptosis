@@ -1,0 +1,21 @@
+[package]
+name = "mc-server-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "mc-server"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+mc-core = { path = "../../crates/core" }
+mc-server = { path = "../../crates/server" }
+# Workspace pin: the binary needs the runtime plus the signal/net/time features
+# the library already uses. `features = ["full"]` was dropped so the two crates
+# cannot silently drift onto different feature sets.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "signal", "net", "time"] }
+tracing.workspace = true

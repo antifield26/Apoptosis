@@ -1,0 +1,366 @@
+//! Status effects (P05-10).
+//!
+//! Vanilla applies effects as a per-tick modifier on attributes and behaviour.
+//! Phase 05 needs the *container* and the tick semantics; it does not need the
+//! full 40-effect table, because only a handful are reachable before mobs and
+//! potions exist.
+//!
+//! ## What is modelled, and what is not
+//!
+//! Modelled: an effect's identity, amplifier, remaining duration, the ambient flag,
+//! expiry, and the two numeric modifiers a caller can ask for — movement speed and
+//! damage taken. [`EffectKind`] lists the effects whose *numeric* effect we apply.
+//!
+//! **Not** modelled, and therefore not claimed: particles, the HUD icon, effect
+//! colour, per-effect behaviour beyond the two modifiers (poison, wither,
+//! levitation, blindness…), instant effects (they apply once rather than over
+//! time), effect removal by milk, beacons or conduits. The client is not sent
+//! `update_mob_effect` yet, so a player sees no icon even when the server applies
+//! the modifier — recorded in the parity matrix rather than implied away.
+
+/// Effect ids as sent on the wire (`update_mob_effect`).
+///
+/// Only the ids whose numeric effect this crate applies are named; a numeric id
+/// that is not recognised is still stored (so a future effect can round-trip) but
+/// contributes no modifier.
+pub mod effect_id {
+    /// `minecraft:speed` — movement speed up.
+    pub const SPEED: i32 = 1;
+    /// `minecraft:slowness` — movement speed down.
+    pub const SLOWNESS: i32 = 2;
+    /// `minecraft:haste` — mining speed up.
+    pub const HASTE: i32 = 3;
+    /// `minecraft:mining_fatigue` — mining speed down.
+    pub const MINING_FATIGUE: i32 = 4;
+    /// `minecraft:strength` — attack damage up.
+    pub const STRENGTH: i32 = 5;
+    /// `minecraft:instant_health`.
+    pub const INSTANT_HEALTH: i32 = 6;
+    /// `minecraft:instant_damage`.
+    pub const INSTANT_DAMAGE: i32 = 7;
+    /// `minecraft:jump_boost`.
+    pub const JUMP_BOOST: i32 = 8;
+    /// `minecraft:regeneration` — health over time.
+    pub const REGENERATION: i32 = 10;
+    /// `minecraft:resistance` — damage taken down.
+    pub const RESISTANCE: i32 = 11;
+    /// `minecraft:fire_resistance`.
+    pub const FIRE_RESISTANCE: i32 = 12;
+    /// `minecraft:water_breathing`.
+    pub const WATER_BREATHING: i32 = 13;
+    /// `minecraft:weakness` — attack damage down.
+    pub const WEAKNESS: i32 = 18;
+    /// `minecraft:poison` — damage over time.
+    pub const POISON: i32 = 19;
+    /// `minecraft:wither` — damage over time.
+    pub const WITHER: i32 = 20;
+    /// `minecraft:slow_falling`.
+    pub const SLOW_FALLING: i32 = 28;
+}
+
+/// Effects whose numeric contribution this crate applies.
+///
+/// Anything else is stored and ticked but changes no modifier, which is honest:
+/// the alternative is a table of numbers we have not verified.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum EffectKind {
+    /// Movement speed up (id 1).
+    Speed,
+    /// Movement speed down (id 2).
+    Slowness,
+    /// Attack damage up (id 5).
+    Strength,
+    /// Attack damage down (id 18).
+    Weakness,
+    /// Damage taken down (id 11).
+    Resistance,
+    /// Damage over time (id 19).
+    Poison,
+    /// Damage over time (id 20).
+    Wither,
+    /// Health over time (id 10).
+    Regeneration,
+}
+
+impl EffectKind {
+    /// Recognise a wire id.
+    #[must_use]
+    pub const fn from_id(id: i32) -> Option<Self> {
+        match id {
+            effect_id::SPEED => Some(Self::Speed),
+            effect_id::SLOWNESS => Some(Self::Slowness),
+            effect_id::STRENGTH => Some(Self::Strength),
+            effect_id::WEAKNESS => Some(Self::Weakness),
+            effect_id::RESISTANCE => Some(Self::Resistance),
+            effect_id::POISON => Some(Self::Poison),
+            effect_id::WITHER => Some(Self::Wither),
+            effect_id::REGENERATION => Some(Self::Regeneration),
+            _ => None,
+        }
+    }
+
+    /// The wire id.
+    #[must_use]
+    pub const fn id(self) -> i32 {
+        match self {
+            Self::Speed => effect_id::SPEED,
+            Self::Slowness => effect_id::SLOWNESS,
+            Self::Strength => effect_id::STRENGTH,
+            Self::Weakness => effect_id::WEAKNESS,
+            Self::Resistance => effect_id::RESISTANCE,
+            Self::Poison => effect_id::POISON,
+            Self::Wither => effect_id::WITHER,
+            Self::Regeneration => effect_id::REGENERATION,
+        }
+    }
+
+    /// Stable name for logs.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Speed => "speed",
+            Self::Slowness => "slowness",
+            Self::Strength => "strength",
+            Self::Weakness => "weakness",
+            Self::Resistance => "resistance",
+            Self::Poison => "poison",
+            Self::Wither => "wither",
+            Self::Regeneration => "regeneration",
+        }
+    }
+
+    /// Whether this effect damages over time.
+    #[must_use]
+    pub const fn is_harmful_over_time(self) -> bool {
+        matches!(self, Self::Poison | Self::Wither)
+    }
+}
+
+/// One active effect on an entity.
+///
+/// Field names match what the tick loop and the (future) `update_mob_effect`
+/// encoder need.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ActiveEffect {
+    /// Wire id of the effect.
+    pub id: i32,
+    /// Amplifier, 0-based (amplifier 0 is "level I").
+    pub amplifier: i32,
+    /// Remaining duration in ticks.
+    pub duration: i32,
+    /// Whether the effect came from a beacon/conduit rather than a potion.
+    pub ambient: bool,
+}
+
+impl ActiveEffect {
+    /// A new effect; duration is clamped to a non-negative value.
+    #[must_use]
+    pub fn new(id: i32, amplifier: i32, duration: i32) -> Self {
+        Self {
+            id,
+            amplifier: amplifier.max(0),
+            duration: duration.max(0),
+            ambient: false,
+        }
+    }
+
+    /// The effect kind, when this crate models its numeric behaviour.
+    #[must_use]
+    pub const fn kind(&self) -> Option<EffectKind> {
+        EffectKind::from_id(self.id)
+    }
+
+    /// Amplifier as a "level" for display and for the vanilla formulas, which are
+    /// written in terms of `amplifier + 1`.
+    #[must_use]
+    pub const fn level(&self) -> i32 {
+        self.amplifier.saturating_add(1)
+    }
+
+    /// Whether the effect has run out.
+    #[must_use]
+    pub const fn is_expired(&self) -> bool {
+        self.duration <= 0
+    }
+}
+
+/// Multiplier applied to movement speed given a set of active effects.
+///
+/// Vanilla adds `0.2 × level` for Speed and subtracts `0.15 × level` for Slowness.
+/// Both are documented community values rather than constants read out of the jar;
+/// they are **not** presented as verified parity, and the result is clamped to a
+/// positive range so a hostile stack of effects cannot produce a negative or absurd
+/// speed (AGENTS.md §10).
+#[must_use]
+pub fn movement_speed_multiplier(effects: &[ActiveEffect]) -> f64 {
+    let mut multiplier = 1.0f64;
+    for effect in effects {
+        match effect.kind() {
+            Some(EffectKind::Speed) => multiplier += 0.2 * f64::from(effect.level()),
+            Some(EffectKind::Slowness) => multiplier -= 0.15 * f64::from(effect.level()),
+            _ => {}
+        }
+    }
+    multiplier.clamp(0.0, 4.0)
+}
+
+/// Multiplier applied to incoming damage given a set of active effects.
+///
+/// Vanilla's Resistance reduces damage by `20%` per level, capped at 100% (level
+/// IV+ is full immunity). Clamped so the result is never negative.
+#[must_use]
+pub fn damage_taken_multiplier(effects: &[ActiveEffect]) -> f64 {
+    let mut reduction = 0.0f64;
+    for effect in effects {
+        if effect.kind() == Some(EffectKind::Resistance) {
+            reduction += 0.2 * f64::from(effect.level());
+        }
+    }
+    (1.0 - reduction).clamp(0.0, 1.0)
+}
+
+/// Damage an effect deals this tick, if any.
+///
+/// Vanilla's poison and wither deal one point on a cadence that depends on the
+/// amplifier; the *cadence table* is not verified here, so this returns damage
+/// every `interval` ticks where the interval is the documented vanilla pattern
+/// (25 ticks at amplifier 0, shortening as the amplifier rises, floor 1). Poison
+/// cannot kill: the caller must clamp the result so health stops at 1.
+#[must_use]
+pub fn damage_over_time(effect: &ActiveEffect, tick: u64) -> f32 {
+    let Some(kind) = effect.kind() else {
+        return 0.0;
+    };
+    if !kind.is_harmful_over_time() {
+        return 0.0;
+    }
+    // Vanilla: interval = 25 >> amplifier, minimum 1 tick.
+    let shift = u32::try_from(effect.amplifier).unwrap_or(0);
+    let interval = (25u64 >> shift.min(4)).max(1);
+    if tick.is_multiple_of(interval) {
+        1.0
+    } else {
+        0.0
+    }
+}
+
+/// Whether poison from this effect is allowed to reduce health below 1.
+///
+/// Poison stops at half a heart; wither does not.
+#[must_use]
+pub fn can_kill(effect: &ActiveEffect) -> bool {
+    effect.kind() == Some(EffectKind::Wither)
+}
+
+#[cfg(test)]
+// `damage_over_time` returns a literal `0.0` or `1.0` and the multiplier helpers
+// return exact literals at their clamp boundaries, so these comparisons are exact
+// by construction rather than approximate.
+#[allow(clippy::float_cmp)]
+mod tests {
+    use super::{
+        ActiveEffect, EffectKind, can_kill, damage_over_time, damage_taken_multiplier, effect_id,
+        movement_speed_multiplier,
+    };
+
+    #[test]
+    fn ids_round_trip_for_modelled_effects() {
+        for kind in [
+            EffectKind::Speed,
+            EffectKind::Slowness,
+            EffectKind::Strength,
+            EffectKind::Weakness,
+            EffectKind::Resistance,
+            EffectKind::Poison,
+            EffectKind::Wither,
+            EffectKind::Regeneration,
+        ] {
+            assert_eq!(EffectKind::from_id(kind.id()), Some(kind));
+            assert!(!kind.name().is_empty());
+        }
+        // An unmodelled id is stored but contributes nothing.
+        assert_eq!(EffectKind::from_id(effect_id::JUMP_BOOST), None);
+        assert_eq!(EffectKind::from_id(-1), None);
+        assert_eq!(EffectKind::from_id(9999), None);
+    }
+
+    #[test]
+    fn amplifiers_and_durations_are_clamped_on_construction() {
+        let effect = ActiveEffect::new(effect_id::SPEED, -5, -10);
+        assert_eq!(effect.amplifier, 0);
+        assert_eq!(effect.duration, 0);
+        assert!(effect.is_expired());
+        assert_eq!(effect.level(), 1);
+        assert_eq!(
+            ActiveEffect::new(effect_id::SPEED, i32::MAX, 0).level(),
+            i32::MAX,
+            "level saturates rather than wrapping"
+        );
+    }
+
+    #[test]
+    fn speed_multiplier_follows_the_vanilla_shape() {
+        let plain = movement_speed_multiplier(&[]);
+        assert!((plain - 1.0).abs() < 1e-9);
+
+        let speed_two = movement_speed_multiplier(&[ActiveEffect::new(effect_id::SPEED, 1, 100)]);
+        assert!((speed_two - 1.4).abs() < 1e-9, "{speed_two}");
+
+        let slow_two = movement_speed_multiplier(&[ActiveEffect::new(effect_id::SLOWNESS, 1, 100)]);
+        assert!((slow_two - 0.7).abs() < 1e-9, "{slow_two}");
+
+        // Absurd amplifiers cannot produce a negative or unbounded speed.
+        let absurd =
+            movement_speed_multiplier(&[ActiveEffect::new(effect_id::SLOWNESS, 1000, 100)]);
+        assert!((0.0..=4.0).contains(&absurd), "{absurd}");
+        let absurd_fast =
+            movement_speed_multiplier(&[ActiveEffect::new(effect_id::SPEED, 1000, 100)]);
+        assert!(absurd_fast <= 4.0, "{absurd_fast}");
+    }
+
+    #[test]
+    fn damage_multiplier_caps_at_full_resistance() {
+        assert!((damage_taken_multiplier(&[]) - 1.0).abs() < 1e-9);
+        let resist_one =
+            damage_taken_multiplier(&[ActiveEffect::new(effect_id::RESISTANCE, 0, 100)]);
+        assert!((resist_one - 0.8).abs() < 1e-9, "{resist_one}");
+        let resist_four =
+            damage_taken_multiplier(&[ActiveEffect::new(effect_id::RESISTANCE, 3, 100)]);
+        assert!((resist_four - 0.2).abs() < 1e-9, "{resist_four}");
+        let resist_ten =
+            damage_taken_multiplier(&[ActiveEffect::new(effect_id::RESISTANCE, 9, 100)]);
+        assert!(
+            resist_ten.abs() < 1e-9,
+            "capped at full immunity: {resist_ten}"
+        );
+    }
+
+    #[test]
+    fn damage_over_time_fires_on_its_cadence() {
+        let poison = ActiveEffect::new(effect_id::POISON, 0, 100);
+        assert_eq!(damage_over_time(&poison, 0), 1.0);
+        assert_eq!(damage_over_time(&poison, 1), 0.0);
+        assert_eq!(damage_over_time(&poison, 25), 1.0);
+        // A higher amplifier shortens the interval.
+        let strong = ActiveEffect::new(effect_id::POISON, 2, 100);
+        assert_eq!(damage_over_time(&strong, 6), 1.0, "25 >> 2 = 6");
+        // Non-damaging and unmodelled effects never deal damage.
+        assert_eq!(
+            damage_over_time(&ActiveEffect::new(effect_id::SPEED, 0, 100), 0),
+            0.0
+        );
+        assert_eq!(
+            damage_over_time(&ActiveEffect::new(effect_id::JUMP_BOOST, 0, 100), 0),
+            0.0
+        );
+        assert_eq!(damage_over_time(&ActiveEffect::new(9999, 0, 100), 0), 0.0);
+    }
+
+    #[test]
+    fn only_wither_may_kill() {
+        assert!(can_kill(&ActiveEffect::new(effect_id::WITHER, 0, 10)));
+        assert!(!can_kill(&ActiveEffect::new(effect_id::POISON, 0, 10)));
+        assert!(!can_kill(&ActiveEffect::new(effect_id::SPEED, 0, 10)));
+        assert!(!can_kill(&ActiveEffect::new(9999, 0, 10)));
+    }
+}
