@@ -49,11 +49,13 @@
 
 pub mod argument;
 pub mod dispatch;
+pub mod selector;
 pub mod source;
 pub mod tree;
 
 pub use argument::{Argument, ArgumentKind, ArgumentValue, ParseError, ValueRange};
 pub use dispatch::{CommandOutcome, Dispatcher, Suggestion};
+pub use selector::{Selector, SelectorError, SelectorKind};
 pub use source::{CommandSource, PermissionLevel, SourceKind};
 pub use tree::{Command, CommandTree, TreeError};
 
