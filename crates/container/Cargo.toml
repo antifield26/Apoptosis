@@ -10,6 +10,9 @@ workspace = true
 
 [dependencies]
 mc-core = { path = "../core" }
+# Recipe data loading (P07-09): the furnace table is built from the real
+# smelting recipes the pack ships rather than a hand-written list.
+mc-data = { path = "../data" }
 mc-entity = { path = "../entity" }
 mc-registry = { path = "../registry" }
 tracing.workspace = true

@@ -208,6 +208,7 @@ name = "mc-container"
 version = "0.1.0"
 dependencies = [
  "mc-core",
+ "mc-data",
  "mc-entity",
  "mc-registry",
  "mc-test-support",
@@ -374,6 +375,19 @@ dependencies = [
  "mc-persistence",
  "mc-registry",
  "mc-test-support",
+ "tracing",
+]
+
+[[package]]
+name = "mc-worldgen"
+version = "0.1.0"
+dependencies = [
+ "mc-core",
+ "mc-nbt",
+ "mc-persistence",
+ "mc-registry",
+ "mc-simulation",
+ "mc-world",
  "tracing",
 ]
 

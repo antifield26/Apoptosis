@@ -62,6 +62,7 @@ pub mod crafting;
 pub mod furnace;
 pub mod hopper;
 pub mod menu;
+pub mod smelting_data;
 
 pub use block_entity::{BlockEntity, BlockEntityData, BlockEntityKind, BlockEntityStore, BlockPos};
 pub use click::{Click, ClickRejection, ClickType, DragStage, DragType, SwapTarget};
