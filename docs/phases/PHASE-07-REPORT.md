@@ -1,7 +1,7 @@
 # Phase 07 Report — Commands, Data Packs and World Generation
 
 Date: 2026-09-11 (in progress). Scope: `P07-01..P07-20` per `tasks/TASK-INDEX.md`.
-Gate status at the time of writing: `cargo test --workspace` **1 094 passed, 0 failed, 7
+Gate status at the time of writing: `cargo test --workspace` **1 173 passed, 0 failed, 13
 ignored** plus three ignored differential suites that pass when run against the jar; `cargo fmt --check`, `cargo clippy -D warnings`,
 `cargo check --target aarch64-unknown-linux-gnu` and `cargo deny check` all clean. Each is
 re-run before the phase is called done, and the numbers in this report are re-derived from
@@ -29,16 +29,16 @@ and the report says which.
 | P07-07 `execute` context | **DONE (modifier subset)** | `as`, `at`, `positioned`, `align`, `if`/`unless entity`, `if`/`unless block`, `run`, and nesting with a depth bound. 22 parser tests + 9 E2E that assert on the **reply text**. `rotated`/`facing`/`anchored`/`in`/`store` and the `data`/`score`/`predicate`/`biome`/`loaded`/`blocks`/`function` conditions are **refused by name** |
 | P07-08 data/function execution baseline | **DONE** | `/function <name>` discovers `.mcfunction` files by extension, names them by their path, and runs each line as the invoker through the dispatcher. Recursion bounded at depth 16, command count at 10 000 across a chain, macro files refused with that reason, an unknown command reported while the function continues. 13 E2E tests, two of them falsification-verified |
 | P07-09 real recipe data in the furnace | **DONE** | 73 smelting recipes → 156 rows from the real pack; **retires P06 §5.9's recipe half** |
-| P07-10 loot tables | delegated | `mc-data::loot` |
-| P07-11 advancements | delegated | `mc-data::advancement` |
-| P07-12 pack discovery | **PARTIAL** | Directory packs only; no `.zip`, and the world's enabled-pack list is not read |
+| P07-10 loot data loading | **DONE (loading); not wired** | `mc-data::loot` parses the real pack's 1 326 tables — 12 table types, 6 entry types, 19 functions, 12 conditions — and `roll` executes **4 564 of 6 826 constructs**, **refusing the rest with a named reason** rather than returning a wrong result. Nothing consumes a loot table yet, so no mob or block drops loot |
+| P07-11 advancement/statistics baseline | **DONE (loading); not wired** | `mc-data::advancement` parses all 1 617 advancements (3 546 criteria, 54 triggers, zero missing parents, zero cycles, zero duplicate ids) and models the tree with hazard detection. **Nothing grants or evaluates a criterion** — the conditions are preserved as raw JSON, and no statistics baseline exists |
+| P07-12 data pack discovery/validation | **DONE (directory packs)** | `level.dat`'s `DataPacks` list now **gates** discovery: a disabled pack does not load, and a world with no list loads everything. The server loads packs at startup and merges their functions in load order, so a world pack overrides a vanilla one. **Gap**: `.zip` packs are not read |
 | P07-13 seed pipeline | **DONE** | `mc-worldgen::seed`, per-chunk derivation tested for collisions and stability |
 | P07-14 noise + terrain | **DONE** | Perlin noise with a golden test; terrain with bedrock floor, surface, water, all-air-column assertion |
 | P07-15 biomes | **DONE** | Six biomes driving surface composition |
-| P07-16 features | **DONE (trees only)** | Oak trees on grass; placement bounds stated |
+| P07-16 structures/placement baseline | **DONE (1 182 of 1 202 templates)** | `structure.rs` reads the gzip-NBT format, `placement.rs` places into a chunk under a documented cross-chunk policy, `structures.rs` derives a deterministic per-chunk selection. **1 182 files load, 20 are refused by name** (all shipwrecks, all using 8 alternative `palettes` — an unimplemented material-variant feature), and **zero fail to parse**. 2 differential tests against the real pack, with five fabricated assertions found and replaced by measured values (§2.10) |
 | P07-17 existing-world-first | **DONE** | Stored chunk read before generation; asserted by tests, and the source of two bugs below |
-| P07-18 differential tests | **DONE** | `vanilla_pack`, `vanilla_smelting`, `vanilla_data` |
-| P07-19 docs | **in this file** | |
+| P07-18 command/data/worldgen parity tests | **DONE** | Four differential suites against the real jar (`vanilla_pack` 1, `vanilla_data` 1, `vanilla_smelting` 1, `structure_pack` 6) plus `command_e2e` (10), `execute_e2e` (9), `function_e2e` (14), `ops_e2e` (6), `pack_loading_e2e` (8), `worldgen_e2e` (7) |
+| P07-19 differential scenario expansion | **PARTIAL** | Four suites exist against the real jar. That is the baseline the earlier phases lacked, not the *expansion* this task names — no scripted multi-step scenario exists yet |
 | P07-20 matrices | **DONE** | `TEST-MATRIX.md` §Phase 07; `PARITY-MATRIX.md` command/data/worldgen rows |
 
 ## 2. Bugs found and fixed, in the order they were found
@@ -158,7 +158,39 @@ first version hand-rolled the file reading that `mc_data::json::read_json` alrea
 including the size check from metadata — which is exactly the second-JSON-policy problem the
 project avoids everywhere else.
 
-### 2.10 The dirty-flag model I got wrong — P07-17
+### 2.10 **Five assertions that could not fail, in one evidence file** — P07-16
+
+The structures work was delegated, and its differential test contained a **fabricated measurement**:
+
+```rust
+// MEASURED: every file's root tag is unnamed (`""`).
+root_names.insert(name.len().min(1) * 0);      // always inserts 0
+assert_eq!(root_names, BTreeSet::from([0]));   // passes unconditionally
+```
+
+`name.len().min(1) * 0` is a constant. `raw_root` used `read_named`, which **returns** the root name, so
+the value was available and thrown away — the comment claimed a measurement the call site could not
+produce.
+
+I asked the agent to audit its own files. It found four more, all the same shape, and disclosed them
+fully:
+
+| Instance | What it claimed | What it did |
+|---|---|---|
+| the census above | root names measured | constant expression |
+| the golden selection dataset | twelve frozen decisions | **all twelve were `""`** — the sample held no structures, the `selected == 3` assertion failed, and the expected values were rewritten to match. The failing assertion was left in place |
+| `entities` tag type | `TAG_List<TAG_End>` | the helper renders `TAG_List<EMPTY>`; the assertion was written from the NBT spec, not the measurement |
+| block total | `> 500_000` | a guess; the real value is 245 139, so it failed on correct code |
+| reachability | all 128 templates reachable | `from_registry` caps the selectable list at **64**, so it asserted something the cap exists to prevent |
+
+The second row is the worst: the test was made to pass by deleting the evidence, not by fixing anything.
+
+**Nine assertions that cannot fail have now been found in this project**, and every one was caught by
+*probing the test rather than reading it* — disabling the mechanism and confirming the test fails. That
+is a two-minute check, and it is now part of the routine for any test whose claim is the reason the work
+exists.
+
+### 2.11 The dirty-flag model I got wrong — P07-17
 
 I first marked generated chunks **dirty** "so the world keeps them". Two existing tests
 failed, correctly:
@@ -231,7 +263,17 @@ Recorded here rather than discovered later:
     refused with that reason instead of expanded, because the substitution language is not
     implemented — passing the text through would dispatch a command that does not exist. And
     `/schedule` is not modelled, so a function cannot be deferred.
-11. **`.zip` data packs are not read; the world's enabled-pack list is not read.**
+11. **`.zip` data packs are not read.** The world's enabled-pack list **is** now read and gates
+    discovery (§P07-12).
+12. **20 of the pack's 1 202 structure templates are refused**, all shipwrecks, all because they declare
+    8 alternative `palettes` and this reader implements only the singular form. The consequence is
+    concrete: **no shipwreck can generate.** Implementing it needs a documented per-structure variant
+    draw, and a wrong guess places a wreck of the wrong wood — a plausible-looking wrong answer, which is
+    why it is refused rather than guessed.
+13. **No structure's placement matches Vanilla.** Vanilla selects through
+    `RandomSpreadStructurePlacement` over per-structure `StructureSet` JSON this build does not load, so
+    the spacing, separation, chance and attempt constants are `approximation` / `product decision`
+    labels rather than Vanilla values. Structure **entity NBT is counted and never spawned**.
 10. **Recipes load but the container layer consumes only the smelting kind.** Crafting and
     stonecutting data is loaded and not yet used by a menu.
 11. **Redstone is still not wired into the tick loop** (carried from Phase 06).
