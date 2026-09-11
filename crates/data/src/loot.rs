@@ -2,21 +2,28 @@
 //!
 //! ## The format, surveyed from the 26.1.2 jar
 //!
-//! `data/minecraft/loot_table/` holds **1 326 files**. Every one was read while this
-//! module was written; the figures below are counts, not recollections. The survey script
-//! is `target/vanilla-26.1.2/survey_loot_adv.py`, and `tests/vanilla_data.rs` re-derives
-//! the same numbers from the extracted pack.
+//! `data/minecraft/loot_table/` holds **1 326 files**. Every one was read while this module was
+//! written; the figures below are counts, not recollections. The measuring script is
+//! `target/vanilla-26.1.2/census_loot_adv.py`, and `tests/vanilla_data.rs` re-derives the same
+//! numbers from the extracted pack and asserts every one of them.
 //!
 //! | Level | Distinct types | Occurrences |
 //! |---|---|---|
-//! | table `type` | 11 | 1 326 |
-//! | entry `type` | 6 | 2 542 |
-//! | `function` | 18 | 1 392 |
-//! | `condition` | 12 | 1 500 |
+//! | table `type` | 12 | 1 329 |
+//! | entry `type` | 6 | 2 548 |
+//! | `function` | 19 | 1 404 |
+//! | `condition` | 12 | 1 545 |
+//! | count provider | 3 | 3 805 |
 //!
-//! The structural discriminator differs per level, which is a real trap: a table and an
-//! entry use `"type"`, a function uses `"function"`, and a condition uses `"condition"`.
-//! A parser that reads `"type"` everywhere finds nothing at all.
+//! The counts exceed the file count because a table inlines others (3 more tables, 12 more
+//! functions, 6 more conditions) and because entries nest inside `alternatives`. Count providers
+//! are listed separately: they are *arguments* of a `count`/`rolls` field, not nodes in the tree,
+//! so they are reported in [`LootLoadReport::number_providers`] rather than in the construct
+//! census.
+//!
+//! The structural discriminator differs per level, which is a real trap: a table and an entry use
+//! `"type"`, a function uses `"function"`, and a condition uses `"condition"`. A parser that
+//! reads `"type"` everywhere finds nothing at all.
 //!
 //! | Table `type` | Files |
 //! |---|---|
@@ -29,22 +36,39 @@
 //! | `minecraft:block_interact` | 4 |
 //! | `minecraft:fishing` | 4 |
 //! | `minecraft:equipment` | 3 |
-//! | `minecraft:entity_interact` | 1 |
+//! | `minecraft:inline` | 3 (not a file type — a table inlined by another) |
 //! | `minecraft:barter` | 1 |
+//! | `minecraft:entity_interact` | 1 |
+//!
+//! ## Four things the real data forced, which a parser written from a description gets wrong
+//!
+//! Each of these was a bug in the first version of this module, found only by loading the pack:
+//!
+//! 1. **`functions` is legal on every entry type**, not only on `minecraft:item`. Vanilla puts
+//!    two on `minecraft:loot_table` entries, each carrying conditions that in turn carry terms:
+//!    reading `functions` only for items lost 2 functions, 2 `any_of` and 4
+//!    `entity_properties`.
+//! 2. **`inverted` uses the singular key `term`**, not `terms` like `any_of`. Missing it hides
+//!    everything under it — 12 `any_of` and their terms — and made `match_tool` look like 178
+//!    occurrences when the files contain **203**.
+//! 3. **A function carries its own `conditions`** (164 of 1 404). They gate whether the function
+//!    runs, and ignoring them applies a function vanilla would not have applied.
+//! 4. **`limit_count`'s `min`/`max` and `binomial`'s `n` are written as floats** (`1.0`, `3.0`),
+//!    so a parser insisting on a JSON integer refuses ten vanilla files.
 //!
 //! ## What this module executes, and what it refuses
 //!
-//! A wrong roll is worse than no roll: it produces items that look plausible and are
-//! silently wrong. So [`roll`] implements a **named, tested subset** and refuses the
-//! rest. Two rules make that honest:
+//! A wrong roll is worse than no roll: it produces items that look plausible and are silently
+//! wrong. So [`roll`] implements a **named, tested subset** and refuses the rest. Two rules make
+//! that honest:
 //!
-//! 1. **Nothing is dropped at parse time.** A function, condition, entry or count
-//!    provider whose type is not modelled is kept as its `Raw` variant holding the
-//!    original JSON, so the structure still describes the file; the loader counts it in
+//! 1. **Nothing is dropped at parse time.** A function, condition, entry or count provider whose
+//!    type is not modelled is kept whole — its `Raw` variant for a construct, its JSON for an
+//!    entry — so the structure still describes the file; the loader counts it in
 //!    [`LootLoadReport::unexecutable`].
-//! 2. **Nothing is ignored at roll time.** A run that meets a `Raw` construct, a tag
-//!    entry, a dynamic entry or a nesting problem returns [`RollError`] naming it. It
-//!    never returns a partial result as if it were the answer.
+//! 2. **Nothing is ignored at roll time.** A run that meets an unmodelled construct, a tag entry,
+//!    a dynamic entry or a reference problem returns [`RollError`] naming it. It never returns a
+//!    partial result as if it were the answer.
 //!
 //! ### Executable
 //!
@@ -56,38 +80,42 @@
 //! | count providers | number literal, `minecraft:uniform`, `minecraft:binomial` |
 //!
 //! `minecraft:table_bonus`, `minecraft:random_chance_with_enchanted_bonus` and
-//! `minecraft:match_tool` are executed **only** when the caller supplies the enchantment
-//! levels in [`LootContext`]; without them the roll refuses, because assuming level 0
-//! would silently drop the looting and silk-touch outcomes.
+//! `minecraft:match_tool` run **only** when the caller supplies the enchantment levels in
+//! [`LootContext`]; without them the roll refuses, because assuming level 0 would silently drop
+//! the looting and silk-touch outcomes. The same is true of `survives_explosion` and
+//! `LootContext::survives_explosion`, and of an entry's `quality` and `LootContext::luck`.
 //!
 //! ### Refused
 //!
-//! Everything else, with the reason attached to each refusal rather than to a comment:
-//! the 16 unexecuted function types (`enchant_randomly`, `enchant_with_levels`,
-//! `apply_bonus`, `explosion_decay`, `enchanted_count_increase`, `copy_components`,
-//! `copy_state`, `exploration_map`, `furnace_smelt`, `set_potion`, `set_enchantments`,
-//! `set_name`, `set_instrument`, `set_stew_effect`, `set_ominous_bottle_amplifier`,
-//! `set_components`), the 5 unexecuted condition types (`block_state_property`,
-//! `entity_properties`, `damage_source_properties`, `location_check`,
-//! `killed_by_player`), the `dynamic` and `tag` entry types, and `minecraft:sequence`.
-//! Each needs the item registry, the enchantment tables, a structure generator, a block
-//! entity, entity state or a damage source — none of which a loot context here carries,
-//! and guessing any of them produces wrong loot.
+//! Everything else, with the reason attached to each refusal rather than to a comment: the 16
+//! unexecuted function types (`apply_bonus`, `copy_components`, `copy_state`,
+//! `enchant_randomly`, `enchant_with_levels`, `enchanted_count_increase`, `exploration_map`,
+//! `explosion_decay`, `furnace_smelt`, `set_components`, `set_enchantments`, `set_instrument`,
+//! `set_name`, `set_ominous_bottle_amplifier`, `set_potion`, `set_stew_effect`) plus the
+//! modelled-but-unexecuted `set_damage`; the 5 unexecuted condition types
+//! (`block_state_property`, `entity_properties`, `damage_source_properties`, `location_check`,
+//! `killed_by_player`); the `dynamic` and `tag` entry types; `minecraft:sequence`; and an entry
+//! whose `quality` needs a luck the caller did not state. Each needs the item registry, the
+//! enchantment tables, a structure generator, a block entity, entity state or a damage source —
+//! none of which a loot context here carries, and guessing any of them produces wrong loot.
+//!
+//! The measured consequence, asserted by the differential test: of the 6 826 constructs the
+//! vanilla pack contains, **4 564 are executable and 903 are not** (the remainder are `Raw`
+//! entries whose nested constructs were counted but not parsed).
 //!
 //! ## Randomness is injected, never invented (AGENTS.md section 3.6)
 //!
-//! `mc-data` sits below `mc-simulation`, which owns the JDK-verified `RandomSource`;
-//! depending on it would invert the layering. So [`Rng`] is a trait defined here in the
-//! same shape as `mc_entity::mob::Rng` — a trait naming the contract, with one `impl` in
-//! the crate that owns the concrete generator. It exposes `next_f32`/`next_f64` alongside
-//! `next_u32` because loot chances are floats, and faking a float out of an integer draw
-//! would change the distribution.
+//! `mc-data` sits below `mc-simulation`, which owns the JDK-verified `RandomSource`; depending
+//! on it would invert the layering. So [`Rng`] is a trait defined here in the same shape as
+//! `mc_entity::mob::Rng` — a trait naming the contract, with one `impl` in the crate that owns
+//! the concrete generator. It exposes `next_f32`/`next_f64` alongside `next_u32` because loot
+//! chances are floats, and faking a float out of an integer draw would change the distribution.
 //!
 //! ## Hostile input (AGENTS.md section 10)
 //!
-//! A pack is not trusted. Every file goes through [`crate::json`] with [`Limits`]; entry
-//! nesting, table nesting and the number of draws a binomial provider may request are all
-//! bounded; and no path here can panic.
+//! A pack is not trusted. Every file goes through [`crate::json`] with [`Limits`]; entry nesting,
+//! table nesting and the number of draws a binomial provider may request are all bounded; and no
+//! path here can panic.
 
 use mc_core::ids::ResourceId;
 use std::collections::{BTreeMap, BTreeSet};
@@ -120,6 +148,95 @@ pub const MAX_TABLE_NESTING: usize = 8;
 /// this ceiling the provider is refused.
 pub const MAX_BINOMIAL_ROUNDS: u32 = 4096;
 
+/// The numeric conversions the format forces, in one place.
+///
+/// The pack format writes counts, probabilities and chances as **JSON numbers**, so every value
+/// arrives as `f64`, while `minecraft:random_chance` compares `f32` and a count is an `i32`. Each
+/// conversion below is exact or is the format's own truncation, and each is argued once here
+/// rather than sprinkled as `as` casts that `clippy::pedantic` is right to flag.
+mod numeric {
+    /// A `f64` narrowed to the `f32` the format stores chances at.
+    ///
+    /// Every chance, probability and linear-provider field in vanilla is a short decimal
+    /// (`0.025`, `0.5714286`, `0.035`) that `f32` reproduces to more digits than the file
+    /// carries, and vanilla itself computes in `float`.
+    #[allow(clippy::cast_possible_truncation)]
+    pub(super) fn chance(value: f64) -> f32 {
+        value as f32
+    }
+
+    /// A drawn count truncated towards zero, which is what vanilla's `(int)` cast does.
+    ///
+    /// The intermediate `f32` is not redundant: vanilla evaluates the provider as a `float`, so
+    /// narrowing first reproduces its rounding rather than being merely close to it.
+    pub(super) fn count(value: f64) -> i32 {
+        #[allow(clippy::cast_possible_truncation)]
+        let narrowed = value as f32;
+        #[allow(clippy::cast_possible_truncation)]
+        let truncated = narrowed as i32;
+        truncated
+    }
+
+    /// A uniform draw scaled to a whole number of selection units.
+    ///
+    /// `total` is a sum of `i32` weights, so it is far inside `f64`'s exact integer range, and
+    /// the product is floored before the cast — the same arithmetic vanilla does.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    pub(super) fn weighted_index(value: f64, total: i64) -> i64 {
+        (value * total as f64).floor() as i64
+    }
+
+    /// Luck applied to an entry's `quality`, which vanilla computes in `float`.
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    pub(super) fn luck_bonus(luck: f32, quality: i32) -> i64 {
+        (luck * quality as f32).floor() as i64
+    }
+
+    /// A `f64` narrowed to `f32` for a linear chance provider's slope or base.
+    pub(super) use chance as slope;
+
+    /// An enchantment level as the `f32` the linear formula multiplies.
+    ///
+    /// Levels are small (vanilla's table-bonus lists are 3 to 5 entries long), so the
+    /// conversion is exact for every value the format can express.
+    #[allow(clippy::cast_precision_loss)]
+    pub(super) fn level(levels_above: i32) -> f32 {
+        levels_above as f32
+    }
+
+    /// A pool's roll count, from the `f64` sum to the `i32` loop bound.
+    ///
+    /// `chance` above is used for the narrowing so the same truncation rule applies as
+    /// everywhere else.
+    pub(super) fn roll_count(value: f64) -> i32 {
+        count(value)
+    }
+
+    /// A checked-whole, checked-range `f64` to the `i64` it exactly represents.
+    #[allow(clippy::cast_possible_truncation)]
+    pub(super) fn whole(value: f64) -> i64 {
+        value as i64
+    }
+
+    /// A weight already proved to be in `1..=i32::MAX`.
+    #[allow(clippy::cast_possible_truncation)]
+    pub(super) fn weight(value: i64) -> i32 {
+        value as i32
+    }
+
+    /// The 24-bit draw of [`super::Rng::next_f32`], which `f32` represents exactly.
+    #[allow(clippy::cast_precision_loss)]
+    pub(super) fn draw24(bits: u32) -> f32 {
+        bits as f32
+    }
+
+    /// The 53-bit draw of [`super::Rng::next_f64`], which `f64` represents exactly.
+    #[allow(clippy::cast_precision_loss)]
+    pub(super) fn draw53(bits: u64) -> f64 {
+        bits as f64
+    }
+}
+
 /// The randomness a roll may consume.
 ///
 /// This is the crate boundary in the same way `mc_entity::mob::Rng` is: `mc-data` may not
@@ -139,17 +256,18 @@ pub trait Rng {
     /// which rolls succeed near the boundary.
     fn next_f32(&mut self) -> f32 {
         // `>> 8` keeps the high 24 bits, which is what `java.util.Random.next(24)`
-        // returns, so the two agree.
-        (self.next_u32() >> 8) as f32 / (1u32 << 24) as f32
+        // returns, so the two agree. Both operands are exactly representable in `f32`.
+        numeric::draw24(self.next_u32() >> 8) / numeric::draw24(1u32 << 24)
     }
 
     /// A uniform draw in `[0, 1)`, with 53 bits of precision.
     ///
-    /// 53 bits matches `java.util.Random.nextDouble()`.
+    /// 53 bits matches `java.util.Random.nextDouble()`. The numerator is below `2^53`, so `f64`
+    /// represents it and the divisor exactly.
     fn next_f64(&mut self) -> f64 {
         let high = u64::from(self.next_u32() >> 5);
         let low = u64::from(self.next_u32() >> 6);
-        ((high << 26) + low) as f64 / (1u64 << 53) as f64
+        numeric::draw53((high << 26) + low) / numeric::draw53(1u64 << 53)
     }
 
     /// Whether a draw of probability `chance` succeeds.
@@ -286,8 +404,65 @@ impl CountProvider {
 }
 
 /// A loot function: something that modifies the stack an entry produced.
+///
+/// A function carries its own `conditions` (164 of vanilla's 1 392 do), and they gate whether
+/// the function runs **at all**. That is a separate thing from an entry's conditions, which
+/// gate whether the entry is produced, so it lives here rather than being flattened into the
+/// caller's list.
 #[derive(Debug, Clone, PartialEq)]
-pub enum LootFunction {
+pub struct LootFunction {
+    /// The discriminant: what the function does.
+    pub kind: LootFunctionKind,
+    /// If any of these fails, the function is not applied.
+    pub conditions: Vec<LootCondition>,
+}
+
+impl LootFunction {
+    /// A function with no conditions.
+    #[must_use]
+    pub const fn new(kind: LootFunctionKind) -> Self {
+        Self {
+            kind,
+            conditions: Vec::new(),
+        }
+    }
+
+    /// The function's type string.
+    #[must_use]
+    pub fn type_name(&self) -> &str {
+        self.kind.type_name()
+    }
+
+    /// Whether [`roll`] can execute this.
+    #[must_use]
+    pub fn is_executable(&self) -> bool {
+        self.kind.is_executable() && self.conditions.iter().all(LootCondition::is_executable)
+    }
+
+    /// Why it cannot be executed, when it cannot.
+    #[must_use]
+    pub const fn refusal_reason(&self) -> Option<&'static str> {
+        self.kind.refusal_reason()
+    }
+
+    /// Whether the function would run given these conditions' outcome.
+    ///
+    /// Kept separate from the condition evaluation so the ordering is visible at the call
+    /// site: conditions first, then the effect.
+    #[must_use]
+    pub fn conditions_pass(
+        &self,
+        rng: &mut impl Rng,
+        context: &LootContext,
+        refusals: &mut Vec<Refusal>,
+    ) -> bool {
+        conditions_pass(&self.conditions, rng, context, refusals)
+    }
+}
+
+/// What a loot function does.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LootFunctionKind {
     /// `minecraft:set_count`. `add` means "add to the existing count" rather than "replace
     /// it".
     SetCount {
@@ -311,11 +486,12 @@ pub enum LootFunction {
         /// Whether to add rather than replace.
         add: bool,
     },
-    /// A function type this build does not model. The JSON is kept verbatim.
+    /// A function type this build does not model. The JSON is kept verbatim, `conditions`
+    /// included, so nothing about the file is lost.
     Raw(serde_json::Value),
 }
 
-impl LootFunction {
+impl LootFunctionKind {
     /// The function's type string.
     #[must_use]
     pub fn type_name(&self) -> &str {
@@ -327,7 +503,7 @@ impl LootFunction {
         }
     }
 
-    /// Whether [`roll`] can execute this.
+    /// Whether [`roll`] can execute this, ignoring its conditions.
     #[must_use]
     pub fn is_executable(&self) -> bool {
         match self {
@@ -482,7 +658,7 @@ impl ChanceProvider {
                 base,
                 per_level_above_first,
             } => {
-                let levels_above = (level - 1).max(0) as f32;
+                let levels_above = numeric::level((level - 1).max(0));
                 (base + per_level_above_first * levels_above).clamp(0.0, 1.0)
             }
         }
@@ -490,6 +666,11 @@ impl ChanceProvider {
 }
 
 /// One alternative inside a pool, which may itself contain alternatives.
+///
+/// Every variant carries `weight`, `quality`, `functions` and `conditions`, because the format
+/// allows all four on **every** entry type and a loader that reads them only on `item` entries
+/// silently drops data. Vanilla exercises that: two `minecraft:loot_table` entries carry
+/// functions, and each of those functions carries conditions. The differential test caught it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum LootEntry {
     /// `minecraft:item`: a concrete stack.
@@ -503,7 +684,7 @@ pub enum LootEntry {
         /// Whether to expand a tag name into one entry per member. `expand` is **never**
         /// present in vanilla, and expanding needs the tag set, so a roll refuses it.
         expand: bool,
-        /// Applied in order.
+        /// Applied in order to the stack this entry produced.
         functions: Vec<LootFunction>,
         /// All must pass.
         conditions: Vec<LootCondition>,
@@ -514,6 +695,8 @@ pub enum LootEntry {
         weight: i32,
         /// Luck scaling.
         quality: i32,
+        /// Applied in order. No stack is produced, so they are refused rather than ignored.
+        functions: Vec<LootFunction>,
         /// All must pass.
         conditions: Vec<LootCondition>,
     },
@@ -528,6 +711,8 @@ pub enum LootEntry {
         weight: i32,
         /// Luck scaling.
         quality: i32,
+        /// Applied in order, after the nested table's own functions.
+        functions: Vec<LootFunction>,
         /// All must pass.
         conditions: Vec<LootCondition>,
     },
@@ -535,6 +720,8 @@ pub enum LootEntry {
     Alternatives {
         /// The children, in order.
         children: Vec<Self>,
+        /// Applied in order, after the chosen child's own functions.
+        functions: Vec<LootFunction>,
         /// All must pass before any child is considered.
         conditions: Vec<LootCondition>,
     },
@@ -546,6 +733,8 @@ pub enum LootEntry {
     Sequence {
         /// The children, in order.
         children: Vec<Self>,
+        /// Applied in order.
+        functions: Vec<LootFunction>,
         /// All must pass.
         conditions: Vec<LootCondition>,
     },
@@ -557,6 +746,8 @@ pub enum LootEntry {
         weight: i32,
         /// Luck scaling.
         quality: i32,
+        /// Applied in order.
+        functions: Vec<LootFunction>,
         /// All must pass.
         conditions: Vec<LootCondition>,
     },
@@ -568,10 +759,16 @@ pub enum LootEntry {
         weight: i32,
         /// Luck scaling.
         quality: i32,
+        /// Applied in order.
+        functions: Vec<LootFunction>,
         /// All must pass.
         conditions: Vec<LootCondition>,
     },
-    /// An entry type this build does not model. The JSON is kept verbatim.
+    /// An entry type this build does not model, kept whole.
+    ///
+    /// Its nested `functions` and `conditions` are **counted** (see `count_raw_constructs`) but
+    /// not parsed, so the census stays exact while the entry stays opaque; the JSON is the
+    /// record of what was there.
     Raw(serde_json::Value),
 }
 
@@ -635,12 +832,21 @@ impl LootEntry {
         }
     }
 
-    /// The functions this entry applies, which only an `item` entry carries.
+    /// The functions this entry applies, in order.
+    ///
+    /// Present on every modelled variant because the format allows `functions` on every entry
+    /// type, not only on `minecraft:item`.
     #[must_use]
     pub fn functions(&self) -> &[LootFunction] {
         match self {
-            Self::Item { functions, .. } => functions,
-            _ => &[],
+            Self::Item { functions, .. }
+            | Self::Empty { functions, .. }
+            | Self::LootTable { functions, .. }
+            | Self::Alternatives { functions, .. }
+            | Self::Sequence { functions, .. }
+            | Self::Dynamic { functions, .. }
+            | Self::Tag { functions, .. } => functions,
+            Self::Raw(_) => &[],
         }
     }
 
@@ -690,32 +896,14 @@ pub struct LootTable {
     pub functions: Vec<LootFunction>,
 }
 
-/// Which level of the format a construct sits at.
+/// Count a count provider.
 ///
-/// The census counts four levels — table, entry, function, condition — and not the count
-/// providers nested inside a function argument. Tracking the level as the tree is walked
-/// is what keeps [`LootTable::mentioned_types`] the same shape as
-/// [`LootLoadReport::modelled`], so the two can be compared.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Level {
-    /// The table's own `type`.
-    Table,
-    /// An entry `type`.
-    Entry,
-    /// A `function`.
-    Function,
-    /// A `condition`.
-    Condition,
-    /// A count provider, which the census does not count as a node.
-    Provider,
-}
-
-impl Level {
-    /// Whether the census counts this level.
-    const fn counted(self) -> bool {
-        !matches!(self, Self::Provider)
-    }
-}
+/// A deliberate no-op for the census, documented rather than silently omitted: the census
+/// counts four levels — table, entry, function, condition. A count provider is an *argument* of
+/// a function, not a node in the tree, so counting it would make
+/// `modelled + unexecutable` disagree with the per-level totals measured from the jar. Its
+/// occurrences are reported separately, in [`LootLoadReport::number_providers`].
+fn count_count_provider(_provider: &CountProvider, _counts: &mut BTreeMap<String, usize>) {}
 
 impl LootTable {
     /// Every table nested inside this one, to any depth.
@@ -786,12 +974,6 @@ const MODELLED_TYPES: &[&str] = &[
     "minecraft:inverted",
 ];
 
-fn count_count_provider(provider: &CountProvider, counts: &mut BTreeMap<String, usize>) {
-    if Level::Provider.counted() {
-        crate::bump(counts, provider.type_name());
-    }
-}
-
 fn count_table(table: &LootTable, counts: &mut BTreeMap<String, usize>) {
     crate::bump(counts, &table.kind);
     for function in &table.functions {
@@ -814,7 +996,12 @@ fn count_table(table: &LootTable, counts: &mut BTreeMap<String, usize>) {
 
 fn count_function(function: &LootFunction, counts: &mut BTreeMap<String, usize>) {
     crate::bump(counts, function.type_name());
-    if let LootFunction::SetCount { count, .. } = function {
+    // A function's own conditions are gates on the function, and the census counts them:
+    // 164 of vanilla's 1 392 functions carry at least one.
+    for condition in &function.conditions {
+        count_condition(condition, counts);
+    }
+    if let LootFunctionKind::SetCount { count, .. } = &function.kind {
         count_count_provider(count, counts);
     }
 }
@@ -847,7 +1034,8 @@ fn count_entry(entry: &LootEntry, counts: &mut BTreeMap<String, usize>) {
             }
         }
         LootEntry::LootTable {
-            inline: Some(table), ..
+            inline: Some(table),
+            ..
         } => count_table(table, counts),
         _ => {}
     }
@@ -856,7 +1044,8 @@ fn count_entry(entry: &LootEntry, counts: &mut BTreeMap<String, usize>) {
 fn collect_nested<'a>(entry: &'a LootEntry, out: &mut Vec<&'a LootTable>) {
     match entry {
         LootEntry::LootTable {
-            inline: Some(table), ..
+            inline: Some(table),
+            ..
         } => {
             out.push(table);
             for pool in &table.pools {
@@ -905,7 +1094,8 @@ fn visit_entry_blocks(entry: &LootEntry, out: &mut BTreeSet<String>) {
             }
         }
         LootEntry::LootTable {
-            inline: Some(table), ..
+            inline: Some(table),
+            ..
         } => visit_table_blocks(table, out),
         _ => {}
     }
@@ -913,8 +1103,11 @@ fn visit_entry_blocks(entry: &LootEntry, out: &mut BTreeSet<String>) {
 
 fn visit_function_blocks(function: &LootFunction, out: &mut BTreeSet<String>) {
     // A raw function may nest conditions, so its JSON is walked too.
-    if let LootFunction::Raw(value) = function {
+    if let LootFunctionKind::Raw(value) = &function.kind {
         collect_blocks(value, out);
+    }
+    for condition in &function.conditions {
+        visit_condition_blocks(condition, out);
     }
 }
 
@@ -936,10 +1129,9 @@ fn collect_blocks(value: &serde_json::Value, out: &mut BTreeSet<String>) {
         serde_json::Value::Object(map) => {
             if map.get("condition").and_then(serde_json::Value::as_str)
                 == Some("minecraft:block_state_property")
+                && let Some(block) = map.get("block").and_then(serde_json::Value::as_str)
             {
-                if let Some(block) = map.get("block").and_then(serde_json::Value::as_str) {
-                    out.insert(block.to_owned());
-                }
+                out.insert(block.to_owned());
             }
             for child in map.values() {
                 collect_blocks(child, out);
@@ -955,7 +1147,7 @@ fn collect_blocks(value: &serde_json::Value, out: &mut BTreeSet<String>) {
 }
 
 /// The `type`/`function`/`condition` discriminator of a raw construct.
-fn raw_type(value: &serde_json::Value, key: &str) -> &str {
+fn raw_type<'a>(value: &'a serde_json::Value, key: &str) -> &'a str {
     value
         .get(key)
         .and_then(serde_json::Value::as_str)
@@ -1163,6 +1355,11 @@ fn collect_references<'a>(entry: &'a LootEntry, out: &mut Vec<Reference<'a>>) {
     }
 }
 
+/// Roll one table's pools, accumulating stacks and refusals.
+///
+/// Seven parameters is one more than the lint's threshold, and bundling them into a struct would
+/// only move the same fields behind a name that has no other use: every caller is inside this
+/// module and already holds all of them.
 #[allow(clippy::too_many_arguments)]
 fn roll_into(
     table: &LootTable,
@@ -1209,14 +1406,21 @@ fn roll_into(
         let bonus = draw_count(&pool.bonus_rolls, rng, refusals, "bonus_rolls");
         // Vanilla adds the two as `f32` and truncates the sum, so the rounding is
         // reproduced rather than replaced with an integer sum that rounds differently.
-        let total = ((rolls + bonus) as f32) as i32;
+        let total = numeric::roll_count(rolls + bonus);
         for _ in 0..total.max(0) {
-            produced.extend(one_roll(&pool.entries, tables, rng, context, refusals, depth));
+            produced.extend(one_roll(
+                &pool.entries,
+                tables,
+                rng,
+                context,
+                refusals,
+                depth,
+            ));
         }
     }
 
     for mut stack in produced {
-        apply_functions(&table.functions, &mut stack, rng, refusals);
+        apply_functions(&table.functions, &mut stack, rng, context, refusals);
         out.push(stack);
     }
     // A table function that could not be executed has already been refused, so the output
@@ -1241,7 +1445,7 @@ fn one_roll(
         let mut weight = i64::from(entry.weight());
         if entry.quality() != 0 {
             match context.luck {
-                Some(luck) => weight += (luck * entry.quality() as f32).floor() as i64,
+                Some(luck) => weight += numeric::luck_bonus(luck, entry.quality()),
                 None => refusals.push(Refusal {
                     kind: "entry",
                     type_name: format!("{} with quality", entry.type_name()),
@@ -1256,7 +1460,7 @@ fn one_roll(
     if total <= 0 {
         return None;
     }
-    let draw = (rng.next_f64() * total as f64).floor() as i64;
+    let draw = numeric::weighted_index(rng.next_f64(), total);
     // A draw of exactly `total` is impossible for a generator returning `[0, 1)`, but a
     // hostile `Rng` impl could return 1.0; clamping keeps the index in range instead of
     // reading past the end.
@@ -1273,6 +1477,10 @@ fn one_roll(
 }
 
 /// Turn a chosen entry into a stack.
+///
+/// The entry's own conditions gate it, then its *contents* decide the base stack, then the
+/// entry's own functions apply on top. That order is the format's: a child of `alternatives`
+/// applies its functions first, and the `alternatives` entry's functions apply afterwards.
 fn resolve_entry(
     entry: &LootEntry,
     tables: &LootTables,
@@ -1284,13 +1492,8 @@ fn resolve_entry(
     if !conditions_pass(entry.conditions(), rng, context, refusals) {
         return None;
     }
-    match entry {
-        LootEntry::Item {
-            name,
-            expand,
-            functions,
-            ..
-        } => {
+    let mut stack = match entry {
+        LootEntry::Item { name, expand, .. } => {
             if *expand {
                 refusals.push(Refusal {
                     kind: "entry",
@@ -1299,9 +1502,7 @@ fn resolve_entry(
                 });
                 return None;
             }
-            let mut stack = ItemStackLike::new(name.clone(), 1);
-            apply_functions(functions, &mut stack, rng, refusals);
-            Some(stack)
+            Some(ItemStackLike::new(name.clone(), 1))
         }
         LootEntry::Empty { .. } => None,
         LootEntry::Dynamic { name, .. } => {
@@ -1330,12 +1531,14 @@ fn resolve_entry(
             None
         }
         LootEntry::Alternatives { children, .. } => {
+            let mut chosen = None;
             for child in children {
                 if let Some(stack) = resolve_entry(child, tables, rng, context, refusals, depth) {
-                    return Some(stack);
+                    chosen = Some(stack);
+                    break;
                 }
             }
-            None
+            chosen
         }
         LootEntry::LootTable { name, inline, .. } => {
             // `check_references` has already proved that `inline` is set or `name` resolves.
@@ -1366,7 +1569,12 @@ fn resolve_entry(
             });
             None
         }
+    };
+    // Applied for every entry type, because the format allows `functions` on every entry type.
+    if let Some(stack) = stack.as_mut() {
+        apply_functions(entry.functions(), stack, rng, context, refusals);
     }
+    stack
 }
 
 /// Whether every condition passes. `false` means "do not roll"; a refusal means "I do not
@@ -1388,6 +1596,10 @@ fn conditions_pass(
 
 /// Evaluate one condition. `None` means "this build cannot decide", and a refusal has been
 /// recorded.
+///
+/// Long, and allowed to be: it is one arm per condition type, and the alternative — a helper per
+/// arm — would spread one decision table across ten functions for no gain.
+#[allow(clippy::too_many_lines)]
 fn evaluate(
     condition: &LootCondition,
     rng: &mut impl Rng,
@@ -1395,17 +1607,17 @@ fn evaluate(
     refusals: &mut Vec<Refusal>,
 ) -> Option<bool> {
     match condition {
-        LootCondition::SurvivesExplosion => match context.survives_explosion {
-            Some(survived) => Some(survived),
-            None => {
-                refusals.push(Refusal {
-                    kind: "condition",
-                    type_name: condition.type_name().to_owned(),
-                    reason: "LootContext::survives_explosion was not supplied",
-                });
-                None
+        LootCondition::SurvivesExplosion => {
+            if let Some(survived) = context.survives_explosion {
+                return Some(survived);
             }
-        },
+            refusals.push(Refusal {
+                kind: "condition",
+                type_name: condition.type_name().to_owned(),
+                reason: "LootContext::survives_explosion was not supplied",
+            });
+            None
+        }
         LootCondition::RandomChance { chance } => Some(rng.chance(*chance)),
         LootCondition::RandomChanceWithEnchantedBonus {
             enchantment,
@@ -1435,30 +1647,26 @@ fn evaluate(
                 });
                 return None;
             }
-            match context.enchantment_level(enchantment) {
-                Some(level) => {
-                    // A negative level is not a level; refusing beats clamping it to 0,
-                    // which would silently apply the unenchanted chance.
-                    if level < 0 {
-                        refusals.push(Refusal {
-                            kind: "condition",
-                            type_name: condition.type_name().to_owned(),
-                            reason: "the enchantment level is negative",
-                        });
-                        return None;
-                    }
-                    let index = usize::try_from(level).unwrap_or(0).min(chances.len() - 1);
-                    Some(rng.chance(chances[index]))
-                }
-                None => {
-                    refusals.push(Refusal {
-                        kind: "condition",
-                        type_name: condition.type_name().to_owned(),
-                        reason: "LootContext::enchantment_levels was not supplied",
-                    });
-                    None
-                }
+            let Some(level) = context.enchantment_level(enchantment) else {
+                refusals.push(Refusal {
+                    kind: "condition",
+                    type_name: condition.type_name().to_owned(),
+                    reason: "LootContext::enchantment_levels was not supplied",
+                });
+                return None;
+            };
+            // A negative level is not a level; refusing beats clamping it to 0, which would
+            // silently apply the unenchanted chance.
+            if level < 0 {
+                refusals.push(Refusal {
+                    kind: "condition",
+                    type_name: condition.type_name().to_owned(),
+                    reason: "the enchantment level is negative",
+                });
+                return None;
             }
+            let index = usize::try_from(level).unwrap_or(0).min(chances.len() - 1);
+            Some(rng.chance(chances[index]))
         }
         LootCondition::MatchToolEnchantments { requirements } => {
             for requirement in requirements {
@@ -1503,13 +1711,11 @@ fn evaluate(
                     None => unknown = true,
                 }
             }
-            if unknown {
-                None
-            } else {
-                Some(false)
-            }
+            if unknown { None } else { Some(false) }
         }
-        LootCondition::Inverted { term } => evaluate(term, rng, context, refusals).map(|pass| !pass),
+        LootCondition::Inverted { term } => {
+            evaluate(term, rng, context, refusals).map(|pass| !pass)
+        }
         LootCondition::Raw(_) => {
             refusals.push(Refusal {
                 kind: "condition",
@@ -1531,10 +1737,7 @@ fn draw_count(
     match provider {
         CountProvider::Constant(value) => *value,
         CountProvider::Uniform { min, max } => min + rng.next_f64() * (max - min),
-        CountProvider::Binomial {
-            extra,
-            probability,
-        } => {
+        CountProvider::Binomial { extra, probability } => {
             // The format's own definition, reproduced: one plus the number of successes in
             // `n` independent draws at `p`. Doing the arithmetic beats sampling some other
             // distribution and hoping it matches.
@@ -1572,48 +1775,57 @@ fn apply_functions(
     functions: &[LootFunction],
     stack: &mut ItemStackLike,
     rng: &mut impl Rng,
+    context: &LootContext,
     refusals: &mut Vec<Refusal>,
 ) {
     for function in functions {
-        match function {
-            LootFunction::SetCount { count, add } => {
+        // The refusal is recorded **before** the conditions are evaluated, and that order
+        // matters: a table that uses a construct this build cannot execute is not rollable,
+        // full stop. Recording it only when the conditions happened to pass would make the
+        // verdict depend on a coin flip, and a caller that rolled once and saw success would
+        // be looking at a table this build cannot actually reproduce.
+        if let Some(reason) = function.refusal_reason() {
+            refusals.push(Refusal {
+                kind: "function",
+                type_name: function.type_name().to_owned(),
+                reason,
+            });
+        }
+        // A function's own conditions gate whether it runs at all. Skipping them would apply
+        // a function vanilla would not have applied, which is a wrong roll.
+        if !function.conditions_pass(rng, context, refusals) {
+            continue;
+        }
+        match &function.kind {
+            LootFunctionKind::SetCount { count, add } => {
                 let value = draw_count(count, rng, refusals, "count");
                 // Vanilla truncates the drawn count towards zero before setting it.
-                let value = (value as f32) as i32;
+                let value = numeric::count(value);
                 stack.count = if *add {
                     stack.count.saturating_add(value)
                 } else {
                     value
                 };
             }
-            LootFunction::LimitCount { min, max } => {
+            LootFunctionKind::LimitCount { min, max } => {
                 if stack.count < *min {
                     stack.count = 0;
                 } else if stack.count > *max {
                     stack.count = *max;
                 }
             }
-            LootFunction::SetDamage { damage, add } => {
-                // The draw is still taken, so the refusal is recorded even when the
-                // function would have been a no-op.
+            LootFunctionKind::SetDamage { damage, add } => {
+                // Modelled but not executable, so the damage is recorded for a caller that
+                // wants it and the refusal above is what makes `roll` fail.
                 let value = draw_count(damage, rng, refusals, "damage").clamp(0.0, 1.0);
                 stack.damage = Some(if *add {
                     (stack.damage.unwrap_or(0.0) + value).clamp(0.0, 1.0)
                 } else {
                     value
                 });
-                refusals.push(Refusal {
-                    kind: "function",
-                    type_name: function.type_name().to_owned(),
-                    reason: "minecraft:set_damage converts a fraction into durability points, \
-                             which needs the item registry's max-damage table",
-                });
             }
-            LootFunction::Raw(_) => refusals.push(Refusal {
-                kind: "function",
-                type_name: function.type_name().to_owned(),
-                reason: "this loot function type is not implemented in this build",
-            }),
+            // Already refused above; nothing to apply.
+            LootFunctionKind::Raw(_) => {}
         }
     }
 }
@@ -1693,10 +1905,12 @@ impl LootTables {
     pub fn referencing(&self, name: &ResourceId) -> Vec<&LootTable> {
         self.tables
             .iter()
-            .filter(|table| references(table).iter().any(|r| match r {
-                Reference::Named(target) => *target == name,
-                Reference::Inline(_) => false,
-            }))
+            .filter(|table| {
+                references(table).iter().any(|r| match r {
+                    Reference::Named(target) => *target == name,
+                    Reference::Inline(_) => false,
+                })
+            })
             .collect()
     }
 
@@ -1769,8 +1983,17 @@ pub struct LootLoadReport {
     ///
     /// Together with `unexecutable` this is the full census: per level — table, entry,
     /// function, condition — the two maps' entries at that level sum to the total the
-    /// survey measured.
+    /// survey measured. Count providers are **not** here; they are arguments of a function
+    /// rather than nodes in the tree, and are reported by [`Self::number_providers`]
+    /// instead.
     pub modelled: BTreeMap<String, usize>,
+    /// Number-provider types, with how many occurrences.
+    ///
+    /// Kept out of `modelled`/`unexecutable` on purpose: including them would make the
+    /// per-level totals disagree with the measured census. Note that `constant` is not a
+    /// type string in the file — a literal count has no `type` field — so it is reported
+    /// under the name [`CountProvider::Constant`] gives it.
+    pub number_providers: BTreeMap<String, usize>,
     /// Names that did not resolve against a declared-known registry.
     pub forward_references: Vec<ForwardReference>,
     /// Distinct table names loaded, after pack overrides.
@@ -1804,6 +2027,12 @@ impl LootLoadReport {
     pub fn occurrences(&self, type_name: &str) -> usize {
         self.modelled.get(type_name).copied().unwrap_or(0)
             + self.unexecutable.get(type_name).copied().unwrap_or(0)
+    }
+
+    /// How many times a number-provider type was seen.
+    #[must_use]
+    pub fn provider_occurrences(&self, type_name: &str) -> usize {
+        self.number_providers.get(type_name).copied().unwrap_or(0)
     }
 
     /// Occurrences at one level, given the closed set of types at that level.
@@ -1942,7 +2171,10 @@ pub const ENTRY_TYPES: &[&str] = &[
     "minecraft:tag",
 ];
 
-/// The 18 `function` types, measured from the jar.
+/// The 19 `function` types, measured from the jar.
+///
+/// 18 of them appear in the 1 326 files; the nineteenth, `minecraft:set_components`, appears
+/// only inside the three tables inlined by `equipment/trial_chamber`.
 pub const FUNCTION_TYPES: &[&str] = &[
     "minecraft:set_count",
     "minecraft:explosion_decay",
@@ -1957,6 +2189,7 @@ pub const FUNCTION_TYPES: &[&str] = &[
     "minecraft:copy_state",
     "minecraft:limit_count",
     "minecraft:set_enchantments",
+    "minecraft:set_components",
     "minecraft:set_stew_effect",
     "minecraft:exploration_map",
     "minecraft:set_name",
@@ -2092,6 +2325,12 @@ fn read_pool(
     })
 }
 
+/// Read one loot entry.
+///
+/// Long by necessity: it is one arm per entry type, each with its own required fields, and the
+/// alternative is a per-type helper that would have to thread the report, the item registry and
+/// the recursion depth through seven signatures.
+#[allow(clippy::too_many_lines)]
 fn read_entry(
     value: &serde_json::Value,
     path: &Path,
@@ -2112,9 +2351,27 @@ fn read_entry(
         }));
     };
     let kind = required_str(map, "type", path).map_err(Skipped::Parse)?;
+    // An entry type outside the measured set is preserved whole. Its nested functions and
+    // conditions are counted so the census stays exact, and its count providers are left inside
+    // the blob — an opaque construct's *arguments* are not reported, which is stated here rather
+    // than left as a silent hole.
+    if !ENTRY_TYPES.contains(&kind) {
+        crate::bump(&mut report.unexecutable, kind);
+        let json = serde_json::Value::Object(map.clone());
+        count_raw_constructs(&json, report);
+        return Ok(LootEntry::Raw(json));
+    }
     crate::bump(&mut report.modelled, kind);
     let weight = read_weight(map, path)?;
     let quality = read_quality(map, path)?;
+    // `functions` is legal on every entry type. Reading it only on `minecraft:item` — which the
+    // first version did — silently drops the two functions vanilla puts on `minecraft:loot_table`
+    // entries, and then their conditions, and then their conditions' terms. The differential test
+    // caught the cascade.
+    let functions = match map.get("functions") {
+        Some(value) => read_functions(value, path, report)?,
+        None => Vec::new(),
+    };
     let conditions = match map.get("conditions") {
         Some(value) => read_conditions(value, path, report)?,
         None => Vec::new(),
@@ -2123,10 +2380,6 @@ fn read_entry(
         "minecraft:item" => {
             let name = required_str(map, "name", path).map_err(Skipped::Parse)?;
             let name = read_item_name(name, path, report, items)?;
-            let functions = match map.get("functions") {
-                Some(value) => read_functions(value, path, report)?,
-                None => Vec::new(),
-            };
             // `expand` is a tag-expansion flag. Vanilla never sets it on an item entry; a
             // pack that does is preserved, and the roll refuses it.
             let expand = match map.get("expand") {
@@ -2151,6 +2404,7 @@ fn read_entry(
         "minecraft:empty" => Ok(LootEntry::Empty {
             weight,
             quality,
+            functions,
             conditions,
         }),
         "minecraft:loot_table" => {
@@ -2185,6 +2439,7 @@ fn read_entry(
                 inline,
                 weight,
                 quality,
+                functions,
                 conditions,
             })
         }
@@ -2193,11 +2448,13 @@ fn read_entry(
             Ok(if kind == "minecraft:alternatives" {
                 LootEntry::Alternatives {
                     children,
+                    functions,
                     conditions,
                 }
             } else {
                 LootEntry::Sequence {
                     children,
+                    functions,
                     conditions,
                 }
             })
@@ -2208,21 +2465,54 @@ fn read_entry(
                 .to_owned(),
             weight,
             quality,
+            functions,
             conditions,
         }),
+        // The only remaining member of the measured set.
         "minecraft:tag" => {
             let name = required_str(map, "name", path).map_err(Skipped::Parse)?;
             Ok(LootEntry::Tag {
                 name: read_id(name, "tag", path)?,
                 weight,
                 quality,
+                functions,
                 conditions,
             })
         }
-        other => {
-            crate::bump(&mut report.unexecutable, other);
-            Ok(LootEntry::Raw(serde_json::Value::Object(map.clone())))
+        // Unreachable: the guard above returned for anything outside `ENTRY_TYPES`. Reported
+        // rather than `unreachable!()`-ed, because AGENTS.md §9 forbids panic as control flow
+        // and a `debug_assert` is not a guarantee in release.
+        other => Err(Skipped::Parse(JsonError::Invalid {
+            path: path.to_path_buf(),
+            reason: format!("unrecognised loot entry type {other:?}"),
+        })),
+    }
+}
+
+/// Count the functions and conditions inside a construct this build does not parse.
+///
+/// Only the two levels the census tracks. Their *arguments* (count providers) are not counted:
+/// they are inside an opaque blob, and inventing a figure for them would be worse than
+/// reporting none. Stated here rather than left implicit.
+fn count_raw_constructs(value: &serde_json::Value, report: &mut LootLoadReport) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(name) = map.get("function").and_then(serde_json::Value::as_str) {
+                crate::bump(&mut report.unexecutable, name);
+            }
+            if let Some(name) = map.get("condition").and_then(serde_json::Value::as_str) {
+                crate::bump(&mut report.unexecutable, name);
+            }
+            for child in map.values() {
+                count_raw_constructs(child, report);
+            }
         }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                count_raw_constructs(child, report);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -2249,7 +2539,7 @@ fn read_weight(
         None => Ok(1),
         // The format's range is 1..=2^31-1. A weight outside it is a pack bug, and refusing
         // beats producing a selection probability nobody can reason about.
-        Some(value) if (1..=i64::from(i32::MAX)).contains(&value) => Ok(value as i32),
+        Some(value) if (1..=i64::from(i32::MAX)).contains(&value) => Ok(numeric::weight(value)),
         Some(value) => Err(Skipped::Parse(JsonError::Invalid {
             path: path.to_path_buf(),
             reason: format!("weight {value} is outside 1..=2147483647"),
@@ -2285,6 +2575,7 @@ fn read_count(
                     reason: format!("count {number} is not representable"),
                 }));
             };
+            crate::bump(&mut report.number_providers, "constant");
             Ok(CountProvider::Constant(as_f64))
         }
         serde_json::Value::Object(map) => {
@@ -2296,19 +2587,28 @@ fn read_count(
                     if min > max {
                         return Err(Skipped::Parse(JsonError::Invalid {
                             path: path.to_path_buf(),
-                            reason: format!("a uniform provider needs min <= max, got {min}..{max}"),
+                            reason: format!(
+                                "a uniform provider needs min <= max, got {min}..{max}"
+                            ),
                         }));
                     }
-                    crate::bump(&mut report.modelled, kind);
+                    crate::bump(&mut report.number_providers, kind);
                     Ok(CountProvider::Uniform { min, max })
                 }
                 "minecraft:binomial" => {
                     // The format calls them `n` and `p`; some documents call them `extra` and
                     // `probability`. Accept both rather than silently treating a stated
                     // binomial as a constant.
-                    let extra = match optional_i64(map, "n", path).map_err(Skipped::Parse)? {
+                    //
+                    // `n` is written as a **float** — `"n": 3.0` in all 18 vanilla occurrences
+                    // — so it is read as a number and then required to be whole. A fractional
+                    // `n` is a pack bug, and refusing it beats rounding a round count. Note
+                    // that `optional_i64` cannot be tried first: it *errors* on `3.0` rather
+                    // than returning `None`, which is what the first version of this code got
+                    // wrong and what the differential test caught.
+                    let extra = match optional_integral(map, "n", path)? {
                         Some(value) => Some(value),
-                        None => optional_i64(map, "extra", path).map_err(Skipped::Parse)?,
+                        None => optional_integral(map, "extra", path)?,
                     };
                     let probability = match optional_f64(map, "p", path).map_err(Skipped::Parse)? {
                         Some(value) => Some(value),
@@ -2327,14 +2627,14 @@ fn read_count(
                             reason: format!("binomial n {extra} does not fit an i32"),
                         })
                     })?;
-                    crate::bump(&mut report.modelled, kind);
+                    crate::bump(&mut report.number_providers, kind);
                     Ok(CountProvider::Binomial {
                         extra,
-                        probability: probability as f32,
+                        probability: numeric::chance(probability),
                     })
                 }
                 other => {
-                    crate::bump(&mut report.unexecutable, other);
+                    crate::bump(&mut report.number_providers, other);
                     Ok(CountProvider::Raw(value.clone()))
                 }
             }
@@ -2382,7 +2682,14 @@ fn read_function(
         }));
     };
     let kind = required_str(map, "function", path).map_err(Skipped::Parse)?;
-    match kind {
+    // A function's own `conditions` gate whether it runs at all; 164 of vanilla's 1 392
+    // functions carry them, so an absent field is the common case and an empty vector is the
+    // right reading of it.
+    let conditions = match map.get("conditions") {
+        Some(value) => read_conditions(value, path, report)?,
+        None => Vec::new(),
+    };
+    let kind = match kind {
         "minecraft:set_count" => {
             crate::bump(&mut report.modelled, kind);
             let Some(count) = map.get("count") else {
@@ -2391,10 +2698,10 @@ fn read_function(
                     reason: "minecraft:set_count needs \"count\"".to_owned(),
                 }));
             };
-            Ok(LootFunction::SetCount {
+            LootFunctionKind::SetCount {
                 count: read_count(count, path, report)?,
                 add: optional_bool(map, "add", path)?,
-            })
+            }
         }
         "minecraft:limit_count" => {
             crate::bump(&mut report.modelled, kind);
@@ -2404,16 +2711,12 @@ fn read_function(
                     reason: "minecraft:limit_count needs a \"limit\" object".to_owned(),
                 }));
             };
-            let min = optional_i64(limit, "min", path)
-                .map_err(Skipped::Parse)?
-                .unwrap_or(0);
-            let max = optional_i64(limit, "max", path)
-                .map_err(Skipped::Parse)?
-                .unwrap_or(i64::from(i32::MAX));
-            Ok(LootFunction::LimitCount {
+            let min = optional_integral(limit, "min", path)?.unwrap_or(0);
+            let max = optional_integral(limit, "max", path)?.unwrap_or(i64::from(i32::MAX));
+            LootFunctionKind::LimitCount {
                 min: to_i32(min, "limit min", path)?,
                 max: to_i32(max, "limit max", path)?,
-            })
+            }
         }
         "minecraft:set_damage" => {
             crate::bump(&mut report.modelled, kind);
@@ -2423,16 +2726,17 @@ fn read_function(
                     reason: "minecraft:set_damage needs \"damage\"".to_owned(),
                 }));
             };
-            Ok(LootFunction::SetDamage {
+            LootFunctionKind::SetDamage {
                 damage: read_count(damage, path, report)?,
                 add: optional_bool(map, "add", path)?,
-            })
+            }
         }
         other => {
             crate::bump(&mut report.unexecutable, other);
-            Ok(LootFunction::Raw(serde_json::Value::Object(map.clone())))
+            LootFunctionKind::Raw(serde_json::Value::Object(map.clone()))
         }
-    }
+    };
+    Ok(LootFunction { kind, conditions })
 }
 
 fn read_conditions(
@@ -2443,7 +2747,10 @@ fn read_conditions(
     let list = value.as_array().ok_or_else(|| {
         Skipped::Parse(JsonError::Invalid {
             path: path.to_path_buf(),
-            reason: format!("\"conditions\" must be an array, found {}", type_name(value)),
+            reason: format!(
+                "\"conditions\" must be an array, found {}",
+                type_name(value)
+            ),
         })
     })?;
     let mut out = Vec::with_capacity(list.len());
@@ -2485,7 +2792,7 @@ fn read_condition(
             Ok(LootCondition::RandomChanceWithEnchantedBonus {
                 enchantment: read_id(enchantment, "enchantment", path)?,
                 unenchanted_chance: required_chance(map, "unenchanted_chance", path)?,
-                enchanted_chance: read_chance_provider(map, path, report)?,
+                enchanted_chance: read_chance_provider(map, path)?,
             })
         }
         "minecraft:table_bonus" => {
@@ -2506,7 +2813,7 @@ fn read_condition(
                         reason: "every table_bonus chance must be a number".to_owned(),
                     }));
                 };
-                out.push(number as f32);
+                out.push(numeric::chance(number));
             }
             Ok(LootCondition::TableBonus {
                 enchantment: read_id(enchantment, "enchantment", path)?,
@@ -2561,7 +2868,6 @@ fn read_condition(
 fn read_chance_provider(
     map: &serde_json::Map<String, serde_json::Value>,
     path: &Path,
-    report: &mut LootLoadReport,
 ) -> Result<ChanceProvider, Skipped> {
     match map.get("enchanted_chance") {
         Some(serde_json::Value::Number(_)) => Ok(ChanceProvider::Constant(required_chance(
@@ -2574,7 +2880,10 @@ fn read_chance_provider(
             if provider_kind != "minecraft:linear" {
                 return Err(Skipped::Unmodelled(provider_kind.to_owned()));
             }
-            crate::bump(&mut report.modelled, provider_kind);
+            // Not counted in `modelled`: `minecraft:linear` is a *chance provider*, an argument
+            // of the condition rather than a node in the tree, exactly like a count provider.
+            // Counting it would make the condition total 1 556 instead of the measured 1 545,
+            // which is how the differential test found this.
             let base = optional_f64(provider, "base", path)
                 .map_err(Skipped::Parse)?
                 .ok_or_else(|| {
@@ -2587,8 +2896,8 @@ fn read_chance_provider(
                 .map_err(Skipped::Parse)?
                 .unwrap_or(0.0);
             Ok(ChanceProvider::Linear {
-                base: base as f32,
-                per_level_above_first: per_level_above_first as f32,
+                base: numeric::slope(base),
+                per_level_above_first: numeric::slope(per_level_above_first),
             })
         }
         other => Err(Skipped::Parse(JsonError::Invalid {
@@ -2690,7 +2999,7 @@ fn required_chance(
     key: &str,
     path: &Path,
 ) -> Result<f32, Skipped> {
-    Ok(required_number(map, key, path)? as f32)
+    Ok(numeric::chance(required_number(map, key, path)?))
 }
 
 fn to_i32(value: i64, what: &str, path: &Path) -> Result<i32, Skipped> {
@@ -2700,6 +3009,39 @@ fn to_i32(value: i64, what: &str, path: &Path) -> Result<i32, Skipped> {
             reason: format!("{what} of {value} does not fit an i32"),
         })
     })
+}
+
+/// Read an optional whole number that the format may write as a float.
+///
+/// `minecraft:limit_count`'s `limit.min`/`limit.max` and `minecraft:binomial`'s `n` are all
+/// written as **floats** in the real pack — `"min": 1.0`, `"n": 3.0` — so a parser that insists
+/// on a JSON integer refuses ten vanilla files. The differential test caught exactly that.
+///
+/// A value with a fractional part is refused rather than truncated: these fields count things,
+/// and silently rounding a count produces loot nobody can reproduce.
+fn optional_integral(
+    map: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    path: &Path,
+) -> Result<Option<i64>, Skipped> {
+    let Some(value) = optional_f64(map, key, path).map_err(Skipped::Parse)? else {
+        return Ok(None);
+    };
+    if !value.is_finite() || value.fract() != 0.0 {
+        return Err(Skipped::Parse(JsonError::Invalid {
+            path: path.to_path_buf(),
+            reason: format!("{key:?} must be a whole number, found {value}"),
+        }));
+    }
+    // `i64::MAX` as an `f64` is not exactly representable, so the bound is checked against
+    // `f64` rather than by a cast that could saturate.
+    if value.abs() > 9.0e18 {
+        return Err(Skipped::Parse(JsonError::Invalid {
+            path: path.to_path_buf(),
+            reason: format!("{key:?} of {value} is out of range"),
+        }));
+    }
+    Ok(Some(numeric::whole(value)))
 }
 
 fn optional_bool(
@@ -2712,7 +3054,10 @@ fn optional_bool(
         Some(serde_json::Value::Bool(flag)) => Ok(*flag),
         Some(other) => Err(Skipped::Parse(JsonError::Invalid {
             path: path.to_path_buf(),
-            reason: format!("field {key:?} must be a boolean, found {}", type_name(other)),
+            reason: format!(
+                "field {key:?} must be a boolean, found {}",
+                type_name(other)
+            ),
         })),
     }
 }
@@ -2725,14 +3070,15 @@ fn read_item_name(
     items: Option<&mc_registry::ItemRegistry>,
 ) -> Result<ResourceId, Skipped> {
     let id = read_id(text, "item", path)?;
-    if let Some(items) = items {
-        if items.id(&id.to_string()).is_err() && items.id(id.value()).is_err() {
-            report.forward_references.push(ForwardReference {
-                registry: "item",
-                name: id.to_string(),
-                file: path.display().to_string(),
-            });
-        }
+    if let Some(items) = items
+        && items.id(&id.to_string()).is_err()
+        && items.id(id.value()).is_err()
+    {
+        report.forward_references.push(ForwardReference {
+            registry: "item",
+            name: id.to_string(),
+            file: path.display().to_string(),
+        });
     }
     Ok(id)
 }

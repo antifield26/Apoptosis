@@ -471,6 +471,13 @@ pub struct Game {
     /// Retained for the tests that exercise the disconnect path directly; the
     /// production path carries overflow on the `TickReport` (see its field docs).
     overflowed: Vec<ConnectionId>,
+    /// The terrain generator, consulted only when nothing is stored for a chunk.
+    ///
+    /// `None` when the registry lacks a palette block, in which case the all-air
+    /// placeholder is used and a warning was logged at construction: a server that cannot
+    /// generate must still start, because refusing to boot over a terrain palette would
+    /// take a working world offline.
+    generator: Option<mc_worldgen::TerrainGenerator>,
     /// The configured player cap, for `/list`.
     ///
     /// One value rather than the whole `ServerConfig`: the alternative was a new
@@ -585,6 +592,25 @@ impl Game {
             * mc_world::SECTION_HEIGHT;
         let y = spawn.1.clamp(min_y + 1, max_y - 2);
         world.set_spawn(spawn.0, y, spawn.2);
+        // Terrain generation is a *simulation* concern: `World` is the chunk container
+        // and stays constructible without a generator, which a large part of the test
+        // suite relies on. A registry that lacks a palette block leaves this `None` with a
+        // warning rather than failing construction — refusing to boot would take a working
+        // *stored* world offline over a terrain feature it may never need.
+        let generator = {
+            // A `WorldSeed` is a label rather than a quantity, so every bit pattern of the
+            // simulation seed is legal and no validation is needed here.
+            let context =
+                mc_worldgen::WorldgenContext::overworld(mc_worldgen::WorldSeed::from_raw(seed));
+            match mc_worldgen::TerrainGenerator::new(context, &registries.blocks) {
+                Ok(generator) => Some(generator),
+                Err(error) => {
+                    warn!(%error, "terrain generation disabled: the palette could not resolve");
+                    None
+                }
+            }
+        };
+
         Ok(Self {
             registries,
             storage: owned,
@@ -601,6 +627,7 @@ impl Game {
             report: TickReport::default(),
             tick: 0,
             overflowed: Vec::new(),
+            generator,
             max_players: DEFAULT_MAX_PLAYERS,
             time_offset: 0,
             shutdown_requested: false,
@@ -810,9 +837,12 @@ impl Game {
         let Some(mut service) = self.storage.take() else {
             return Ok(());
         };
+        // `queue_dirty_chunks` now reports how many placeholders it skipped, which
+        // `close_storage` has no use for — the warning is emitted inside `save_all`, and a
+        // shutdown path that also logged it would say the same thing twice.
         let result = self
             .queue_dirty_chunks(&mut service)
-            .and_then(|()| service.close().map(|_| ()));
+            .and_then(|_skipped| service.close().map(|_| ()));
         if let Err(error) = &result {
             warn!(%error, "closing the world failed");
         }
@@ -2532,18 +2562,89 @@ impl Game {
             }
         }
         if !loaded {
-            // A placeholder is only safe to *persist* when this game could have read
-            // the real chunk and found nothing. Without storage it cannot know, so it
-            // keeps the placeholder but refuses to let it be written back by marking
-            // it as "not saved yet" rather than clean.
-            self.world.ensure_chunk(pos);
-            if !self.can_read_stored_chunks() {
-                self.placeholder_without_storage.insert(pos);
+            // Generation requires knowing that **nothing is stored**, and only a game that
+            // owns storage can know that: `read_stored_chunk` returns `Ok(None)` both for
+            // "no chunk here" and for "I have no handle to look with". Treating the second
+            // as the first would generate terrain over a saved world, which is unrecoverable
+            // — so a borrowing game keeps the placeholder and its do-not-persist mark
+            // instead. Found by the worldgen E2E test; see the fix's commit message.
+            //
+            // This is the **only** place generation happens, which is what makes "an
+            // existing world is never regenerated" a structural property rather than a
+            // promise.
+            let may_generate = self.can_read_stored_chunks();
+            match self
+                .generator
+                .as_ref()
+                .filter(|_| may_generate)
+                .map(|generator| {
+                    // The trait must be in scope for the method to resolve; naming it here
+                    // rather than at the top of the file keeps the import next to its only use.
+                    use mc_worldgen::ChunkGenerator as _;
+                    generator
+                        .generate_chunk(pos, &self.registries.blocks)
+                        .map_err(|error| error.to_string())
+                }) {
+                Some(Ok(chunk)) => {
+                    // Left **clean**, which is the non-obvious part: this generator is
+                    // deterministic, so a generated chunk is reproducible byte for byte
+                    // from `(seed, pos)` at any later time. Persisting it buys nothing, and
+                    // a dirty chunk cannot be unloaded — so marking it dirty would make
+                    // generated chunks accumulate forever. What must be persisted is a
+                    // *modification*, and `set_block` marks the chunk dirty for that.
+                    //
+                    // An earlier version of this path marked it dirty "so the world keeps
+                    // it", which broke chunk unloading for every generated chunk and (via a
+                    // matching change to the clean-marking below) let placeholders be
+                    // written back over real terrain. Two existing tests caught both.
+                    self.world.load_chunk(chunk);
+                }
+                Some(Err(error)) => {
+                    warn!(?pos, %error, "chunk generation failed; using a placeholder");
+                    self.world.ensure_chunk(pos);
+                    if !self.can_read_stored_chunks() {
+                        self.placeholder_without_storage.insert(pos);
+                    }
+                }
+                None => {
+                    // No generator, or a game that cannot tell "absent" from "unreadable":
+                    // a placeholder is only safe to *persist* when this game could have read
+                    // the real chunk and found nothing. Without storage it cannot know, so it
+                    // keeps the placeholder but refuses to let it be written back by marking
+                    // it "not saved yet" rather than clean.
+                    self.world.ensure_chunk(pos);
+                    if !may_generate {
+                        self.placeholder_without_storage.insert(pos);
+                    }
+                }
             }
         }
-        // Both paths end clean: a chunk nobody edited must not be written back, and
-        // `ensure_chunk` marks its placeholder dirty by construction.
+        // Every path ends clean, and the three origins reach that state for three
+        // different reasons — which is why the line is unconditional:
+        //
+        //   * a **stored** chunk is unmodified;
+        //   * a **generated** chunk is reproducible from the seed;
+        //   * a **placeholder** is a stand-in, and `ensure_chunk` marks it dirty by
+        //     construction, so without this it would be written back over real terrain.
+        //
+        // The third is the one an earlier version broke by making this conditional, which
+        // `a_stored_chunk_is_loaded_from_disk_and_never_overwritten_by_a_placeholder` caught.
         self.mark_chunk_clean(pos);
+    }
+
+    /// Load a chunk, generating or reading it as appropriate.
+    ///
+    /// The same path the chunk streamer uses, exposed because it is genuinely useful
+    /// outside it: a test needs to place a chunk deterministically, and a future
+    /// `/forceload` needs to load one that no player is near. It is deliberately **not** a
+    /// test-only shortcut — a second loading path would be a second place for the
+    /// "prefer stored over generated" ordering to be got wrong.
+    ///
+    /// Returns whether a chunk is loaded afterwards, which is `false` only when generation
+    /// failed *and* storage could not supply one.
+    pub fn load_chunk(&mut self, pos: ChunkPos) -> bool {
+        self.load_or_create_chunk(pos);
+        self.world.is_loaded(pos)
     }
 
     /// Read a chunk from the owned storage, when there is one.
@@ -2951,7 +3052,17 @@ impl Game {
     /// [`ServerError::Operational`] when a chunk cannot be encoded or the flush
     /// fails.
     pub fn save_all(&mut self, storage: &mut WorldService) -> ServerResult<()> {
-        self.queue_dirty_chunks(storage)?;
+        let skipped = self.queue_dirty_chunks(storage)?;
+        if skipped > 0 {
+            // Reported rather than silent: a save that deliberately left chunks out is
+            // different from one that saved everything, and an operator should be able to
+            // tell which happened.
+            warn!(
+                skipped,
+                "placeholder chunks were not saved: this game cannot read storage, so it \
+                 cannot tell an empty chunk from an unreadable one"
+            );
+        }
         let report = storage.storage_mut().flush()?;
         if report.is_clean() {
             self.world.clear_dirty();
@@ -2970,8 +3081,14 @@ impl Game {
 
     /// [`Game::save_all`] against the handle this game owns.
     ///
-    /// A no-op for a game that does not own storage. This is what
-    /// [`crate::lifecycle::Server::run`] calls on the autosave tick.
+    /// **Silently does nothing when this game does not own storage**, and returns `Ok(())`
+    /// when it does so. That is deliberate — a game built with `Game::new` or
+    /// `Game::with_seed` holds a *borrow* and legitimately has no handle to flush, and
+    /// [`crate::lifecycle::Server::run`] calls this on every autosave tick regardless —
+    /// but it is a sharp edge worth naming: a caller who pairs it with a borrowing
+    /// constructor gets a save that reports success and writes nothing, and the loss only
+    /// appears as missing terrain after a restart. Use [`Game::save_all`] with the service
+    /// you borrowed from instead.
     ///
     /// # Errors
     ///
@@ -2985,9 +3102,27 @@ impl Game {
         result
     }
 
-    /// Encode and queue every dirty chunk.
-    fn queue_dirty_chunks(&self, storage: &mut WorldService) -> ServerResult<()> {
+    /// Encode and queue every dirty chunk, **except** the do-not-persist placeholders.
+    ///
+    /// The skip is the whole point of [`Game::placeholder_without_storage`], and until this
+    /// was written nothing consulted that set: the field was populated on every placeholder
+    /// path and read by nobody, so a placeholder was still written over real terrain. A
+    /// generated world made it visible — the borrowing-game test placed a marker and watched
+    /// it vanish — but the defect predates generation, and the doc comment on the field was
+    /// more confident than the code.
+    fn queue_dirty_chunks(&self, storage: &mut WorldService) -> ServerResult<usize> {
+        let mut skipped = 0usize;
         for pos in self.world.dirty_chunks() {
+            if self.placeholder_without_storage.contains(&pos) {
+                // Belt to the clean-flag's braces. A placeholder is cleaned when it is
+                // created, so a placeholder should never *be* dirty — but the consequence of
+                // being wrong here is destroying a saved world, so the check stays and is
+                // reported. (Before this check existed, the field was populated on every
+                // placeholder path and read by nobody, which is how a placeholder once
+                // overwrote real terrain.)
+                skipped += 1;
+                continue;
+            }
             if let Some(chunk) = self.world.chunk(pos) {
                 let data = chunk.to_chunk_data(&self.registries.blocks)?;
                 storage
@@ -2995,7 +3130,7 @@ impl Game {
                     .queue_chunk_save(&Dimension::Overworld, &data)?;
             }
         }
-        Ok(())
+        Ok(skipped)
     }
 }
 

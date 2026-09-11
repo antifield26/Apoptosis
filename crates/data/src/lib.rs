@@ -45,13 +45,33 @@
 
 #![forbid(unsafe_code)]
 
+use std::collections::BTreeMap;
+
+pub mod advancement;
+pub mod function;
 pub mod json;
+pub mod loot;
 pub mod pack;
 pub mod recipe;
 pub mod tag;
 pub mod tag_resolve;
 
+pub use advancement::{
+    Advancement, AdvancementDisplay, AdvancementIcon, AdvancementLoadReport, AdvancementProblem,
+    AdvancementRegistry, AdvancementRewards, Chain, Criterion, Frame, TextComponent,
+    read_advancement_file,
+};
+pub use function::{
+    FunctionError, FunctionFile, FunctionLimits, FunctionLoadReport, FunctionRegistry,
+    SUGGESTED_MAX_RECURSION_DEPTH, parse_function, read_function_file,
+};
 pub use json::{JsonError, Limits};
+pub use loot::{
+    ChanceProvider, CountProvider, EnchantmentRequirement, ForwardReference, ItemStackLike,
+    LootCondition, LootContext, LootEntry, LootFunction, LootLoadReport, LootPool, LootTable,
+    LootTables, Refusal, Rng, RollError, load_directory as load_loot_tables,
+    roll as roll_loot_table,
+};
 pub use pack::{DataPack, DataPackSet, PackError, PackMetadata, PackSource};
 pub use recipe::{
     CookingRecipe, Ingredient, Recipe, RecipeBook, RecipeKind, RecipeLoadReport, ShapedRecipe,
@@ -61,6 +81,16 @@ pub use tag::{
     RegistryContents, TagEntry, TagFile, TagKey, TagLoadReport, TagProblem, TagSet, TagValue,
 };
 pub use tag_resolve::{MAX_TAG_DEPTH, resolve_all};
+
+/// Count one occurrence of a type string in a census map.
+///
+/// The loaders all report "how many of each type did I see", and doing it in one place keeps
+/// the three reports (`loot`, `function`, `advancement`) shaped the same way rather than three
+/// near-copies of `entry(kind).or_insert(0) += 1`. Ordered map, so iterating a report is
+/// deterministic (AGENTS.md §3.6).
+pub(crate) fn bump(counts: &mut BTreeMap<String, usize>, key: &str) {
+    *counts.entry(key.to_owned()).or_insert(0) += 1;
+}
 
 /// Namespace of the built-in data, as it appears in `data/minecraft/`.
 pub const VANILLA_NAMESPACE: &str = "minecraft";

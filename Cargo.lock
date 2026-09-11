@@ -328,6 +328,7 @@ dependencies = [
  "mc-simulation",
  "mc-test-support",
  "mc-world",
+ "mc-worldgen",
  "serde",
  "thiserror",
  "tokio",

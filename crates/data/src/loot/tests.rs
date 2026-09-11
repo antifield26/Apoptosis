@@ -5,8 +5,8 @@
 //! reproducible, which is the whole point of injecting the randomness.
 
 use super::{
-    BINOMIAL_ROUND_CAP_CHECK, CountProvider, LootCondition, LootContext, LootEntry, LootFunction,
-    LootLoadReport, LootPool, LootTable, LootTables, MAX_TABLE_NESTING, Refusal, RollError, Rng,
+    CountProvider, LootCondition, LootContext, LootEntry, LootFunction, LootFunctionKind,
+    LootLoadReport, LootPool, LootTable, LootTables, MAX_TABLE_NESTING, Refusal, Rng, RollError,
     roll,
 };
 use mc_core::ids::ResourceId;
@@ -104,20 +104,8 @@ fn the_same_seed_rolls_the_same_loot() {
         ],
         3.0,
     );
-    let first = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(42),
-        &context(),
-    )
-    .expect("rolls");
-    let second = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(42),
-        &context(),
-    )
-    .expect("rolls");
+    let first = roll(&table, &LootTables::new(), &mut SeqRng::new(42), &context()).expect("rolls");
+    let second = roll(&table, &LootTables::new(), &mut SeqRng::new(42), &context()).expect("rolls");
     assert_eq!(first, second);
     assert_eq!(first.len(), 3, "three rolls, from the pool's rolls value");
 }
@@ -145,10 +133,7 @@ fn weights_are_respected_across_many_draws() {
         }
     }
     let cod = counts.get("minecraft:cod").copied().unwrap_or(0);
-    let tropical = counts
-        .get("minecraft:tropical_fish")
-        .copied()
-        .unwrap_or(0);
+    let tropical = counts.get("minecraft:tropical_fish").copied().unwrap_or(0);
     assert!(
         (5_400..6_600).contains(&cod),
         "cod should be about 60%, got {cod}"
@@ -162,13 +147,7 @@ fn weights_are_respected_across_many_draws() {
 #[test]
 fn rolls_equal_to_zero_produce_nothing() {
     let table = table_with(vec![item("minecraft:stone", 1)], 0.0);
-    let out = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(1),
-        &context(),
-    )
-    .expect("rolls");
+    let out = roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context()).expect("rolls");
     assert!(out.is_empty());
 }
 
@@ -200,19 +179,13 @@ fn set_count_sets_and_adds() {
         weight: 1,
         quality: 0,
         expand: false,
-        functions: vec![LootFunction::SetCount {
+        functions: vec![LootFunction::new(LootFunctionKind::SetCount {
             count: CountProvider::Constant(4.0),
             add: false,
-        }],
+        })],
         conditions: Vec::new(),
     };
-    let out = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(1),
-        &context(),
-    )
-    .expect("rolls");
+    let out = roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context()).expect("rolls");
     assert_eq!(out[0].count, 4, "set_count replaces");
 
     table.pools[0].entries[0] = LootEntry::Item {
@@ -220,19 +193,13 @@ fn set_count_sets_and_adds() {
         weight: 1,
         quality: 0,
         expand: false,
-        functions: vec![LootFunction::SetCount {
+        functions: vec![LootFunction::new(LootFunctionKind::SetCount {
             count: CountProvider::Constant(3.0),
             add: true,
-        }],
+        })],
         conditions: Vec::new(),
     };
-    let out = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(1),
-        &context(),
-    )
-    .expect("rolls");
+    let out = roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context()).expect("rolls");
     assert_eq!(out[0].count, 4, "add starts from the 1 the entry produced");
 }
 
@@ -245,22 +212,16 @@ fn limit_count_clamps_and_discards() {
         quality: 0,
         expand: false,
         functions: vec![
-            LootFunction::SetCount {
+            LootFunction::new(LootFunctionKind::SetCount {
                 count: CountProvider::Constant(10.0),
                 add: false,
-            },
-            LootFunction::LimitCount { min: 1, max: 8 },
+            }),
+            LootFunction::new(LootFunctionKind::LimitCount { min: 1, max: 8 }),
         ],
         conditions: Vec::new(),
     };
     table.pools[0].entries[0] = entry.clone();
-    let out = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(1),
-        &context(),
-    )
-    .expect("rolls");
+    let out = roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context()).expect("rolls");
     assert_eq!(out[0].count, 8, "clamped to max");
 
     table.pools[0].entries[0] = LootEntry::Item {
@@ -269,21 +230,15 @@ fn limit_count_clamps_and_discards() {
         quality: 0,
         expand: false,
         functions: vec![
-            LootFunction::SetCount {
+            LootFunction::new(LootFunctionKind::SetCount {
                 count: CountProvider::Constant(0.0),
                 add: false,
-            },
-            LootFunction::LimitCount { min: 1, max: 8 },
+            }),
+            LootFunction::new(LootFunctionKind::LimitCount { min: 1, max: 8 }),
         ],
         conditions: Vec::new(),
     };
-    let out = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(1),
-        &context(),
-    )
-    .expect("rolls");
+    let out = roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context()).expect("rolls");
     assert_eq!(out[0].count, 0, "below min means an empty stack");
 }
 
@@ -318,6 +273,7 @@ fn alternatives_take_the_first_child_whose_conditions_pass() {
                     conditions: vec![LootCondition::SurvivesExplosion],
                 },
             ],
+            functions: Vec::new(),
             conditions: Vec::new(),
         }],
         1.0,
@@ -336,8 +292,8 @@ fn alternatives_take_the_first_child_whose_conditions_pass() {
     assert_eq!(out[0].item, id("minecraft:cobblestone"));
 
     // With an unknown tool: refused, because the same table gives different answers.
-    let err = roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context())
-        .expect_err("must refuse");
+    let err =
+        roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context()).expect_err("must refuse");
     match err {
         RollError::Unexecutable { refusals } => assert!(
             refusals
@@ -370,13 +326,8 @@ fn an_unmodelled_condition_refuses_rather_than_being_ignored() {
             "properties": {"age": "7"}
         }))],
     };
-    let err = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(1),
-        &context(),
-    )
-    .expect_err("must refuse");
+    let err =
+        roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context()).expect_err("must refuse");
     let text = err.to_string();
     assert!(text.contains("block_state_property"), "{text}");
     assert!(
@@ -393,20 +344,15 @@ fn an_unmodelled_function_refuses_rather_than_being_skipped() {
         weight: 1,
         quality: 0,
         expand: false,
-        functions: vec![LootFunction::Raw(json!({
+        functions: vec![LootFunction::new(LootFunctionKind::Raw(json!({
             "function": "minecraft:apply_bonus",
             "enchantment": "minecraft:fortune",
             "formula": "minecraft:ore_drops"
-        }))],
+        })))],
         conditions: Vec::new(),
     };
-    let err = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(1),
-        &context(),
-    )
-    .expect_err("must refuse");
+    let err =
+        roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context()).expect_err("must refuse");
     assert!(err.to_string().contains("apply_bonus"), "{err}");
 }
 
@@ -418,19 +364,14 @@ fn set_damage_is_modelled_but_refused() {
         weight: 1,
         quality: 0,
         expand: false,
-        functions: vec![LootFunction::SetDamage {
+        functions: vec![LootFunction::new(LootFunctionKind::SetDamage {
             damage: CountProvider::Constant(0.5),
             add: false,
-        }],
+        })],
         conditions: Vec::new(),
     };
-    let err = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(1),
-        &context(),
-    )
-    .expect_err("must refuse");
+    let err =
+        roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context()).expect_err("must refuse");
     assert!(err.to_string().contains("set_damage"), "{err}");
 }
 
@@ -439,23 +380,24 @@ fn a_refusal_lists_every_reason_not_only_the_first() {
     // A table with two different unexecutable constructs must report both, so one run tells
     // the whole story.
     let mut table = table_with(vec![item("minecraft:stone", 1)], 1.0);
-    table.functions = vec![LootFunction::Raw(json!({"function": "minecraft:copy_name"}))];
-    table.pools[0].conditions = vec![LootCondition::Raw(json!({"condition": "minecraft:location_check"}))];
+    table.functions = vec![LootFunction::new(LootFunctionKind::Raw(
+        json!({"function": "minecraft:copy_name"}),
+    ))];
+    table.pools[0].conditions = vec![LootCondition::Raw(
+        json!({"condition": "minecraft:location_check"}),
+    )];
     table.pools[0].entries[0] = LootEntry::Item {
         name: id("minecraft:stone"),
         weight: 1,
         quality: 0,
         expand: false,
-        functions: vec![LootFunction::Raw(json!({"function": "minecraft:furnace_smelt"}))],
+        functions: vec![LootFunction::new(LootFunctionKind::Raw(
+            json!({"function": "minecraft:furnace_smelt"}),
+        ))],
         conditions: Vec::new(),
     };
-    let err = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(1),
-        &context(),
-    )
-    .expect_err("must refuse");
+    let err =
+        roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context()).expect_err("must refuse");
     let text = err.to_string();
     assert!(text.contains("copy_name"), "{text}");
     assert!(text.contains("location_check"), "{text}");
@@ -465,23 +407,15 @@ fn a_refusal_lists_every_reason_not_only_the_first() {
 fn a_refusal_is_deterministic() {
     let mut table = table_with(vec![item("minecraft:stone", 1)], 1.0);
     table.functions = vec![
-        LootFunction::Raw(json!({"function": "minecraft:zeta"})),
-        LootFunction::Raw(json!({"function": "minecraft:alpha"})),
+        LootFunction::new(LootFunctionKind::Raw(json!({"function": "minecraft:zeta"}))),
+        LootFunction::new(LootFunctionKind::Raw(
+            json!({"function": "minecraft:alpha"}),
+        )),
     ];
-    let first = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(1),
-        &context(),
-    )
-    .expect_err("must refuse");
-    let second = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(9),
-        &context(),
-    )
-    .expect_err("must refuse");
+    let first =
+        roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context()).expect_err("must refuse");
+    let second =
+        roll(&table, &LootTables::new(), &mut SeqRng::new(9), &context()).expect_err("must refuse");
     assert_eq!(first.to_string(), second.to_string());
 }
 
@@ -501,6 +435,7 @@ fn a_named_reference_resolves_through_the_registry() {
                 inline: None,
                 weight: 1,
                 quality: 0,
+                functions: Vec::new(),
                 conditions: Vec::new(),
             }],
             conditions: Vec::new(),
@@ -527,6 +462,7 @@ fn a_missing_reference_is_an_error_naming_it() {
                 inline: None,
                 weight: 1,
                 quality: 0,
+                functions: Vec::new(),
                 conditions: Vec::new(),
             }],
             conditions: Vec::new(),
@@ -562,6 +498,7 @@ fn a_cycle_between_two_tables_is_reported_and_terminates() {
                 inline: None,
                 weight: 1,
                 quality: 0,
+                functions: Vec::new(),
                 conditions: Vec::new(),
             }],
             conditions: Vec::new(),
@@ -592,6 +529,7 @@ fn a_self_reference_is_a_cycle() {
                 inline: None,
                 weight: 1,
                 quality: 0,
+                functions: Vec::new(),
                 conditions: Vec::new(),
             }],
             conditions: Vec::new(),
@@ -632,6 +570,7 @@ fn an_inline_table_is_rolled_in_place() {
                 inline: Some(Box::new(inline)),
                 weight: 1,
                 quality: 0,
+                functions: Vec::new(),
                 conditions: Vec::new(),
             }],
             conditions: Vec::new(),
@@ -651,16 +590,15 @@ fn a_tag_entry_is_refused() {
         name: id("minecraft:creeper_drop_music_discs"),
         weight: 1,
         quality: 0,
+        functions: Vec::new(),
         conditions: Vec::new(),
     };
-    let err = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(1),
-        &context(),
-    )
-    .expect_err("must refuse");
-    assert!(err.to_string().contains("creeper_drop_music_discs"), "{err}");
+    let err =
+        roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context()).expect_err("must refuse");
+    assert!(
+        err.to_string().contains("creeper_drop_music_discs"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -670,15 +608,11 @@ fn a_dynamic_entry_is_refused() {
         name: "minecraft:sherds".to_owned(),
         weight: 1,
         quality: 0,
+        functions: Vec::new(),
         conditions: Vec::new(),
     };
-    let err = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(1),
-        &context(),
-    )
-    .expect_err("must refuse");
+    let err =
+        roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context()).expect_err("must refuse");
     assert!(err.to_string().contains("minecraft:sherds"), "{err}");
 }
 
@@ -687,35 +621,18 @@ fn survives_explosion_needs_the_context_field() {
     let mut table = table_with(vec![item("minecraft:cobblestone", 1)], 1.0);
     table.pools[0].conditions = vec![LootCondition::SurvivesExplosion];
 
-    let err = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(1),
-        &context(),
-    )
-    .expect_err("must refuse without the field");
+    let err = roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context())
+        .expect_err("must refuse without the field");
     assert!(err.to_string().contains("survives_explosion"), "{err}");
 
     let mut survived = context();
     survived.survives_explosion = Some(true);
-    let out = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(1),
-        &survived,
-    )
-    .expect("rolls");
+    let out = roll(&table, &LootTables::new(), &mut SeqRng::new(1), &survived).expect("rolls");
     assert_eq!(out.len(), 1);
 
     let mut destroyed = context();
     destroyed.survives_explosion = Some(false);
-    let out = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(1),
-        &destroyed,
-    )
-    .expect("rolls");
+    let out = roll(&table, &LootTables::new(), &mut SeqRng::new(1), &destroyed).expect("rolls");
     assert!(out.is_empty(), "the condition said no");
 }
 
@@ -752,24 +669,12 @@ fn any_of_and_inverted_compose() {
     }];
     let mut destroyed = context();
     destroyed.survives_explosion = Some(false);
-    let out = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(1),
-        &destroyed,
-    )
-    .expect("rolls");
+    let out = roll(&table, &LootTables::new(), &mut SeqRng::new(1), &destroyed).expect("rolls");
     assert_eq!(out.len(), 1);
 
     let mut survived = context();
     survived.survives_explosion = Some(true);
-    let out = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(1),
-        &survived,
-    )
-    .expect("rolls");
+    let out = roll(&table, &LootTables::new(), &mut SeqRng::new(1), &survived).expect("rolls");
     assert!(out.is_empty());
 }
 
@@ -784,13 +689,8 @@ fn an_unknown_member_of_any_of_refuses_even_when_another_term_passes() {
             LootCondition::RandomChance { chance: 1.0 },
         ],
     }];
-    let err = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(1),
-        &context(),
-    )
-    .expect_err("must refuse");
+    let err =
+        roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context()).expect_err("must refuse");
     assert!(err.to_string().contains("location_check"), "{err}");
 }
 
@@ -854,13 +754,13 @@ fn a_binomial_count_stays_within_its_rounds() {
         weight: 1,
         quality: 0,
         expand: false,
-        functions: vec![LootFunction::SetCount {
+        functions: vec![LootFunction::new(LootFunctionKind::SetCount {
             count: CountProvider::Binomial {
                 extra: 3,
                 probability: 1.0,
             },
             add: false,
-        }],
+        })],
         conditions: Vec::new(),
     };
     for seed in 0..16 {
@@ -878,29 +778,24 @@ fn a_binomial_count_stays_within_its_rounds() {
 #[test]
 fn an_absurd_binomial_is_refused_rather_than_burning_draws() {
     // AGENTS.md section 10: allocation/CPU amplification. One billion rounds would not
-    // crash, it would stall — which on a 20 TPS server is the same outage.
+    // crash, it would stall —which on a 20 TPS server is the same outage.
     let mut table = table_with(vec![item("minecraft:wheat_seeds", 1)], 1.0);
     table.pools[0].entries[0] = LootEntry::Item {
         name: id("minecraft:wheat_seeds"),
         weight: 1,
         quality: 0,
         expand: false,
-        functions: vec![LootFunction::SetCount {
+        functions: vec![LootFunction::new(LootFunctionKind::SetCount {
             count: CountProvider::Binomial {
                 extra: 1_000_000_000,
                 probability: 0.5,
             },
             add: false,
-        }],
+        })],
         conditions: Vec::new(),
     };
-    let err = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(1),
-        &context(),
-    )
-    .expect_err("must refuse");
+    let err =
+        roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context()).expect_err("must refuse");
     assert!(err.to_string().contains("binomial"), "{err}");
 }
 
@@ -915,13 +810,8 @@ fn quality_without_luck_is_refused() {
         functions: Vec::new(),
         conditions: Vec::new(),
     };
-    let err = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(1),
-        &context(),
-    )
-    .expect_err("must refuse");
+    let err =
+        roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context()).expect_err("must refuse");
     assert!(err.to_string().contains("quality"), "{err}");
 
     let mut with_luck = context();
@@ -956,13 +846,7 @@ fn a_hostile_rng_returning_one_does_not_index_past_the_end() {
 #[test]
 fn an_empty_pool_yields_nothing_rather_than_panicking() {
     let table = table_with(Vec::new(), 4.0);
-    let out = roll(
-        &table,
-        &LootTables::new(),
-        &mut SeqRng::new(1),
-        &context(),
-    )
-    .expect("rolls");
+    let out = roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context()).expect("rolls");
     assert!(out.is_empty());
 }
 
@@ -974,7 +858,9 @@ fn mentioned_types_counts_the_whole_tree() {
         weight: 1,
         quality: 0,
         expand: false,
-        functions: vec![LootFunction::Raw(json!({"function": "minecraft:apply_bonus"}))],
+        functions: vec![LootFunction::new(LootFunctionKind::Raw(
+            json!({"function": "minecraft:apply_bonus"}),
+        ))],
         conditions: vec![LootCondition::SurvivesExplosion],
     };
     let types = table.mentioned_types();
@@ -1015,11 +901,128 @@ fn a_report_that_lost_a_file_fails_the_accounting_check() {
     report.skipped.push("one bad file".to_owned());
     assert!(report.is_fully_accounted());
     assert_eq!(report.total_unmodelled_files(), 0);
-    report.unmodelled.insert("minecraft:unknown".to_owned(), 1);
+    assert!(!report.is_clean(), "a skipped file is not clean");
+    assert!(report.unmodelled.is_empty());
+    report
+        .unmodelled
+        .insert("minecraft:unknown_table_type".to_owned(), 1);
     report.loaded -= 1;
     assert!(report.is_fully_accounted());
     assert!(!report.is_clean());
-    assert_eq!(report.occurrences("minecraft:unknown"), 1);
+    assert_eq!(report.total_unmodelled_files(), 1);
+    // `unmodelled` is a *file* bucket keyed by table type; a construct type nothing modelled
+    // is not in it, which is what keeps `occurrences` about the two construct maps.
+    assert_eq!(report.occurrences("minecraft:unknown_table_type"), 0);
+    report
+        .unexecutable
+        .insert("minecraft:furnace_smelt".to_owned(), 4);
+    assert_eq!(report.occurrences("minecraft:furnace_smelt"), 4);
+    assert_eq!(report.total_unexecutable(), 4);
+}
+
+#[test]
+fn a_functions_own_conditions_gate_whether_it_runs() {
+    // 164 of vanilla's 1 392 functions carry their own conditions, and they gate the
+    // *function*, not the entry. Ignoring them would apply a count vanilla would not have
+    // applied, which is a wrong roll rather than a missing one.
+    let mut with_condition = LootFunction::new(LootFunctionKind::SetCount {
+        count: CountProvider::Constant(4.0),
+        add: false,
+    });
+    with_condition.conditions = vec![LootCondition::SurvivesExplosion];
+
+    let mut table = table_with(vec![item("minecraft:stick", 1)], 1.0);
+    table.pools[0].entries[0] = LootEntry::Item {
+        name: id("minecraft:stick"),
+        weight: 1,
+        quality: 0,
+        expand: false,
+        functions: vec![with_condition.clone()],
+        conditions: Vec::new(),
+    };
+
+    // The function's condition fails: the function is not applied, so the count stays 1.
+    let mut destroyed = context();
+    destroyed.survives_explosion = Some(false);
+    let out = roll(&table, &LootTables::new(), &mut SeqRng::new(1), &destroyed).expect("rolls");
+    assert_eq!(out[0].count, 1, "the gated function must not run");
+
+    // It passes: the function runs.
+    let mut survived = context();
+    survived.survives_explosion = Some(true);
+    let out = roll(&table, &LootTables::new(), &mut SeqRng::new(1), &survived).expect("rolls");
+    assert_eq!(out[0].count, 4);
+
+    // And an unknown outcome refuses rather than guessing either way.
+    let err =
+        roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context()).expect_err("must refuse");
+    assert!(err.to_string().contains("survives_explosion"), "{err}");
+
+    // A gated function whose condition cannot be evaluated is still refused, never applied.
+    let mut with_raw_condition = with_condition;
+    with_raw_condition.conditions = vec![LootCondition::Raw(
+        json!({"condition": "minecraft:location_check"}),
+    )];
+    table.pools[0].entries[0] = LootEntry::Item {
+        name: id("minecraft:stick"),
+        weight: 1,
+        quality: 0,
+        expand: false,
+        functions: vec![with_raw_condition],
+        conditions: Vec::new(),
+    };
+    let err =
+        roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context()).expect_err("must refuse");
+    assert!(err.to_string().contains("location_check"), "{err}");
+}
+
+#[test]
+fn a_function_that_cannot_run_is_refused_even_when_its_condition_fails() {
+    // The refusal must not depend on which branch the conditions happened to take: a table
+    // using a construct this build cannot execute is not rollable, full stop.
+    let mut function = LootFunction::new(LootFunctionKind::Raw(
+        json!({"function": "minecraft:apply_bonus"}),
+    ));
+    function.conditions = vec![LootCondition::SurvivesExplosion];
+    let mut table = table_with(vec![item("minecraft:stick", 1)], 1.0);
+    table.pools[0].entries[0] = LootEntry::Item {
+        name: id("minecraft:stick"),
+        weight: 1,
+        quality: 0,
+        expand: false,
+        functions: vec![function],
+        conditions: Vec::new(),
+    };
+    let mut destroyed = context();
+    destroyed.survives_explosion = Some(false);
+    let err =
+        roll(&table, &LootTables::new(), &mut SeqRng::new(1), &destroyed).expect_err("must refuse");
+    assert!(err.to_string().contains("apply_bonus"), "{err}");
+}
+
+#[test]
+fn mentioned_types_counts_a_functions_own_conditions() {
+    let mut function = LootFunction::new(LootFunctionKind::SetCount {
+        count: CountProvider::Constant(2.0),
+        add: false,
+    });
+    function.conditions = vec![LootCondition::SurvivesExplosion];
+    let mut table = table_with(vec![item("minecraft:stick", 1)], 1.0);
+    table.pools[0].entries[0] = LootEntry::Item {
+        name: id("minecraft:stick"),
+        weight: 1,
+        quality: 0,
+        expand: false,
+        functions: vec![function],
+        conditions: Vec::new(),
+    };
+    let types = table.mentioned_types();
+    assert_eq!(types.get("minecraft:set_count").copied(), Some(1));
+    assert_eq!(
+        types.get("minecraft:survives_explosion").copied(),
+        Some(1),
+        "the function's condition is a node in the census: {types:?}"
+    );
 }
 
 #[test]
@@ -1068,11 +1071,13 @@ fn lookup_helpers_answer_deterministically() {
         "names are ascending"
     );
     assert_eq!(tables.of_kind("minecraft:chest").len(), 1);
-    assert!(tables.by_name(&id("minecraft:chests/simple_dungeon")).is_some());
+    assert!(
+        tables
+            .by_name(&id("minecraft:chests/simple_dungeon"))
+            .is_some()
+    );
     assert!(tables.by_name(&id("minecraft:nope")).is_none());
-    assert!(tables
-        .referencing(&id("minecraft:test"))
-        .is_empty());
+    assert!(tables.referencing(&id("minecraft:test")).is_empty());
 }
 
 #[test]
@@ -1129,6 +1134,7 @@ fn the_nesting_limit_is_reported_for_a_long_chain() {
                     inline: None,
                     weight: 1,
                     quality: 0,
+                    functions: Vec::new(),
                     conditions: Vec::new(),
                 }],
                 conditions: Vec::new(),
@@ -1144,7 +1150,10 @@ fn the_nesting_limit_is_reported_for_a_long_chain() {
         .expect("the chain start");
     let err = roll(start, &tables, &mut SeqRng::new(1), &context()).expect_err("must refuse");
     assert!(
-        matches!(err, RollError::TooDeep { .. } | RollError::UnknownTable { .. }),
+        matches!(
+            err,
+            RollError::TooDeep { .. } | RollError::UnknownTable { .. }
+        ),
         "{err}"
     );
 }
@@ -1175,4 +1184,3 @@ fn chance_is_strict_at_the_boundaries() {
     assert!(rng.chance(1.0));
     assert!(rng.chance(f32::MIN_POSITIVE));
 }
-

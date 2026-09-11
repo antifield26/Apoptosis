@@ -280,7 +280,9 @@ impl Advancement {
     /// A criterion by name.
     #[must_use]
     pub fn criterion(&self, name: &str) -> Option<&Criterion> {
-        self.criteria.iter().find(|criterion| criterion.name == name)
+        self.criteria
+            .iter()
+            .find(|criterion| criterion.name == name)
     }
 
     /// Every criterion name, ascending.
@@ -333,15 +335,20 @@ impl Advancement {
 
     /// Criteria that no requirement group mentions.
     ///
+    /// Measured against [`Self::effective_requirements`], not the raw field: a file that omits
+    /// `requirements` means "every criterion is required", so an absent field must report
+    /// **nothing** here. An earlier draft read the raw vector, which made every criterion of
+    /// every vanilla advancement with an implicit requirement look unused.
+    ///
     /// Not necessarily a bug — a criterion can exist only to be referenced by another
     /// advancement's conditions — but worth reporting, because it usually is one.
     #[must_use]
     pub fn unreferenced_criteria(&self) -> Vec<&str> {
         let referenced: BTreeSet<&str> = self
-            .requirements
+            .effective_requirements()
             .iter()
             .flatten()
-            .map(String::as_str)
+            .copied()
             .collect();
         self.criterion_names()
             .into_iter()
@@ -453,7 +460,10 @@ impl fmt::Display for AdvancementProblem {
                 write!(f, "{name} requires the undefined criterion {criterion:?}")
             }
             Self::UnreferencedCriterion { name, criterion } => {
-                write!(f, "{name} defines the criterion {criterion:?}, which no group requires")
+                write!(
+                    f,
+                    "{name} defines the criterion {criterion:?}, which no group requires"
+                )
             }
             Self::TooDeep { at, limit } => {
                 write!(f, "{at} has a parent chain deeper than {limit}")
@@ -532,9 +542,7 @@ impl AdvancementLoadReport {
     pub fn errors(&self) -> Vec<&AdvancementProblem> {
         self.problems
             .iter()
-            .filter(|problem| {
-                !matches!(problem, AdvancementProblem::UnreferencedCriterion { .. })
-            })
+            .filter(|problem| !matches!(problem, AdvancementProblem::UnreferencedCriterion { .. }))
             .collect()
     }
 
@@ -838,13 +846,13 @@ impl AdvancementRegistry {
             out.push(AdvancementProblem::Duplicate { name });
         }
         for advancement in &self.advancements {
-            if let Some(parent) = &advancement.parent {
-                if !self.by_name.contains_key(parent) {
-                    out.push(AdvancementProblem::MissingParent {
-                        from: advancement.name.clone(),
-                        missing: parent.clone(),
-                    });
-                }
+            if let Some(parent) = &advancement.parent
+                && !self.by_name.contains_key(parent)
+            {
+                out.push(AdvancementProblem::MissingParent {
+                    from: advancement.name.clone(),
+                    missing: parent.clone(),
+                });
             }
             for criterion in advancement.undefined_requirements() {
                 out.push(AdvancementProblem::UndefinedRequirement {
@@ -885,12 +893,12 @@ impl AdvancementRegistry {
             loop {
                 if let Some(seen) = colour.get(&node) {
                     // `1` means "on the current path", `2` means "finished".
-                    if *seen == 1 {
-                        if let Some(index) = path.iter().position(|entry| entry == &node) {
-                            let mut cycle: Vec<ResourceId> = path[index..].to_vec();
-                            cycle.push(node);
-                            out.push(AdvancementProblem::Cycle { path: cycle });
-                        }
+                    if *seen == 1
+                        && let Some(index) = path.iter().position(|entry| entry == &node)
+                    {
+                        let mut cycle: Vec<ResourceId> = path[index..].to_vec();
+                        cycle.push(node);
+                        out.push(AdvancementProblem::Cycle { path: cycle });
                     }
                     break;
                 }
@@ -985,9 +993,7 @@ impl AdvancementRegistry {
                 Err(error) => report.skipped.push(error.to_string()),
             }
         }
-        report
-            .unmodelled
-            .retain(|_, count| *count > 0);
+        report.unmodelled.retain(|_, count| *count > 0);
         // One rebuild for the whole directory, rather than one per insert.
         registry.rebuild_index();
         report.advancements = registry.len();
@@ -1274,7 +1280,10 @@ fn read_requirements(
     };
     let groups = value.as_array().ok_or_else(|| JsonError::Invalid {
         path: path.to_path_buf(),
-        reason: format!("\"requirements\" must be an array, found {}", type_name(value)),
+        reason: format!(
+            "\"requirements\" must be an array, found {}",
+            type_name(value)
+        ),
     })?;
     let mut out = Vec::with_capacity(groups.len());
     for group in groups {
@@ -1328,9 +1337,9 @@ fn read_id_array(
     key: &str,
     path: &Path,
 ) -> Result<Vec<ResourceId>, JsonError> {
-    let Some(value) = map.get(key) else {
+    if map.get(key).is_none() {
         return Ok(Vec::new());
-    };
+    }
     let list = required_array(map, key, path)?;
     let mut out = Vec::with_capacity(list.len());
     for item in list {
@@ -1359,7 +1368,10 @@ fn optional_bool_default(
         Some(serde_json::Value::Bool(flag)) => Ok(*flag),
         Some(other) => Err(JsonError::Invalid {
             path: path.to_path_buf(),
-            reason: format!("field {key:?} must be a boolean, found {}", type_name(other)),
+            reason: format!(
+                "field {key:?} must be a boolean, found {}",
+                type_name(other)
+            ),
         }),
     }
 }

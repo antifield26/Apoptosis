@@ -1,0 +1,28 @@
+[package]
+name = "mc-worldgen"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+# Required by the licence gate: a workspace member without it is rejected.
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mc-core = { path = "../core" }
+# `WorldSeed::from_level_dat` reads the parsed world-gen document, so the NBT
+# value type is part of this crate's public API. `mc-nbt` is a leaf crate
+# (core only); no dependency cycle is possible.
+mc-nbt = { path = "../nbt" }
+# `WorldgenContext` carries the dimension key and derives its vertical bounds
+# from the dimension model rather than hard-coding them.
+mc-persistence = { path = "../persistence" }
+mc-registry = { path = "../registry" }
+# `mc-simulation` owns `RandomSource`, the JDK-verified `java.util.Random` clone.
+# Using it here (rather than a fresh PRNG) is what makes generation reproducible
+# and keeps one random-draw implementation in the workspace.
+mc-simulation = { path = "../simulation" }
+# `mc-world` owns the runtime `Chunk`/`Section` this crate generates into.
+mc-world = { path = "../world" }
+tracing.workspace = true

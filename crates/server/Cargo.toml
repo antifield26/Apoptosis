@@ -22,6 +22,7 @@ mc-registry = { path = "../registry" }
 # server → simulation and never the other way.
 mc-simulation = { path = "../simulation" }
 mc-world = { path = "../world" }
+mc-worldgen = { path = "../worldgen" }
 serde.workspace = true
 thiserror.workspace = true
 # `signal` is required by the Ctrl-C handler; without it `cargo build -p mc-server`

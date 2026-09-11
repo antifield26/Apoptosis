@@ -1,0 +1,81 @@
+//! World generation: seeds, noise, biomes, terrain, features and the
+//! existing-world-first chunk provider (P07-13..P07-17).
+//!
+//! ## Why this crate exists, in the phase prompt's own order
+//!
+//! PHASE-07 says: *"Prioritize loading existing worlds before perfecting every
+//! generation feature, then expand toward 26.1.2 parity."* That sentence orders
+//! this crate:
+//!
+//! 1. [`existing::ChunkProvider::chunk_at`] returns a **stored** chunk whenever
+//!    one exists and only falls back to a generator when nothing is stored. The
+//!    data-loss rule from `Game::load_or_create_chunk` — never write a
+//!    placeholder over real terrain — is the reason this is the first thing
+//!    built rather than the last;
+//! 2. [`seed`] makes generation a pure function of `(world seed, chunk position)`
+//!    so a generated chunk is reproducible for ever, in any order (AGENTS.md
+//!    §3.6);
+//! 3. [`noise`], [`terrain`], [`biome`] and [`features`] then produce terrain
+//!    that is *labelled as ours* at every step — see "no parity claim" below.
+//!
+//! ## No parity claim — what this is and is not
+//!
+//! **Nothing in this crate reproduces Vanilla world generation.** It is a
+//! documented, deterministic baseline that can be replaced field by field:
+//!
+//! | Piece | Status |
+//! |---|---|
+//! | `(seed, chunk_pos) → chunk` determinism | **ours**, proven by construction and by test |
+//! | Perlin gradient noise | Perlin's published 2002 algorithm; **not** Vanilla's `NormalNoise` |
+//! | Octave tables / amplitudes | **approximation**: geometric persistence, not Vanilla's tables |
+//! | Biome selection | **ours**: a two-field threshold rule over noise, **not** Vanilla's multi-noise parameter table |
+//! | Terrain shape | **ours**: a documented noise → y mapping; **not** Vanilla's density functions |
+//! | Biome ids | names copied from Vanilla's `minecraft:` ids; **no biome registry is loaded**, so this is a label, not a lookup |
+//! | Block palette | all names resolved through [`mc_registry::BlockRegistry`] — **never** a hard-coded numeric state id |
+//! | Trees | oak only, chunk-local, documented density; **not** Vanilla's placed-feature system |
+//! | Structures, ores, caves, ravines, lakes, decoration | **not implemented** — see [`features`] |
+//!
+//! Every constant in this crate carries one of four labels: **verified** (with a
+//! source), **derived** (from something verified, derivation written out),
+//! **approximation** (deliberately simpler, deviation named) or **product
+//! decision** (our choice, no Vanilla claim). Terrain is the easiest place in
+//! this project to present a guess as a fact, so the labels are next to the
+//! numbers, and the crate's doc comments repeat the important ones.
+
+#![forbid(unsafe_code)]
+// Terrain, noise and features narrow and widen constantly: block coordinates are
+// `i32`, lattice indices are `usize`, and heights are `f64`. Every site is
+// range-checked first, clamped by a documented constant, or lossless by
+// construction (`noise::COORDINATE_LIMIT`, `seed::WorldgenContext::section_count`).
+// The same exemption is documented in the other binary-format crates.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_lossless
+)]
+
+pub mod biome;
+pub mod existing;
+pub mod features;
+pub mod noise;
+pub mod seed;
+pub mod terrain;
+
+pub use biome::{BIOMES, Biome, BiomeSource, SurfaceBlocks};
+pub use existing::{
+    ChunkLookup, ChunkProvider, FnLookup, MapLookup, NoStorage, ProviderError, ProviderStats,
+    StoredChunk,
+};
+pub use features::{
+    OakPlacement, TreeDensity, TreeStats, place_oak_at, populate_oak_trees,
+    populate_oak_trees_flat, tree_fits_in_chunk,
+};
+pub use noise::{FractalNoise, MAX_OCTAVES, PerlinNoise};
+pub use seed::{
+    ChunkSeed, OVERWORLD_HEIGHT, OVERWORLD_MIN_Y, OVERWORLD_SEA_LEVEL, WorldSeed, WorldgenContext,
+};
+pub use terrain::{
+    BlockPalette, ChunkGenerator, EXAMPLE_SEED, FlatGenerator, FlatLayer, GenerationError,
+    TerrainGenerator,
+};

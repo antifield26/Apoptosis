@@ -275,7 +275,9 @@ impl FunctionFile {
     /// exists so a dispatcher can decide up front whether it needs a depth guard.
     #[must_use]
     pub fn calls_function_command(&self) -> bool {
-        self.commands.iter().any(|command| is_function_call(command))
+        self.commands
+            .iter()
+            .any(|command| is_function_call(command))
     }
 
     /// Total characters across every command, for a caller sizing a chain budget.
@@ -299,8 +301,9 @@ pub fn is_function_call(command: &str) -> bool {
 /// Whether the command is `function` with no argument, which is a syntax error the
 /// dispatcher will reject but is still a `function` command.
 fn is_bare_function_command(command: &str) -> bool {
-    let command = command.trim_start_matches('/').trim();
-    command.eq_ignore_ascii_case("function")
+    strip_leading_slash(command)
+        .trim()
+        .eq_ignore_ascii_case("function")
 }
 
 /// The recursion bound this project suggests to whoever owns the dispatcher.
@@ -397,9 +400,7 @@ impl FunctionRegistry {
     /// A function by name.
     #[must_use]
     pub fn by_name(&self, name: &ResourceId) -> Option<&FunctionFile> {
-        self.by_name
-            .get(name)
-            .map(|index| &self.functions[*index])
+        self.by_name.get(name).map(|index| &self.functions[*index])
     }
 
     /// Every function name, ascending.
@@ -528,9 +529,7 @@ impl FunctionRegistry {
                 Err(error) => report.skipped.push(error.to_string()),
             }
         }
-        report
-            .unmodelled
-            .retain(|_, count| *count > 0);
+        report.unmodelled.retain(|_, count| *count > 0);
         registry
     }
 }
@@ -540,12 +539,24 @@ impl FunctionRegistry {
 /// The command name is matched case-insensitively, since the dispatcher does; a command with
 /// no argument returns `None`, because there is no target to resolve.
 fn function_call_target(command: &str) -> Option<&str> {
-    let command = command.trim_start_matches('/').trim();
+    let command = strip_leading_slash(command);
     let (head, rest) = command.split_once(char::is_whitespace)?;
     if !head.eq_ignore_ascii_case("function") {
         return None;
     }
     rest.split_whitespace().next()
+}
+
+/// Strip leading whitespace and one optional `/`.
+///
+/// Both orders occur — `"/function x"`, `"  /function x"` — so the whitespace is trimmed on
+/// both sides of the slash rather than once at the front.
+fn strip_leading_slash(command: &str) -> &str {
+    let trimmed = command.trim_start();
+    match trimmed.strip_prefix('/') {
+        Some(rest) => rest.trim_start(),
+        None => trimmed,
+    }
 }
 
 /// Resolve a `/function` target against the calling function's namespace.

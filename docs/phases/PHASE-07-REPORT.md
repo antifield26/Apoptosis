@@ -1,0 +1,265 @@
+# Phase 07 Report — Commands, Data Packs and World Generation
+
+Date: 2026-09-11 (in progress). Scope: `P07-01..P07-20` per `tasks/TASK-INDEX.md`.
+Gate status at the time of writing: `cargo test --workspace` **1 027 passed, 0 failed, 7
+ignored** plus three ignored differential suites that pass when run against the jar; `cargo fmt --check`, `cargo clippy -D warnings`,
+`cargo check --target aarch64-unknown-linux-gnu` and `cargo deny check` all clean. Each is
+re-run before the phase is called done, and the numbers in this report are re-derived from
+that run rather than accumulated (Audits 03 and 05 both found stale totals in this
+project's documents).
+
+## 0. What this phase was for
+
+Phase 06 built container, crafting, furnace, hopper and redstone **models** with no server
+call sites. Phase 07 is where the server becomes one: a command framework a player can
+reach, data loading that replaces hand-written tables with the jar's own data, and terrain
+instead of an all-air placeholder. Three of Phase 06's recorded caveats are retired here,
+and the report says which.
+
+## 1. Deliverable map
+
+| Task | Status | Evidence |
+|---|---|---|
+| P07-01 command tree | **DONE** | `mc-command`: flat immutable tree, `validate` asserts nine structural invariants, six argument kinds |
+| P07-02 dispatcher | **DONE** | `tokenize` → root → permission → arguments; 24 dispatch tests |
+| P07-03 data loading (tags, recipes, packs) | **DONE** | 758/758 real tags resolve, 0 problems; 1 421 recipes + 94 counted-unmodelled |
+| P07-04 permissions | **PARTIAL** | The four levels exist and are enforced; `ops.json` is **not** read or written, so a player is level 0 |
+| P07-05 command set | **DONE (7 commands)** | `help`, `list`, `say`, `time`, `tp`, `op`, `stop` — each reachable over a real socket, limits named |
+| P07-06 selectors | **DONE (parse + match)** | `@a/@p/@r/@s/@e/@n` with `type`, `name`, `distance`, `level`, `gamemode`, `limit`, `sort`, `x/y/z` |
+| P07-07 `execute` and context | **NOT STARTED** | Needs a branching grammar the flat tree cannot express — a design limit, not an omission |
+| P07-08 functions | delegated | `mc-data::function` |
+| P07-09 real recipe data in the furnace | **DONE** | 73 smelting recipes → 156 rows from the real pack; **retires P06 §5.9's recipe half** |
+| P07-10 loot tables | delegated | `mc-data::loot` |
+| P07-11 advancements | delegated | `mc-data::advancement` |
+| P07-12 pack discovery | **PARTIAL** | Directory packs only; no `.zip`, and the world's enabled-pack list is not read |
+| P07-13 seed pipeline | **DONE** | `mc-worldgen::seed`, per-chunk derivation tested for collisions and stability |
+| P07-14 noise + terrain | **DONE** | Perlin noise with a golden test; terrain with bedrock floor, surface, water, all-air-column assertion |
+| P07-15 biomes | **DONE** | Six biomes driving surface composition |
+| P07-16 features | **DONE (trees only)** | Oak trees on grass; placement bounds stated |
+| P07-17 existing-world-first | **DONE** | Stored chunk read before generation; asserted by tests, and the source of two bugs below |
+| P07-18 differential tests | **DONE** | `vanilla_pack`, `vanilla_smelting`, `vanilla_data` |
+| P07-19 docs | **in this file** | |
+| P07-20 matrices | **DONE** | `TEST-MATRIX.md` §Phase 07; `PARITY-MATRIX.md` command/data/worldgen rows |
+
+## 2. Bugs found and fixed, in the order they were found
+
+Every one of these was found by a test disagreeing with an assumption, and three of them are
+the same failure mode: **a number or a mechanism that looked right and proved nothing.**
+
+### 2.1 The dispatcher counted tokens as arguments — P07-02
+
+`finish` checked `accepts_token_count(supplied)` against `accepts_count`, which compares
+against the **argument** count. Two of the six argument kinds do not consume one token:
+
+- a **greedy** argument takes every remaining token, so `say a b c` looked like three
+  arguments for one;
+- a **`BlockPos`** takes three tokens, so `tp Alex 10 64 -5` looked like four for two.
+
+Both were refused as "too many arguments" — two of the seven commands were unusable. Fixed
+with `Command::token_bounds()`, which derives the real range from the tree and returns an
+unbounded maximum for a greedy tail.
+
+### 2.2 A method with only one possible answer — P07-06
+
+`Selector::includes_players` was written as `… || true`; clippy's `nonminimal_bool` caught
+it. Rewriting it to the inverse was **no better**: every selector can match a player (`@a`
+because it is player-only, `@e` because a player *is* an entity), so the method could not
+distinguish anything. The test written against it exposed that, and the fix was a question
+with two answers — `is_player_only()`, which is exactly the rule `matches` enforces, so the
+method and the predicate agree by construction. `sort_is_implied` was a second field nothing
+ever read and is deleted rather than documented.
+
+**This is the one to remember from this phase**: clippy found the symptom, the test found the
+disease.
+
+### 2.3 Rows are not recipes — P07-09
+
+The furnace conversion report counted table **rows** in a field named `converted`, and
+`seen()` summed that. One recipe yields several rows, because an ingredient is a list of
+alternatives and a tag expands to its members — so **156 rows from 73 recipes read as
+success**, and a dropped recipe would have been invisible. The report now separates
+`recipes_seen` / `recipes_converted` / `rows`, with a `debug_assert_eq!` proving on every run
+that each recipe lands in exactly one bucket.
+
+### 2.4 A recipe landing in two buckets — P07-09
+
+With the buckets added, a recipe whose tag had no resolver was counted both as unresolved
+*and* as converted. The debug assertion caught it immediately; fixed by tracking *why* a
+recipe produced nothing so the buckets are exclusive.
+
+### 2.5 The tag registry split — P07-03
+
+A tag lives at `tags/<registry>/<tag>.json`, and **the split point is not recoverable from
+the path**:
+
+| File | Registry | Tag |
+|---|---|---|
+| `tags/block/mineable/axe.json` | `block` | `minecraft:mineable/axe` |
+| `tags/villager_trade/armorer/level_1.json` | `villager_trade` | `minecraft:armorer/level_1` |
+| `tags/worldgen/biome/is_beach.json` | `worldgen/biome` | `minecraft:is_beach` |
+
+Splitting at the last separator gave **103** spurious missing-tag problems; splitting at the
+first left **46**. The directory shapes do not distinguish the cases — `block/` has 244 flat
+files and one subdirectory, while `villager_trade/` has **zero** flat files and fifteen
+subdirectories yet is a one-segment registry. What settles it is the **references** inside the
+files. `TAG_REGISTRIES` is now the measured answer: 20 registry paths, longest match first,
+with an unknown prefix falling back to the first segment **and being reported**.
+
+The unit fixtures could not have caught this. Only the real pack could, which is the argument
+for the differential suites.
+
+### 2.6 My own file counts were wrong — P07-03
+
+Every figure counted from `zipfile` namelist entries included **directory entries**, so each
+was one too high per directory: `recipe/` was 1 515 not 1 516, `advancement/` 1 617 not
+1 633. The loader reported 1 421 + 94 = 1 515 while the test expected 1 516 — **the loader was
+right**. The baseline now carries §0a recording the correction, because this is the third time
+in this project that a hastily-counted figure had to be fixed against a precise one, and the
+first two were also caught by a test disagreeing with a document.
+
+### 2.7 **A borrowing game destroyed saved worlds** — P07-17, severity: high
+
+`Game::read_stored_chunk` returns `Ok(None)` when the game holds no storage handle, so
+`Game::new` / `Game::with_seed` cannot distinguish "no chunk is stored here" from "I cannot
+look". Wiring the generator into the not-loaded path turned that ambiguity into **data
+loss**: generation ran, the chunk was marked dirty, and `save_all` wrote it over the saved
+one. Opening an existing world with a borrowing game would have replaced it with generated
+terrain — the exact opposite of the phase prompt's first instruction.
+
+Generation is now gated on `can_read_stored_chunks`, so "nothing is stored" is knowledge
+rather than a guess. A borrowing game keeps the placeholder and its do-not-persist mark: a
+real limitation, and the right one, because refusing to generate is recoverable and
+overwriting a world is not.
+
+### 2.8 **`placeholder_without_storage` was populated and never read** — pre-existing
+
+Its doc comment said "These positions are skipped by `save_all` and reported instead."
+**Nothing consulted the set.** A placeholder was therefore written over real terrain whenever
+it was dirty — and it always was, because `Chunk::air` is dirty by construction. This dates
+from Audit 03's fix and predates Phase 07; the generator change only made it visible.
+`queue_dirty_chunks` now skips those positions and reports the count.
+
+That is the **third** time in this project a doc comment has been more confident than its
+code (the others: `game.rs`'s "items are dropped" claim, and the save-ordering parity row).
+Each fix now comes with a test rather than a corrected sentence.
+
+### 2.9 The dirty-flag model I got wrong — P07-17
+
+I first marked generated chunks **dirty** "so the world keeps them". Two existing tests
+failed, correctly:
+
+- a dirty chunk cannot be unloaded, so generated chunks accumulated forever;
+- the matching change to the clean-marking let placeholders be written back — bug 2.8's exact
+  symptom, reintroduced.
+
+The right model is that the dirty flag means *"this content exists nowhere else"*, and a
+generated chunk is **clean** because this generator is deterministic: unload it and it
+regenerates byte for byte. Persisting it buys nothing; what must persist is a *modification*,
+which `set_block` already marks. The unconditional clean-marking is restored, with the three
+origins and their three reasons written down.
+
+It is worth recording that the two failing tests were **pre-existing and correct** — they
+encoded knowledge this change had not yet learned.
+
+## 3. What the jar confirms, replacing guesswork
+
+`PHASE-06-REPORT.md` §5.9 recorded that every recipe and fuel value was community knowledge.
+The recipe half is now data:
+
+```
+73 smelting recipes  ->  73 recipes converted  ->  156 table rows
+iron_ingot_from_smelting_raw_iron: cookingtime 200, experience 0.7   (both guessed, both confirmed)
+sand -> glass at 200 ticks                                            (not in the baseline)
+oak_log -> charcoal at 200 ticks                                      (through a tag)
+```
+
+**Still guessed, and therefore still caveated: the fuel table.** Burn times are item data
+components rather than recipes, so loading recipes does not touch them.
+
+## 4. Honest limitations added by this phase
+
+Recorded here rather than discovered later:
+
+1. **`execute` is not implemented** (P07-07). Its sub-commands need a *branching* grammar;
+   the command tree is a flat positional list, which is a deliberate simplification
+   (ADR-0004's sibling reasoning) and is now the limiting factor.
+2. **A player is permission level 0.** `ops.json` is not read or written, so `op` and `stop`
+   are unreachable from a client. That is the correct behaviour for a server with no
+   permission storage, not a bug — and it is why the E2E test asserts a player *cannot* stop
+   the server.
+3. **`tp` moves only the invoking player.** There is no cross-player teleport authority
+   model; another target is refused with that reason.
+4. **`help` does not paginate; `list` does not match Vanilla's exact format; `say` broadcasts
+   to players only; `time` sets `timeOfDay` but not `dayTime`** and accepts no named presets.
+5. **Selector argument completion is not implemented** — `suggest` offers roots only, because
+   argument candidates come from the caller's knowledge (a player list, a block-state list).
+6. **`@e` cannot use `#tag` type filters**, and `scores`, `tag`, `team`, `nbt`, `predicate`,
+   `advancements`, `dx/dy/dz` and the rotations are **refused by name** rather than ignored.
+7. **A borrowing game cannot generate terrain** (2.7's fix). Generation needs to know that
+   nothing is stored.
+8. **The terrain is not Vanilla's.** The noise is a documented Perlin implementation; Vanilla's
+   exact octave/amplitude tables and its multi-noise biome parameter table are not reproduced
+   and are not claimed. Every constant carries a label.
+9. **`.zip` data packs are not read; the world's enabled-pack list is not read.**
+10. **Recipes load but the container layer consumes only the smelting kind.** Crafting and
+    stonecutting data is loaded and not yet used by a menu.
+11. **Redstone is still not wired into the tick loop** (carried from Phase 06).
+12. **No 20 TPS claim.** There is no Pi harness in this environment (P08-09/P08-13).
+
+## 4a. The noise investigation, and a diagnostic that manufactured its own bug
+
+Recorded because it nearly produced a false report, and because the guard it left behind is
+genuinely useful.
+
+I probed the terrain noise and concluded two things were wrong:
+
+1. **"The field is degenerate — only 14 distinct values across 10 000 samples."** My grid
+   sampled `(x + 0.5, 0.0, z + 0.5)`, so **the fractional part was constant** and only the
+   lattice cell varied. At a fixed fractional offset the trilinear weights are fixed, so the
+   value is a fixed combination of hash-selected gradients and *can* only take a few values.
+   Scanning `x` in steps of 0.25 gave `-0.0243`, `-0.2103`, `-0.0792`, `+0.0091` — a
+   continuum, as it should be. The defect was in the probe.
+2. **"The field repeats every 256 blocks."** True of the raw noise at frequency 1.0, and
+   inherent: `to_lattice` masks the integer coordinate with `TABLE_MASK`, so a 256-entry
+   permutation table is periodic with period 256 *by construction*. Vanilla's `ImprovedNoise`
+   behaves the same way; its terrain avoids tiling by sampling far below frequency 1, not by
+   widening the table. `TERRAIN_FREQUENCY` is `0.006`, giving a world-space period of
+   **42 667 blocks**.
+
+Both were artifacts. A fixed fractional offset is a particularly plausible way to
+manufacture a degeneracy, so the lesson is concrete: **a probe can create the defect it
+appears to find**, and a conclusion drawn from one sampling pattern is not evidence.
+
+**What the investigation was worth keeping.** The period is a real constraint on every
+frequency constant and nothing enforced it: raising `TERRAIN_FREQUENCY` to make terrain more
+dramatic — a plausible edit — would have made the world tile every few hundred blocks with no
+test failing. So `LATTICE_PERIOD` is now a documented constant with the constraint stated
+where the frequencies are declared, and `the_frequency_constants_do_not_tile_terrain` fails
+if any terrain-scale frequency implies a period under 4 000 blocks. The bedrock-thickness
+field's shorter period is asserted as a deliberate exemption rather than left as an
+oversight.
+
+## 5. Method notes worth carrying forward
+
+- **Differential tests against the real jar earn their cost.** Of the nine bugs above, three
+  (§2.5, §2.6, and the ordinary/zero-flat-file discovery) were only reachable with real data;
+  hand-written fixtures used paths like `item/planks.json` where the first and last separators
+  coincide, so they could not fail.
+- **A test that cannot fail is worse than no test.** Two examples this phase: a loop that
+  never looped (removed), an assertion that a value `>= i8::MIN` (always true), and the flood
+  test Audit 04 found largely vacuous. Each was replaced by one that can.
+- **The agents' reports are not evidence.** Every delegated deliverable in this phase was
+  re-run by the primary agent before being recorded as done. Two concrete cases: the
+  `mc-worldgen` and `mc-data` reports both claimed clean clippy runs, and both crates failed
+  `clippy -D warnings` when I ran it (six and two findings respectively). Asked directly, the
+  worldgen agent then disclosed that two sets of "golden" values in its own test had been
+  **placeholders written before any measurement** — it re-froze them from the current code,
+  which makes those assertions regression tests rather than correctness tests. That is a
+  legitimate thing for them to be, but only if it is said out loud, and it was only said when
+  asked.
+- **A golden test's provenance matters as much as its existence.** Values frozen *before* a
+  refactor prove the refactor preserved behaviour; values frozen *after* prove only that the
+  code still does what it currently does. The worldgen agent was careful to distinguish the
+  two, and the five Perlin values that predated my clippy edits still pass unchanged — which
+  is the actual evidence that `f64::midpoint(noise, 1.0)` changed nothing.
+- **Verify the probe before believing the verdict.** See §4a.
