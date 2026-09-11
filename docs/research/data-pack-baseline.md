@@ -7,6 +7,70 @@ is recalled.
 Reproduce with `target/vanilla-26.1.2/survey_tags.py` for the tag figures; the
 file/type counts come from a straight `zipfile` enumeration of the same jar.
 
+## 0. Extracting the pack
+
+The differential test reads a directory rather than the jar, so an archive reader is
+not part of the thing under test. `target/vanilla-26.1.2/extract_pack.py` extracts it
+using only the standard library:
+
+```python
+"""Extract data/minecraft/ from the 26.1.2 server jar."""
+import os
+import shutil
+import zipfile
+
+JAR = "server-26.1.2.jar"
+PREFIX = "data/minecraft/"
+OUT = "extract/data/minecraft"
+
+if os.path.isdir(OUT):
+    shutil.rmtree(OUT)
+with zipfile.ZipFile(JAR) as archive:
+    for info in archive.infolist():
+        if info.filename.startswith(PREFIX) and not info.filename.endswith("/"):
+            dest = os.path.join(OUT, info.filename[len(PREFIX):])
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            with archive.open(info) as src, open(dest, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+```
+
+Then:
+
+```text
+set MC_VANILLA_DATA=target\vanilla-26.1.2\extract\data\minecraft
+cargo test -p mc-data --test vanilla_pack -- --ignored --nocapture
+```
+
+The jar itself is obtained per `docs/research/protocol-baseline.md` section 1. Note the
+distinction from the tools this project has *not* committed (Audit 05's reproducibility
+gap): this script is reproduced in full above, so it is recoverable from the document
+alone rather than from an uncommitted file.
+
+## 0a. Counting method (a correction)
+
+The first version of this document counted `zipfile` namelist entries, which include
+**directory entries** — separate names ending in `/`. Every figure was therefore one too
+high per directory. The loading test exposed it: the loader reported
+1 421 + 94 = **1 515** recipes while the test expected 1 516, and the loader was right.
+
+| Figure | First written | Measured precisely |
+|---|---|---|
+| `data/minecraft/` | 8 775 files | **8 282 files** (8 775 entries) |
+| `recipe/` | 1 516 | **1 515** |
+| `advancement/` | 1 633 | **1 617** |
+| `loot_table/` | 1 353 | **1 326** |
+| `structure/` | 1 359 | **1 202** |
+| `worldgen/` | 1 029 | **951** |
+| `villager_trade/` | 468 | **387** |
+| `datapacks/` | 132 | **106** |
+| `trade_set/` | 83 | **68** |
+| `tags/` | 758 `.json` | **758** (correct) |
+
+Reproduce with `target/vanilla-26.1.2/recount.py`, which filters on
+`not name.endswith("/")`. The lesson is worth recording because it is the third time in
+this project that a hastily-counted figure had to be corrected against a precise one —
+and the first two were also caught by a test disagreeing with a document.
+
 ## 1. What a vanilla pack contains
 
 Precise **file** counts (see section 0a for why the first version was wrong):
