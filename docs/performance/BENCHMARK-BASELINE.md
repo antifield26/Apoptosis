@@ -7,7 +7,8 @@ percentiles, CPU, RSS and (where relevant) storage and network figures.
 **Status: no acceptance baseline exists yet, and none is claimed.** The Pi 5 /
 10-player target is established by P08-09, P08-10, P08-11, P08-12 and P08-13.
 Until then, any number below is a development-host observation for orientation
-and regression detection only.
+and regression detection only. §P08-13 records the first P08 harness run; it
+is still a dev-host observation, not a Pi claim.
 
 ## 1. Measurements taken so far
 
@@ -78,6 +79,56 @@ Interpretation:
 - Nothing spawns mobs today, so the population here is seeded directly through
   `EntityStore::spawn`. This measures entity bookkeeping and physics, **not** a
   spawning world.
+
+### P08-13 — Pi operations profile (development host, debug profile)
+
+| Field | Value |
+|---|---|
+| Date | 2026-09-12 |
+| Hardware | operator Windows host, x86_64 (not a Pi 5) |
+| OS / kernel | Windows (dev host; kernel not recorded — see the gap below) |
+| Toolchain | pinned `1.98.1` (`rust-toolchain.toml`) |
+| Commit | `b9dc784` tree plus the uncommitted `pi_profile.rs` harness (this run predates its commit; re-run after commit for the citable figure) |
+| Build profile | `dev` (unoptimised, debug assertions on) |
+| Workload (P08-10) | 10 survival clients, view 8, flat stone floor, 40 warm-up + 200 measured ticks; rotation+swing+hotbar every tick, one 0.2-block step every 20th tick, rotating chat/`/list` |
+| Command | `cargo test -p mc-server --test pi_profile -- --ignored --nocapture` (four tests; figures below are the `profile_run` test) |
+| Wall time (200 ticks) | 2.1–4.2 s across runs (host noise dominates; see interpretation) |
+| MSPT mean | 10.5–21.2 ms across runs |
+| MSPT p50 / p95 / p99 | run A: 0.69 / 0.85 / 381.23 ms, max 386.08 ms; run B (workload test): 0.66 / 0.76 / 0.90 ms, max 1.01 ms |
+| Per-phase means | `network` 0.02, `scheduled_ticks` 0.00, `entities` 0.00, `players` 0.05–0.12, `block_entities` 0.00, `broadcast` 72–140 ms |
+| Overruns | 46 of 240 ticks (the join burst; settled ticks do not overrun) |
+| TPS | not measured as a rate — the test drives the loop synchronously; the printed "tps estimate" (57–114) is ticks/wall and is **not** a 20 TPS claim |
+| CPU / RSS | not captured on this host |
+| Network throughput | not applicable (in-process queues drained by the test) |
+| Storage | `TempDir` on the system drive |
+
+P08-11 (chunkgen burst): 20 × 64-block hops east, 5 ticks per hop — 684
+chunks resident, 1 360 streamed, 10.7 s wall. P08-12 (persistence): 81 dirty
+chunks saved in 4.7 s wall (≈58 ms/chunk in debug), dirty flags all cleared.
+
+Interpretation, stated carefully:
+
+- The **settled tick** (workload test: p95 0.76 ms, max 1.0 ms) has ~50x
+  headroom against the 50 ms budget even unoptimised. The `profile_run`'s
+  p99/max (≈380–810 ms) is the **join burst**: 10 players × 289 chunks built
+  and encoded while the window is still filling. That is why two figures are
+  quoted, not one — a single percentile over a run that includes the burst
+  describes neither the burst nor the steady state.
+- The **broadcast phase dominates** (72–140 ms lifetime mean): chunk-packet
+  construction (`vanilla_chunk_packet`'s per-block palette scan) plus the
+  streaming budget. On a settled server it is idle; under join/gen pressure it
+  is the whole tick. P08-14's only evidence-backed target, if one is needed.
+- The **save** costs ≈58 ms/chunk in debug (≈108 ms/chunk in the P04-18
+  figure; the difference is host noise and chunk content, not a code change).
+  Still the first thing a Pi run must profile.
+- Run-to-run variance is large (mean 10.5 vs 21.2 ms) on this host: a busy
+  desktop moves the figure more than a code change does. Treat every number
+  here as one order of magnitude, and re-run on the Pi before any tuning
+  decision (P08-14 rule).
+
+Gaps this run does not close (carried, not hidden): no Pi 5 hardware, no
+release profile, no real client traffic, no kernel/CPU/RSS capture, and the
+commit cited is the harness's parent rather than the harness itself.
 
 ## 2. Planned workloads
 
