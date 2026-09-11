@@ -72,6 +72,9 @@ datapack is committed.
    licence findings are in `docs/legal/third-party.md` §1. The clones have no `.git`
    directory, so pinned commit SHAs were never recordable (ADR-0001 R-02) and that
    remains the reason this log cannot cite them.
-2. **No commits.** The repository still has zero commits, which is why a single bad
-   script destroyed a document: there was no history to restore from. Recorded as an
-   owner action in every phase report.
+2. **History started late.** For the first six phases the repository had **no
+   commits**, which is why a single bad script destroyed a document: there was no
+   history to restore from. The owner authorised an initial commit on 2026-09-11
+   (`b7b1c99`), so that specific exposure is closed from that point on — but the
+   earlier work has no per-change history, and the `[unrecovered]` rows above are
+   still unrecoverable because of it.

@@ -112,7 +112,7 @@ aligned.
 
 | # | Item | Why it is not fixed here |
 |---|---|---|
-| 1 | **Repository has zero commits** | The brief explicitly says not to commit without instruction. CI therefore has never run; `Cargo.lock` is untracked and reproducibility is not demonstrable from VCS. **Highest-value owner action.** |
+| 1 | **Repository has zero commits** — *resolved 2026-09-11 by the owner-authorised initial commit `b7b1c99`* | The brief explicitly says not to commit without instruction. CI therefore has never run; `Cargo.lock` is untracked and reproducibility is not demonstrable from VCS. **Highest-value owner action.** |
 | 2 | **No reference-repo SHAs** | The clones contain no `.git`; only a re-clone with history can close R-01. |
 | 3 | **Real 26.1.2 client verification** | No client exists in this environment (carried from P02). Registry element NBT stays `provisional`; the login/config chain is unverified against a real client. Drives P02-T12 and the P04 exit gate ("real client survival session"). |
 | 4 | **`docs/operations/` was empty** | Now holds `DEPENDENCY-POLICY.md`; the runbook itself is P08-15. |

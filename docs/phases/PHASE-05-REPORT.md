@@ -145,7 +145,7 @@ appear to attack.
 | Lints | `cargo clippy --workspace --all-targets -- -D warnings` | clean |
 | Cross-build | `cargo check --target aarch64-unknown-linux-gnu --workspace --all-targets` | clean |
 | Binary | `cargo build -p mc-server-app` | builds; a smoke run binds, accepts a TCP connection, and writes a clean `level.dat` with **no placeholder region file** |
-| Diff hygiene | `git status --short` | 11 untracked top-level entries; **zero commits** (by instruction) |
+| Diff hygiene | `git status --short` | 11 untracked top-level entries; **zero commits** at the time, by instruction. Resolved afterwards by `b7b1c99` (owner-authorised), which is what made this report reviewable as a diff rather than as a tree |
 
 Per-crate: core 10 · entity **127** (+4 doc) · nbt 16 (+1 doc) · network **15+1+2** ·
 persistence 71+9+16+7 · protocol 101+4+4 · registry 12 · server

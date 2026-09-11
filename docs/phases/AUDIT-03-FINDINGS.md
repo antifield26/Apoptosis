@@ -42,7 +42,7 @@ that did not survive contact with the code**:
 | Audit-02: "collision axis order recorded in the parity matrix" | It was not | Row added |
 | `MAX_SATURATION` presented as a game fact | It is this project's own simplification, and was **the one constant in `crates/entity` with no label** | Labelled as unverified, with the real Vanilla rule named |
 | `DEPENDENCY-POLICY` "90 packages … all permissive" | 91; and it counted our own unlicensed crates as third-party "packages" | Exact count removed (it moves every phase); the licence property the gate checks is stated instead |
-| `third-party.md` "`Cargo.lock` is committed" | There are no commits | Corrected |
+| `third-party.md` "`Cargo.lock` is committed" | There were no commits at the time | Corrected; it is genuinely committed now (`b7b1c99`) |
 | `provenance.md` cited `crates/entity/src/random` | That path never existed (the module moved to `mc-simulation`) | Corrected |
 | Phase-04 P04-17 "place two diamond blocks **through gameplay**" | The test used `world_mut().set_block`, i.e. the storage path | Corrected, with a pointer to the Phase-05 test that does exercise a real restart |
 
@@ -135,9 +135,11 @@ opened the file with `open(path, 'w')`, which **truncates immediately**, and the
 before writing anything. The file was left at 0 bytes. A follow-up script read the
 now-empty file and wrote it back empty.
 
-**Nothing could be restored from history, because the repository has no commits.** This
-is the concrete cost of the standing "zero commits" gap that every phase report has
-recorded as an owner action: a single bad write is unrecoverable.
+**Nothing could be restored from history, because the repository had no commits at the
+time.** This is the concrete cost of the standing "zero commits" gap that every phase
+report recorded as an owner action: a single bad write was unrecoverable. The owner
+authorised an initial commit shortly afterwards (`b7b1c99`, 2026-09-11), so the
+exposure is closed from that point — the damage this section describes is not.
 
 What was done:
 

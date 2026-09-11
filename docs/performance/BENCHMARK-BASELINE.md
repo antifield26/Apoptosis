@@ -19,7 +19,7 @@ and regression detection only.
 | Hardware | operator Windows host, x86_64 (not a Pi 5) |
 | OS / kernel | Windows 10.0.28020 |
 | Toolchain | rustc 1.98.1 (48a229cea 2026-09-01) |
-| Commit | **none — the repository has no commits yet** (ADR-0001 R-10) |
+| Commit | **none at measurement time** — the repository had no commits then (ADR-0001 R-10, now closed by `b7b1c99`). The source measured is the tree that became that commit |
 | Build profile | `dev` (unoptimised, debug assertions on) |
 | Workload | 10 synthetic players, view distance 8 chunks, all joined and streaming, flat stone floor, 60 warm-up ticks + 400 measured |
 | Command | `cargo test -p mc-server --test tick_baseline -- --ignored --nocapture` |
@@ -51,7 +51,7 @@ Interpretation, stated carefully:
 | Date | 2026-09-11 |
 | Hardware | operator Windows host, x86_64 (not a Pi 5) |
 | Toolchain | rustc 1.98.1 |
-| Commit | **none — the repository has no commits yet** |
+| Commit | **none at measurement time**; the tree measured is the one committed as `b7b1c99` |
 | Build profile | `dev` (unoptimised) |
 | Workload | 10 players + **600 mobs + 400 items** (1 000 entity-ticks/tick), view distance 8, flat stone floor, 60 warm-up + 400 measured ticks |
 | Command | `cargo test -p mc-server --test tick_baseline -- --ignored --nocapture entity_heavy` |

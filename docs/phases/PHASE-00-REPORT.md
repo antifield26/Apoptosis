@@ -1,7 +1,7 @@
 # Phase 00 Report — Research, Repository, Protocol, License & Architecture Audit
 
 Date: 2026-09-10. Agent operating protocol followed (AGENTS.md §14): read contract prompts,
-inspected `git status` (branch `master`, **no commits yet**), searched before creating, smallest coherent change (docs only).
+inspected `git status` (branch `master`, **no commits at Phase 00 (the initial commit landed 2026-09-11 as `b7b1c99`) yet**), searched before creating, smallest coherent change (docs only).
 
 > **Post-hoc status note (added 2026-09-11, audit round):** this report is the
 > record of Phase 00 as executed. Two items below have since changed and are

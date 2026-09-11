@@ -33,7 +33,7 @@ Date: 2026-09-10. Scope: the four local clones + our project policy. No code cop
 ## 5. Adopted dependencies (Phase 01, P01-01/P00-09)
 
 Resolved 2026-09-10 via `cargo build --workspace` (toolchain 1.98.1). All MIT/Apache-2.0.
-`Cargo.lock` pins the versions below. It is **not committed yet** — the repository still has no commits (Audit 02/03).
+`Cargo.lock` pins the versions below and is committed (initial commit `b7b1c99`); before that it was untracked, which Audit 02/03 recorded.
 
 | Crate (locked) | License | Purpose | First use |
 |---|---|---|---|

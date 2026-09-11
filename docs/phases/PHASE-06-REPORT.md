@@ -4,7 +4,10 @@ Date: 2026-09-11. Preflight: re-read `AGENTS.md`, `MASTER-PROMPT.md`,
 `prompts/EXECUTION-LOOP.md`, `prompts/PHASE-06.md`, `tasks/TASK-INDEX.md`,
 `gates/{EXIT-GATES,DEFINITION-OF-DONE}.md`, ADR-0001/0002/0003, all phase reports,
 `AUDIT-0{1,2,3}-FINDINGS.md` and both matrices; `git status` (branch `master`, **still
-no commits** — unchanged by instruction); toolchain 1.98.1.
+no commits** at preflight — unchanged by instruction); toolchain 1.98.1.
+
+The owner authorised an initial commit during this phase, so after §8 the tree
+became `b7b1c99` and every later change is reviewable as a diff.
 
 The phase opened with a third audit pass over Phases 00–05, which found defects in
 already-"completed" work. Those are fixed here and are listed first, because two of
