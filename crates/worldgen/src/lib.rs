@@ -15,8 +15,9 @@
 //! 2. [`seed`] makes generation a pure function of `(world seed, chunk position)`
 //!    so a generated chunk is reproducible for ever, in any order (AGENTS.md
 //!    §3.6);
-//! 3. [`noise`], [`terrain`], [`biome`] and [`features`] then produce terrain
-//!    that is *labelled as ours* at every step — see "no parity claim" below.
+//! 3. [`noise`], [`terrain`], [`biome`], [`features`], and now [`structures`] then
+//!    produce terrain that is *labelled as ours* at every step — see "no parity
+//!    claim" below.
 //!
 //! ## No parity claim — what this is and is not
 //!
@@ -33,7 +34,10 @@
 //! | Biome ids | names copied from Vanilla's `minecraft:` ids; **no biome registry is loaded**, so this is a label, not a lookup |
 //! | Block palette | all names resolved through [`mc_registry::BlockRegistry`] — **never** a hard-coded numeric state id |
 //! | Trees | oak only, chunk-local, documented density; **not** Vanilla's placed-feature system |
-//! | Structures, ores, caves, ravines, lakes, decoration | **not implemented** — see [`features`] |
+//! | Structure *files* | the 26.1.2 `.nbt` format, **measured** (1 202 files, `DataVersion` 4790); `palettes` (plural, 20 shipwreck files) and block-entity `nbt` are **not** modelled |
+//! | Structure *placement* | one whole template per selected chunk on a documented grid; **not** Vanilla's `RandomSpreadStructurePlacement`, and **not** jigsaw assembly |
+//! | Structure *types* | templates a data pack ships; mineshafts, strongholds and fortresses are procedural in Vanilla and **are not implemented** |
+//! | Ores, caves, ravines, lakes, decoration | **not implemented** — see [`features`] |
 //!
 //! Every constant in this crate carries one of four labels: **verified** (with a
 //! source), **derived** (from something verified, derivation written out),
@@ -41,6 +45,15 @@
 //! decision** (our choice, no Vanilla claim). Terrain is the easiest place in
 //! this project to present a guess as a fact, so the labels are next to the
 //! numbers, and the crate's doc comments repeat the important ones.
+//!
+//! ## Where a structure is placed from
+//!
+//! [`structures::generate_structures`] runs **after** terrain, because a structure
+//! sits on the surface and needs the same height field the terrain pass used. It
+//! writes only the chunk it is given: [`placement`] documents at length why
+//! `mc_world::Chunk` cannot write into a neighbour (it wraps horizontally rather
+//! than erroring), why the default policy therefore refuses a structure that does
+//! not fit in one chunk, and exactly how many of the real templates that affects.
 
 #![forbid(unsafe_code)]
 // Terrain, noise and features narrow and widen constantly: block coordinates are
@@ -59,7 +72,10 @@ pub mod biome;
 pub mod existing;
 pub mod features;
 pub mod noise;
+pub mod placement;
 pub mod seed;
+pub mod structure;
+pub mod structures;
 pub mod terrain;
 
 pub use biome::{BIOMES, Biome, BiomeSource, SurfaceBlocks};
@@ -72,8 +88,21 @@ pub use features::{
     populate_oak_trees_flat, tree_fits_in_chunk,
 };
 pub use noise::{FractalNoise, MAX_OCTAVES, PerlinNoise};
+pub use placement::{
+    AirPolicy, Anchor, CrossChunk, PlacementReport, blocks_outside_chunk, fits_in_chunk, place,
+};
 pub use seed::{
     ChunkSeed, OVERWORLD_HEIGHT, OVERWORLD_MIN_Y, OVERWORLD_SEA_LEVEL, WorldSeed, WorldgenContext,
+};
+pub use structure::{
+    PaletteEntry, ResolvedStructure, StructureBlock, StructureError, StructureLimits,
+    StructureTemplate, parse_gzip_structure, parse_nbt_structure, read_structure,
+};
+pub use structures::{
+    MAX_SELECTABLE_STRUCTURES, STRUCTURE_CHANCE_PER_CELL, STRUCTURE_MAX_ATTEMPTS,
+    STRUCTURE_SEPARATION_CHUNKS, STRUCTURE_SPACING_CHUNKS, StructureBuild, StructureGenReport,
+    StructureGenRequest, StructureGrid, StructureLoadReport, StructureRegistry, StructureSelection,
+    StructureSet, generate_structures, load_structures,
 };
 pub use terrain::{
     BlockPalette, ChunkGenerator, EXAMPLE_SEED, FlatGenerator, FlatLayer, GenerationError,

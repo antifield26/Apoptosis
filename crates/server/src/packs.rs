@@ -27,6 +27,7 @@
 //! that has been running for months must still start on a machine where nobody copied the jar data.
 //! Every problem is recorded and reported.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use mc_core::error::ServerResult;
@@ -79,11 +80,12 @@ impl PackLoadOutcome {
         if !self.vanilla_data {
             text.push_str("; no vanilla data pack configured");
         }
+        // `write!` rather than `push_str(&format!(...))`: one allocation instead of two.
         if !self.skipped.is_empty() {
-            text.push_str(&format!("; {} pack(s) disabled", self.skipped.len()));
+            let _ = write!(text, "; {} pack(s) disabled", self.skipped.len());
         }
         if !self.rejected.is_empty() {
-            text.push_str(&format!("; {} pack(s) unreadable", self.rejected.len()));
+            let _ = write!(text, "; {} pack(s) unreadable", self.rejected.len());
         }
         text
     }
