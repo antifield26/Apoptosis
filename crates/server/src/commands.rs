@@ -105,6 +105,13 @@ impl Game {
         add(Command::new("tp", "Teleport to coordinates")
             .with_argument(Argument::word("target"))
             .with_argument(Argument::required("pos", ArgumentKind::BlockPos)));
+        // The whole chain is one greedy argument: `execute` is parsed by its own regular
+        // grammar (see `mc_command::execute`), not by the tree, because its modifiers may
+        // appear in any order and any number of times.
+        add(
+            Command::new("execute", "Run a command in a modified context")
+                .with_argument(Argument::greedy("command")),
+        );
         add(Command::new("op", "Grant operator status").requiring(PermissionLevel::Operator));
         add(Command::new("stop", "Stop the server").requiring(PermissionLevel::Console));
         tree
@@ -213,7 +220,10 @@ impl Game {
     }
 
     /// Run a parsed command.
-    fn run_command(
+    ///
+    /// `pub(crate)` so `/execute` runs its inner command through this same match rather than
+    /// duplicating it: two dispatch paths would be two places for a new command to be forgotten.
+    pub(crate) fn run_command(
         &mut self,
         id: mc_network::bridge::ConnectionId,
         parsed: &mc_command::dispatch::ParsedCommand,
@@ -225,6 +235,17 @@ impl Game {
             "say" => Ok(self.command_say(parsed, report)?),
             "time" => Ok(self.command_time(parsed, report)?),
             "tp" => Ok(self.command_tp(id, parsed)),
+            "execute" => {
+                // The chain parser owns the grammar; the token list is the raw argument text so
+                // `run` can hand the inner command its original words.
+                let tokens: Vec<String> = parsed
+                    .raw_arguments
+                    .split_whitespace()
+                    .map(str::to_owned)
+                    .collect();
+                self.dispatch_execute(id, &tokens, report, 0)?;
+                Ok(CommandResult::silent())
+            }
             "op" => Ok(Self::command_op(parsed)),
             "stop" => Ok(CommandResult::Stop),
             // Unreachable: the tree only contains the names above, and `parse` resolved
