@@ -251,63 +251,76 @@ components rather than recipes, so loading recipes does not touch them.
 
 ## 4. Honest limitations added by this phase
 
-Recorded here rather than discovered later:
+Recorded here rather than discovered later. **Renumbered as one sequence**: an earlier version had two
+items numbered 10, 11 and 12, which made "limitation 11" ambiguous, and its first item still said
+`execute` was unimplemented after P07-07 delivered it — an under-claim is as wrong as an over-claim, and
+just as misleading to a reader.
 
-1. **`execute` is not implemented** (P07-07). Its sub-commands need a *branching* grammar;
-   the command tree is a flat positional list, which is a deliberate simplification
-   (ADR-0004's sibling reasoning) and is now the limiting factor.
-2. **`/op` cannot grant, because it does not write `ops.json`.** Reading works (§2.9), so an
-   operator listed in the file reaches every command their level allows, and a player who is
-   not listed holds nothing. What is missing is the **write** half: `/op` reports that it
-   cannot persist rather than appearing to succeed. Writing an operator file is an authority
-   decision — it is the mechanism by which a server grows new administrators — and this phase
-   deliberately does not make it silently. Recorded as the remaining P07-04 work rather than
-   presented as done. `bypassesPlayerLimit` is parsed and reported but not enforced, because
-   nothing refuses a login on the player limit yet.
-3. **`tp` moves only the invoking player.** There is no cross-player teleport authority
-   model; another target is refused with that reason.
-4. **`help` does not paginate; `list` does not match Vanilla's exact format; `say` broadcasts
-   to players only; `time` sets `timeOfDay` but not `dayTime`** and accepts no named presets.
-5. **Selector argument completion is not implemented** — `suggest` offers roots only, because
-   argument candidates come from the caller's knowledge (a player list, a block-state list).
-6. **`@e` cannot use `#tag` type filters**, and `scores`, `tag`, `team`, `nbt`, `predicate`,
-   `advancements`, `dx/dy/dz` and the rotations are **refused by name** rather than ignored.
-7. **A borrowing game cannot generate terrain** (2.7's fix). Generation needs to know that
-   nothing is stored.
-8. **The terrain is not Vanilla's.** The noise is a documented Perlin implementation; Vanilla's
-   exact octave/amplitude tables and its multi-noise biome parameter table are not reproduced
-   and are not claimed. Every constant carries a label.
-9. **`execute` diverges from Vanilla in three named ways.** `as @a` runs the command **once,
-   as the first match** (ordered by name) rather than once per entity — a multi-target run
-   multiplies a command that may not be idempotent, and announcing `say` once rather than N times
-   is the behaviour that cannot surprise an operator. Only **players** are command sources, so a
-   selector matching only mobs selects nothing (reported as "no entity matched" rather than
-   silently running as the invoker). And feedback goes to the **invoker** rather than to the
-   executing source, because a non-player source has no reply channel.
-10. **`/function` diverges from Vanilla in three ways.** Function **tags**
-    (`/function #namespace:tag`) are refused by name rather than run. **Macro** lines (`$(name)`) are
-    refused with that reason instead of expanded, because the substitution language is not
-    implemented — passing the text through would dispatch a command that does not exist. And
-    `/schedule` is not modelled, so a function cannot be deferred.
-11. **`.zip` data packs are not read.** The world's enabled-pack list **is** now read and gates
-    discovery (§P07-12).
-12. **20 of the pack's 1 202 structure templates are refused**, all shipwrecks, all because they declare
-    8 alternative `palettes` and this reader implements only the singular form. The consequence is
-    concrete: **no shipwreck can generate.** Implementing it needs a documented per-structure variant
-    draw, and a wrong guess places a wreck of the wrong wood — a plausible-looking wrong answer, which is
-    why it is refused rather than guessed.
-13. **Recipes and tags are loaded by `mc-data` but never installed on the server.** The differential
-    suites assert their census against the real pack, and `SmeltingRegistry::from_recipes` builds a
-    verified 156-row table — but `Game` holds no smelting registry, so **a furnace smelts from the
-    hand-written Phase 06 baseline**. P07-09's conversion is complete and its wiring is not.
+### Commands
+
+1. **`execute` diverges from Vanilla in three named ways.** `as @a` runs the command **once, as the first
+   match** (ordered by name) rather than once per entity — a multi-target run multiplies a command that may
+   not be idempotent, and announcing `say` once rather than N times is the behaviour that cannot surprise an
+   operator. Only **players** are command sources, so a selector matching only mobs selects nothing
+   (reported as "no entity matched" rather than silently running as the invoker). And feedback goes to the
+   **invoker** rather than the executing source, because a non-player source has no reply channel.
+2. **`/function` diverges from Vanilla in three ways.** Function **tags** (`/function #namespace:tag`) are
+   refused by name rather than run. **Macro** lines (`$(name)`) are refused with that reason instead of
+   expanded, because the substitution language is not implemented — passing the text through would dispatch
+   a command that does not exist. And `/schedule` is not modelled, so a function cannot be deferred.
+3. **`/op` cannot grant, because it does not write `ops.json`.** Reading works (§2.9), so an operator listed
+   in the file reaches every command their level allows, and a player who is not listed holds nothing. What
+   is missing is the **write** half: `/op` reports that it cannot persist rather than appearing to succeed.
+   Writing an operator file is an authority decision — it is the mechanism by which a server grows new
+   administrators — and this phase deliberately does not make it silently. `bypassesPlayerLimit` is parsed
+   and reported but not enforced, because nothing refuses a login on the player limit yet.
+4. **`tp` moves only the invoking player.** There is no cross-player teleport authority model; another
+   target is refused with that reason.
+5. **`help` does not paginate; `list` does not match Vanilla's exact format; `say` broadcasts to players
+   only; `time` sets `timeOfDay` but not `dayTime`** and accepts no named presets.
+6. **Selector argument completion is not implemented** — `suggest` offers roots only, because argument
+   candidates come from the caller's knowledge (a player list, a block-state list).
+7. **`@e` cannot use `#tag` type filters**, and `scores`, `tag`, `team`, `nbt`, `predicate`,
+   `advancements`, `dx`/`dy`/`dz` and the rotations are **refused by name** rather than ignored.
+
+### Data
+
+8. **Recipes and tags are loaded by `mc-data` but never installed on the server.** The differential suites
+   assert their census against the real pack, and `SmeltingRegistry::from_recipes` builds a verified
+   156-row table — but `Game` holds no smelting registry, so **a furnace smelts from the hand-written
+   Phase 06 baseline**. P07-09's conversion is complete and its wiring is not, so §5.9's caveat is
+   **half**-retired. The same is true of crafting and stonecutting data: loaded, not consumed by a menu.
+9. **Loot tables and advancements load and are never used.** `mc-data` parses 1 326 loot tables and 1 617
+   advancements, and asserts the census; nothing drops loot and nothing evaluates a criterion. Loot `roll`
+   executes 4 564 of 6 826 constructs and **refuses the rest with a named reason** rather than returning a
+   wrong result.
+10. **`.zip` data packs are not read.** The world's enabled-pack list **is** read and gates discovery
+    (P07-12).
+
+### World generation
+
+11. **The terrain is not Vanilla's.** The noise is a documented Perlin implementation; Vanilla's exact
+    octave/amplitude tables and its multi-noise biome parameter table are not reproduced and are not
+    claimed. Every constant carries a label.
+12. **Structures: only the single-chunk subset can generate.** The selectable set is derived from
+    `fitting_in_one_chunk()` so that selection and placement agree, which means ancient cities, mansions and
+    bastions — the multi-chunk templates — never appear.
+13. **20 of the pack's 1 202 structure templates are refused**, all shipwrecks, all because they declare 8
+    alternative `palettes` and this reader implements only the singular form. **No shipwreck can generate.**
+    Implementing it needs a documented per-structure variant draw, and a wrong guess places a wreck of the
+    wrong wood — a plausible-looking wrong answer, which is why it is refused rather than guessed.
 14. **No structure's placement matches Vanilla.** Vanilla selects through
-    `RandomSpreadStructurePlacement` over per-structure `StructureSet` JSON this build does not load, so
-    the spacing, separation, chance and attempt constants are `approximation` / `product decision`
-    labels rather than Vanilla values. Structure **entity NBT is counted and never spawned**.
-10. **Recipes load but the container layer consumes only the smelting kind.** Crafting and
-    stonecutting data is loaded and not yet used by a menu.
-11. **Redstone is still not wired into the tick loop** (carried from Phase 06).
-12. **No 20 TPS claim.** There is no Pi harness in this environment (P08-09/P08-13).
+    `RandomSpreadStructurePlacement` over per-structure `StructureSet` JSON this build does not load, so the
+    spacing, separation, chance and attempt constants are `approximation` / `product decision` labels rather
+    than Vanilla values. Structure **entity NBT is counted and never spawned**.
+15. **A borrowing game cannot generate terrain** (§2.7's fix). Generation needs to know that nothing is
+    stored, and a borrowing game cannot tell "absent" from "unreadable".
+
+### Cross-phase
+
+16. **Redstone is still not wired into the tick loop** (carried from Phase 06). The update model, budget and
+    determinism tests exist; nothing drives them from a tick.
+17. **No 20 TPS claim.** There is no Pi harness in this environment (P08-09/P08-13).
 
 ## 4a. The noise investigation, and a diagnostic that manufactured its own bug
 
