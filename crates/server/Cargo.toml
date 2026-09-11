@@ -12,6 +12,12 @@ workspace = true
 mc-core = { path = "../core" }
 mc-command = { path = "../command" }
 mc-container = { path = "../container" }
+# For the bounded JSON boundary `mc_data::json`, used to read `ops.json`:
+# an operator-supplied file must go through the same size/depth policy as a pack.
+mc-data = { path = "../data" }
+# Only for `serde_json::Value` as a type; the *policy* for reading JSON is
+# `mc_data::json`, which is what `ops.rs` calls.
+serde_json.workspace = true
 mc-entity = { path = "../entity" }
 mc-network = { path = "../network" }
 mc-persistence = { path = "../persistence" }

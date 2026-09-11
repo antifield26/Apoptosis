@@ -478,6 +478,16 @@ pub struct Game {
     /// generate must still start, because refusing to boot over a terrain palette would
     /// take a working world offline.
     generator: Option<mc_worldgen::TerrainGenerator>,
+    /// Who may run operator commands, loaded from `ops.json` at construction.
+    ///
+    /// Loaded once rather than per login, matching Vanilla's startup read. A change to the
+    /// file therefore needs a restart — stated because the alternative (reloading on every
+    /// login) is a different feature that would let a grant take effect with no audit trail.
+    ///
+    /// An empty list is the common case and is not an error; a **malformed** file is reported
+    /// by `Server::open_world` and leaves this empty, because refusing to boot over an
+    /// operator file would take a working world offline.
+    operators: crate::ops::OperatorList,
     /// The configured player cap, for `/list`.
     ///
     /// One value rather than the whole `ServerConfig`: the alternative was a new
@@ -574,6 +584,35 @@ impl Game {
         events: GameEvents,
         seed: i64,
     ) -> ServerResult<Self> {
+        Self::build_with_operators(
+            borrowed,
+            owned,
+            view_distance,
+            events,
+            seed,
+            crate::ops::OperatorList::new(),
+        )
+    }
+
+    /// As [`Game::build`], with an explicit operator list.
+    ///
+    /// A separate function rather than a sixth parameter on the constructors: `ops.json` is
+    /// loaded by the lifecycle, which knows the world directory, and a test that wants
+    /// operators can say so here. Threading it through `new`/`with_seed`/
+    /// `with_seed_and_storage` would add a parameter to four signatures and every call site
+    /// to serve one production caller.
+    ///
+    /// # Errors
+    ///
+    /// As for [`Game::build`].
+    pub fn build_with_operators(
+        borrowed: Option<&WorldService>,
+        owned: Option<WorldService>,
+        view_distance: i32,
+        events: GameEvents,
+        seed: i64,
+        operators: crate::ops::OperatorList,
+    ) -> ServerResult<Self> {
         let registries = Registries::vanilla()?;
         let mut world = World::new(Dimension::Overworld, registries.blocks.clone());
         // The spawn comes from whichever handle this game was given; a game with
@@ -628,6 +667,7 @@ impl Game {
             tick: 0,
             overflowed: Vec::new(),
             generator,
+            operators,
             max_players: DEFAULT_MAX_PLAYERS,
             time_offset: 0,
             shutdown_requested: false,
@@ -1384,7 +1424,11 @@ impl Game {
                 outbound,
                 sent_chunks: BTreeSet::new(),
                 tick_start_y: f64::from(sy),
-                permission: mc_command::PermissionLevel::All,
+                // The operator list is the authority: a listed uuid gets its file level,
+                // and anyone else is level 0. `ops.json` stores the hyphenated uuid, which is
+                // what `Uuid`'s `Display` produces — the conversion is a real one, since the
+                // in-memory id is a `Uuid`.
+                permission: self.operators.level_for(&profile.id.to_string()),
                 menu,
                 ready: false,
             },
@@ -1553,6 +1597,16 @@ impl Game {
             | PlayIntent::UseItem { .. } => {}
         }
         Ok(())
+    }
+
+    /// The operator list this game loaded.
+    ///
+    /// Exposed so a caller can report which operators a running server knows about, and so a
+    /// test can assert that the *list* and a session's level agree — a session-only check
+    /// cannot catch a level that came from somewhere other than the file.
+    #[must_use]
+    pub const fn operators(&self) -> &crate::ops::OperatorList {
+        &self.operators
     }
 
     /// The configured maximum player count, for `/list`.

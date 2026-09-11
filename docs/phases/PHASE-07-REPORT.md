@@ -1,7 +1,7 @@
 # Phase 07 Report — Commands, Data Packs and World Generation
 
 Date: 2026-09-11 (in progress). Scope: `P07-01..P07-20` per `tasks/TASK-INDEX.md`.
-Gate status at the time of writing: `cargo test --workspace` **1 027 passed, 0 failed, 7
+Gate status at the time of writing: `cargo test --workspace` **1 050 passed, 0 failed, 7
 ignored** plus three ignored differential suites that pass when run against the jar; `cargo fmt --check`, `cargo clippy -D warnings`,
 `cargo check --target aarch64-unknown-linux-gnu` and `cargo deny check` all clean. Each is
 re-run before the phase is called done, and the numbers in this report are re-derived from
@@ -23,7 +23,7 @@ and the report says which.
 | P07-01 command tree | **DONE** | `mc-command`: flat immutable tree, `validate` asserts nine structural invariants, six argument kinds |
 | P07-02 dispatcher | **DONE** | `tokenize` → root → permission → arguments; 24 dispatch tests |
 | P07-03 data loading (tags, recipes, packs) | **DONE** | 758/758 real tags resolve, 0 problems; 1 421 recipes + 94 counted-unmodelled |
-| P07-04 permissions | **PARTIAL** | The four levels exist and are enforced; `ops.json` is **not** read or written, so a player is level 0 |
+| P07-04 permissions | **DONE for reading; writing not implemented** | The four levels exist, are enforced, and are now **granted**: `ops.json` is read at startup and a listed uuid's level comes from the file. 18 unit tests + 6 E2E, including that a level-4 operator *can* stop the server and a plain player *cannot*. `/op` still cannot **write** the file — see §4 |
 | P07-05 command set | **DONE (7 commands)** | `help`, `list`, `say`, `time`, `tp`, `op`, `stop` — each reachable over a real socket, limits named |
 | P07-06 selectors | **DONE (parse + match)** | `@a/@p/@r/@s/@e/@n` with `type`, `name`, `distance`, `level`, `gamemode`, `limit`, `sort`, `x/y/z` |
 | P07-07 `execute` and context | **NOT STARTED** | Needs a branching grammar the flat tree cannot express — a design limit, not an omission |
@@ -143,7 +143,22 @@ That is the **third** time in this project a doc comment has been more confident
 code (the others: `game.rs`'s "items are dropped" claim, and the save-ordering parity row).
 Each fix now comes with a test rather than a corrected sentence.
 
-### 2.9 The dirty-flag model I got wrong — P07-17
+### 2.9 **The operator lookup did not normalise its key** — P07-04
+
+`parse_entry` lower-cased the uuid it stored, but `level_for`/`is_operator`/`get` looked up
+the raw query. So an operator listed with an upper-case uuid — which files in the wild
+contain — was invisible: the lookup returned "not an operator", **silently**, with the symptom
+being "permissions stopped working". That is the precise failure the module was written to
+prevent, and it was in the module. A test caught it; all three accessors now share one
+normalising lookup.
+
+Two smaller ones from the same file: `ops_directory` returned `""` rather than `"."` because
+`Path::new("world").parent()` is `Some("")` and not `None`, so the fallback never fired; and my
+first version hand-rolled the file reading that `mc_data::json::read_json` already does —
+including the size check from metadata — which is exactly the second-JSON-policy problem the
+project avoids everywhere else.
+
+### 2.10 The dirty-flag model I got wrong — P07-17
 
 I first marked generated chunks **dirty** "so the world keeps them". Two existing tests
 failed, correctly:
@@ -183,10 +198,14 @@ Recorded here rather than discovered later:
 1. **`execute` is not implemented** (P07-07). Its sub-commands need a *branching* grammar;
    the command tree is a flat positional list, which is a deliberate simplification
    (ADR-0004's sibling reasoning) and is now the limiting factor.
-2. **A player is permission level 0.** `ops.json` is not read or written, so `op` and `stop`
-   are unreachable from a client. That is the correct behaviour for a server with no
-   permission storage, not a bug — and it is why the E2E test asserts a player *cannot* stop
-   the server.
+2. **`/op` cannot grant, because it does not write `ops.json`.** Reading works (§2.9), so an
+   operator listed in the file reaches every command their level allows, and a player who is
+   not listed holds nothing. What is missing is the **write** half: `/op` reports that it
+   cannot persist rather than appearing to succeed. Writing an operator file is an authority
+   decision — it is the mechanism by which a server grows new administrators — and this phase
+   deliberately does not make it silently. Recorded as the remaining P07-04 work rather than
+   presented as done. `bypassesPlayerLimit` is parsed and reported but not enforced, because
+   nothing refuses a login on the player limit yet.
 3. **`tp` moves only the invoking player.** There is no cross-player teleport authority
    model; another target is refused with that reason.
 4. **`help` does not paginate; `list` does not match Vanilla's exact format; `say` broadcasts

@@ -16,4 +16,5 @@ pub mod config;
 pub mod game;
 pub mod lifecycle;
 pub mod logging;
+pub mod ops;
 pub mod storage;

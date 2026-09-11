@@ -158,11 +158,38 @@ impl<H: TickHook> Server<H> {
         // load a chunk from disk before creating an all-air placeholder for it;
         // `Server` therefore drives saving through the game and never closes the
         // handle itself (see `Game`'s threading notes).
-        let mut game = crate::game::Game::with_seed_and_storage(
-            world,
+        // `ops.json` lives beside `server.properties`, which is the directory *containing*
+        // the world. A malformed file is logged and treated as empty rather than stopping the
+        // boot: refusing to start would take a working world offline over an operator file,
+        // and the operator can see the message and fix it.
+        let operators = match crate::ops::OperatorList::load(&crate::ops::ops_directory(
+            &self.config.storage.world_dir,
+        )) {
+            Ok(list) => {
+                if !list.is_empty() {
+                    tracing::info!(
+                        operators = list.len(),
+                        bypasses = list.bypass_count(),
+                        "loaded the operator list"
+                    );
+                }
+                list
+            }
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    "ops.json could not be read; the server will run with no operators"
+                );
+                crate::ops::OperatorList::new()
+            }
+        };
+        let mut game = crate::game::Game::build_with_operators(
+            None,
+            Some(world),
             i32::try_from(self.config.simulation.view_distance).unwrap_or(8),
             events_rx,
             crate::game::DEFAULT_RANDOM_SEED,
+            operators,
         )?;
         // The lifecycle is the authority for the player cap, so it tells the game
         // rather than the game reading the config itself (`/list` is the only consumer).
