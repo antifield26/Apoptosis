@@ -28,7 +28,7 @@ Date: 2026-09-10. Scope: the four local clones + our project policy. No code cop
 ## 4. Audit trail
 
 - Method: read-only inspection 2026-09-10 (file headers + workspace manifests). Full per-repo details: `docs/research/reference-repos.md` §1-4.
-- `git status` at audit time: repo has **no commits yet** (branch `master`; the tree holds the workspace manifests and `docs/`). Audit artifacts are new files under `docs/`; nothing was copied from the clones. (An earlier revision of this line listed a top-level `src/` that never existed in this layout — corrected 2026-09-11.)
+- `git status` **at audit time** (2026-09-10): repo had **no commits yet**; the initial commit `b7b1c99` landed 2026-09-11 (branch `master`; the tree holds the workspace manifests and `docs/`). Audit artifacts are new files under `docs/`; nothing was copied from the clones. (An earlier revision of this line listed a top-level `src/` that never existed in this layout — corrected 2026-09-11.)
 
 ## 5. Adopted dependencies (Phase 01, P01-01/P00-09)
 

@@ -172,7 +172,7 @@ sign-extends each. Caught by the golden-vector test against the real JDK. My
 
 ## 5. Standing gaps carried forward
 
-1. ~~The repository still has **no commits**~~ — resolved by `b7b1c99` (2026-09-11). CI has now run for the first time on that commit; the result is recorded in `PHASE-06-REPORT.md`.
+1. ~~The repository still has **no commits**~~ — resolved by `b7b1c99` (2026-09-11). **CI has still never run**: the repository has no remote, so the workflow has no host. The four gates are run locally and their results recorded per phase.
 2. No real 26.1.2 client, so "real client" exit-gate clauses stay qualified.
 3. Reference clones have no `.git`, so pinned SHAs remain unrecordable.
 4. A runbook is still absent (`docs/operations/` holds only the dependency

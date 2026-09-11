@@ -172,7 +172,7 @@ Full findings: `docs/phases/AUDIT-01-FINDINGS.md`.
 | A01-T06 | Connection gate cannot panic the process (poison recovery) | L1 | **pass** | `limits.rs::lock_state` replaces four `expect`s; covered by the existing gate tests |
 | A01-T07 | Shutdown drains live connections before the world is closed | L3 | **pass** | `network/tests/login_tolerance.rs::shutdown_drains_a_live_connection`: a connected, logged-in client is drained rather than abandoned |
 | A01-T08 | Per-crate builds do not rely on workspace feature unification | L1 | **pass** | `cargo build -p mc-server` and `-p mc-server-app` succeed standalone (tokio features declared per crate) |
-| A01-T09 | Dependency/licence gate exists and is enforceable | — | **pass (config)** | `deny.toml` + `dependency-policy` CI job + `docs/operations/DEPENDENCY-POLICY.md`; not yet executed because the repo has no commits |
+| A01-T09 | Dependency/licence gate exists and is enforceable | — | **pass (config)** | `deny.toml` + `dependency-policy` CI job + `docs/operations/DEPENDENCY-POLICY.md`; written but **never executed**: the repository has no remote, so the workflow has no host (Audit 05) |
 | A01-T10 | Reference-repo SHA gap recorded as unmet, not glossed | — | **pass (doc)** | `reference-repos.md` header + ADR R-01; still requires a re-clone to close |
 
 ## P02 — Protocol (executed)

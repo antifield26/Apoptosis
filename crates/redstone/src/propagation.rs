@@ -679,6 +679,15 @@ pub struct PropagationReport {
     /// The order is the evidence for determinism: `tests/determinism.rs` compares this
     /// whole vector between two identical runs, not just the final state.
     pub changes: Vec<PropagatedChange>,
+    /// Neighbour updates **refused** because the queue hit its entry cap.
+    ///
+    /// A refused push is for a position not already pending, and it is not guaranteed
+    /// to be re-derived: a later change to one of its neighbours would raise a fresh
+    /// push, but a circuit that has settled will not produce one. So a non-zero value
+    /// means redstone may be stale somewhere, and it is reported rather than
+    /// discarded (Audit 04 A5). Reaching it needs >4 096 distinct simultaneously
+    /// pending positions, which a normal circuit does not approach.
+    pub updates_refused: usize,
 }
 
 impl PropagationReport {
@@ -690,6 +699,7 @@ impl PropagationReport {
             blocks_changed: 0,
             budget_exhausted: false,
             changes: Vec::new(),
+            updates_refused: 0,
         }
     }
 
@@ -774,7 +784,9 @@ pub fn propagate<V: BlockView + ?Sized>(
                 // budget unit and changes nothing, which is what keeps the queue from growing on a
                 // settled circuit.
                 for neighbour in NeighbourSet::of(pos) {
-                    let _ = queue.push_neighbour(neighbour);
+                    if queue.push_neighbour(neighbour) == Inserted::Refused {
+                        report.updates_refused += 1;
+                    }
                 }
                 debug_assert_ne!(change.old_state, change.new_state);
             }

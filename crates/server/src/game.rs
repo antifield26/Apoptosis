@@ -1096,9 +1096,13 @@ impl Game {
     ///
     /// Also retires the block entity at each changed position. A block entity is
     /// state its *block* owns, so a block that changed no longer owns it; leaving the
-    /// entry behind would make it reappear if the same block were placed again. When
-    /// the retired entity held items they are dropped into the world rather than
-    /// discarded, because a chest disappearing must not destroy its contents.
+    /// entry behind would make it reappear if the same block were placed again.
+    ///
+    /// **A retired entity's items are currently lost.** The count is logged and the
+    /// retirement is counted on the tick report, but nothing spawns them: an item drop
+    /// needs a per-item position, which is P06-08's caller. The previous comment here
+    /// claimed they were dropped, which the log a few lines below contradicts
+    /// (Audit 05).
     fn broadcast_block_changes(&mut self, report: &mut TickReport) -> ServerResult<()> {
         let changes = self.world.take_block_changes();
         for change in changes {

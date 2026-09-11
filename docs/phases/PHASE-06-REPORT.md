@@ -99,20 +99,20 @@ is P05-14's; its absence is stated rather than papered over.
 | P06-01 Server-authoritative inventory transaction model | DONE | `mc-container::Menu` owns its containers, cursor and revision counter. Two private helpers (`extract`/`insert`) are the only way a click moves items, so conservation is a property of two functions rather than of seven handlers. 46 transaction tests |
 | P06-02 Slot click validation | DONE | `Click::new` decodes the five wire integers into typed intent and refuses an unknown click type, a bad button for the type, a slot outside `−1..=MAX_MENU_SLOTS`, a negative state id and a window id that does not fit a `u8`. `Menu::apply_click` then validates window → slot → **state id** → role → limit, in that order, before mutating. 11 decoder tests + 6 over a real socket |
 | P06-03 Container/session model | DONE | `Container` (bounded, change-tracking, `total_items`), `SlotMapping`/`MenuLayout`/`SlotRange`, `Session.menu` with the player menu open. The player menu's 46 slots match the jar-verified `InventoryMenu` layout |
-| P06-04 Crafting grid baseline | PARTIAL | `RecipeRegistry::baseline` with shaped + shapeless matching, the exact-fill rule, offset matching inside a 3x3 grid, mirroring, and `craft`/`recompute_result`. 24 tests. **A hand-written subset, not the Vanilla recipe set** — noted in-code and in §5. Tags and the recipe book are P07-03 |
-| P06-05 Furnace/smelting container baseline | PARTIAL | `Furnace::tick` with burn/cook accounting, a labelled fuel table, a 3-slot layout, and the rule that a blocked output wastes no fuel. 21 tests. Fuel values are from recall, not a dump (§5); blasting/smoking and fuel remainders are absent |
+| P06-04 Crafting grid baseline | PARTIAL (library-only) | `RecipeRegistry::baseline` with shaped + shapeless matching, the exact-fill rule, offset matching inside a 3x3 grid, mirroring, and `craft`/`recompute_result`. 24 tests. **A hand-written subset, not the Vanilla recipe set** — noted in-code and in §5. Tags and the recipe book are P07-03 |
+| P06-05 Furnace/smelting container baseline | PARTIAL (library-only) | `Furnace::tick` with burn/cook accounting, a labelled fuel table, a 3-slot layout, and the rule that a blocked output wastes no fuel. 21 tests. Fuel values are from recall, not a dump (§5); blasting/smoking and fuel remainders are absent |
 | P06-06 Item metadata/tag semantics | **NOT DONE** | Depends on P07-03's data loading; item stacks still carry only id + count. Recorded, not implied |
 | P06-07 Block entity lifecycle | PARTIAL | `BlockEntity`/`BlockEntityData`/`BlockEntityStore` (typed payload, deterministic order, `audit_against` for leaked entries), wired into the game loop so a block change retires its entity and reports the contents. 10 unit + 6 integration tests. **No persistence and no client sync** (§5) |
-| P06-08 Hopper inventory transfer model | PARTIAL | `Hopper::transfer` with per-container slot roles, conservation by construction, and an adversarial randomised test. 17 tests. **No tick scheduling** — the 8-tick cooldown is a constant the caller must honour |
+| P06-08 Hopper inventory transfer model | PARTIAL (library-only) | `Hopper::transfer` with per-container slot roles, conservation by construction, and an adversarial randomised test. 17 tests. **No tick scheduling** — the 8-tick cooldown is a constant the caller must honour |
 | P06-09 Redstone state/update abstraction | PARTIAL | `PowerLevel`/`PowerState`/`SignalKind`/`PowerSource`, `UpdateQueue`/`UpdateKind`/`UpdateBudget`, with a documented per-source table. **The weak/strong distinction is carried but currently unobservable**: with no conductivity table a strongly-emitting redstone block and a weakly-emitting lever both give adjacent dust 14, so the kind never changes an outcome. Asserted by a test rather than glossed over |
 | P06-10 Neighbour/update scheduling | DONE | A deterministic queue ordered by `(due tick, position)` with a bounded neighbour set, plus the fix that a budget stop **leaves work queued** rather than dropping it (the audit found the original dropped it, so a long line never finished) |
 | P06-11 Power propagation baseline | PARTIAL | `propagate` recomputes from the six neighbours with attenuation 1 per block, writes on any difference, and reports `budget_exhausted` honestly. **`WIRE_LIVE_BLOCKS = 14`, one fewer than the wiki's "up to 15 blocks" phrasing** — the implemented rule charges the first dust block an attenuation step, so the 15th is dark. Which matches 26.1.2 is unverified and the constant documents the discrepancy |
 | P06-12 Repeater/comparator timing baseline | DONE | `components.rs`: lever, torch, repeater (documented delay) and comparator (compare/subtract), each a pure `output_power`, plus the scheduler honouring a delay |
 | P06-13 Piston/observer family baseline | **NOT DONE** | Explicitly out of scope for this pass and listed as such in `mc-redstone`'s module docs and §5. Not stubbed |
 | P06-14 Redstone containers/hoppers integration | **NOT DONE** | Neither the hopper's schedule (P06-08's caller) nor a comparator reading a container exists |
-| P06-15 Inventory adversarial tests | DONE | `a_flood_of_hostile_clicks_cannot_create_or_destroy_items` (2 000 pseudo-random clicks over every type, asserting conservation and boundedness after **every** click), plus the socket-level malformed/stale/truncated cases |
+| P06-15 Inventory adversarial tests | **PARTIAL** | The flood test, the socket-level malformed/stale/truncated cases, and the duplication regression suite. **Audit 04 replayed the flood PRNG and found it largely vacuous**: only 46 of the 2 000 generated clicks survive `Click::new` (the rest are decoder refusals), and no drag ever reaches its end stage, so the `Even`/`One`/`Full` distribution arithmetic is never exercised by it. The claim in §3.2 overstated the coverage. The deterministic drag tests cover that arithmetic directly, so this is a coverage gap rather than a correctness one — but the mark was too generous |
 | P06-16 Redstone golden/differential tests | PARTIAL | 17 propagation tests (including the two-direction decrease case and a lever off-then-on), 5 golden circuits with hand-written expected power, 6 determinism tests comparing the whole change vector, 7 budget-exhaustion tests, 4 world-integration tests, and 8 power-model tests. **No differential test against a real Vanilla server** — that needs the P08 harness |
-| P06-17 Transaction/recovery review | DONE | This section: every audit defect triaged, the close-with-cursor item-loss case tested, and the transaction rules re-verified end to end over a socket |
+| P06-17 Transaction/recovery review | **PARTIAL** | Every audit defect triaged and the rules re-verified over a socket. **Audit 04 found the review incomplete**: the "close with cursor" test only asserted the cursor was *readable*, no caller recovered it, and a disconnect destroyed the items. Now fixed and covered by `inventory_duplication`, but the original mark was too generous |
 | P06-18 Automation workload benchmark/review | **NOT DONE** | No hopper/redstone-heavy workload exists to measure, because nothing schedules them yet. Deferred with that reason rather than measured vacuously |
 
 ## 3. Verification (exact commands, this host, 2026-09-11)
@@ -132,7 +132,7 @@ Workspace total: **745 passed, 0 failed, 4 ignored**. Measured, not accumulated:
 |---|---|
 | `mc-container` (lib) | **118** — menu 28, click 11, container 7, block_entity 10, crafting 24, furnace 21, hopper 17 |
 | `mc-redstone` | **111** — lib 64, propagation 17, power_model 8, budget_exhaustion 7, determinism 6, golden_circuits 5, world_integration 4 |
-| `mc-server` | 38 — lib 12, e2e_login_play 6, entity_lifecycle 9, network_game_bridge 4, survival_e2e 7, **container_e2e 6**, **block_entity_e2e 6** (2 benchmarks ignored) |
+| `mc-server` | **50** — lib 12, e2e_login_play 6, entity_lifecycle 9, network_game_bridge 4, survival_e2e 7, **container_e2e 6**, **block_entity_e2e 6** (2 benchmarks ignored). Audit 04 caught this row reading **38**: the listed suites sum to 50, and the 7 was dropped from the Phase-04 line |
 | `mc-entity` | 127 (+4 doc) |
 | `mc-persistence` | 103 — lib 71, corruption 16, anvil_fixture 9, restart 7 (2 differential ignored) |
 | `mc-protocol` | 109 — lib 101, packet_ids 4, fixtures 4 |
@@ -223,10 +223,20 @@ unbounded") rather than a shape.
 
 **Values not verified against Vanilla**
 
-9. **Every recipe and fuel value is from community knowledge, not a jar dump or an
-   experiment.** By `AGENTS.md` §4 that is source level 5–6, so nothing here may be
-   called Vanilla-verified. The specific shapes, counts and fuel times are listed in
-   the module docs with that caveat.
+9. **The recipe and fuel values are from community knowledge, not a jar dump or an
+   experiment**, so by `AGENTS.md` §4 they are source level 5–6 and none of them may
+   be called Vanilla-verified. Audit 05 caught that this item was **misstated in the
+   other direction**: `furnace.rs` labelled six of eight fuel rows `Evidence::Verified`,
+   which the code had no basis for, while the crafting module carried no labels at all.
+   The report was more honest than the code. Both are now aligned, and P07-03 replaces
+   the tables with data loaded from the jar — which is what actually retires the
+   caveat rather than rewording it.
+
+**Also library-only, and not stated above:** crafting, smelting, hopper transfer and
+redstone have **no production call sites**. They are implemented and tested against
+their own inputs, but nothing in `Game` crafts, smelts, transfers or propagates: the
+only wired path is the container transaction model. Audit 04 measured this and it is
+the single biggest understatement the report made.
 10. **Product decisions, labelled as such:** the alternatives cap, the result-count
     clamp, `MAX_COOK_TICKS`, oak-only sticks/slabs, bamboo excluded, the hopper
     cooldown of 8, the one-move-per-call hopper model, and the destination-slot

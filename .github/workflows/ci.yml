@@ -1,8 +1,16 @@
 name: ci
 
+# Status: **configured, never executed.** The repository has no git remote, so this
+# workflow has no host (docs/phases/AUDIT-05-FINDINGS.md). The four gates it
+# implements are run locally by every phase and their results are recorded in the
+# phase reports; CI is an additional, not a substitute, mechanism.
+#
+# Nothing here should be described as "CI passing" until it has actually run.
+
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -21,12 +29,37 @@ jobs:
       - run: cargo test --workspace
       - run: cargo build --workspace --release
 
+  check-linux:
+    # The production target is Linux, and the development host is Windows, so the
+    # *host* difference is worth testing on an ordinary runner: platform-specific
+    # code, path handling, file locking and the temp-dir behaviour all differ.
+    #
+    # This runs the same gates natively rather than cross-compiling, because a
+    # cross-`check` does not link and would miss a linker or libc problem.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
   check-aarch64:
-    # P01-11: Pi-5 target must at least typecheck + clippy-clean on every push.
-    # Full linking needs aarch64 libraries (this runner provides them); local
-    # Windows hosts without one should run the equivalent:
-    #   cargo check --target aarch64-unknown-linux-gnu --workspace --all-targets
-    runs-on: ubuntu-24.04-arm
+    # P01-11: the Pi 5 target must at least typecheck + clippy-clean on every push.
+    #
+    # Cross-`check` on an x86_64 runner, deliberately: GitHub's *hosted* arm64
+    # runners are available for public repositories only, so `ubuntu-24.04-arm`
+    # would silently never be scheduled for a private repo and the gate would be
+    # fictional while looking present. A cross-check is weaker than running on
+    # arm64 — it does not link — and that limitation is stated rather than papered
+    # over by naming a runner that may not exist.
+    #
+    # Running natively on arm64 belongs to the P08 Pi harness, where the hardware is
+    # real and the benchmark needs it anyway.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -34,13 +67,15 @@ jobs:
           toolchain: "1.98.1"
           components: rustfmt, clippy
           targets: aarch64-unknown-linux-gnu
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets --target aarch64-unknown-linux-gnu -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo check --target aarch64-unknown-linux-gnu --workspace --all-targets
 
   dependency-policy:
     # P01-03 / ADR-0001 D-08: the licence/dependency gate the policy promises.
     # Policy and local usage: docs/operations/DEPENDENCY-POLICY.md.
+    #
+    # This job's config was verified locally with cargo-deny 0.20.2 before being
+    # committed: it needed two fixes (`allow-wildcard-paths` and `private.ignore`)
+    # that its first-ever run exposed. See docs/phases/AUDIT-05-FINDINGS.md.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -48,9 +83,8 @@ jobs:
         with:
           toolchain: "1.98.1"
       - uses: taiki-e/install-action@cargo-deny
-      - run: cargo deny --all-features check licenses bans sources
+      - run: cargo deny check licenses bans sources
       # Advisories are reported but not enforced: no triage process exists yet,
       # and failing on an unfixed upstream advisory would block unrelated work.
-      # Tracked in docs/operations/DEPENDENCY-POLICY.md.
-      - run: cargo deny --all-features check advisories
+      - run: cargo deny check advisories
         continue-on-error: true

@@ -1,7 +1,9 @@
 # Phase 00 Report — Research, Repository, Protocol, License & Architecture Audit
 
 Date: 2026-09-10. Agent operating protocol followed (AGENTS.md §14): read contract prompts,
-inspected `git status` (branch `master`, **no commits at Phase 00 (the initial commit landed 2026-09-11 as `b7b1c99`) yet**), searched before creating, smallest coherent change (docs only).
+inspected `git status` (branch `master`, **no commits at Phase 00** — the initial commit
+landed later, 2026-09-11 as `b7b1c99`), searched before creating, smallest coherent
+change (docs only).
 
 > **Post-hoc status note (added 2026-09-11, audit round):** this report is the
 > record of Phase 00 as executed. Two items below have since changed and are
@@ -14,10 +16,15 @@ inspected `git status` (branch `master`, **no commits at Phase 00 (the initial c
 >   value supersedes it.
 > - **R-01 (reference SHAs) is still open by nature.** The clones have no `.git`,
 >   so no SHA exists to record; re-cloning is an owner action.
-> - The repository still has **zero commits**. CI (`.github/workflows/ci.yml`) is
->   therefore unexecuted, and reproducibility is not yet demonstrable from VCS.
+> - The repository had **zero commits at Phase 00**. That was resolved on
+>   2026-09-11 by the owner-authorised initial commit `b7b1c99`, so reproducibility
+>   from VCS is now demonstrable for every change after it — though not for the
+>   Phase 00–06 work, which has no per-change history.
 >   The Phase 01 report's phrase "`Cargo.lock` is committed" meant "intended to be
->   committed"; it is not, yet.
+>   committed"; it was not at the time, and it is now.
+> - **CI has still never run.** There is **no git remote**, so the workflow has no
+>   host; this is not a "not yet" but an unmet prerequisite (see
+>   `docs/phases/AUDIT-05-FINDINGS.md`).
 >
 > Independent audit results and the fixes they produced are recorded in
 > `docs/phases/AUDIT-01-FINDINGS.md`.
