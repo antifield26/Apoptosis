@@ -1,7 +1,7 @@
 # Phase 07 Report — Commands, Data Packs and World Generation
 
 Date: 2026-09-11 (in progress). Scope: `P07-01..P07-20` per `tasks/TASK-INDEX.md`.
-Gate status at the time of writing: `cargo test --workspace` **1 173 passed, 0 failed, 15
+Gate status at the time of writing: `cargo test --workspace` **1 174 passed, 0 failed, 17
 ignored** plus three ignored differential suites that pass when run against the jar; `cargo fmt --check`, `cargo clippy -D warnings`,
 `cargo check --target aarch64-unknown-linux-gnu` and `cargo deny check` all clean. Each is
 re-run before the phase is called done, and the numbers in this report are re-derived from
@@ -35,7 +35,7 @@ and the report says which.
 | P07-13 seed pipeline | **DONE** | `mc-worldgen::seed`, per-chunk derivation tested for collisions and stability |
 | P07-14 noise + terrain | **DONE** | Perlin noise with a golden test; terrain with bedrock floor, surface, water, all-air-column assertion |
 | P07-15 biomes | **DONE** | Six biomes driving surface composition |
-| P07-16 structures/placement baseline | **DONE (1 182 of 1 202 templates)** | `structure.rs` reads the gzip-NBT format, `placement.rs` places into a chunk under a documented cross-chunk policy, `structures.rs` derives a deterministic per-chunk selection. **1 182 files load, 20 are refused by name** (all shipwrecks, all using 8 alternative `palettes` — an unimplemented material-variant feature), and **zero fail to parse**. 2 differential tests against the real pack, with five fabricated assertions found and replaced by measured values (§2.10) |
+| P07-16 structures/placement baseline | **DONE (wired; single-chunk subset only)** | 1 182 of the pack's 1 202 templates load, selection is deterministic, and `load_or_create_chunk` **places** them: 14 of 3 600 generated chunks decorated, 12 362 blocks written, 0 refused. **Limitation**: the selectable population is the single-chunk subset (1 028 of 1 182), so large structures — ancient cities, mansions, bastions — never generate under a `SingleChunk` policy. 2 differential tests plus 2 integration tests that assert the wiring, not just the library |
 | P07-17 existing-world-first | **DONE** | Stored chunk read before generation; asserted by tests, and the source of two bugs below |
 | P07-18 command/data/worldgen parity tests | **DONE** | Five differential suites against the real jar (`vanilla_pack` 1, `vanilla_data` 1, `vanilla_smelting` 1, `structure_pack` 6, `scenario_vanilla` 2) plus `command_e2e` (10), `execute_e2e` (9), `function_e2e` (14), `ops_e2e` (6), `pack_loading_e2e` (8), `worldgen_e2e` (7) |
 | P07-19 differential scenario expansion | **DONE** | `scenario_vanilla` runs five stages in sequence against the real pack: 758 tags, 1 421 recipes → 156 furnace rows, terrain in all 256 columns of a generated chunk, a real `igloo/bottom` placed (180 blocks), and a marker surviving save/reopen. Two claims probed: a no-op save loses the marker, and removing the generation gate breaks the borrowing test |
@@ -190,7 +190,33 @@ The second row is the worst: the test was made to pass by deleting the evidence,
 is a two-minute check, and it is now part of the routine for any test whose claim is the reason the work
 exists.
 
-### 2.11 The dirty-flag model I got wrong — P07-17
+### 2.11 **Structures were tested and never called, then always refused** — P07-16
+
+Two bugs, the first hidden by the second.
+
+**The library was never wired.** `mc-worldgen` loaded 1 202 templates, selected one per chunk and placed
+it — all tested — while `Game::load_or_create_chunk` never called any of it. A running server generated **no
+structures at all**, and the status table said DONE. I found it by asking "does the server reference
+structures?" rather than by reading the table, which is the check I should have run before writing DONE in
+the first place.
+
+**Then every placement was refused.** With the wiring in place: `considered: 3600, selected: 14,
+blocks_written: 0, refused: 14`. `StructureSet::from_registry` selects from the first 64 names in sorted
+order — alphabetically all `ancient_city/*`, which are multi-chunk — while `StructureBuild::default()` is
+`CrossChunk::SingleChunk`, which refuses anything that does not fit.
+
+**Neither bug was visible to the library's tests**, and that is the useful part. Selection is tested
+against synthetic `golden_N` names that fit in a chunk; placement is tested against individual templates.
+Both suites pass. Only running the two *together*, through the server, shows they disagree — which is what
+P07-19's scenario exists for, and what it did not cover because it placed a template by hand.
+
+**Two more on the way.** `resolve_vanilla_data` rejected the namespace-directory form that
+`MC_VANILLA_DATA` uses in every differential test, so the vanilla pack loaded **zero namespaces** —
+silently. And `DataPackSet::push` accepted a root with no `data/`; the world-pack path checked, the vanilla
+path did not. The resolution now happens inside `with_vanilla_data`, because a bug whose cause is "a caller
+forgot a step" is better fixed by removing the step.
+
+### 2.12 The dirty-flag model I got wrong — P07-17
 
 I first marked generated chunks **dirty** "so the world keeps them". Two existing tests
 failed, correctly:
