@@ -84,6 +84,18 @@ a verifiable fact, not a decision: the repository is **public**).
    valence fixture citation and the never-built difftest-harness note) are
    annotated as external/hypothetical.
 
+## Where the audits live, and which ones were retired
+
+Two different things are called "audits" here, and conflating them makes a directory look missing:
+
+- **Retired (pre-governance).** `AUDIT-01`—`AUDIT-06` were finding files under `docs/phases/`, retired to
+  git history at tag `phase-09-final` with the phase reports. (`AUDIT-04` never existed as a file — the
+  fourth pass was folded into `AUDIT-05`.) The map below covers these.
+- **Live (post-governance).** `docs/audits/` holds five files that were created *after* this report and
+  are deliberately kept in the working tree: they are the evidence for the current state, so retiring them
+  would leave the completion claims in `README.md` and `PARITY-MATRIX.md` pointing at a tag. Indexed in
+  [README.md](README.md).
+
 ## Old path → new path map
 
 | Old | New |
