@@ -362,7 +362,17 @@ fn profile_run_reports_tps_mspt_phases() {
     let wall = started.elapsed();
     println!("--- P08-13 profile run (dev host, NOT a Pi 5; NOT a 20 TPS claim) ---");
     println!("toolchain          : {}", rustc_version());
-    println!("build profile      : dev (unoptimised, debug assertions on)");
+    // The recorded profile must come from the binary, not from the person
+    // quoting the log: P09's first release-profile run printed "dev" here
+    // because the string was hardcoded (AUDIT-06 finding 3).
+    println!(
+        "build profile      : {}",
+        if cfg!(debug_assertions) {
+            "dev (unoptimised, debug assertions on)"
+        } else {
+            "release (optimised, debug assertions off)"
+        }
+    );
     println!(
         "workload           : {PLAYERS} survival clients, view {VIEW_DISTANCE}, move+swing+hotbar+chat//list"
     );

@@ -103,8 +103,12 @@ mod tests {
     use mc_network::bridge::game_channel;
     use mc_test_support::fixtures::TempDir;
 
-    fn game() -> (Game, TempDir) {
-        let dir = TempDir::new("ops-metrics");
+    // The tag must differ per test: TempDir uniqueness is pid + nanos, and two
+    // same-tag constructions in one process have observed the same nanos tick
+    // under parallel I/O, so one test's level.dat rename raced the other's
+    // drop-time remove_dir_all (PHASE-08-REPORT.md §2.1).
+    fn game(tag: &str) -> (Game, TempDir) {
+        let dir = TempDir::new(tag);
         let config = crate::config::StorageConfig {
             world_dir: dir.path().join("world"),
             autosave_ticks: 0,
@@ -119,7 +123,7 @@ mod tests {
     // Zero is the exact rendering of an empty window, not an epsilon comparison.
     #[allow(clippy::float_cmp)]
     fn a_fresh_game_reports_zeroes_not_garbage() {
-        let (game, _dir) = game();
+        let (game, _dir) = game("ops-metrics-fresh");
         let snapshot = OperationalSnapshot::of(&game);
         assert_eq!(snapshot.ticks, 0);
         assert_eq!(snapshot.overruns, 0);
@@ -136,7 +140,7 @@ mod tests {
     // comparisons below are ordering checks on measured data, not epsilon work.
     #[allow(clippy::float_cmp)]
     fn after_ticks_the_snapshot_counts_what_the_scheduler_counted() {
-        let (mut game, _dir) = game();
+        let (mut game, _dir) = game("ops-metrics-counted");
         for _ in 0..5 {
             game.tick().expect("tick");
         }
@@ -156,7 +160,7 @@ mod tests {
     #[test]
     fn the_snapshot_does_not_move_the_game() {
         // Reading metrics must not tick, join or drop anything.
-        let (mut game, _dir) = game();
+        let (mut game, _dir) = game("ops-metrics-readonly");
         game.tick().expect("tick");
         let before = game.metrics().tick_count();
         let _ = OperationalSnapshot::of(&game);
