@@ -1,6 +1,6 @@
 # Benchmark Baseline
 
-Owner: engineering. Method contract: AGENTS.md section 13 — every record carries
+Owner: engineering. Method contract: CONVENTIONS.md section 13 — every record carries
 hardware, OS, toolchain, commit, build profile, workload, duration, TPS, MSPT
 percentiles, CPU, RSS and (where relevant) storage and network figures.
 
@@ -196,7 +196,7 @@ cover (scripted clients, loopback, microSD).
 | Commit | `14759bc` plus the uncommitted `Registries::vanilla()` fixture-search fix — the deployment defect this run found (see below); rebuilt **on the device** |
 | Build profile | `release`, `--locked`, built on the Pi (`cargo build --workspace --release --locked`, 1 m 18 s clean / 26 s incremental) |
 | Binary | `/srv/mc-server/mc-server`, SHA-256 `62067e04b4c3f9e5958293425ad056c590fd5bd93c32ea07b2e7c0d3467ae02f`, 4 524 624 B |
-| Storage | **microSD** (`/dev/mmcblk0p2`, 29 GB free) — explicitly *not* the performance acceptance target (AGENTS.md §2); storage-bound figures are labelled below |
+| Storage | **microSD** (`/dev/mmcblk0p2`, 29 GB free) — explicitly *not* the performance acceptance target (CONVENTIONS.md §2); storage-bound figures are labelled below |
 | Workload | 10 scripted clients (`target/pi_soak_client2.py`, the TestClient conversation): MOVE_PLAYER_ROT 20 Hz, one 0.2-block MOVE_PLAYER_POS step per 20th tick, rotating `/list` (~2/min each), view 8; clients ran **on the Pi** at `nice -n 19` with one loopback source address each (127.0.0.2…11) because the per-IP admission cap (correctly) refuses 10 connections from one address |
 | Duration / warmup | 1800 s measured after staggered joins; 62 × 600-tick `tick metrics` windows captured, 60 with all 10 players |
 | TPS | the fixed 20 TPS clock held for the whole soak: **zero overruns in 60 settled windows** (lifetime overruns 5, all in the join window); the §4 verdict rule (mean MSPT < 50 ms, no settled-tick overrun) is **passed** |
@@ -246,7 +246,7 @@ show — but the record says so, not "production-ready".
 ## 3. Production target
 
 Raspberry Pi 5 8 GB, Debian 13 Trixie, aarch64, NVMe. microSD is explicitly **not**
-a performance acceptance target (AGENTS.md section 2). Development/CI is x86_64
+a performance acceptance target (CONVENTIONS.md section 2). Development/CI is x86_64
 plus an aarch64 build verification
 (`cargo check --target aarch64-unknown-linux-gnu --workspace --all-targets`),
 which is green as of Phase 04.

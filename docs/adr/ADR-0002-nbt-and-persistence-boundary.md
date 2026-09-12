@@ -34,7 +34,7 @@ Consequences:
   modified-UTF-8 form exceeds the `u16` prefix) instead of silently truncating a
   length field; the five Phase-02 call sites propagate it with `?`;
 - `ResourceId` gained `Ord` so ids can key ordered maps (deterministic save
-  order, AGENTS.md §3.6).
+  order, CONVENTIONS.md §3.6).
 
 ## 2. Decision: `ChunkData` is a schema boundary, not the runtime chunk
 
@@ -52,7 +52,7 @@ Consequences:
 Rejected alternatives: serializing the runtime chunk directly (couples the
 format to gameplay structures — the option `prompts/PHASE-03.md` explicitly
 rules out), and a trait-based `ChunkSerializer` abstraction (no second
-implementation exists, so it would be speculative — AGENTS.md §3.4).
+implementation exists, so it would be speculative — CONVENTIONS.md §3.4).
 
 ## 3. Decision: single-owner storage, one writer
 

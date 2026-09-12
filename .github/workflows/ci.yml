@@ -1,11 +1,9 @@
 name: ci
 
-# Status: **configured, never executed.** The repository has no git remote, so this
-# workflow has no host (docs/phases/AUDIT-05-FINDINGS.md). The four gates it
-# implements are run locally by every phase and their results are recorded in the
-# phase reports; CI is an additional, not a substitute, mechanism.
-#
-# Nothing here should be described as "CI passing" until it has actually run.
+# Runs the five quality gates (fmt, clippy, tests, aarch64 cross-check,
+# cargo-deny) on both host platforms, plus the documentation audit
+# (tools/docs-audit/). The workflow first executed on 2026-09-12 when the
+# repository gained its remote; results are visible under the Actions tab.
 
 on:
   push:
@@ -72,10 +70,6 @@ jobs:
   dependency-policy:
     # P01-03 / ADR-0001 D-08: the licence/dependency gate the policy promises.
     # Policy and local usage: docs/operations/DEPENDENCY-POLICY.md.
-    #
-    # This job's config was verified locally with cargo-deny 0.20.2 before being
-    # committed: it needed two fixes (`allow-wildcard-paths` and `private.ignore`)
-    # that its first-ever run exposed. See docs/phases/AUDIT-05-FINDINGS.md.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -88,3 +82,16 @@ jobs:
       # and failing on an unfixed upstream advisory would block unrelated work.
       - run: cargo deny check advisories
         continue-on-error: true
+
+  docs-audit:
+    # The mechanical half of documentation health: every tracked text file is
+    # valid UTF-8, and no document references a file the repository does not
+    # ship. Scripts and rules: tools/docs-audit/, CONTRIBUTING.md.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python tools/docs-audit/check_encoding.py
+      - run: python tools/docs-audit/check_links.py

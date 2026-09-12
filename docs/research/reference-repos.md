@@ -8,7 +8,7 @@ Local clones root: `OpenSourceMinecraftServer/`
 > `Test-Path .git` = False in each. Therefore **commit SHA / branch cannot be obtained**.
 > Version identity below comes from in-tree metadata + code constants (file:line cited).
 >
-> **This is an unmet AGENTS.md §5 requirement, not a satisfied one** (audit
+> **This is an unmet CONVENTIONS.md §5 requirement, not a satisfied one** (audit
 > 2026-09-11). §5 asks for filesystem path, commit SHA, branch/tag, version,
 > licence, modules and tests. Five of the seven are recorded below; SHA and
 > branch/tag are not obtainable from these exports. Traceability rests on
@@ -29,10 +29,10 @@ Local clones root: `OpenSourceMinecraftServer/`
   - `crates/pumpkin-world/src/lib.rs:22-24` `CURRENT_MC_VERSION="26.2"`, bedrock consts
   - `crates/pumpkin-world/src/world_info/mod.rs:14-15` DataVersion range **4435 (=1.21.9) .. 4903 (=26.2)**
   - `crates/pumpkin-world/src/chunk/format/anvil.rs:40-41` `WORLD_DATA_VERSION=4903`
-- Workspace members (`Cargo.toml:1-23`): pumpkin, pumpkin-api-macros, pumpkin-auth, pumpkin-codecs, pumpkin-command, pumpkin-config, pumpkin-data, pumpkin-gametest, pumpkin-inventory, pumpkin-macros, pumpkin-nbt, pumpkin-plugin-api, pumpkin-plugin-runtime, pumpkin-plugin-utils, pumpkin-protocol, pumpkin-util, pumpkin-world, tools/pumpkin-codegen, tools/pumpkin-fuzzer (+ empty submodule dir `crates/pumpkin-plugin-wit/`, see `.gitmodules:1-3`, not checked out, not in workspace)
+- Workspace members (`Cargo.toml:1-23`): pumpkin, pumpkin-api-macros, pumpkin-auth, pumpkin-codecs, pumpkin-command, pumpkin-config, pumpkin-data, pumpkin-gametest, pumpkin-inventory, pumpkin-macros, pumpkin-nbt, pumpkin-plugin-api, pumpkin-plugin-runtime, pumpkin-plugin-utils, pumpkin-protocol, pumpkin-util, pumpkin-world, tools/pumpkin-codegen, tools/pumpkin-fuzzer (+ empty submodule dir `OpenSourceMinecraftServer/Pumpkin-master/crates/pumpkin-plugin-wit/` (external clone), see `.gitmodules:1-3`, not checked out, not in workspace)
 - Relevant modules:
   - protocol/net: `crates/pumpkin-protocol/src/{java/{client,server,packet_encoder.rs,packet_decoder.rs},bedrock/,ser/,codec/,packet.rs}` + `crates/pumpkin/src/net/{java/{handshake.rs,pending.rs,status.rs,login/,play/},bedrock/,query.rs,rcon/,chunk_sender.rs,packet_limiter.rs}`
-  - persistence/world/chunk: `crates/pumpkin-world/src/{world_info/{mod.rs,anvil.rs,data_files.rs},chunk/{mod.rs,palette.rs,format/{anvil.rs,linear.rs,pump.rs,mod.rs},io/{mod.rs,file_manager.rs}},chunk_system/{dag.rs,schedule.rs,chunk_holder.rs,chunk_loading.rs,worker_logic.rs},tick/,generation/,lighting/}` + runtime `crates/pumpkin/src/world/`
+  - persistence/world/chunk: `crates/pumpkin-world/src/{world_info/{mod.rs,anvil.rs,data_files.rs},chunk/{mod.rs,palette.rs,format/{anvil.rs,linear.rs,pump.rs,mod.rs},io/{mod.rs,file_manager.rs}},chunk_system/{dag.rs,schedule.rs,chunk_holder.rs,chunk_loading.rs,worker_logic.rs},tick/,generation/,lighting/}` + runtime `OpenSourceMinecraftServer/Pumpkin-master/crates/pumpkin/src/world/` (external clone)
   - entity/simulation: `crates/pumpkin/src/{entity/{player.rs,living.rs,mob/,ai/},server/{ticker.rs,tick_rate_manager.rs,scheduler.rs}}`
 - Tests/fixtures: inline unit tests (`world_info/anvil.rs:549-981`, `chunk_system/tests.rs`, `version.rs:334-345`); benches (`pumpkin-world/benches/{chunk,chunk_io,chunk_gen,chunk_gen_concurrent,noise_router}.rs`, `pumpkin-nbt/benches/nbt.rs`); fuzz targets (`pumpkin-protocol/fuzz/fuzz_targets/`, `pumpkin-nbt/fuzz/fuzz_targets/`); `assets/packet/26_1_packets.json` + `26_2_packets.json` (+1.7.2..1.21.11 series); `assets/meta_data_type/26_1+26_2`, `assets/tracked_data/26_2_tracked_data.json`, `assets/datapacks/{...,26_1,26_2}/`, `assets/tests/*.chunk|*.json`, `assets/viabackwards/data/mappings-26.2to26.1.nbt`, `mappings-26.1to1.21.11.nbt`
 
@@ -59,9 +59,9 @@ Local clones root: `OpenSourceMinecraftServer/`
 - Relevant paths:
   - protocol: `crates/valence_protocol/src/{lib.rs:70-189,decode.rs,packets.rs,packets/{handshaking,login,status,play}/,var_int.rs,var_long.rs,velocity.rs}`
   - network: `crates/valence_network/src/{lib.rs,connect.rs:129-414,packet_io.rs,legacy_ping.rs}` (Tokio gateway + flume into ECS)
-  - world/persistence: `crates/valence_anvil/src/{lib.rs,parsing.rs,bevy.rs}`, `crates/valence_server/src/{lib.rs,layer.rs,layer/chunk.rs,event_loop.rs,keepalive.rs}`, `crates/valence_spatial/src/`
+  - world/persistence: `crates/valence_anvil/src/{lib.rs,parsing.rs,bevy.rs}`, `crates/valence_server/src/{lib.rs,layer.rs,layer/chunk.rs,event_loop.rs,keepalive.rs}`, `OpenSourceMinecraftServer/valence-main/crates/valence_spatial/src/` (external clone)
   - tick: `crates/valence_server_common/src/lib.rs:18-21` DEFAULT_TPS=20, `ScheduleRunnerPlugin::run_loop(tick_period)`
-- Tests/fixtures: `src/tests/*.rs` (12 files: client, layer, inventory, ...), `src/testing.rs` harness (MockClient), `benches/*.rs` (packet, anvil, var_int/long, many_players; anvil bench downloads external `sp_world_1.19.2.zip`, not vendored), `examples/` 28 files, extracted fixtures `crates/valence_{generated,entity,lang,registry}/extracted/`, `tools/packet_inspector/extracted/packets.json`, `extractor/` Fabric data-extraction mod + `extractor/README.md:23-32` upgrade procedure
+- Tests/fixtures: `src/tests/*.rs` (12 files: client, layer, inventory, ...), `src/testing.rs` harness (MockClient), `benches/*.rs` (packet, anvil, var_int/long, many_players; anvil bench downloads external `sp_world_1.19.2.zip`, not vendored), `examples/` 28 files, extracted fixtures `crates/valence_{generated,entity,lang,registry}/extracted/`, `tools/packet_inspector/extracted/packets.json` (all valence paths relative to `OpenSourceMinecraftServer/valence-main/`), `extractor/` Fabric data-extraction mod + `extractor/README.md:23-32` upgrade procedure
 
 ## 4. Minestom-master
 

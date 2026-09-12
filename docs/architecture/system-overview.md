@@ -28,7 +28,7 @@ fixed 20 TPS, Tokio I/O, Pi 5 aarch64 first-class. See ADR-0001 for decisions.
                                                               +-------------+
 ```
 
-Data flow (AGENTS.md §8): `TCP/Tokio → decoded events → tick scheduler → 20 TPS sim → state changes → packet scheduler → socket`.
+Data flow (CONVENTIONS.md §8): `TCP/Tokio → decoded events → tick scheduler → 20 TPS sim → state changes → packet scheduler → socket`.
 Workers (chunkgen/compression/persistence) join at tick boundary; gameplay order never depends on I/O completion.
 
 Crate map: `docs/adr/ADR-0001-system-architecture.md` §D-01 (Phase 03 refined it

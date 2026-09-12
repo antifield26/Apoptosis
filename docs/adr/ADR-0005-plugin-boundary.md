@@ -1,10 +1,10 @@
 # ADR-0005 — Rust-Native Plugin Boundary: Three Named Seams, Zero API Types
 
 Date: 2026-09-12. Status: **Accepted** (Phase 09, P09-12).
-Context: `AGENTS.md` §2 reserves a "Rust-native plugin API" for a later phase;
+Context: `CONVENTIONS.md` §2 reserves a "Rust-native plugin API" for a later phase;
 ADR-0001 D-07 fixed the shape in advance — *boundary, not abstraction*: no
 plugin API types in core, a conceptual seam only, each part introduced "only
-when exercised by real code". MASTER-PROMPT §7 forbids interfaces that exist
+when exercised by real code". CONVENTIONS.md §3.4 forbids interfaces that exist
 solely to reserve space. This ADR is the promised P09-12 record: it names the
 seams, pins them to the code that would grow them, and states what would have
 to be true before any of them becomes an API.
@@ -34,7 +34,7 @@ Rejected now, and re-rejectable only with a named second consumer:
 
 - **A `Plugin` trait / handler registry / event-bus type in core.** Every one of
   these has one hypothetical consumer and zero real ones — the exact
-  "speculative abstraction" AGENTS.md §3.4 and MASTER-PROMPT §7 forbid. The
+  "speculative abstraction" CONVENTIONS.md §3.4 and §3.4 (no fake interfaces) forbid. The
   three seams are call sites; a call site costs nothing to leave alone.
 - **`dyn`-anything at the tick boundary.** The tick is the determinism
   contract (ADR-0001 D-02/D-06): a fixed phase order, ascending entity ids,
@@ -44,7 +44,7 @@ Rejected now, and re-rejectable only with a named second consumer:
 - **Async plugin tasks.** Tokio stays at the I/O edges (D-02). A plugin API
   that let gameplay work escape the tick would reintroduce the concurrency
   hazards the architecture exists to prevent.
-- **A `mc-plugin-api` crate now.** §7 of AGENTS.md: a crate exists when it owns
+- **A `mc-plugin-api` crate now.** §7 of CONVENTIONS.md: a crate exists when it owns
   real behaviour. When the first trigger fires, the API types should live in
   such a crate — until then the boundary is this document.
 
@@ -52,7 +52,7 @@ Rejected now, and re-rejectable only with a named second consumer:
 
 1. **The error contract applies.** A misbehaving extension is treated like a
    hostile client: it may fail its own work, it may not panic the tick or the
-   process (AGENTS.md §9).
+   process (CONVENTIONS.md §9).
 2. **Permissions are enforced at dispatch, not at trust.** Whatever a plugin
    registers joins the tree below `PermissionLevel` checks (P07-04); a function
    hook inherits the invoker's level by construction (`run_function`).

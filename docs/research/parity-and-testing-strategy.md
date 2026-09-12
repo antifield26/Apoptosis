@@ -15,7 +15,7 @@ Ranked by risk = (player-visible wrongness) × (locks architecture early). Each 
 | 5 | Block break/place validation + block-state store | Dupe/ghost blocks = economy-breaking | P04-08/09/10 | Validation matrix + rollback check |
 | 6 | Inventory transactions (server-authoritative) | Dupes live here | P06-01/02/15 | Adversarial click/shift tests |
 | 7 | Entity lifecycle + damage/invuln + pickup | Death-item-loss rage + tick-order bugs | P05-03/06/08 | Determinism scenarios |
-| 8 | Tick ordering determinism (same seed+inputs+ticks → same state) | Required by AGENTS.md §3.6; chaos otherwise | P05-02/17 | Regression scenarios with normalized-state compare |
+| 8 | Tick ordering determinism (same seed+inputs+ticks → same state) | Required by CONVENTIONS.md §3.6; chaos otherwise | P05-02/17 | Regression scenarios with normalized-state compare |
 | 9 | Redstone update scheduling + power propagation | Ordering-sensitive, combinatorial | P06-09/10/11/16 | Golden + differential circuits |
 | 10 | Commands/permissions/selectors | Privilege bypass = security hole | P07-02/04/05 | Permission matrix tests |
 | 11 | Registries/tags/data-driven loading | Wrong IDs corrupt everything downstream | P04-01/P07-03 | Registry golden tests vs vanilla datapack |
@@ -27,7 +27,7 @@ Deferred deliberately: perfect worldgen parity, Data Pack functions/loot full se
 
 ## 2. Differential-testing strategy + baseline harness shape (P00-08)
 
-Principles (AGENTS.md §12): compare **semantic state, never incidental bytes**. Every trace records: seed/state, inputs, tick count, outputs, normalized state, first divergence, classification (bug / missing feature / intentional+ADR).
+Principles (CONVENTIONS.md §12): compare **semantic state, never incidental bytes**. Every trace records: seed/state, inputs, tick count, outputs, normalized state, first divergence, classification (bug / missing feature / intentional+ADR).
 
 Levels, cheapest first:
 
@@ -35,8 +35,8 @@ Levels, cheapest first:
 2. **Property/fuzz**: VarInt/frame/NBT parsers (`proptest`-style + hostile corpus: non-terminating VarInt, oversize, decomp-bomb, bad UTF-8, traversal paths). First use P02-12/P03-04.
 3. **Restart/corruption**: save → kill -9 → load → normalized-state equal; bit-flip region/NBT → safe error, no panic. First use P03-14/15.
 4. **E2E scripted client**: minimal test client (P02-13) drives join/move/break/place/inventory/death; asserts server state, not packet bytes. First use P02-14, grows through P04-16.
-5. **Differential vs trusted 26.1.2 baseline**: same seed + scripted inputs + N ticks → capture normalized state (positions, health, block deltas, inventory) on both sides → first-divergence report. Baseline = vanilla 26.1.2 server (operator-run, offline mode) + our packet captures; reference clones are NOT the oracle (AGENTS.md §4). Harness shape: `tools/difftest` (deferred to P05-17/P07-19; shape defined now: `record/ | replay/ | normalize/ | compare/` subcommands, JSONL traces).
-6. **Benchmarks with perf contract fields** (AGENTS.md §13): hw/ram, cpu/os/kernel, toolchain, SHA, profile, workload, warmup, TPS, MSPT p50/p95/p99, CPU, RSS, alloc hotspots, storage/net where relevant. Baselines start P04-18, gate P08-13/16.
+5. **Differential vs trusted 26.1.2 baseline**: same seed + scripted inputs + N ticks → capture normalized state (positions, health, block deltas, inventory) on both sides → first-divergence report. Baseline = vanilla 26.1.2 server (operator-run, offline mode) + our packet captures; reference clones are NOT the oracle (CONVENTIONS.md §4). Harness shape (design note; the harness itself was never built — the differential test suites superseded it): `record/ | replay/ | normalize/ | compare/` subcommands over JSONL traces.
+6. **Benchmarks with perf contract fields** (CONVENTIONS.md §13): hw/ram, cpu/os/kernel, toolchain, SHA, profile, workload, warmup, TPS, MSPT p50/p95/p99, CPU, RSS, alloc hotspots, storage/net where relevant. Baselines start P04-18, gate P08-13/16.
 
 ## 3. Initial dependency / license policy (P00-09, binding proposal → ratified in ADR-0001 §8)
 

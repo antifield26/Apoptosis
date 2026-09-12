@@ -2,7 +2,7 @@
 
 Date: 2026-09-11. Status: **Accepted** (Phase 07, P07-03).
 Context: Phase 07 had to load data packs — 8 775 files under `data/minecraft/` in the
-26.1.2 jar, plus whatever a world or an operator adds. `AGENTS.md` §7 lists
+26.1.2 jar, plus whatever a world or an operator adds. `CONVENTIONS.md` §7 lists
 "registry/ # Minecraft registry/data loading and lookup" as one boundary, which raised
 the question of whether this belongs in `mc-registry`.
 Evidence: `crates/data/`, `docs/research/data-pack-baseline.md`,

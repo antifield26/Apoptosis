@@ -30,7 +30,7 @@ workspace's own crates).
 - **The dependency policy**: permissive-only allow-list unchanged; copyleft
   dependencies still require an explicit owner + legal decision before
   adoption.
-- **Provenance recording** (AGENTS.md §6): unchanged; MIT is a licence
+- **Provenance recording** (CONVENTIONS.md §6): unchanged; MIT is a licence
   decision, not a provenance cleanup.
 
 ## 3. Consequences

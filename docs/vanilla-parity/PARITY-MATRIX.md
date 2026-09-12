@@ -2,7 +2,7 @@
 
 Target: Java 26.1.2 (protocol 775, Display "26.1"). Update rule: a row may move
 to `partial`/`full` only with cited evidence (fixture/differential/E2E);
-intentional divergence needs ADR/parity note (AGENTS.md §12). "Test client"
+intentional divergence needs ADR/parity note (CONVENTIONS.md §12). "Test client"
 means our own codec client; it does **not** prove real-client acceptance.
 "Vanilla differential" means the real 26.1.2 server jar was run against files our
 code wrote (`crates/persistence/tests/vanilla_differential.rs`).

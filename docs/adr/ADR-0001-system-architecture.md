@@ -8,7 +8,7 @@ Evidence: `docs/research/{reference-repos,protocol-baseline,architecture-compari
 
 ## 1. Decisions
 
-### D-01 Crate boundaries (logical, created only with real behavior — AGENTS.md §7)
+### D-01 Crate boundaries (logical, created only with real behavior — CONVENTIONS.md §7)
 
 ```text
 crates/
@@ -40,12 +40,12 @@ Rejected: one-big-crate (ownership unclear under concurrency contract) and ECS-f
 - One tick thread @50ms (`simulation`), overrun clamp (no catch-up spiral), frozen-state still flushes network + keepalive.
 - Tokio ONLY at I/O edges (accept, codec, read/write, RCON/Query); gameplay/simulation sync; bridges via bounded channels + `block_in_place`/oneshot for short tasks, worker pool (Rayon-style batch) for chunk gen/compression/persistence with **tick-boundary join** (completion never reorders gameplay).
 - Inside tick: phases serial (`net-drain → tasks → worlds → entities → block-entities → packet-flush`), batches parallel (`par_chunks(8..32)` scale TBD by Pi evidence).
-- Cross-thread borrows follow `sync/trySync` ownership semantics + affinity assertions (TickThread-style); every boundary documents owner/primitive/ordering/backpressure/failure/shutdown (AGENTS.md §8). TICK_START/TICK_END bracketing + TickMonitor-style observability from day one (P01-08/09).
+- Cross-thread borrows follow `sync/trySync` ownership semantics + affinity assertions (TickThread-style); every boundary documents owner/primitive/ordering/backpressure/failure/shutdown (CONVENTIONS.md §8). TICK_START/TICK_END bracketing + TickMonitor-style observability from day one (P01-08/09).
 - Alternatives rejected: per-connection gameplay threads (ordering chaos), Bevy-schedule-everything (framework lock-in), Folia-style region threads (post-release).
 
 ### D-03 Networking boundary
 
-TCP/Tokio → decode/validate → bounded queue → tick consumes intents → sim mutates → outbound events → packet scheduler → socket. Auth-critical packets (handshake/status/login/config acks/keepalive) fast-pathed; gameplay packets tick-queued (cf. Minestom `IMMEDIATE_PROCESS_PACKETS`, `PlayerSocketConnection.java:62-74,144-178`). Malformed input never panics; every hostile class gets a regression test (AGENTS.md §10).
+TCP/Tokio → decode/validate → bounded queue → tick consumes intents → sim mutates → outbound events → packet scheduler → socket. Auth-critical packets (handshake/status/login/config acks/keepalive) fast-pathed; gameplay packets tick-queued (cf. Minestom `IMMEDIATE_PROCESS_PACKETS`, `PlayerSocketConnection.java:62-74,144-178`). Malformed input never panics; every hostile class gets a regression test (CONVENTIONS.md §10).
 
 ### D-04 Persistence strategy
 
@@ -62,9 +62,9 @@ TCP/Tokio → decode/validate → bounded queue → tick consumes intents → si
 
 ### D-06 Determinism
 
-Same seed + ordered inputs + tick count → same normalized state (AGENTS.md §3.6). Worker completion joins at tick boundary; scheduled-tick ring (256 slots + priority, Pumpkin-world shape) snapshots before parallel waves. Deliberate nondeterminism (if any) documented per-site. Regression scenarios from P05-02/17.
+Same seed + ordered inputs + tick count → same normalized state (CONVENTIONS.md §3.6). Worker completion joins at tick boundary; scheduled-tick ring (256 slots + priority, Pumpkin-world shape) snapshots before parallel waves. Deliberate nondeterminism (if any) documented per-site. Regression scenarios from P05-02/17.
 
-### D-07 Plugin readiness = boundary, not abstraction (AGENTS.md §2, MASTER §7)
+### D-07 Plugin readiness = boundary, not abstraction (CONVENTIONS.md §2, §3.4)
 
 No plugin API types in core. Conceputal seam only: tick events (start/end), command registration point, datapack-function hook — each introduced only when exercised by real code (P09-12 writes the boundary ADR).
 
@@ -80,8 +80,8 @@ Adopt in P01: `tokio, serde, serde_json, toml, tracing, tracing-subscriber, this
 | R-02 | 26.1.2 wire differs from 26.1 base (packet ids/fields) despite shared proto 775 | M / H | Capture real 26.1.2 session in P02; golden fixtures per packet family; conformance report gate | P02-11/16 |
 | R-03 | ~~Exact 26.1 DataVersion/Level-version unconfirmed (only range [4435,4903]/[19132,19133] known)~~ **RESOLVED P03** | H / H → closed | Measured on a vanilla 26.1.2 world generated on this host: DataVersion **4790**, level `version` **19133**; corroborated by `DetectedVersion` bytecode and the jar's `version.json`. Writer stamps 4790, reader accepts [4435,4790] (`protocol-baseline.md` §2) | P03-06 (done) |
 | R-04 | GPL contamination (Pumpkin GPL-3.0, Paper GPLv3) via copy/translate/vendor | M / H (license forces) | Clean-room rule + provenance log + no-vendor policy (`third-party.md` §2); review-agent checks each phase | every phase |
-| R-05 | Pi 5 20 TPS with 10 players unproven on this codebase (no code yet) | H / H | Pi harness early (P04-18 baseline), no pre-threshold tuning (AGENTS.md §13), profile-gated fixes only (P08-14) | P04-18, P08-09..14 |
-| R-06 | Async bleed: gameplay becomes async via Tokio convenience | M / M | D-02 boundary + review checklist (`EXECUTION-LOOP.md` §5); clippy/lint custom pass if drift seen | P01-04, reviews |
+| R-05 | Pi 5 20 TPS with 10 players unproven on this codebase (no code yet) | H / H | Pi harness early (P04-18 baseline), no pre-threshold tuning (CONVENTIONS.md §13), profile-gated fixes only (P08-14) | P04-18, P08-09..14 |
+| R-06 | Async bleed: gameplay becomes async via Tokio convenience | M / M | D-02 boundary + review checklist (`CONVENTIONS.md` §14); clippy/lint custom pass if drift seen | P01-04, reviews |
 | R-07 | Vanilla world corruption (layout break 26.1, DataVersion stamp, sector bugs) | M / H | Dual-layout reader, range-checked versions, tmp→rename + `_old` backup, restart/corruption suites, vanilla-world load test | P03-14/15/16 |
 | R-08 | Valence staleness (1.20.1) misleads protocol work | L / M | Valence excluded as protocol oracle (4-state, no Config); used only for codec style/boundary ideas | P02 |
 | R-09 | ~~No project license chosen → GPL-reuse automatically forbidden, but also distribution unclear~~ **RESOLVED 2026-09-12 (ADR-0006)** | L / M → closed | Owner adopted **MIT**; `LICENSE` + `license = "MIT"` in all 17 manifests; `cargo deny` now checks the workspace's own crates (no `private = { ignore = true }`). Distribution unblocked; the clean-room rule and the third-party GPL ban are unchanged | P09 (closed post-phase) |

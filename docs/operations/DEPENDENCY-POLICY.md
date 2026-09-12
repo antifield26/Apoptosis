@@ -10,7 +10,7 @@ Binding policy text: `docs/legal/third-party.md` section 2.
    set (MIT, Apache-2.0, BSD-2/3-Clause, ISC, Zlib, Unicode-3.0, CC0-1.0,
    MPL-2.0). Anything else — in particular any GPL/AGPL/SSPL crate — fails the
    build until an explicit owner + legal decision adds it in a reviewed commit
-   (AGENTS.md section 6).
+   (CONVENTIONS.md section 6).
 2. **crates.io only.** `[sources]` denies unknown registries and any git
    dependency, so a fork of a copyleft project cannot slip in through a
    `git = "..."` requirement.

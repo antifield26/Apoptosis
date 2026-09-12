@@ -17,7 +17,7 @@ Evidence: `crates/entity/src/entity.rs`, `crates/entity/src/mob.rs`,
 
 Three reasons, in the order they mattered:
 
-1. **Determinism (AGENTS.md §3.6).** Gameplay iterates every entity every tick. A
+1. **Determinism (CONVENTIONS.md §3.6).** Gameplay iterates every entity every tick. A
    `BTreeMap<EntityId, Entity>` iterates in ascending id for free; a
    `Vec<Box<dyn Entity>>` invites insertion-order or pointer-order iteration, which
    is exactly the accidental nondeterminism the contract forbids. The same argument
@@ -78,7 +78,7 @@ An ECS buys data-oriented iteration for tens of thousands of homogeneous entitie
 The Phase 05 workload is 10 players and a few hundred mobs (measured in
 `docs/performance/BENCHMARK-BASELINE.md`), and the entity-heavy benchmark spends
 its time in the per-entity world query, not in archetype traversal. An ECS now
-would be optimisation from intuition, which AGENTS.md §3.2 forbids. The measured
+would be optimisation from intuition, which CONVENTIONS.md §3.2 forbids. The measured
 figure exists so this decision can be revisited with evidence rather than taste.
 
 ## 5. Consequences
