@@ -1,0 +1,97 @@
+name: release
+
+# Produces the release artifacts for a version tag and attaches them to the GitHub Release.
+#
+# Triggered by the tag, not by a branch: the artifact must be reproducible from an
+# immutable ref. `ci.yml` also runs on tag pushes (`on: push` is unfiltered), so the five
+# gates are re-checked on exactly this commit before this job's output is used.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# `contents: write` is what lets the job attach assets to the Release.
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-x86_64:
+    # The aarch64 artifact is deliberately NOT built here.
+    #
+    # The production target is a Pi 5 (aarch64) and the shipped aarch64 binary is built
+    # **on the device** with `cargo build --workspace --release --locked`, because a
+    # cross-build cannot be run and therefore cannot be verified. `ci.yml`'s
+    # check-aarch64 job cross-*checks* only, for the same reason it documents. A runner
+    # could produce an aarch64 binary; nothing here could show that it runs.
+    #
+    # So this job produces the x86_64 artifact and the checksums for what exists, and the
+    # release body states that the aarch64 asset is added by hand from the device. The
+    # release page is honest at every moment rather than only once the manual step lands.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+
+      # The tag must agree with the manifest. Prefix rather than equality, because a
+      # pre-release tag carries a suffix cargo does not model: the existing tag is
+      # v0.1.0-rc.1 while Cargo.toml says 0.1.0. This still catches the mistake that
+      # matters -- tagging a version the workspace never declared.
+      - name: check the tag against the workspace version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $line = Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+          if (-not $line) { throw "no version in Cargo.toml" }
+          $version = $line.Matches[0].Groups[1].Value
+          Write-Host "tag=$tag workspace-version=$version"
+          if ($tag -notlike "v$version*") {
+            throw "tag $tag does not start with v$version -- bump Cargo.toml or retag"
+          }
+
+      # `--locked`: the artifact must come from the committed lockfile, not a fresh
+      # resolution. A build that silently resolves something else is not the same build.
+      - run: cargo build --workspace --release --locked
+
+      - name: stage the artifact and write checksums
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target/release/mc-server.exe dist/mc-server-x86_64-windows.exe
+          # Only the files actually produced are summed; the aarch64 line is added when
+          # that artifact is attached from the device.
+          Push-Location dist
+          Get-ChildItem -File | ForEach-Object {
+            $hash = (Get-FileHash $_.Name -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)"
+          } | Set-Content -Encoding ascii SHA256SUMS
+          Pop-Location
+          Get-Content dist/SHA256SUMS
+
+      # Create the release if the tag has none yet, then attach. `--clobber` makes a
+      # re-run of the same tag idempotent instead of failing on an existing asset.
+      - name: attach to the GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            $notes = @"
+          Built from tag ``$tag`` by the release workflow.
+
+          **The aarch64 artifact is added by hand and may not be present yet.** It is built on the
+          Raspberry Pi 5 target itself (``cargo build --workspace --release --locked``) because a
+          cross-build cannot be run, and therefore cannot be verified, from CI. See the release
+          checklist in CONTRIBUTING.md.
+          "@
+            gh release create $tag --title $tag --generate-notes --notes "$notes"
+          }
+          gh release upload $tag dist/mc-server-x86_64-windows.exe dist/SHA256SUMS --clobber

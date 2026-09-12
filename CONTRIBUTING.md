@@ -108,6 +108,53 @@ Rules the scripts help enforce:
   the maintainer's explicit approval (git history is the archive — the
   pre-governance documentation snapshot is the tag `phase-09-final`).
 
+## Releases
+
+Two artifacts ship per release, and only one of them can be built in CI.
+
+| Artifact | Built where | Why |
+|---|---|---|
+| `mc-server-x86_64-windows.exe` | CI, by [`.github/workflows/release.yml`](.github/workflows/release.yml) on the tag | an ordinary runner build, and the gates have already run on the same commit |
+| `mc-server-aarch64` | **on the Raspberry Pi 5, by hand** | the production target is a Pi; a cross-build cannot be *run* from CI, so it cannot be verified there. `ci.yml`'s `check-aarch64` cross-*checks* only, and says so |
+
+Because of that split, **a release exists before it is complete**. The workflow says so in the release
+body it writes, so the page is honest at every moment rather than only once the manual step lands.
+
+### Checklist
+
+1. **Land the change and let CI go green on `main`.** A release is cut from a commit that passed the five
+   gates, not from one that is about to.
+2. **Bump the version** in `Cargo.toml` (`[workspace.package] version`) and add the CHANGELOG entry. The
+   tag must start with `v` + that version; the workflow refuses to build otherwise. A pre-release suffix
+   is allowed and is *not* modelled by cargo — `v0.1.0-rc.1` was released from workspace version `0.1.0`.
+3. **Tag and push the tag.** CI runs again on the tag, and `release.yml` builds the x86_64 artifact,
+   writes `SHA256SUMS`, creates the GitHub Release if the tag has none, and attaches both with
+   `--clobber` so a re-run of the same tag is idempotent.
+4. **Build the aarch64 artifact on the device and attach it.** On the Pi, from a clean checkout of the
+   tag:
+
+   ```sh
+   cargo build --workspace --release --locked
+   sha256sum target/release/mc-server
+   ```
+
+   Then attach it to the same release and **add its line to the checksums**:
+
+   ```sh
+   gh release upload vX.Y.Z ./mc-server-aarch64 --clobber
+   ```
+
+   The checksums file must end up covering **both** artifacts. If it still lists only the x86_64 build,
+   the release is incomplete — say so rather than treating the release as done.
+5. **Record the build on the device** in `/srv/mc-server/BUILD-INFO` (commit, date, profile) so the
+   deployed server can be traced to a tag, and verify the deployed binary's SHA-256 matches the attached
+   artifact. For `v0.1.0-rc.1` it does, byte for byte.
+6. **Update the CHANGELOG's release block** with the final asset list and hashes, so the CHANGELOG and the
+   Release page agree. `docs/release/RELEASE-CANDIDATE.md` carries the operator-facing summary.
+
+Do **not** describe a release as complete, or as verified on aarch64, until step 4 has run on real
+hardware. "The workflow is green" only ever means the x86_64 half.
+
 ## Reporting issues
 
 Bugs: open a GitHub issue with the smallest reproduction and the gate output.
