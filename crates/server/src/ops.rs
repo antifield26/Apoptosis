@@ -33,8 +33,10 @@
 //!   their name.
 //! - **An unknown level is refused, not clamped.** Level 5 is a typo or a different game's
 //!   file; treating it as 4 would grant more authority than the file asks for.
-//! - **`bypassesPlayerLimit` is parsed and reported but not enforced**, because the server
-//!   has no player-limit refusal to bypass. Said out loud rather than silently dropped.
+//! - **`bypassesPlayerLimit` is enforced at the join gate** (`Game::is_full_for`):
+//!   a listed operator with the flag joins a full server; everyone else is
+//!   refused with a disconnect. Parse + report + enforce, all three, each with
+//!   a test (`ops::tests::*bypass*`, `ops_e2e::a_full_server_*`).
 
 use mc_command::PermissionLevel;
 use mc_core::error::{ServerError, ServerResult};
@@ -67,8 +69,8 @@ pub struct Operator {
     pub level: PermissionLevel,
     /// Whether the file grants a player-limit bypass.
     ///
-    /// Parsed and reported; not enforced, because nothing refuses a login on the player limit
-    /// yet.
+    /// Enforced by [`crate::game::Game::is_full_for`]: a listed operator with
+    /// this flag joins a full server rather than being refused with it.
     pub bypasses_player_limit: bool,
 }
 
@@ -201,7 +203,7 @@ impl OperatorList {
         self.by_uuid.values()
     }
 
-    /// How many entries ask for a player-limit bypass, which this build does not enforce.
+    /// How many entries ask for a player-limit bypass (enforced at the join gate).
     #[must_use]
     pub fn bypass_count(&self) -> usize {
         self.by_uuid
