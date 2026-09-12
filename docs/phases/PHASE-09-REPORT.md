@@ -152,3 +152,16 @@ re-derivation.
   is true but the artifact is not retained" — the evidence chain script now
   produces every cited log in one pass, so the next phase cannot repeat the
   class.
+
+## 7. Post-report updates (2026-09-12, same day)
+
+- **R-09 resolved**: the owner adopted **MIT** (ADR-0006; `LICENSE`, license
+  fields in all 17 manifests, `cargo deny` no longer skips the workspace's own
+  crates). The §1/§5 statements "publishing blocked on R-09" were true at
+  write time and stand as history; `ADR-0001`'s R-09 row and the release
+  documents now record the resolution. Publishing remains unstarted only
+  because no distribution channel (git remote, registry) exists.
+- **Pi 5 hardware became available** the same day (`antifield@10.130.136.226`,
+  Raspberry Pi 5 Model B, Debian 13 trixie aarch64, 8 GB, microSD): the KD-35
+  acceptance run of `BENCHMARK-BASELINE.md` §4 is being executed; results land
+  as §P09-Pi in that file and in the KD-35 / parity-matrix updates.

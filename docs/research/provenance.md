@@ -11,8 +11,10 @@ Behaviour, facts and tests may inform us; the code is independently written. Pum
 (GPL-3.0) and Paper (GPLv3) are read-only references, and patch *logic* is treated as
 tainted in the same way as code.
 
-**No project licence decision has been made** (ADR-0001 R-09), so GPL/AGPL-licensed
-reuse is *forbidden*, not merely discouraged.
+**No project licence decision had been made** (ADR-0001 R-09) when this policy was
+written, so GPL/AGPL-licensed reuse was *forbidden*, not merely discouraged. The
+owner adopted **MIT** on 2026-09-12 (ADR-0006); the clean-room rule and the GPL
+reuse ban for third-party material are unchanged by it.
 
 > **Reconstruction note.** This document was accidentally truncated on 2026-09-11 by a
 > maintenance script whose `open(path, 'w')` truncated the file before a failing write

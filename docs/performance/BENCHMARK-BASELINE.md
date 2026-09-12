@@ -176,7 +176,7 @@ Interpretation, stated carefully:
 | SHA-256 | `36e3ab018015b6a2fd58e54b9d3d93a8f64c77af744a602d3b6ef64e6936e659` |
 | Smoke 1 | fresh world dir: server starts, creates `level.dat`; hand-rolled socket client (`status` handshake proto 775 → request → JSON → ping/pong echo) passes: `{"version":{"name":"26.1.2","protocol":775},"players":{"max":10,...}}` |
 | Smoke 2 | second start on the same dir: world reused, no error, smoke passes again |
-| Distribution | **withheld** — R-09 (no project license decision); nothing may be published until the owner decides. The build is reproducible; the release is not claimed |
+| Distribution | **unblocked 2026-09-12** — the owner adopted MIT (ADR-0006, closing R-09, after this build was recorded); no publication channel exists yet (no git remote), so the artifact remains a local build. The build is reproducible; a release announcement is not claimed |
 
 ## 2. Planned workloads
 

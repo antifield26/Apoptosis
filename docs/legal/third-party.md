@@ -17,7 +17,7 @@ Date: 2026-09-10. Scope: the four local clones + our project policy. No code cop
 2. **Provenance log**: any nontrivial algorithm/table/design directly derived from a reference gets a row in `docs/research/provenance.md` (what / from where incl. file:line / license / how reimplemented).
 3. **Dependency gate** (feeds ADR-0001 § dependencies): every new third-party crate needs license check (prefer MIT/Apache-2.0/BSD/ISC/Zlib; anything GPL/AGPL/SSPL → requires explicit owner decision + legal review BEFORE use). Record in `docs/legal/third-party.md` with version + license + purpose.
 4. **Data assets**: Mojang game data (packets.json-style tables, datapacks, mappings NBT, structure NBT) are Mojang-EULA-bound (cf. Pumpkin `assets/NOTICE.md`). We do not vendor reference-extracted data; where runtime data is needed (Phase 04/07), prefer generating/loading from a user-supplied vanilla client jar or server operator's files, and document the source. No extracted asset is committed in Phase 00.
-5. **No license decision made**: this project has no license file yet. GPL-source reuse is therefore **forbidden**, not merely discouraged. Choosing our own license is out of scope for Phase 00 (flagged for owner).
+5. **Project license: MIT** (owner decision 2026-09-12, ADR-0006 — resolves ADR-0001 R-09; `LICENSE` + `license = "MIT"` in every manifest). Rules 1–4 above are unchanged by it: clean-room stays binding, and GPL/AGPL *source* reuse stays **forbidden** — MIT covers our own code, not theirs.
 
 ## 3. Dependency pre-policy (P00-09 output, to be ratified in ADR-0001)
 
@@ -62,8 +62,8 @@ third-party crate:
 
 | Crate | License | Purpose | First use |
 |---|---|---|---|
-| mc-nbt (internal) | project (undecided, R-09) | NBT model/reader/writer shared by protocol + persistence | P03-01..04 |
-| mc-persistence (internal) | project (undecided, R-09) | Anvil region IO, `level.dat`, chunk schema, dirty/autosave/save barrier | P03-05..15 |
+| mc-nbt (internal) | project (MIT) | NBT model/reader/writer shared by protocol + persistence | P03-01..04 |
+| mc-persistence (internal) | project (MIT) | Anvil region IO, `level.dat`, chunk schema, dirty/autosave/save barrier | P03-05..15 |
 
 Compression reuses the already-adopted `flate2 1.1.10` (MIT OR Apache-2.0) for
 zlib **and** gzip; no LZ4 crate was added, because LZ4 region compression
@@ -94,9 +94,9 @@ Phase 04 added three **internal** crates and no third-party crate:
 
 | Crate | License | Purpose | First use |
 |---|---|---|---|
-| mc-registry (internal) | project (undecided, R-09) | block-state and item id tables, loaded from a generated fixture | P04-01 |
-| mc-world (internal) | project (undecided, R-09) | runtime chunks, block storage, collision, ray casting | P04-02/07/08 |
-| mc-entity (internal) | project (undecided, R-09) | player state, inventory, item stacks, health/food/XP | P04-04/12/13/14 |
+| mc-registry (internal) | project (MIT) | block-state and item id tables, loaded from a generated fixture | P04-01 |
+| mc-world (internal) | project (MIT) | runtime chunks, block storage, collision, ray casting | P04-02/07/08 |
+| mc-entity (internal) | project (MIT) | player state, inventory, item stacks, health/food/XP | P04-04/12/13/14 |
 
 `mc-server` gained normal (non-dev) dependencies on `mc-entity`, `mc-world`,
 `mc-registry` and `mc-protocol`; all internal, so `deny.toml` is unaffected.

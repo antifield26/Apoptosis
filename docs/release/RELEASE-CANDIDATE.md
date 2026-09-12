@@ -1,10 +1,11 @@
 # Release Candidate Documentation (P09-10)
 
-Status: **release candidate, not a release.** No artifact is published and no
-version number is claimed: the project has no license decision yet (ADR-0001
-R-09), so distribution is blocked by the owner call, not by engineering. This
-document is what a builder or operator needs to produce and run the server from
-source today.
+Status: **release candidate, distributable under MIT** (ADR-0006, owner
+decision 2026-09-12 — closes ADR-0001 R-09). The artifact below is a local
+build; the repository has no remote yet, so no publication channel exists —
+"may be distributed" means the legal blocker is gone, not that artifacts are
+uploaded anywhere. This document is what a builder or operator needs to
+produce and run the server from source today.
 
 ## 1. What ships
 
@@ -68,7 +69,7 @@ reviewed — never applied to a real host), `docs/operations/DEPENDENCY-POLICY.m
 | Full regression matrix passes | **Yes** — five gates green on 2026-09-12, each with a retained run: `cargo test --workspace --no-fail-fast` (1 189/0/21, 74 suites; `target/p09_full_test.log` + `target/p09_full_test2.log`), `cargo fmt --check` (`gate_fmt.log`), `cargo clippy --workspace --all-targets -- -D warnings` (`gate_clippy.log`), `cargo check --target aarch64-unknown-linux-gnu` (`gate_aarch64.log`), `cargo deny check licenses bans sources` (`gate_deny.log`) — all exit 0; re-runnable per §2 |
 | Conformance report produced | Yes — `docs/phases/PHASE-09-REPORT.md` + sweep rows in `docs/testing/TEST-MATRIX.md` |
 | Known divergences documented | Yes — `docs/vanilla-parity/KNOWN-DIVERGENCES.md` (38 entries) |
-| Release artifacts published | **No** — blocked on the owner's license decision (R-09); nothing may be distributed until it exists |
+| Release artifacts published | **No** — publishing is now *legally unblocked* (MIT, ADR-0006) but no publication channel exists (no git remote, no registry); the artifact is a recorded local build. When a channel appears, the MIT `LICENSE` ships with it |
 | 20 TPS on Pi 5 with 10 players | **No verdict exists** — no hardware in this environment (KD-35); the Pi acceptance procedure to run when hardware exists is in `BENCHMARK-BASELINE.md` §Pi-acceptance |
 | Real-client acceptance | **No** — no Java client in this environment (KD-38); the protocol test client is the partner |
 

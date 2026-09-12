@@ -1,9 +1,9 @@
 # MinecraftServer — workspace root (virtual manifest).
 # Phase 01 (P01-01): workspace + shared package metadata + lint contract.
 #
-# License: UNDECIDED, see docs/adr/ADR-0001-system-architecture.md R-09.
-# Until the owner decides, GPL/AGPL-licensed reuse is forbidden
-# (docs/legal/third-party.md, section 2). Hence no `license` field below.
+# License: MIT (owner decision 2026-09-12, ADR-0006) — closes ADR-0001 R-09.
+# The GPL/AGPL reuse ban for *third-party* material is unchanged
+# (docs/legal/third-party.md, section 2); see `license = "MIT"` below.
 
 [workspace]
 resolver = "2"
@@ -13,6 +13,7 @@ members = ["crates/*", "apps/*"]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.98.1"
+license = "MIT"
 # This workspace builds a server binary, not libraries for crates.io. Declaring that
 # is not cosmetic: `cargo deny` requires *publishable* crates to version their path
 # dependencies (crates.io forbids a versionless path dep in a published crate), and

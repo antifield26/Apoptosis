@@ -1,7 +1,6 @@
 # cargo-deny configuration (P01-03 / ADR-0001 D-08).
 #
-# The project has no licence of its own yet (ADR-0001 R-09), which makes
-# copyleft reuse forbidden rather than merely discouraged. This gate enforces the
+# The project is MIT (ADR-0006, closing ADR-0001 R-09). This gate enforces the
 # policy recorded in docs/legal/third-party.md section 2:
 #   * only permissive licences may enter the dependency tree;
 #   * crates are fetched from crates.io only (no git forks of GPL projects);
@@ -36,15 +35,10 @@ allow = [
 ]
 confidence-threshold = 0.9
 
-# Our own crates are unpublished (`publish = false` in the workspace manifest) and
-# carry no licence field, because the project's licence is **undecided** (ADR-0001
-# R-09, an owner action). Ignoring them here makes this gate check what the policy is
-# actually about — the third-party tree — instead of failing forever on a decision the
-# agent cannot make. It does **not** resolve R-09: see docs/operations/DEPENDENCY-POLICY.md.
-#
-# Without this, the first real run of this gate failed with `error[unlicensed]:
-# mc-container = 0.1.0 is unlicensed` for all 15 workspace members.
-private = { ignore = true }
+# The workspace's own crates carry `license = "MIT"` (ADR-0006), so this gate
+# now checks them together with the third-party tree — nothing is skipped.
+# Until ADR-0006 they were unlicensed and had to be excluded with
+# `private = { ignore = true }`, which failed the first real gate run.
 
 [bans]
 multiple-versions = "allow"

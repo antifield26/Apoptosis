@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 # Required by the licence gate: a workspace member without it is rejected.
 publish.workspace = true
+license.workspace = true
 
 [lints]
 workspace = true

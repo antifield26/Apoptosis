@@ -84,7 +84,7 @@ Adopt in P01: `tokio, serde, serde_json, toml, tracing, tracing-subscriber, this
 | R-06 | Async bleed: gameplay becomes async via Tokio convenience | M / M | D-02 boundary + review checklist (`EXECUTION-LOOP.md` §5); clippy/lint custom pass if drift seen | P01-04, reviews |
 | R-07 | Vanilla world corruption (layout break 26.1, DataVersion stamp, sector bugs) | M / H | Dual-layout reader, range-checked versions, tmp→rename + `_old` backup, restart/corruption suites, vanilla-world load test | P03-14/15/16 |
 | R-08 | Valence staleness (1.20.1) misleads protocol work | L / M | Valence excluded as protocol oracle (4-state, no Config); used only for codec style/boundary ideas | P02 |
-| R-09 | No project license chosen → GPL-reuse automatically forbidden, but also distribution unclear | L / M | Flag for owner; no release artifacts until decided (P09-09 blocked on it) | P09 |
+| R-09 | ~~No project license chosen → GPL-reuse automatically forbidden, but also distribution unclear~~ **RESOLVED 2026-09-12 (ADR-0006)** | L / M → closed | Owner adopted **MIT**; `LICENSE` + `license = "MIT"` in all 17 manifests; `cargo deny` now checks the workspace's own crates (no `private = { ignore = true }`). Distribution unblocked; the clean-room rule and the third-party GPL ban are unchanged | P09 (closed post-phase) |
 | R-10 | Repo has zero commits (resolved 2026-09-11: initial commit `b7b1c99`); all Phase-00 evidence is docs-only | — / L | Initial commit recommended post-gate (owner approval); docs are the deliverable, no prod claims made | P00 exit |
 
 ## 3. Consequences
