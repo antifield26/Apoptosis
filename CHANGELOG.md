@@ -6,11 +6,26 @@ per-phase reports and five adversarial audits that this file condenses live in
 git history — the pre-governance snapshot (which still contains them as files)
 is the tag **`phase-09-final`** (`git show phase-09-final:docs/phases/…`).
 
-Format follows [Keep a Changelog](https://keepachangelog.com/) in spirit; the
-project has shipped no tagged release yet, so the first entry is the release
-candidate matching the workspace version (`0.1.0` in [Cargo.toml](Cargo.toml)).
+Format follows [Keep a Changelog](https://keepachangelog.com/) in spirit. The first
+entry is the release candidate matching the workspace version (`0.1.0` in
+[Cargo.toml](Cargo.toml)); it is **published** as tag `v0.1.0-rc.1` with built
+artifacts, and no later version has been released.
 
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
+
+**Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
+
+| Asset | Size | SHA-256 |
+|---|---|---|
+| `mc-server-aarch64` | 4 526 384 B | `0a9575c7499c03573f4b83e0b4b762c60daff55ba49e0d87b2997d845baea3e3` |
+| `mc-server-x86_64-windows.exe` | 3 385 344 B | `a11d6f06dd7269b9b3ecc68ff8735db4f502ae60bc66bf768e14f910adfd0b45` |
+| `SHA256SUMS` | 185 B | `02c0a325ced2ea2eda5c444848d6fd09dcc8a2915b76ae58bc2dbab9d14e56b8` |
+
+Both binaries are built from this tag; the aarch64 one was built **on the device** and is
+byte-identical to the binary the Pi acceptance host runs (verified by SHA-256 during the
+governance round, 2026-09-12). Build and release procedure:
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
 
 ### Phase 00 — Research (2026-09-10)
 
@@ -144,4 +159,4 @@ candidate matching the workspace version (`0.1.0` in [Cargo.toml](Cargo.toml)).
   per-phase reports distilled into this file and retired to git history, and
   the documentation-audit scripts committed to `tools/docs-audit/`.
 
-[0.1.0-rc.1]: https://github.com/antifield26/Apoptosis
+[`v0.1.0-rc.1`]: https://github.com/antifield26/Apoptosis/releases/tag/v0.1.0-rc.1
