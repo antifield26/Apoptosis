@@ -253,8 +253,12 @@ the audit record, which is history.
    hurried coverage claim is worse than an acknowledged gap (AUDIT-07 reported "30 of 30 verified" while 16
    rows were never compared). The decomposition to start from is AUDIT-08-FINDINGS §5: 32 rows deep-dived,
    126 inherited.
-2. **CI has not seen this round's commits at the time of writing.** They are local. The next push runs the
-   four audit scripts and the five gates on them; nothing here should be treated as CI-verified until then.
+2. **CI has seen this round's commits, and it is green.** Run `34701863618` completed **success** on
+   `5fafdf0` (the W8 commit) with all five jobs passing: `check-x86_64`, `check-linux`, `check-aarch64`,
+   `dependency-policy` and `docs-audit`. That last one is the four audit scripts running against this
+   round's documentation, which is the check that matters most for a docs-only round. Note the push
+   refspec: the local branch is `master` and the remote default is `main`, so it is `git push origin
+   master:main` — `git push origin main` fails with "src refspec main does not match any".
 3. **`release.yml` has never executed.** It cannot be validated end-to-end without publishing a tag, which
    this round deliberately did not do. Its YAML, its version guard and its embedded PowerShell were checked
    locally; the first real tag is its first real test.
