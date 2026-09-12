@@ -130,7 +130,56 @@ Gaps this run does not close (carried, not hidden): no Pi 5 hardware, no
 release profile, no real client traffic, no kernel/CPU/RSS capture, and the
 commit cited is the harness's parent rather than the harness itself.
 
+### P09-08 — Pi performance release sweep (development host, BOTH profiles)
+
+First run of the harness under the release profile, closing the "no release
+profile" gap named in §P08-13 **on this host only**. Still not a Pi 5, still a
+driven in-process loop — the verdict rule stays §4.
+
+| Field | Value |
+|---|---|
+| Date | 2026-09-12 |
+| Hardware | operator Windows host, x86_64 (not a Pi 5) |
+| Toolchain | pinned `1.98.1` (`rust-toolchain.toml`) |
+| Commit | `bf118c8` tree plus the uncommitted P09 metrics-tag fix (runs predate the commit; same shape as §P08-13's citation) |
+| Build profile | `dev` and `release` (`--locked`) |
+| Workload | §P08-13's acceptance workload: 10 survival clients, view 8, flat floor, rotation+swing+hotbar every tick, periodic step, rotating chat/`/list`; 40 warm-up + 200 measured ticks (pi_profile), 60+400 (tick_baseline) |
+| Command | `cargo test [-release] -p mc-server --test pi_profile --test tick_baseline -- --ignored --nocapture`; cited release log: `target/p09_perf_release.log` (re-run after the profile-string fix, AUDIT-06 finding 3 — the run self-describes as `release (optimised, debug assertions off)`) |
+| MSPT p50/p95/p99 — settled, **release** | **0.060 / 0.072 / 0.137 ms**, max 0.244 (workload test); tick_baseline 10-player: 0.042 / 0.074 / 0.140 ms, max 0.224 |
+| MSPT p50/p95/p99 — settled, debug | 0.67 / 0.74 / 0.84 ms, max 1.02 (consistent with §P08-13) |
+| MSPT p99 — join burst, **release** | 13.29 ms (max 14.17) vs **390.5 ms (max 396.7) in debug** — the burst is encode/stream cost, which optimization collapses |
+| Entity-heavy 1 000 entities, release | p50/p95/p99 1.07 / 1.26 / 1.36 ms, max 1.50 (debug §P05-18: 16.75/19.23/21.02) |
+| Chunkgen burst | 684 resident, 1 360 streamed: **0.47 s release / 11.1 s debug** (≈0.34 ms vs ≈8 ms per streamed chunk) |
+| Dirty save (81 chunks) | **0.88 s release / 5.13 s debug** (≈11 ms vs ≈63 ms per chunk) |
+| TPS | not a rate measurement (driven loop); the printed estimates are ticks/wall |
+| CPU / RSS | not captured on this host (§4 step 4 owns that on the Pi) |
+| Network / storage | in-process queues; `TempDir` on the system drive |
+
+Interpretation, stated carefully:
+
+- Release settles at ~0.05–0.06 ms p95 for the acceptance workload: **~800×**
+  headroom against the 50 ms budget on this host — but the §P08-13 warning
+  stands: host noise, wrong hardware and a driven loop make this a regression
+  baseline, not a 20 TPS verdict.
+- The join burst falling from ~390 ms (debug) to ~13 ms (release) re-frames
+  P08-14's palette no-fix: in release the whole burst is a rounding error at
+  20 TPS scale. Any future optimization work should start from a Pi profile,
+  not from this loop.
+
+### P09-09 — reproducible release build (development host)
+
+| Field | Value |
+|---|---|
+| Date | 2026-09-12 |
+| Command | `cargo build --workspace --release --locked` (exit 0; `Cargo.lock` committed, pinned toolchain 1.98.1) |
+| Artifact | `target/release/mc-server.exe`, 3 382 272 bytes |
+| SHA-256 | `36e3ab018015b6a2fd58e54b9d3d93a8f64c77af744a602d3b6ef64e6936e659` |
+| Smoke 1 | fresh world dir: server starts, creates `level.dat`; hand-rolled socket client (`status` handshake proto 775 → request → JSON → ping/pong echo) passes: `{"version":{"name":"26.1.2","protocol":775},"players":{"max":10,...}}` |
+| Smoke 2 | second start on the same dir: world reused, no error, smoke passes again |
+| Distribution | **withheld** — R-09 (no project license decision); nothing may be published until the owner decides. The build is reproducible; the release is not claimed |
+
 ## 2. Planned workloads
+
 
 1. `idle` — empty server, tick overhead floor.
 2. `single-roam` — 1 scripted client roaming + chunk streaming.
@@ -147,3 +196,40 @@ a performance acceptance target (AGENTS.md section 2). Development/CI is x86_64
 plus an aarch64 build verification
 (`cargo check --target aarch64-unknown-linux-gnu --workspace --all-targets`),
 which is green as of Phase 04.
+
+## 4. Pi acceptance procedure (P09-08 — the run to do when hardware exists)
+
+No Pi 5 exists in this environment, so the 20 TPS verdict is **unknown, not
+claimed** (KD-35). This section is the prepared substitute: the exact procedure
+the owner runs when a Pi 5 is available, so the verdict needs no re-derivation.
+Every step cites what already exists in the tree.
+
+1. **Build on the Pi** (Debian 13 Trixie aarch64, NVMe, 8 GB): `rustup` installs
+   the pinned 1.98.1 toolchain from `rust-toolchain.toml`, then
+   `cargo build --workspace --release --locked`. Record the commit SHA and
+   `rustc --version`.
+2. **In-process benches, release profile** (validates the port, gives the first
+   MSPT figures):
+   `cargo test --release -p mc-server --test pi_profile --test tick_baseline -- --ignored --nocapture`
+   — the same workload that produced §1's dev-host numbers.
+3. **Real service run** (the acceptance workload): install
+   `deploy/mc-server.service` per `docs/operations/RUNBOOK.md` §1, 10 real or
+   scripted clients at view 8 in Vanilla Survival, **30 minutes**.
+4. **Capture the §13 fields during the soak**: TPS + MSPT p50/p95/p99 from the
+   `tick metrics` log lines (`OperationalSnapshot`, one per 600 ticks —
+   `journalctl -u mc-server`); CPU and RSS from `systemd-cgtop` / a `/proc`
+   sampler (the fields the snapshot deliberately does not fabricate); storage
+   latency from `iostat` on the NVMe; note any overrun outside the join burst.
+5. **Verdict rule**: the product contract is stable 20 TPS — the soak passes
+   when mean MSPT stays under 50 ms and no settled tick (i.e. excluding the
+   join burst) overruns the budget. A soak that fails names the dominant phase
+   from the per-phase means, and the P08-14 rule (profile-gated smallest
+   change) applies before any tuning.
+6. **Record**: a dated `§P09-Pi` section in this file with every §13 field and
+   the commit; update `PARITY-MATRIX.md`'s 20 TPS row and `KNOWN-DIVERGENCES.md`
+   KD-35 in the same pass. Until that section exists, no document may upgrade
+   KD-35.
+
+Until then, the aarch64 half of the story is the cross-build gate
+(`cargo check --target aarch64-unknown-linux-gnu`, green 2026-09-12) plus the
+release-profile figures below — honest partial evidence, not the verdict.

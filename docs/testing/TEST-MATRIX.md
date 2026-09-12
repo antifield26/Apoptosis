@@ -3,11 +3,14 @@
 Conventions: `L1` unit · `L2` property/fuzz · `L3` integration · `L4` golden/fixture ·
 `L5` end-to-end · `L6` differential vs vanilla · `L7` regression-per-bug`.
 Status: `planned | pass | fail | skipped(reason) | ignored(needs external input)`.
-Totals: **1 189 passed, 0 failed, 21 ignored**, re-derived from a
-`cargo test --workspace --no-fail-fast` run at P09-01 (74 suites; HEAD
-`233cfce`; the Phase 07 figure 1 174/0/17 predates the P08 suites —
-`pi_profile` 0+4 ignored, `ops_e2e` +1, `command_e2e` +1, `tick_baseline`
-phase-mean lines are inside existing tests, not new suites).
+Totals: **1 189 passed, 0 failed, 21 ignored**, re-derived from **two consecutive**
+`cargo test --workspace --no-fail-fast` runs on 2026-09-12 (74 suites; both
+exit 0; both after the P09 TempDir-tag fix — `target/p09_full_test.log` at
+12:02, and `target/p09_full_test2.log` after the final P09 code change, which
+also re-ran the four non-test gates the same day: `gate_fmt.log`,
+`gate_clippy.log`, `gate_aarch64.log`, `gate_deny.log`). The 21 ignored = 7
+differential suites (15 tests, env-gated) + `pi_profile` 4 + `tick_baseline`
+2 — all run on demand the same day (P09 rows below).
 
 ## Phase 07 — Commands, data packs and worldgen
 
@@ -307,8 +310,37 @@ on-demand (workload/chunkgen/persistence/profile); `tick_baseline` gains
 | `bypassesPlayerLimit` comments said "not enforced" after P08-06 enforced it | re-reading every `bypass` mention | Name the enforcement site (`Game::is_full_for`); same doc-rot shape as Phase 07 §2.7/2.8 |
 | `PHASE-08-REPORT.md` cited §§2.5/7 that did not exist | P08 verification cluster | Wrote the missing §2.5 (palette no-fix probe) + §2.6 (matrix deferral); fixed the P08-16 row pointer |
 
+## Phase 09 — Conformance, release candidate and plugin readiness
+
+The sweep rows re-derive the phase claims from named suites measured in the
+2026-09-12 runs; per-crate lib binaries are in the full-run output, and counts
+below are the named integration/fixture/differential suites only.
+
+| ID | Case | Level | Status | Evidence |
+|---|---|---|---|---|
+| P09-T01 | Full test matrix execution | all | **pass** | two consecutive full-workspace runs, 1 189 / 0 / 21, 74 suites (2026-09-12); Phase 08 section added in the same pass (commit `bf118c8`) |
+| P09-T02 | Protocol conformance sweep | L1+L2+L4+L5 | **pass** | `packet_ids` 4 (jar-extracted ids incl. the `chat_command`=7 regression), `fixtures` 4 (golden bytes), `keepalive` 1, `login_tolerance` 2, `e2e_login_play` 6, plus the hostile VarInt/frame/packet corpus inside the `mc-protocol` lib binaries |
+| P09-T03 | Persistence compatibility sweep | L1+L3+L6 | **pass** | `restart` 7, `corruption` 16, `anvil_fixture` 9 (byte-identical palette repack), `vanilla_chunk` 4, and the env-gated `vanilla_differential` 2 run green with `MC_VANILLA_DATA`+`MC_VANILLA_JAR`+`MC_VANILLA_WORLD` — vanilla booted on our rewritten world (2026-09-12) |
+| P09-T04 | Survival regression sweep | L3+L4+L5 | **pass** | `survival_e2e` 7 (join/stream/move/break/place/death/save-reload), `network_game_bridge` 4 (real-socket login → play), `vanilla_chunk` 4 (real terrain walkable) |
+| P09-T05 | Entity/redstone regression sweep | L1+L2+L3+L5 | **pass** | `entity_lifecycle` 9, redstone suites 47 (`propagation` 17, `world_integration` 4, `budget_exhaustion` 7, `determinism` 6, `golden_circuits` 5, `power_model` 8), inventory/container: `container_e2e` 6, `block_entity_e2e` 6, `inventory_duplication` 5 |
+| P09-T06 | Commands/data/worldgen regression sweep | L1+L3+L5+L6 | **pass** | `command_e2e` 11, `execute_e2e` 9, `function_e2e` 14, `pack_discovery` 10, `pack_loading_e2e` 8, `worldgen_e2e` 7, worldgen golden suites 30 (`structure_golden` 9, `seed_derivation` 8, `golden` 6, `determinism` 7), differential: `vanilla_pack` 1, `vanilla_data` 1, `vanilla_smelting` 1, `structure_pack` 6, `scenario_vanilla` 2, `structure_wiring` 2 |
+| P09-T07 | Security adversarial sweep | L1+L2+L3+L5 | **pass** | hostile-input classes green in the full run: non-terminating VarInt/frames + random-byte connections (protocol/network libs), slow-drip bound + registry cap + `framing.rs` drip test, `command_e2e` flood test, `ops_e2e` 7 (permission/impersonation), `inventory_duplication` 5 (2 000-click conservation), `corruption` 16 (hostile disk), config guardrails |
+| P09-T08 | Pi performance release sweep | L4 (perf) | **pass (ignored, on demand; dev host, both profiles)** | 2026-09-12: debug settled p50/p95/p99 0.67/0.74/0.84 ms max 1.02; release figures in `BENCHMARK-BASELINE.md` §P09-08; chunkgen 684 resident/1 360 streamed; 81 dirty saved; **no Pi 5, no 20 TPS verdict** — the prepared acceptance run is `BENCHMARK-BASELINE.md` §4 |
+| P09-T09 | Reproducible release build | — | **pass (build) / blocked (publish)** | `cargo build --workspace --release --locked` green + real-socket status smoke; **no artifact published** — R-09 license decision pending; recorded in `BENCHMARK-BASELINE.md` §P09-09 |
+| P09-T10 | Release documentation | — | **pass** | `docs/release/RELEASE-CANDIDATE.md`: build/run/claims table, every "no" tied to a KD entry |
+| P09-T11 | Known divergence catalog | — | **pass** | `docs/vanilla-parity/KNOWN-DIVERGENCES.md` KD-01..38, each sourced to a matrix row or phase report |
+| P09-T12 | Rust-native plugin boundary ADR | — | **pass** | `docs/adr/ADR-0005-plugin-boundary.md`: three named seams with code sites and triggers; zero API types (grep-verified) |
+| P09-T13 | Independent final review | L7 | **pass** | adversarial review by a fresh agent, findings + dispositions in `docs/phases/AUDIT-06-FINDINGS.md` |
+| P09-T14 | Release candidate acceptance report | — | **pass** | `docs/phases/PHASE-09-REPORT.md`, exit-gate verdict table per clause |
+
+### The metrics flaky fixed by this phase (L7)
+
+| Bug | Found by | Fix |
+|---|---|---|
+| `mc-server` lib tests failed ~1 in 4 full runs: `cannot move .../level.dat.tmp into place (os error 2)` | PHASE-08-REPORT §2.1 observation | Root cause proven with a probe: `TempDir` names are `tag+pid+nanos`; under parallel filesystem I/O the wall clock quantises — duplicate paths recur across identical 160 000-construction probe runs (7 and 17; `target/p09_probe_tempdir.log` retains the 7). All three metrics tests shared the tag `ops-metrics`, so one test's `WorldService::open` raced another's drop-time `remove_dir_all`. Fix: `game(tag)` with a distinct tag per test (the codebase-wide convention); 10 consecutive green runs (`target/p09_metrics_repeat.log`) + two full-workspace green runs after the fix |
+
 ## Later phases (tracked, not yet expanded)
 
 P04 survival slice (move/collide/break/place/inventory/death/restart) · P05 determinism scenarios + entity suites ·
 P06 inventory-adversarial + redstone golden/differential · P07 command-permission matrix + datapack/worldgen parity ·
-P09 full-matrix + conformance sweeps. Expand at phase entry.
+Expand at phase entry.
