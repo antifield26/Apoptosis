@@ -160,6 +160,14 @@ fn commit(temp: &Path, path: &Path) -> ServerResult<()> {
 ///
 /// Not supported on every platform (Windows cannot fsync a directory handle);
 /// a failure is logged at debug level rather than treated as a save failure.
+///
+/// Coverage note (Audit 08, M3): no in-process test can observe this call —
+/// a directory fsync is only observable across a power loss, and Windows
+/// cannot fsync a directory handle at all, so a suite that stays green with
+/// this function disabled proves nothing either way (verified: disabling it
+/// leaves all 74 mc-persistence lib tests green). The guarantee is enforced
+/// by review on the Linux deployment, not by a test; the repo definition-of-done item 4's documented
+/// reason is this comment.
 fn sync_directory(dir: Option<&Path>) {
     let Some(dir) = dir else {
         return;

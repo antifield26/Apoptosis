@@ -3,7 +3,7 @@
 //! ## What this replaces
 //!
 //! `furnace.rs` ships a hand-written `SmeltingRegistry::baseline` — six recipes from
-//! community knowledge, which `PHASE-06-REPORT.md` §5.9 had to record as unverified. The
+//! community knowledge, which the Phase 06 review recorded as unverified (CHANGELOG.md). The
 //! 26.1.2 jar ships **73 `smelting` recipes**, 25 `blasting`, 9 `smoking` and 9
 //! `campfire_cooking`, and `mc-data` loads them.
 //!

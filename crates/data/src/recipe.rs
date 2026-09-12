@@ -35,7 +35,7 @@
 //!
 //! ## Real values this replaced guessed ones with
 //!
-//! `PHASE-06-REPORT.md` §5.9 recorded that the hand-written furnace table was
+//! The Phase 06 review recorded that the hand-written furnace table was
 //! "community knowledge, not a jar dump". The jar confirms the two values that were
 //! guessed: iron from raw iron is `cookingtime: 200, experience: 0.7`. Loading it
 //! means the numbers now come from the data, and the guessed table can go.

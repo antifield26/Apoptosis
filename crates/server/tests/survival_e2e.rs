@@ -9,7 +9,7 @@
 //! What this proves: a player can join, receive terrain, walk on it, break and
 //! place blocks within reach, die, respawn, and have the world survive a restart.
 //! What it does **not** prove is real-client acceptance —no 26.1.2 client exists
-//! in this environment. That gap is stated in `docs/phases/PHASE-04-REPORT.md`
+//! in this environment. That gap is stated in the parity matrix (originally the Phase 04 report)
 //! rather than papered over with a self-consistent codec test.
 
 // Each scenario is a single linear narrative (join → act → assert) on purpose;

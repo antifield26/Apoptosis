@@ -31,7 +31,7 @@
 //! - **`stop`** sets the shutdown flag; it does not save first, because the lifecycle's
 //!   shutdown path already saves after the network drains (ADR-0001 D-04).
 //!
-//! Every one of these is a line in `PHASE-07-REPORT.md` §5 and in the parity matrix.
+//! Every one of these is a line in the parity matrix (the Phase 07 report is in git history, tag `phase-09-final`).
 
 use mc_command::source::{CommandSource, SourceKind};
 use mc_core::error::ServerResult;

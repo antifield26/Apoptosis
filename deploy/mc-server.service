@@ -44,6 +44,26 @@ ExecStart=/srv/mc-server/mc-server /srv/mc-server/config.toml
 # binary swap cannot take them with it. world_dir in config.toml must point at
 # /var/lib/mc-server/world for this layout.
 ReadWritePaths=/var/lib/mc-server /var/backups/mc-server
+# Hardening (Audit 08, M4: the unhardened unit scored 9.2 UNSAFE on
+# systemd-analyze). The server reads its binary/config from /srv (read-only
+# under ProtectSystem=strict), writes only the world and backups through
+# ReadWritePaths, and needs no other host access.
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
 # SIGTERM is the graceful stop; the 60 s bound covers the 5 s connection drain
 # plus the 30 s save bound with margin (see the header comment).
 KillSignal=SIGTERM

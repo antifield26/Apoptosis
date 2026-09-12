@@ -99,8 +99,9 @@ impl Registries {
         let exe_dir = std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(Path::to_path_buf));
+        let override_dir = std::env::var("MC_FIXTURE_DIR").ok();
         let mut tried = String::new();
-        for dir in candidate_dirs(exe_dir.as_deref()) {
+        for dir in candidate_dirs(exe_dir.as_deref(), override_dir.as_deref()) {
             if dir.join("blocks.tsv").is_file() {
                 return Self::load(&dir);
             }
@@ -113,9 +114,11 @@ impl Registries {
 }
 
 /// The search list behind [`Registries::vanilla`], exposed for testing.
-fn candidate_dirs(exe_dir: Option<&Path>) -> Vec<PathBuf> {
+/// `override_dir` is the `$MC_FIXTURE_DIR` value, passed in so the precedence
+/// is testable without touching process-global state (Audit 08, M2).
+fn candidate_dirs(exe_dir: Option<&Path>, override_dir: Option<&str>) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    if let Ok(dir) = std::env::var("MC_FIXTURE_DIR") {
+    if let Some(dir) = override_dir {
         dirs.push(PathBuf::from(dir));
     }
     if let Some(exe_dir) = exe_dir {
@@ -141,7 +144,7 @@ mod tests {
     // that makes the deployed layout win before the build-tree fallback.
     #[test]
     fn the_fixture_search_prefers_the_executable_side_over_the_build_tree() {
-        let dirs = candidate_dirs(Some(Path::new("/srv/mc-server")));
+        let dirs = candidate_dirs(Some(Path::new("/srv/mc-server")), None);
         assert_eq!(
             dirs[0],
             Path::new("/srv/mc-server/fixtures/registry"),
@@ -155,8 +158,18 @@ mod tests {
 
     #[test]
     fn the_fixture_search_works_without_an_executable() {
-        let dirs = candidate_dirs(None);
+        let dirs = candidate_dirs(None, None);
         assert_eq!(dirs.len(), 1, "no exe means only the compiled-in path");
         assert!(dirs[0].ends_with(FIXTURE_DIR));
+    }
+
+    // Audit 08 (M2): the `$MC_FIXTURE_DIR` override had no coverage at all —
+    // the branch existed but nothing read it. This pins the precedence: the
+    // operator override is searched before everything else.
+    #[test]
+    fn the_operator_override_is_searched_first() {
+        let dirs = candidate_dirs(Some(Path::new("/srv/mc-server")), Some("/data/registry"));
+        assert_eq!(dirs[0], Path::new("/data/registry"));
+        assert_eq!(dirs[1], Path::new("/srv/mc-server/fixtures/registry"));
     }
 }

@@ -1,7 +1,7 @@
 //! `level.dat` (P03-08).
 //!
 //! Modelled on the file a real 26.1.2 server wrote (`target/vanilla-26.1.2`,
-//! dumped in `docs/phases/PHASE-03-REPORT.md`):
+//! dumped in the Phase 03 report (git history, tag `phase-09-final`)):
 //!
 //! ```text
 //! Data: {

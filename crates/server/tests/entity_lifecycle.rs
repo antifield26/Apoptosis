@@ -14,7 +14,7 @@
 //!
 //! What this does **not** prove: mob AI, item pickup or the entity packets that
 //! would make a non-player entity visible to a client. Those are P05-11..P05-15
-//! and are listed as gaps in `docs/phases/PHASE-04-REPORT.md` rather than implied
+//! and are listed as gaps in the parity matrix (originally the Phase 04 report) rather than implied
 //! by a passing test here.
 
 // Chunk arithmetic narrows world coordinates to chunk indices; the crate root

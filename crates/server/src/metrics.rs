@@ -106,7 +106,7 @@ mod tests {
     // The tag must differ per test: TempDir uniqueness is pid + nanos, and two
     // same-tag constructions in one process have observed the same nanos tick
     // under parallel I/O, so one test's level.dat rename raced the other's
-    // drop-time remove_dir_all (PHASE-08-REPORT.md §2.1).
+    // drop-time remove_dir_all (the P08 flaky record; see CHANGELOG.md).
     fn game(tag: &str) -> (Game, TempDir) {
         let dir = TempDir::new(tag);
         let config = crate::config::StorageConfig {

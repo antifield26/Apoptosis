@@ -11,7 +11,7 @@
 //! Every format constant here was measured on a world generated and saved by the
 //! vanilla 26.1.2 server (`target/vanilla-26.1.2`, evidence recorded in
 //! `docs/research/protocol-baseline.md` section 2 and
-//! `docs/phases/PHASE-03-REPORT.md`):
+//! the Phase 03 report (git history, tag `phase-09-final`)):
 //!
 //! | Fact | Value | How it was measured |
 //! |---|---|---|

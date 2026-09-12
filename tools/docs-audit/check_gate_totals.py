@@ -33,8 +33,14 @@ if not canonical:
 TOTAL = canonical.group(1).replace(' ', '')
 print(f'canonical total ({CANONICAL_DOC}): {TOTAL} passed\n')
 
-# A stated total looks like "1 194 passed" or "1194 passed", with the thin space optional.
-STATED = re.compile(r'(\d[\d\u202f ]{2,})\s*passed')
+# A stated total looks like "1 194 passed", "1194 passed" or "1,194 passed"
+# (comma-grouped, which used to be matched as the bare trailing digits and
+# produced a mangled diagnostic — Audit 08, L3).
+STATED = re.compile(r'(\d[\d,\u202f ]{2,})\s*passed')
+# An unrendered template placeholder (Audit 08, H2): "{{lib_sum}}" style
+# fragments left behind by a generation step are exactly as silent as a
+# stale number.
+PLACEHOLDER = re.compile(r'\{[a-z_]{3,}\}')
 
 findings = []
 exempt = []
@@ -43,8 +49,15 @@ for rel in docs:
         continue
     text = (ROOT / rel).read_text(encoding='utf-8')
     for number, line in enumerate(text.splitlines(), 1):
+        if rel != CANONICAL_DOC:
+            for match in PLACEHOLDER.finditer(line):
+                entry = (rel, number, match.group(0), line.strip()[:100])
+                if rel.startswith('docs/audits/'):
+                    exempt.append(entry)
+                else:
+                    findings.append(entry)
         for match in STATED.finditer(line):
-            value = match.group(1).replace(' ', '').replace('\u202f', '')
+            value = match.group(1).replace(' ', '').replace(',', '').replace('\u202f', '')
             if value == TOTAL:
                 continue
             entry = (rel, number, value, line.strip()[:100])

@@ -104,8 +104,9 @@ candidate matching the workspace version (`0.1.0` in [Cargo.toml](Cargo.toml)).
 
 ### Phase 09 — Conformance & release candidate (2026-09-12)
 
-- Full-matrix sweeps across every domain (final counts: **1 194 passed /
-  0 failed / 21 ignored, 74 suites**); all seven differential suites green
+- Full-matrix sweeps across every domain (the sweep measured **1 194 / 0 /
+  21 over 74 suites**; the remediation and Audit 08 coverage tests brought the
+  tree to **1 196 / 0 / 21**); all seven differential suites green
   including the vanilla round trip; both build profiles measured; release
   build reproducible with a real-socket smoke.
 - Known-divergence catalog, release-candidate documentation, plugin-boundary

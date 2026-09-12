@@ -8,8 +8,9 @@ a verifiable fact, not a decision: the repository is **public**).
 
 ## Baseline (verified, 2026-09-12)
 
-- Five gates: `cargo test --workspace --no-fail-fast` = **1 194 passed /
-  0 failed / 21 ignored, 74 suites**; fmt, clippy (`-D warnings`), aarch64
+- Five gates: `cargo test --workspace --no-fail-fast` = **1 194 / 0 /
+  21 ignored over 74 suites** at the audit baseline (**1 196 / 0 / 21** after
+  the Audit 08 coverage tests); fmt, clippy (`-D warnings`), aarch64
   cross-check and `cargo deny` (licenses/bans/sources) all clean. Identical
   after the governance work (see the final section).
 - CI: the `ci` workflow runs on GitHub since the repository gained its remote.
@@ -96,28 +97,23 @@ a verifiable fact, not a decision: the repository is **public**).
 | (references to) the exit-gates / definition-of-done contract files | `CONVENTIONS.md §15` and the phase-gate summary in git history |
 | (references to) the task-index file | `CHANGELOG.md` (phase structure) — no in-repo task index exists |
 
-## Pending items (owner decisions or actions, not done unilaterally)
+## Pending items — status after the Audit 08 remediation (2026-09-12)
 
-1. **Thirteen code references across twelve files still cite retired reports**
-   (an earlier version said "ten code comments"; Audit 07 finding L4 measured 13
-   references in 12 files) (e.g.
-   `crates/container/src/smelting_data.rs` → `PHASE-06-REPORT.md` §5.9;
-   `crates/server/src/metrics.rs` → PHASE-08-REPORT §2.1). Left untouched on
-   purpose: the task forbids changing `crates/`/`apps/`, and each citation
-   resolves in git history (`git show phase-09-final:…`). A future code-touch
-   commit can re-point them at the changelog.
-2. **CI's `docs-audit` job runs for the first time on the next push.** Both
-   scripts pass locally on the post-governance tree (0 findings); if the
-   runner disagrees, that is a script portability bug to fix, not a docs one.
-3. **The prompt pack stays git-ignored.** If the owner ever wants it public,
-   the reference rewrite is superseded by un-ignoring it; the two mechanisms
-   should not be mixed.
-4. **No tagged binary release exists.** When one is wanted: tag a version,
-   build per `docs/release/RELEASE-CANDIDATE.md` §2, attach artifacts, and
-   only then may "release" language appear in the README (it currently says
-   release candidate).
+1. **Code references citing retired reports — CLOSED.** AUDIT-07 measured 13
+   references in 12 files (an earlier version said ten); AUDIT-08 re-measured
+   12 in 11 files and **all of them were re-pointed** at `CHANGELOG.md` or the
+   git-history tag form in the remediation commit. Measured now: **0**.
+2. **CI `docs-audit` first run — RESOLVED.** The first run failed and taught
+   the checker two things (target/-prefix exemptions, archive-tag fetching);
+   the job has since run green.
+3. **The prompt pack stays git-ignored** — unchanged by decision.
+4. **Tagged binary release — CLOSED.** Tag `v0.1.0-rc.1` with the x86_64 and
+   aarch64 `mc-server` binaries (SHA-256 sums attached) on GitHub Releases;
+   README/RELEASE-CANDIDATE/CHANGELOG use release language.
 5. **KD-38 (real-client acceptance) remains the only unresolved acceptance
-   boundary**; the parity matrix tracks it.
+   boundary**; the parity matrix tracks it. The parity-matrix roadmap gaps
+   (lighting, entity persistence/sync, redstone wiring, container windows, …)
+   are development work, not remediation.
 
 ## Final verification
 

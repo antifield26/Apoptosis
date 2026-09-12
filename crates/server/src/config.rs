@@ -125,12 +125,12 @@ impl Default for StorageConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct DataPackConfig {
-    /// Path to the vanilla data directory — the jar\'s \data/minecraft\ — when it is available.
+    /// Path to the vanilla data directory — the jar's `data/minecraft` — when it is available.
     ///
-    /// \None\ by default, and that is the honest default: the jar data is Mojang\'s and is **not**
+    /// `None` by default, and that is the honest default: the jar data is Mojang's and is **not**
     /// committed to this repository, so a server on a fresh checkout has none. The consequence is
     /// stated rather than hidden: with no vanilla data, no vanilla function, recipe or tag loads,
-    /// and \/function\ reports unknown names. Setting this to either the \data/minecraft\
+    /// and `/function` reports unknown names. Setting this to either the `data/minecraft`
     /// directory or a pack root containing it works, because the two are indistinguishable from
     /// outside and getting it wrong has the same symptom as configuring nothing.
     pub vanilla_data: Option<PathBuf>,

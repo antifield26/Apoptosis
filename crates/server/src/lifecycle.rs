@@ -328,7 +328,7 @@ impl<H: TickHook> Server<H> {
     ///
     /// [`ServerError::Operational`] when the bind fails or online mode is
     /// enabled (the encryption/session flow is not implemented yet; see
-    /// `docs/phases/PHASE-02-REPORT.md`).
+    /// the Phase 02 report, git history tag `phase-09-final`).
     pub async fn start_network(&mut self) -> ServerResult<std::net::SocketAddr> {
         if self.config.network.online_mode {
             return Err(ServerError::Operational(

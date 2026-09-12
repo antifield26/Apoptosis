@@ -10,7 +10,7 @@
 //! introduced `attributes`/`timelines`/`default_clock` in the datapack JSON),
 //! and this environment has no real 26.1.2 client to verify against. A real
 //! client test is required before any compatibility claim; the gap is tracked
-//! in `docs/phases/PHASE-02-REPORT.md`. Full registry loading is P04-01/P07-03.
+//! in the Phase 02 report (git history, tag `phase-09-final`). Full registry loading is P04-01/P07-03.
 
 use mc_core::error::ServerResult;
 use mc_protocol::RawPacket;

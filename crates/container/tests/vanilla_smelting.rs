@@ -6,7 +6,7 @@
 //! `smelting` type into a [`SmeltingRegistry`], and asserts the figures
 //! `docs/research/data-pack-baseline.md` measured.
 //!
-//! It is the test that retires `PHASE-06-REPORT.md` §5.9's caveat: the six hand-written
+//! It is the test that retires the Phase 06 §5.9 caveat (see CHANGELOG.md): the six hand-written
 //! baseline recipes were community knowledge, and the jar states their real values. If the
 //! conversion disagrees with the jar on iron, either the loader or the convertor is wrong.
 //!
@@ -128,7 +128,7 @@ fn the_furnace_table_is_built_from_the_real_smelting_recipes() {
 
 /// The values Phase 06 hand-wrote from community knowledge, which the jar states.
 ///
-/// This is the assertion that retires `PHASE-06-REPORT.md` §5.9's caveat, so it is worth
+/// This is the assertion that retires the Phase 06 §5.9 caveat, so it is worth
 /// keeping separate: if it ever fails, the caveat is back.
 fn check_known_values(registry: &ItemRegistry, table: &SmeltingRegistry) {
     // The two values Phase 06 guessed and the jar confirms.

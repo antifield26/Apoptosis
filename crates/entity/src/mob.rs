@@ -113,6 +113,9 @@ pub const TICKS_PER_SECOND: f64 = 20.0;
 /// player data point to other mobs is this crate's assumption; see the module
 /// documentation before using it to move anything.
 pub const SPEED_BLOCKS_PER_SECOND_PER_ATTRIBUTE: f64 = 43.17;
+// Pinned by `the_speed_constant_is_the_documented_player_derivation` in the
+// tests module below: changing it is a deliberate recalibration, not an
+// accident (Audit 08, L1).
 
 /// Distance in blocks at which a hostile mob acquires a player as its target.
 ///
@@ -924,6 +927,28 @@ mod tests {
         SPEED_BLOCKS_PER_SECOND_PER_ATTRIBUTE, TARGET_LOSE_RADIUS, WALK_DURATION_TICKS,
         WANDER_RADIUS,
     };
+
+    // Audit 08 (L1): the constant is a derivation from the documented player
+    // figure, unverified against vanilla (module table). Pinning it here makes
+    // any change a deliberate, reviewable recalibration.
+    #[test]
+    fn the_speed_constant_is_the_documented_player_derivation() {
+        assert_eq!(SPEED_BLOCKS_PER_SECOND_PER_ATTRIBUTE, 43.17);
+        // and the derived table really is attribute x constant:
+        for kind in [
+            MobKind::Zombie,
+            MobKind::Sheep,
+            MobKind::Spider,
+            MobKind::Skeleton,
+            MobKind::Cow,
+            MobKind::Pig,
+            MobKind::Chicken,
+            MobKind::Creeper,
+        ] {
+            let expected = kind.movement_speed_attribute() * SPEED_BLOCKS_PER_SECOND_PER_ATTRIBUTE;
+            assert_eq!(kind.movement_speed_blocks_per_second(), expected);
+        }
+    }
     use crate::entity::EntityId;
 
     /// `java.util.Random`'s 48-bit LCG, for driving the AI from a fixed seed.

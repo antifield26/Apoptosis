@@ -13,7 +13,7 @@ Anvil format.
 | Toolchain | Rust **1.98.1**, pinned in [rust-toolchain.toml](rust-toolchain.toml) |
 | Platform | x86_64 (dev/CI) + aarch64 (production target) |
 | CI | GitHub Actions (`ci` workflow) — fmt, clippy, tests, aarch64 check, cargo-deny |
-| Status | **Release candidate** — see [docs/release/RELEASE-CANDIDATE.md](docs/release/RELEASE-CANDIDATE.md) |
+| Status | **Release candidate `v0.1.0-rc.1`** — binaries on [GitHub Releases](https://github.com/antifield26/Apoptosis/releases); see [docs/release/RELEASE-CANDIDATE.md](docs/release/RELEASE-CANDIDATE.md) |
 
 ## What works today
 
@@ -81,7 +81,7 @@ restore.
 ## Testing
 
 ```sh
-cargo test --workspace --no-fail-fast            # 1 194 passed / 0 failed / 21 ignored (74 suites)
+cargo test --workspace --no-fail-fast            # 1 196 passed / 0 failed / 21 ignored (74 suites)
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo check --target aarch64-unknown-linux-gnu

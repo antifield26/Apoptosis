@@ -273,6 +273,14 @@ fn pull_candidates(
 /// A slot qualifies when its role allows placement, it is empty or holds the same
 /// item, and it has at least one item of room. `None` means the items stay where
 /// they are.
+/// Pick the destination slot and how much of `stack` it can take.
+///
+/// Precondition (Audit 08, L2): the room computed here assumes every
+/// destination slot accepts at least [`MAX_ITEMS_PER_TRANSFER`] — which holds
+/// for hopper slots (64-stack) — because a `Container` does not carry a
+/// per-slot limit the way a menu's slot mapping does. A caller pointing a
+/// hopper at limited slots would over-report room and trip the invariant
+/// error in [`transfer`].
 fn push_target(
     destination: &Container,
     destination_roles: &[SlotRole],
