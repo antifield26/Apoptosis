@@ -37,7 +37,9 @@ install -m 0644 crates/test-support/fixtures/registry/blocks.tsv \
                 crates/test-support/fixtures/registry/items.tsv \
                 /srv/mc-server/fixtures/registry/
 install -m 0644 config.example.toml /srv/mc-server/config.toml
-# then edit /srv/mc-server/config.toml (bind, world_dir)
+# then edit /srv/mc-server/config.toml (bind, world_dir; see section 2 for
+#      the optional [datapacks] vanilla_data path, without which the server has
+#      no vanilla functions, recipes or tags)
 install -m 0644 deploy/mc-server.service /etc/systemd/system/mc-server.service
 systemctl daemon-reload
 systemctl enable --now mc-server.service
@@ -88,6 +90,24 @@ Operational notes:
 - `autosave_ticks = 0` disables the timer (explicit saves only). Default 6000
   (5 min at 20 TPS) is a **product decision, not a Vanilla-verified value**
   (Audit 05).
+- **`[datapacks] vanilla_data` is optional, and leaving it unset has
+  consequences worth knowing before they are discovered.** Point it at the
+  26.1.2 jar's extracted `data/minecraft` (either that directory or a pack root
+  containing it — both resolve) to load vanilla functions, recipes, tags and
+  structures. With it unset, **no** vanilla function, recipe or tag loads:
+  `/function` reports unknown names and generated terrain carries no
+  structures, while world packs under `<world_dir>/datapacks/` still load.
+  The data is Mojang's and is not committed, so a fresh checkout is in exactly
+  that state. Either accepted form works: the extracted `data/minecraft`
+  directory itself, or a pack root **containing** `data/minecraft`. The Pi
+  acceptance host now uses the second — verified on the device,
+  `vanilla_data = "/srv/mc-server/vanilla-data"` with the pack at
+  `/srv/mc-server/vanilla-data/data/minecraft` (758 tags, 1 515 recipes, 1 617
+  advancements), and the journal reports `vanilla_data=true` with
+  `namespaces=1`. The P09 acceptance run itself did **not** configure it — its
+  world was bare generated terrain, which is fine for a performance soak and is
+  recorded here so the omission is not mistaken for a regression (AUDIT-07
+  finding E4).
 
 ## 3. Observe (logs and metrics)
 

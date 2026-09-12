@@ -23,3 +23,19 @@ view_distance = 8
 world_dir = "world"
 # Ticks between autosaves at 20 TPS (6000 = 5 min); 0 disables the timer.
 autosave_ticks = 6000
+
+[datapacks]
+# Optional: the **vanilla** data pack — the 26.1.2 server jar's own
+# `data/minecraft`. That data is Mojang's, so it is deliberately not committed
+# here and this key is unset by default; extract it from the jar you supply
+# (see docs/research/data-pack-baseline.md section 0).
+#
+# Point it at the extracted `data/minecraft` directory, or at a pack root that
+# contains it — both work, because the two are indistinguishable from outside.
+# It is what loads vanilla functions, recipes, tags and structures.
+#
+# Leaving it unset is a real state, not a degraded mode: with no vanilla data,
+# **no** vanilla function, recipe or tag loads, so `/function` reports unknown
+# names and generated terrain carries no structures. World packs still load
+# from `<world_dir>/datapacks/`, filtered by the world's own enabled-pack list.
+# vanilla_data = "/opt/minecraft/data/minecraft"
