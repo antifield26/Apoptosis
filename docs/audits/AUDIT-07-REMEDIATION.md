@@ -69,6 +69,8 @@ points at its own snippet and says why.
 | `tools/docs-audit/check_encoding.py` | exit 0 — **265** tracked text files, 0 invalid UTF-8, 0 mojibake (was 240: the filter now also covers `.py`, `.java` and `.service`, so the newly committed sources are inside the check rather than beside it) |
 | `tools/docs-audit/check_links.py` | exit 0 — **32** markdown files incl. the 4 root documents, 0 broken |
 | `tools/docs-audit/check_gate_totals.py` | exit 0 — new; 0 mismatched totals, 7 exempt historical records |
+| `tools/docs-audit/check_line_endings.py` | exit 0 — **new** (lane E finding E2); 275 tracked files, 0 working-tree `eol=lf` violations |
+| Pi deployment (lane E) | layout matches RUNBOOK §1; unit enabled; start → ping (`protocol=775`) → graceful stop; archived soak figures all recomputed |
 
 ## 4. What changed
 
@@ -86,13 +88,40 @@ points at its own snippet and says why.
   `docs/protocol/chunk-wire-format.md`, `docs/performance/BENCHMARK-BASELINE.md`,
   `docs/adr/ADR-0004-data-loading-and-registry-split.md` — citations re-pointed
 - `.github/workflows/ci.yml` — runs the third audit script; job comment describes the real scope
-- `docs/audits/AUDIT-07-FINDINGS.md` — erratum on its own over-claim, plus §1a
+- `docs/audits/AUDIT-07-FINDINGS.md` — erratum on its own over-claim, plus §1a, plus lane E completed
+- `docs/audits/AUDIT-07-LANE-E.md` — **new**, the Pi deployment audit
+- `tools/docs-audit/check_line_endings.py` — **new**, the `eol=lf` guard (lane E finding E2)
+- `crates/test-support/fixtures/{registry/items.tsv,anvil/MANIFEST.txt}` — normalised to LF (content
+  unchanged; the committed bytes were already LF)
+- `docs/performance/BENCHMARK-BASELINE.md` — binary size corrected (lane E finding E1)
+- `CONTRIBUTING.md`, `.github/workflows/ci.yml` — the fourth audit script
 
-## 5. Still open
+## 5. Lane E — completed after this report was first written
 
-- **Lane E (Pi) remains unverified.** The host answers ICMP but its SSH channel is a password login and no
-  credential is available to an automated agent, so the P08/P09 operational claims that live only on the
-  device are still `unverified`, not clean. This is a credential boundary, not a defect.
+Lane E was blocked on a credential when §1–§4 were written. The owner supplied access, and the lane is now
+done: [AUDIT-07-LANE-E.md](AUDIT-07-LANE-E.md). It added **five** further findings, all fixed here.
+
+The deployment matched RUNBOOK §1, the unit is enabled with the documented effective settings, and the
+start → Server List Ping → stop cycle passes with **`protocol=775` / `version_name=26.1.2`** on 25599 and a
+0.2 s graceful stop. Most importantly, **every P09-Pi soak figure recomputes from the archived raw data**:
+62 tick-metrics lines, 60 ten-player windows, p50/p95/p99 medians **0.206 / 0.268 / 0.289 ms** against the
+documented 0.21 / 0.27 / 0.29, overruns 5, RSS 122.2 MB, CPU 1.00 %.
+
+| ID | Severity | Action | Verification |
+|---|---|---|---|
+| **E1** binary size 4 524 624 B contradicted its own SHA-256 | LOW | corrected to the measured **4 526 696 B** | the device reports that size *and* the documented hash `62067e04…` |
+| **E2** three tracked files had CRLF worktree bytes against an LF index, violating `eol=lf` | MEDIUM | all three normalised to LF; added `tools/docs-audit/check_line_endings.py` | injecting CRLF → checker exit 1 and names the file; restoring → exit 0. After normalisation the repository `items.tsv` hash **equals the deployed one** (`b5dfeddb…`), proving the fixture had never drifted |
+| **E3** deployed unit comments are an older revision | LOW | recorded; settings identical, so the device runs what the repo describes | `systemctl show` effective values match §1's table |
+| **E4** deployed server loads no data pack, and RUNBOOK §1 never says so | LOW | recorded as a documentation gap | journal reports `vanilla_data=false`; config has no `datapacks` key |
+| **E5** `/var/backups/mc-server/` is empty | LOW | recorded as an observation | `ls` |
+
+E2 is the one worth reading twice. `git status` was **clean** while the working tree disagreed with the
+index, so nothing looked wrong — and the defect then produced a false conclusion *in this very audit*: the
+deployed `items.tsv` appeared to have drifted from the repository's, when the two are line-for-line
+identical. That is precisely the platform-dependent-bytes failure `.gitattributes` says it exists to
+prevent, and it went unnoticed until a byte comparison was attempted across two machines.
+
+## 6. Still open
 - **`RELEASE-CANDIDATE.md`'s cited run logs still live only on the build machine.** The reproduction
   *sources* are now committed and the citations say so; committing multi-hundred-kilobyte logs was judged
   not worth the repository weight when the five commands in §2 regenerate them.

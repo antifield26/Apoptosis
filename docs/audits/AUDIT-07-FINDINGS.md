@@ -374,15 +374,30 @@ mismatch (`determinism` 6 vs 7) was **my script conflating two same-named suites
 
 ## 5. Lane E — Pi deployment
 
-**skipped(reason: credential, not reachability).** `RPI5.local` answers ICMP (`ping` succeeds), but
-`ssh -o BatchMode=yes antifield@RPI5.local` returns `Permission denied (publickey,password)` — exit 255.
-No key or password is available to this agent, and the brief's `SSH_ASKPASS` route needs a credential to
-supply. Consequence: **every P08/P09 operational claim that lives only on the Pi is unverified by this
-audit** — the `pi_profile`/`tick_baseline` numbers, the 30-minute soak, the `systemd` unit's real
-behaviour, the `accepts-2026-09-12` log archive, and the RUNBOOK §1 layout. These are recorded as
-`unverified (Lane E blocked)`, not as clean. Note the benchmarks themselves **do** run on this host and
-passed under `--ignored` (4 + 2 tests); what is unverified is that the *documented Pi figures* came from a
-Pi.
+**Completed** (was `skipped(credential)`; the owner supplied access during remediation). Full record:
+[AUDIT-07-LANE-E.md](AUDIT-07-LANE-E.md).
+
+The device is `RPI5` at `169.254.77.10`, aarch64, kernel `6.18.39+rpt-rpi-2712`. Verified: the layout
+matches RUNBOOK §1; the unit is **enabled** and its effective systemd settings match the documented table;
+**start → Server List Ping → stop** completes with `protocol=775` / `version_name=26.1.2` on 25599 and a
+0.2 s graceful stop to `inactive` with `ExecMainStatus=0`; the journal shows the documented
+drain/save/close sequence and reproduces DataVersion 4790; and **every P09-Pi soak figure recomputes from
+the archived raw data** (62 tick lines, 60 ten-player windows, p50/p95/p99 = 0.206/0.268/0.289 ms against
+the documented 0.21/0.27/0.29, overruns 5, RSS 122.2 MB, CPU 1.00 %).
+
+Lane E produced five further findings, recorded there and in the remediation report:
+
+| ID | Severity | One-line |
+|---|---|---|
+| E1 | LOW | the recorded Pi binary size (4 524 624 B) contradicted its own reproduced SHA-256; measured 4 526 696 B |
+| E2 | MEDIUM | three tracked files had CRLF worktree bytes against an LF index, violating the declared `eol=lf` policy; it made byte-identical fixtures compare as different, and caused exactly that false "deployment drifted" conclusion during this audit |
+| E3 | LOW | the deployed unit file's comments are an older revision than the committed one (settings identical) |
+| E4 | LOW | the deployed server loads no data pack, and RUNBOOK §1 never mentions the option — the acceptance world had bare terrain |
+| E5 | LOW | `/var/backups/mc-server/` is empty; no backup was taken during acceptance |
+
+The earlier note stands and is now the only remaining operational gap: the benchmarks run on this host and
+pass under `--ignored` (4 + 2 tests), and the documented Pi figures are now **verified to come from a Pi**
+rather than merely asserted.
 
 ## 6. Checked and clean (coverage statement)
 
@@ -397,7 +412,7 @@ Pi.
   executed; stricter all-markdown link check (0 broken); `KD-01..KD-38` completeness; 49 defect rows with
   no duplicates; 30/30 per-suite counts verified; the "529 chunks + vanilla boots" claim reproduced with
   the vanilla server's own log; CI history read from GitHub; stale-count hunt across six documents.
-- **Lane E**: attempted; blocked on credentials; recorded as unverified rather than skipped silently.
+- **Lane E**: **completed** on 2026-09-12 once access was supplied — layout, unit, start/stop cycle, protocol smoke, journal sequence, archived soak figures recomputed from raw data, fixture and binary hashes, manifest hashes. Five findings; see [AUDIT-07-LANE-E.md](AUDIT-07-LANE-E.md).
 
 Not covered by this audit, stated so the main auditor knows the boundary: behavioural re-derivation of all
 149 suite-verified rows; the ~90-vs-8 command-coverage claim against a real client; the

@@ -84,7 +84,7 @@ new ADR rather than an edit to an accepted one.
 
 ## Documentation health (reproducible, not manual)
 
-Three audit scripts guard the docs; they are the mechanical definition of
+Four audit scripts guard the docs; they are the mechanical definition of
 "documentation healthy" and are run in CI:
 
 ```sh
@@ -93,6 +93,8 @@ python tools/docs-audit/check_links.py      # every tracked markdown file: zero 
                                             # dead backticked paths, zero references to untracked files
 python tools/docs-audit/check_gate_totals.py  # the workspace test total is stated identically in every
                                             # document that restates it (owner: docs/testing/TEST-MATRIX.md)
+python tools/docs-audit/check_line_endings.py # no tracked file violates its declared eol=lf attribute
+                                            # (local guard: a Linux checkout already yields LF)
 ```
 
 Rules the scripts help enforce:

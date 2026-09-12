@@ -103,3 +103,4 @@ jobs:
       - run: python tools/docs-audit/check_encoding.py
       - run: python tools/docs-audit/check_links.py
       - run: python tools/docs-audit/check_gate_totals.py
+      - run: python tools/docs-audit/check_line_endings.py

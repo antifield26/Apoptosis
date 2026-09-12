@@ -195,7 +195,7 @@ cover (scripted clients, loopback, microSD).
 | Toolchain | pinned 1.98.1 via rustup on the device (`rust-toolchain.toml` channel) |
 | Commit | `14759bc` plus the uncommitted `Registries::vanilla()` fixture-search fix — the deployment defect this run found (see below); rebuilt **on the device** |
 | Build profile | `release`, `--locked`, built on the Pi (`cargo build --workspace --release --locked`, 1 m 18 s clean / 26 s incremental) |
-| Binary | `/srv/mc-server/mc-server`, SHA-256 `62067e04b4c3f9e5958293425ad056c590fd5bd93c32ea07b2e7c0d3467ae02f`, 4 524 624 B |
+| Binary | `/srv/mc-server/mc-server`, SHA-256 `62067e04b4c3f9e5958293425ad056c590fd5bd93c32ea07b2e7c0d3467ae02f`, **4 526 696 B** (corrected by Audit 07 lane E: the file had been recorded as 4 524 624 B, which contradicts its own SHA-256 — a hash fixes the content and therefore the size; the measured size is 4 526 696 B and the hash reproduced exactly) |
 | Storage | **microSD** (`/dev/mmcblk0p2`, 29 GB free) — explicitly *not* the performance acceptance target (CONVENTIONS.md §2); storage-bound figures are labelled below |
 | Workload | 10 scripted clients (`tools/pi-bench/soak_client_v2.py`, the TestClient conversation): MOVE_PLAYER_ROT 20 Hz, one 0.2-block MOVE_PLAYER_POS step per 20th tick, rotating `/list` (~2/min each), view 8; clients ran **on the Pi** at `nice -n 19` with one loopback source address each (127.0.0.2…11) because the per-IP admission cap (correctly) refuses 10 connections from one address |
 | Duration / warmup | 1800 s measured after staggered joins; 62 × 600-tick `tick metrics` windows captured, 60 with all 10 players |
