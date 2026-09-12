@@ -32,7 +32,7 @@ and [docs/operations/RUNBOOK.md](docs/operations/RUNBOOK.md)).
 
 | Gate | Command | Current state (2026-09-12) |
 |---|---|---|
-| Tests | `cargo test --workspace --no-fail-fast` | 1 191 passed / 0 failed / 21 ignored, 74 suites |
+| Tests | `cargo test --workspace --no-fail-fast` | 1 194 passed / 0 failed / 21 ignored, 74 suites |
 | Formatting | `cargo fmt --all -- --check` | clean |
 | Lints | `cargo clippy --workspace --all-targets -- -D warnings` | clean |
 | aarch64 | `cargo check --target aarch64-unknown-linux-gnu --workspace --all-targets` | clean |
@@ -84,13 +84,15 @@ new ADR rather than an edit to an accepted one.
 
 ## Documentation health (reproducible, not manual)
 
-Two audit scripts guard the docs; they are the mechanical definition of
+Three audit scripts guard the docs; they are the mechanical definition of
 "documentation healthy" and are run in CI:
 
 ```sh
 python tools/docs-audit/check_encoding.py   # every tracked text file: strict UTF-8, zero mojibake
-python tools/docs-audit/check_links.py      # zero broken markdown links, zero dead backticked paths,
-                                            # zero references to files that are not tracked
+python tools/docs-audit/check_links.py      # every tracked markdown file: zero broken links, zero
+                                            # dead backticked paths, zero references to untracked files
+python tools/docs-audit/check_gate_totals.py  # the workspace test total is stated identically in every
+                                            # document that restates it (owner: docs/testing/TEST-MATRIX.md)
 ```
 
 Rules the scripts help enforce:

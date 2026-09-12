@@ -144,7 +144,7 @@ driven in-process loop — the verdict rule stays §4.
 | Commit | `bf118c8` tree plus the uncommitted P09 metrics-tag fix (runs predate the commit; same shape as §P08-13's citation) |
 | Build profile | `dev` and `release` (`--locked`) |
 | Workload | §P08-13's acceptance workload: 10 survival clients, view 8, flat floor, rotation+swing+hotbar every tick, periodic step, rotating chat/`/list`; 40 warm-up + 200 measured ticks (pi_profile), 60+400 (tick_baseline) |
-| Command | `cargo test [-release] -p mc-server --test pi_profile --test tick_baseline -- --ignored --nocapture`; cited release log: `target/p09_perf_release.log` (re-run after the profile-string fix, AUDIT-06 finding 3 — the run self-describes as `release (optimised, debug assertions off)`) |
+| Command | `cargo test [-release] -p mc-server --test pi_profile --test tick_baseline -- --ignored --nocapture`; release log (machine-local, git-ignored, not distributed — re-run the command above to produce it): `target/p09_perf_release.log` (re-run after the profile-string fix, AUDIT-06 finding 3 — the run self-describes as `release (optimised, debug assertions off)`) |
 | MSPT p50/p95/p99 — settled, **release** | **0.060 / 0.072 / 0.137 ms**, max 0.244 (workload test); tick_baseline 10-player: 0.042 / 0.074 / 0.140 ms, max 0.224 |
 | MSPT p50/p95/p99 — settled, debug | 0.67 / 0.74 / 0.84 ms, max 1.02 (consistent with §P08-13) |
 | MSPT p99 — join burst, **release** | 13.29 ms (max 14.17) vs **390.5 ms (max 396.7) in debug** — the burst is encode/stream cost, which optimization collapses |
@@ -197,7 +197,7 @@ cover (scripted clients, loopback, microSD).
 | Build profile | `release`, `--locked`, built on the Pi (`cargo build --workspace --release --locked`, 1 m 18 s clean / 26 s incremental) |
 | Binary | `/srv/mc-server/mc-server`, SHA-256 `62067e04b4c3f9e5958293425ad056c590fd5bd93c32ea07b2e7c0d3467ae02f`, 4 524 624 B |
 | Storage | **microSD** (`/dev/mmcblk0p2`, 29 GB free) — explicitly *not* the performance acceptance target (CONVENTIONS.md §2); storage-bound figures are labelled below |
-| Workload | 10 scripted clients (`target/pi_soak_client2.py`, the TestClient conversation): MOVE_PLAYER_ROT 20 Hz, one 0.2-block MOVE_PLAYER_POS step per 20th tick, rotating `/list` (~2/min each), view 8; clients ran **on the Pi** at `nice -n 19` with one loopback source address each (127.0.0.2…11) because the per-IP admission cap (correctly) refuses 10 connections from one address |
+| Workload | 10 scripted clients (`tools/pi-bench/soak_client_v2.py`, the TestClient conversation): MOVE_PLAYER_ROT 20 Hz, one 0.2-block MOVE_PLAYER_POS step per 20th tick, rotating `/list` (~2/min each), view 8; clients ran **on the Pi** at `nice -n 19` with one loopback source address each (127.0.0.2…11) because the per-IP admission cap (correctly) refuses 10 connections from one address |
 | Duration / warmup | 1800 s measured after staggered joins; 62 × 600-tick `tick metrics` windows captured, 60 with all 10 players |
 | TPS | the fixed 20 TPS clock held for the whole soak: **zero overruns in 60 settled windows** (lifetime overruns 5, all in the join window); the §4 verdict rule (mean MSPT < 50 ms, no settled-tick overrun) is **passed** |
 | MSPT p50/p95/p99 — settled, 10 players | medians across the 60 windows: **0.206 / 0.268 / 0.289 ms** (window p50 max 0.243; window p99 max 29.23 — see the spike note) |

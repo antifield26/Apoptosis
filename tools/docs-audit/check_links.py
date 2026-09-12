@@ -1,5 +1,9 @@
 """Documentation link audit: the objective half of a docs review.
 
+Scope: **every tracked markdown file**, including the repository root's README, CHANGELOG, CONTRIBUTING
+and SECURITY. This is stated because an earlier version checked only `docs/**` while reporting a bare
+"0 findings", which could be misread as repository-wide coverage (Audit 07, finding H2).
+
 "Consolidate the docs" is a judgement call, but broken references are not. For
 every tracked markdown file this checks, mechanically:
 
@@ -27,8 +31,17 @@ tracked = subprocess.run(
 ).stdout.splitlines()
 tracked_set = {f.replace('\\', '/') for f in tracked}
 
-docs = [f for f in tracked_set if f.startswith('docs/') and f.endswith('.md')]
-print(f'checking {len(docs)} markdown docs\n')
+# **Every** tracked markdown file, not only `docs/`. An earlier version filtered on
+# `startswith('docs/')`, which silently excluded README.md, CHANGELOG.md, CONTRIBUTING.md and
+# SECURITY.md — the four documents with the most external-facing references. "0 findings" then read as
+# repository-wide when it was docs-only. (Audit 07, finding H2.)
+docs = sorted(f for f in tracked_set if f.endswith('.md'))
+root_docs = [f for f in docs if '/' not in f]
+print(f'checking {len(docs)} tracked markdown files '
+      f'({len(docs) - len(root_docs)} under subdirectories, {len(root_docs)} at the repository root)')
+for name in root_docs:
+    print(f'    root: {name}')
+print()
 
 LINK = re.compile(r'\[[^\]]*\]\(([^)#\s]+?)(?:#[^)]*)?\)')
 BACKTICK_PATH = re.compile(r'`((?:docs|crates|apps|deploy|tools|target|OpenSourceMinecraftServer)/[A-Za-z0-9_./-]+)`')

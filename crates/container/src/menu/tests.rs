@@ -589,34 +589,48 @@ fn shift_click_out_of_a_computed_slot_moves_the_result_out() {
 
 // ------------------------------------------------------------- hostile
 
-#[test]
-fn a_flood_of_hostile_clicks_cannot_create_or_destroy_items() {
-    // Deterministic pseudo-random clicks across every click type and slot. The
-    // only invariants asserted are conservation and boundedness, because a hostile
-    // client's goal is to break exactly those.
-    let mut menu = chest_menu();
-    menu.set_slot(0, stack(stone(), 64)).expect("set");
-    menu.set_slot(1, stack(bucket(), 16)).expect("set");
-    menu.set_slot(9, stack(granite(), 33)).expect("set");
-    let before = menu.total_items();
+/// What a hostile flood did, so the caller can assert conservation against it.
+struct Flood {
+    /// Items the click generator threw on the floor (the only legal decrease).
+    thrown: i64,
+    /// Items created — must be zero in survival.
+    created: i64,
+    /// Structurally illegal clicks the decoder refused.
+    refused_as_malformed: usize,
+    /// Clicks the menu accepted.
+    accepted: usize,
+}
 
+/// Drive `rounds` deterministic pseudo-random hostile clicks into `menu`.
+///
+/// Extracted so one generator can drive several menus. A single menu is not enough: a chest's slots all
+/// accept 64, so its flood never reaches `Menu::insert`'s over-limit overflow branch, and an audit showed
+/// that discarding the overflow entirely left the chest flood green (Audit 07, finding M1). The caller
+/// that needs the overflow path passes a menu with a capped slot.
+///
+/// The only invariants asserted per click are conservation and boundedness, because a hostile client's
+/// goal is to break exactly those.
+fn hostile_flood(menu: &mut Menu, rounds: usize) -> Flood {
     let mut seed = 0x1234_5678u64;
     let mut next = |bound: u64| {
         seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
         (seed >> 33) % bound
     };
 
-    let mut thrown = 0i64;
-    let mut created = 0i64;
-    let mut refused_as_malformed = 0usize;
-    for _ in 0..2_000 {
+    let mut flood = Flood {
+        thrown: 0,
+        created: 0,
+        refused_as_malformed: 0,
+        accepted: 0,
+    };
+    for _ in 0..rounds {
         let slot = next(46) as i16;
         // Any button, including ones no click type defines: the decoder must
         // refuse those rather than reinterpret them.
         let button = next(200) as i8;
         let kind = ClickType::ALL[next(7) as usize];
         let Ok(mut c) = Click::new(0, 0, slot, button, kind.id()) else {
-            refused_as_malformed += 1;
+            flood.refused_as_malformed += 1;
             continue;
         };
         c.window_id = menu.window_id();
@@ -628,11 +642,12 @@ fn a_flood_of_hostile_clicks_cannot_create_or_destroy_items() {
         let Ok(outcome) = menu.apply_click(&c) else {
             continue;
         };
+        flood.accepted += 1;
         for stack in &outcome.dropped {
-            thrown += i64::from(stack.count());
+            flood.thrown += i64::from(stack.count());
         }
         if kind == ClickType::Clone && menu.is_creative() {
-            created += 1;
+            flood.created += 1;
         }
         // Boundedness, checked after every single click.
         assert!(
@@ -650,10 +665,38 @@ fn a_flood_of_hostile_clicks_cannot_create_or_destroy_items() {
         }
         assert!(menu.total_items() >= 0, "the total went negative");
     }
+    flood
+}
 
-    assert_eq!(created, 0, "survival must never create items");
+/// A menu whose slot 0 is capped at one item — the furnace-output shape.
+///
+/// Placing a 64-stack into it takes `Menu::insert`'s overflow branch, which is the path that decides
+/// whether the excess comes back to the cursor or is destroyed.
+fn capped_slot_menu() -> Menu {
+    let container = Container::new(ContainerKind::Generic, 2).expect("container");
+    let mut slots = vec![
+        SlotMapping::with_limit(0, 0, SlotRole::Storage, 1),
+        SlotMapping::storage(0, 1),
+    ];
+    slots.truncate(2);
+    Menu::new(1, vec![container], slots, MenuLayout::none(), sizes())
+        .expect("the capped menu builds")
+}
+
+#[test]
+fn a_flood_of_hostile_clicks_cannot_create_or_destroy_items() {
+    let mut menu = chest_menu();
+    menu.set_slot(0, stack(stone(), 64)).expect("set");
+    menu.set_slot(1, stack(bucket(), 16)).expect("set");
+    menu.set_slot(9, stack(granite(), 33)).expect("set");
+    let before = menu.total_items();
+
+    let flood = hostile_flood(&mut menu, 2_000);
+    let thrown = flood.thrown;
+
+    assert_eq!(flood.created, 0, "survival must never create items");
     assert!(
-        refused_as_malformed > 0,
+        flood.refused_as_malformed > 0,
         "the generator must have produced some structurally illegal clicks for the \
          decoder to refuse; otherwise this test is not exercising that path"
     );
@@ -661,6 +704,61 @@ fn a_flood_of_hostile_clicks_cannot_create_or_destroy_items() {
         menu.total_items(),
         before - thrown,
         "conservation: the only change is what was thrown"
+    );
+}
+
+#[test]
+fn a_flood_over_a_capped_slot_cannot_create_or_destroy_items() {
+    // The audit's M1: the chest flood above never reaches `Menu::insert`'s over-limit branch, because
+    // every chest slot accepts 64 and its stacks are 64/16/33. So the claim "floods cannot destroy
+    // items" was not exercised on the one path that can. This runs the **same** generator against a
+    // menu whose slot 0 holds a single item at a time, so each attempt to place a 64-stack there takes
+    // the overflow branch.
+    let mut menu = capped_slot_menu();
+    // Slot 0 is **empty** on purpose. The audit's break lives in `Menu::insert`'s
+    // `existing.is_empty()` branch, so a seeded slot would take the merge branch and prove nothing —
+    // which is exactly what the first version of this test did.
+    // `stone` stacks to 64; `bucket` would stack to 16 and this test needs a full 64 on the cursor.
+    menu.set_slot(1, stack(stone(), 64)).expect("set");
+    let before = menu.total_items();
+
+    // Deterministic coverage of the over-limit placement: 64 items onto an empty slot that holds one
+    // at a time. `placed.count() > limit` is true here, so the overflow branch runs on this click.
+    apply(&mut menu, 1, 0, ClickType::Pickup);
+    assert_eq!(
+        menu.cursor().count(),
+        64,
+        "the whole stack is on the cursor"
+    );
+    apply(&mut menu, 0, 0, ClickType::Pickup);
+    assert_eq!(
+        menu.display_stack(0).count(),
+        1,
+        "the capped slot accepted exactly its ceiling"
+    );
+    assert_eq!(
+        menu.cursor().count(),
+        63,
+        "and the 63 that did not fit came back to the cursor instead of being destroyed"
+    );
+    assert_eq!(
+        menu.total_items(),
+        before,
+        "placing into a capped slot must conserve every item"
+    );
+
+    // Then the hostile-random part, over the same menu.
+    let flood = hostile_flood(&mut menu, 2_000);
+
+    assert_eq!(flood.created, 0, "survival must never create items");
+    assert_eq!(
+        menu.total_items(),
+        before - flood.thrown,
+        "conservation over a capped slot: the overflow must return to the cursor, never vanish"
+    );
+    assert!(
+        menu.display_stack(0).count() <= 1,
+        "the capped slot must never hold more than its ceiling"
     );
 }
 

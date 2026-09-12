@@ -4,14 +4,17 @@ Date: 2026-09-11. Method: enumerate and parse the **official 26.1.2 server jar's
 data pack**, which ships inside `server-26.1.2.jar` as `data/minecraft/`. Nothing here
 is recalled.
 
-Reproduce with `target/vanilla-26.1.2/survey_tags.py` for the tag figures; the
+Reproduce with `tools/vanilla-probe/survey_tags.py` for the tag figures; the
 file/type counts come from a straight `zipfile` enumeration of the same jar.
 
 ## 0. Extracting the pack
 
 The differential test reads a directory rather than the jar, so an archive reader is
-not part of the thing under test. `target/vanilla-26.1.2/extract_pack.py` extracts it
-using only the standard library:
+not part of the thing under test. The extractor is the snippet below — it is short enough to live in
+this document, which is the honest place for it: an earlier version pointed at
+`target/vanilla-26.1.2/extract_pack.py`, but that file was a byte-identical copy of the recount script and
+contained no extraction code at all (*Audit 07, found during M3 remediation*). Save the snippet as
+`extract_pack.py` beside the jar and run it from there:
 
 ```python
 """Extract data/minecraft/ from the 26.1.2 server jar."""
@@ -66,7 +69,7 @@ high per directory. The loading test exposed it: the loader reported
 | `trade_set/` | 83 | **68** |
 | `tags/` | 758 `.json` | **758** (correct) |
 
-Reproduce with `target/vanilla-26.1.2/recount.py`, which filters on
+Reproduce with `tools/vanilla-probe/recount.py`, which filters on
 `not name.endswith("/")`. The lesson is worth recording because it is the third time in
 this project that a hastily-counted figure had to be corrected against a precise one —
 and the first two were also caught by a test disagreeing with a document.

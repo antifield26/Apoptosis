@@ -6,7 +6,7 @@ Context: Phase 07 had to load data packs — 8 775 files under `data/minecraft/`
 "registry/ # Minecraft registry/data loading and lookup" as one boundary, which raised
 the question of whether this belongs in `mc-registry`.
 Evidence: `crates/data/`, `docs/research/data-pack-baseline.md`,
-`target/vanilla-26.1.2/survey_tags.py` (the measurement tool),
+`tools/vanilla-probe/survey_tags.py` (the measurement tool),
 the Phase 07 report (git history, tag `phase-09-final`).
 
 ## 1. Decision: `mc-data` is a separate crate from `mc-registry`

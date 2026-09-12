@@ -85,8 +85,11 @@ jobs:
 
   docs-audit:
     # The mechanical half of documentation health: every tracked text file is
-    # valid UTF-8, and no document references a file the repository does not
-    # ship. Scripts and rules: tools/docs-audit/, CONTRIBUTING.md.
+    # valid UTF-8, no document references a file the repository does not ship,
+    # and the workspace test total is stated identically wherever it appears
+    # (that last one exists because six documents used to restate it by hand,
+    # and one drifted -- Audit 07 finding M2). Scripts and rules:
+    # tools/docs-audit/, CONTRIBUTING.md.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -99,3 +102,4 @@ jobs:
           python-version: "3.12"
       - run: python tools/docs-audit/check_encoding.py
       - run: python tools/docs-audit/check_links.py
+      - run: python tools/docs-audit/check_gate_totals.py

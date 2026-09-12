@@ -6,7 +6,7 @@ client is actually built against. Class + method are cited for each. This file
 exists because a chunk packet built from a second-hand description is the
 easiest way to produce a server that logs in and then shows a black void.
 
-Tooling: `target/vanilla-26.1.2/reports/` and `javap -p -c -constants` on the
+Tooling: `tools/vanilla-probe/DumpRegistries.java` for the registry dump, and `javap -p -c -constants` on the
 classes named below.
 
 ## 1. `level_chunk_with_light` (clientbound 45)

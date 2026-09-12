@@ -92,18 +92,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8], keep_backup: bool) -> ServerResul
         })?;
     }
     let temp = temp_path(path);
-    {
-        let mut file = fs::File::create(&temp).map_err(|e| {
-            ServerError::Operational(format!("cannot create {}: {e}", temp.display()))
-        })?;
-        file.write_all(bytes).map_err(|e| {
-            ServerError::Operational(format!("cannot write {}: {e}", temp.display()))
-        })?;
-        // Durability point: the staged file must be complete before it can
-        // replace the live one.
-        file.sync_all()
-            .map_err(|e| ServerError::Operational(format!("fsync {}: {e}", temp.display())))?;
-    }
+    stage(&temp, bytes)?;
 
     if keep_backup && path.exists() {
         let backup = backup_path(path);
@@ -121,16 +110,50 @@ pub fn write_atomic(path: &Path, bytes: &[u8], keep_backup: bool) -> ServerResul
         }
     }
 
-    fs::rename(&temp, path).map_err(|e| {
-        let _ = fs::remove_file(&temp);
+    commit(&temp, path)?;
+    sync_directory(path.parent());
+    Ok(())
+}
+
+/// Write `bytes` to `temp` and fsync it, so the staged file is complete and durable before anything
+/// can replace the live one.
+///
+/// Kept separate from [`commit`] because the crash window the pair exists to close is *between* them:
+/// after `stage` and before `commit`, `path` must still hold its previous content, and that is a
+/// property a test can observe (see `a_staged_write_leaves_the_live_file_untouched`).
+fn stage(temp: &Path, bytes: &[u8]) -> ServerResult<()> {
+    let mut file = fs::File::create(temp)
+        .map_err(|e| ServerError::Operational(format!("cannot create {}: {e}", temp.display())))?;
+    file.write_all(bytes)
+        .map_err(|e| ServerError::Operational(format!("cannot write {}: {e}", temp.display())))?;
+    file.sync_all()
+        .map_err(|e| ServerError::Operational(format!("fsync {}: {e}", temp.display())))
+}
+
+/// Replace `path` with the already-staged `temp`, by **exactly one `rename`**.
+///
+/// # The invariant, and why it is a separate function
+///
+/// `path` must never be absent — not even briefly. `rename` is atomic: before it the old file is live,
+/// after it the new one is, so a crash at any instant leaves a complete `level.dat`. Anything that
+/// removes, truncates or rewrites `path` before the `rename` re-opens a window where a crash loses the
+/// file outright — and `level.dat` is the file that says what the world is, so losing it loses the
+/// world.
+///
+/// An audit verified that no test could detect this ordering being wrong: deleting `path` before the
+/// rename left all 104 `mc-persistence` tests green. Hence the split. The failure path is now
+/// reachable from a test — hand `commit` a `temp` that does not exist, so the rename fails, and assert
+/// `path` still reads back its previous bytes — and `a_failed_commit_leaves_the_live_file_untouched`
+/// does exactly that. It fails for any implementation that touches `path` before the rename.
+fn commit(temp: &Path, path: &Path) -> ServerResult<()> {
+    fs::rename(temp, path).map_err(|e| {
+        let _ = fs::remove_file(temp);
         ServerError::Operational(format!(
             "cannot move {} into place at {}: {e}",
             temp.display(),
             path.display()
         ))
-    })?;
-    sync_directory(path.parent());
-    Ok(())
+    })
 }
 
 /// Best-effort directory fsync so the rename itself survives a power loss.
@@ -243,12 +266,13 @@ pub fn unix_millis(now: std::time::SystemTime) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        SaveReport, backup_path, decode_gzip_nbt, encode_gzip_nbt, temp_path, unix_millis,
-        unix_seconds, write_atomic,
+        SaveReport, backup_path, commit, decode_gzip_nbt, encode_gzip_nbt, stage, temp_path,
+        unix_millis, unix_seconds, write_atomic,
     };
     use mc_core::error::ServerError;
     use mc_nbt::NbtTag;
     use mc_test_support::fixtures::TempDir;
+    use std::fs;
     use std::path::Path;
 
     #[test]
@@ -270,6 +294,60 @@ mod tests {
             "the previous version is preserved as level.dat_old"
         );
         assert!(!temp_path(&path).exists(), "staging file must be gone");
+    }
+
+    /// The audit's H1: a failed replacement must not lose the live file.
+    ///
+    /// `temp` does not exist, so the `rename` fails after staging would have succeeded — the failure
+    /// window the doc comment on `commit` describes. An implementation that removes or truncates
+    /// `path` before renaming fails this test, because `path` would be gone.
+    #[test]
+    fn a_failed_commit_leaves_the_live_file_untouched() {
+        let dir = TempDir::new("save-failed-commit");
+        let path = dir.path().join("level.dat");
+        fs::write(&path, b"previous world").expect("seed the live file");
+        let missing = dir.path().join("never-staged.tmp");
+
+        let error = commit(&missing, &path).expect_err("renaming a missing staging file must fail");
+        assert!(
+            matches!(error, ServerError::Operational(_)),
+            "expected an operational error, got {error:?}"
+        );
+
+        // The invariant. Without it the failure above would have destroyed the world's metadata.
+        assert_eq!(
+            fs::read(&path).expect("the live file must still exist"),
+            b"previous world",
+            "a failed commit must leave the live file byte-identical"
+        );
+    }
+
+    /// The other half of the same crash window: after staging, before committing, the live file is
+    /// still the previous version.
+    #[test]
+    fn a_staged_write_leaves_the_live_file_untouched() {
+        let dir = TempDir::new("save-staged");
+        let path = dir.path().join("level.dat");
+        fs::write(&path, b"previous world").expect("seed the live file");
+        let temp = temp_path(&path);
+
+        stage(&temp, b"next world").expect("staging succeeds");
+
+        assert_eq!(
+            fs::read(&path).expect("the live file survives staging"),
+            b"previous world",
+            "staging happens beside the live file, never over it"
+        );
+        assert_eq!(
+            fs::read(&temp).expect("the staged file is complete"),
+            b"next world",
+            "and the staged file holds the new content"
+        );
+
+        // Completing the pair produces the new content and consumes the staging file.
+        commit(&temp, &path).expect("commit succeeds");
+        assert_eq!(fs::read(&path).expect("live file"), b"next world");
+        assert!(!temp.exists(), "the staging file is consumed by the rename");
     }
 
     #[test]

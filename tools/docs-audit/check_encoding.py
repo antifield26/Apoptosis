@@ -12,7 +12,11 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-TEXT_SUFFIXES = ('.md', '.rs', '.toml', '.tsv', '.yml', '.yaml', '.txt', '.json', '.hex')
+TEXT_SUFFIXES = ('.md', '.rs', '.toml', '.tsv', '.yml', '.yaml', '.txt', '.json', '.hex',
+                 # research/reproduction sources committed under tools/ (Audit 07, M3):
+                 # committing them without extending this list would leave the very files
+                 # this check exists for outside its coverage.
+                 '.py', '.java', '.service')
 # Replacement character plus the characteristic GBK mojibake lead pairs.
 MOJIBAKE = ('\ufffd', '\u9225', '\u9418', '\u951b', '\u9429')
 

@@ -8,18 +8,25 @@ a verifiable fact, not a decision: the repository is **public**).
 
 ## Baseline (verified, 2026-09-12)
 
-- Five gates: `cargo test --workspace --no-fail-fast` = **1 191 passed /
+- Five gates: `cargo test --workspace --no-fail-fast` = **1 194 passed /
   0 failed / 21 ignored, 74 suites**; fmt, clippy (`-D warnings`), aarch64
   cross-check and `cargo deny` (licenses/bans/sources) all clean. Identical
   after the governance work (see the final section).
-- CI: the `ci` workflow has run on GitHub since the repository gained its
-  remote — **both runs green** (7m6s, 6m45s). Where the workflow's own header
-  previously claimed "configured, never executed" (and cited an audit file
-  that no longer exists), it now states the truth.
-- 256 tracked files (203 under `crates/`, 40 under `docs/` = 38 markdown +
-  2 tsv, 2 under `apps/`, 11 root files). The pre-governance audit's "246" was
-  the encoding script's count of tracked *text* files (the two `.tsv` baselines
-  and nine other non-text-suffix files are excluded by its suffix filter).
+- CI: the `ci` workflow runs on GitHub since the repository gained its remote.
+  At the time of writing the two runs then in existence were both green (7m6s,
+  6m45s). The full history as of Audit 07 is **six runs: four green, two red**
+  (`34683857279` and `34683247774` — the docs-audit job's first execution and
+  the archive-tag fetch, both fixed by the two commits that follow them), with
+  **HEAD green**. The two failures are part of the record and the sentence above
+  was written before them (Audit 07 finding L3).
+- **251** tracked files after the governance work (203 under `crates/`, **27**
+  under `docs/` = 25 markdown + 2 tsv, 2 under `apps/`, 2 under `tools/`, 15 at
+  the repository root plus `.github/`). An earlier version of this line said 256
+  with "40 under `docs/`": the 40 was the *pre*-governance docs count, so the
+  sub-total and the total were not recomputed after the 15 phase reports and the
+  divergence catalog were deleted (40 − 16 + 3 = 27). Corrected by Audit 07
+  finding L1. The pre-governance audit's "246" was the encoding script's count
+  of tracked *text* files.
 - `docs/` was 444.5 KB across 38 markdown files; the retired phases directory alone was
   194.1 KB (43.7%). All figures re-verified with `tools/docs-audit/` scripts.
 - 78 references to the git-ignored prompt pack; 4 broken backticked paths;
@@ -91,7 +98,9 @@ a verifiable fact, not a decision: the repository is **public**).
 
 ## Pending items (owner decisions or actions, not done unilaterally)
 
-1. **Ten code comments still cite retired reports** (e.g.
+1. **Thirteen code references across twelve files still cite retired reports**
+   (an earlier version said "ten code comments"; Audit 07 finding L4 measured 13
+   references in 12 files) (e.g.
    `crates/container/src/smelting_data.rs` → `PHASE-06-REPORT.md` §5.9;
    `crates/server/src/metrics.rs` → PHASE-08-REPORT §2.1). Left untouched on
    purpose: the task forbids changing `crates/`/`apps/`, and each citation
@@ -113,7 +122,12 @@ a verifiable fact, not a decision: the repository is **public**).
 ## Final verification
 
 Recorded in the governance commits: the five gates match the baseline
-exactly (1 191 / 0 / 21, 74 suites; fmt, clippy, aarch64, deny clean), and
-both audit scripts report zero findings (encoding: 249 text files, all valid
-UTF-8, zero mojibake; links: 0 broken markdown links, 0 broken backticked
-paths, 0 references to untracked files).
+exactly (1 194 / 0 / 21, 74 suites; fmt, clippy, aarch64, deny clean), and
+both audit scripts report zero findings. Measured by Audit 07 on the same
+tree: encoding — **240** text files (the script's suffix filter includes
+`.hex`), all valid UTF-8, zero mojibake; links — 0 broken markdown links, 0
+broken backticked paths, 0 references to untracked files. An earlier version of
+this line said "249 text files", which is the pre-governance figure with `.hex`
+included (Audit 07 finding L2). Note the link checker's scope: as of Audit 07
+finding H2 it covers **every** tracked markdown file, where the version this
+report was written against covered only `docs/**` (25 files).
