@@ -281,9 +281,8 @@ needs no re-derivation.
    from the per-phase means, and the P08-14 rule (profile-gated smallest
    change) applies before any tuning.
 6. **Record**: a dated `§P09-Pi` section in this file with every §13 field and
-   the commit; update `PARITY-MATRIX.md`'s 20 TPS row and `KNOWN-DIVERGENCES.md`
-   KD-35 in the same pass. Until that section exists, no document may upgrade
-   KD-35.
+   the commit; update the parity matrix's 20 TPS row (KD-35) in the same
+   pass. Until that section exists, no document may upgrade KD-35.
 
 Until then, the aarch64 half of the story is the cross-build gate
 (`cargo check --target aarch64-unknown-linux-gnu`, green 2026-09-12) plus the
