@@ -76,9 +76,12 @@ for rel in docs:
             broken_links.append((rel, target))
     for match in BACKTICK_PATH.finditer(text):
         target = match.group(1)
-        # Paths under a declared external-clone root are citations of another
-        # repository, not of this one.
-        if target.startswith('OpenSourceMinecraftServer/'):
+        # Two prefix families are citations of things the repository
+        # deliberately does not ship, not broken references:
+        #   OpenSourceMinecraftServer/ — the external reference clones;
+        #   target/ — the machine-local scratch and measurement area
+        #   (.gitignore), where the jar-derived research tooling lives.
+        if target.startswith(('OpenSourceMinecraftServer/', 'target/')):
             continue
         if target not in tracked_set and not (ROOT / target).exists():
             if resolvable_in_history(target):

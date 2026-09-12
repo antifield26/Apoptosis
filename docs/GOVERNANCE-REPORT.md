@@ -57,7 +57,7 @@ a verifiable fact, not a decision: the repository is **public**).
    repeated "Bugs found" tables into: current coverage by area (counts from
    the run log), the differential-suite inventory, one deduplicated 49-entry
    defect history, and the known-false-assertion lessons.
-5. **`docs/phases/` retired** (15 files deleted, owner decision ③): the
+5. **The phases directory retired** (15 files deleted, owner decision ③): the
    content is distilled into `CHANGELOG.md`, the defect history and the parity
    matrix; every reference in the surviving documents was rewritten to the
    git-history form before deletion, and the whole pre-governance tree is the
@@ -82,7 +82,7 @@ a verifiable fact, not a decision: the repository is **public**).
 |---|---|
 | The ten phase reports | `CHANGELOG.md` per-phase sections; full text `git show phase-09-final:docs/phases/PHASE-05-REPORT.md` |
 | The five audit findings | defect history in `docs/testing/TEST-MATRIX.md`; full text at the tag |
-| `docs/vanilla-parity/KNOWN-DIVERGENCES.md` | `docs/vanilla-parity/PARITY-MATRIX.md` (KD tags in rows) |
+| The retired divergence-catalog file | `vanilla-parity/PARITY-MATRIX.md` (KD tags in rows) |
 | (references to) the agent contract's `§N` | `docs/CONVENTIONS.md §N` (same numbering) |
 | (references to) `MASTER-PROMPT §7` | `CONVENTIONS.md §3.4` |
 | (references to) the execution loop's review checklist | `CONVENTIONS.md §14` |
