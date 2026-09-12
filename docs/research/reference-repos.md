@@ -61,7 +61,7 @@ Local clones root: `OpenSourceMinecraftServer/`
   - network: `crates/valence_network/src/{lib.rs,connect.rs:129-414,packet_io.rs,legacy_ping.rs}` (Tokio gateway + flume into ECS)
   - world/persistence: `crates/valence_anvil/src/{lib.rs,parsing.rs,bevy.rs}`, `crates/valence_server/src/{lib.rs,layer.rs,layer/chunk.rs,event_loop.rs,keepalive.rs}`, `OpenSourceMinecraftServer/valence-main/crates/valence_spatial/src/` (external clone)
   - tick: `crates/valence_server_common/src/lib.rs:18-21` DEFAULT_TPS=20, `ScheduleRunnerPlugin::run_loop(tick_period)`
-- Tests/fixtures: `src/tests/*.rs` (12 files: client, layer, inventory, ...), `src/testing.rs` harness (MockClient), `benches/*.rs` (packet, anvil, var_int/long, many_players; anvil bench downloads external `sp_world_1.19.2.zip`, not vendored), `examples/` 28 files, extracted fixtures `crates/valence_{generated,entity,lang,registry}/extracted/`, `tools/packet_inspector/extracted/packets.json` (all valence paths relative to `OpenSourceMinecraftServer/valence-main/`), `extractor/` Fabric data-extraction mod + `extractor/README.md:23-32` upgrade procedure
+- Tests/fixtures: `src/tests/*.rs` (12 files: client, layer, inventory, ...), `src/testing.rs` harness (MockClient), `benches/*.rs` (packet, anvil, var_int/long, many_players; anvil bench downloads external `sp_world_1.19.2.zip`, not vendored), `examples/` 28 files, extracted fixtures `crates/valence_{generated,entity,lang,registry}/extracted/`, `OpenSourceMinecraftServer/valence-main/tools/packet_inspector/extracted/packets.json` (valence paths are relative to its clone root), `extractor/` Fabric data-extraction mod + `extractor/README.md:23-32` upgrade procedure
 
 ## 4. Minestom-master
 

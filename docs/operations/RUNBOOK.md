@@ -152,6 +152,6 @@ backup: it covers neither region files nor operator error.
 - Online mode: fail-fast boundary only; enabling it is an error, not auth.
 - `.zip` data packs unread; structure subset is single-chunk only; redstone not
   wired into the tick loop; loot/advancements load but never fire; furnace
-  smelts from the hand-written baseline (see `PHASE-07-REPORT.md` §4).
+  smelts from the hand-written baseline (see the parity matrix's smelting row).
 - Backup/restore are library calls awaiting a CLI; the unit file was reviewed
   by reading, never applied to a real Pi here.

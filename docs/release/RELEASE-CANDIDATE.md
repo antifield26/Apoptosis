@@ -17,7 +17,7 @@ matrix counts under data packs), data
 packs (tags/recipes/functions), seeded terrain with a single-chunk structure
 subset, Anvil-compatible persistence verified against real vanilla worlds.
 Scope boundaries and every known divergence:
-[docs/vanilla-parity/PARITY-MATRIX.md](PARITY-MATRIX.md) (KD-01…KD-38; the
+[docs/vanilla-parity/PARITY-MATRIX.md](../vanilla-parity/PARITY-MATRIX.md) (KD-01…KD-38; the
 release-affecting highlights: no lighting propagation yet — clients render
 dark; entities are not persisted or synced; redstone is modelled but not
 tick-driven; 8 of ~90 commands).
@@ -68,7 +68,7 @@ reviewed — never applied to a real host), `docs/operations/DEPENDENCY-POLICY.m
 |---|---|
 | Full regression matrix passes | **Yes** — five gates green on 2026-09-12, each with a retained run: `cargo test --workspace --no-fail-fast` (1 189/0/21, 74 suites; `target/p09_full_test.log` + `target/p09_full_test2.log`), `cargo fmt --check` (`gate_fmt.log`), `cargo clippy --workspace --all-targets -- -D warnings` (`gate_clippy.log`), `cargo check --target aarch64-unknown-linux-gnu` (`gate_aarch64.log`), `cargo deny check licenses bans sources` (`gate_deny.log`) — all exit 0; re-runnable per §2 |
 | Conformance report produced | Yes — the Phase 09 acceptance report (git history, tag `phase-09-final`) + the sweep rows in `docs/testing/TEST-MATRIX.md` |
-| Known divergences documented | Yes — [PARITY-MATRIX.md](PARITY-MATRIX.md), the single authority (KD-01…KD-38 tagged in its rows) |
+| Known divergences documented | Yes — [PARITY-MATRIX.md](../vanilla-parity/PARITY-MATRIX.md), the single authority (KD-01…KD-38 tagged in its rows) |
 | Release artifacts published | **Source: yes** — `github.com/antifield26/Apoptosis` (public, MIT). **Binary: no** — no tagged release with build artifacts exists yet; build from source per §2 |
 | 20 TPS on Pi 5 with 10 players | **Met for the scripted workload** — the `BENCHMARK-BASELINE.md` §4 acceptance run executed on a Pi 5 (Debian 13, release, on-device build): 30-min soak, settled MSPT medians 0.21/0.27/0.29 ms, zero settled overruns (§P09-Pi). Boundaries: scripted clients (KD-38), loopback, microSD |
 | Real-client acceptance | **No** — no Java client was driven; the scripted clients speak the exact TestClient conversation the E2E suite proves (KD-38) |
@@ -77,7 +77,7 @@ reviewed — never applied to a real host), `docs/operations/DEPENDENCY-POLICY.m
 
 - the Phase 09 acceptance report — git history (tag `phase-09-final`), distilled into `CHANGELOG.md`
 - `docs/testing/TEST-MATRIX.md` — what every test claims and how it could fail
-- `docs/vanilla-parity/PARITY-MATRIX.md` — per-domain parity with cited evidence
+- [vanilla-parity/PARITY-MATRIX.md](../vanilla-parity/PARITY-MATRIX.md) — per-domain parity with cited evidence
 - `docs/vanilla-parity/PARITY-MATRIX.md` — the single parity/divergence authority (KD-01…KD-38)
 - `docs/performance/BENCHMARK-BASELINE.md` — every benchmark record + the Pi acceptance procedure
 - `docs/adr/ADR-0005-plugin-boundary.md` — plugin readiness: boundary, not API

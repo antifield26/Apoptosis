@@ -44,7 +44,7 @@ cargo deny --all-features check advisories   # informational
 - **Advisories are not enforced yet.** The CI job reports them and always
   passes. Reason: there is no triage process, and hard-failing on an unfixed
   upstream advisory would block unrelated work. This is a known gap, tracked in
-  `docs/phases/AUDIT-01-FINDINGS.md`; closing it means assigning an owner and a
+  Audit 01 (git history, tag `phase-09-final`); closing it means assigning an owner and a
   response window (P08 or P09).
 
 ## 4. Data assets

@@ -7,7 +7,7 @@ Context: Phase 07 had to load data packs — 8 775 files under `data/minecraft/`
 the question of whether this belongs in `mc-registry`.
 Evidence: `crates/data/`, `docs/research/data-pack-baseline.md`,
 `target/vanilla-26.1.2/survey_tags.py` (the measurement tool),
-`docs/phases/PHASE-07-REPORT.md`.
+the Phase 07 report (git history, tag `phase-09-final`).
 
 ## 1. Decision: `mc-data` is a separate crate from `mc-registry`
 
@@ -54,7 +54,7 @@ data/minecraft/              8 775 files across 39 directories
 ```
 
 Why this matters: Phase 06 shipped hand-written recipe and fuel tables from community
-knowledge, and `PHASE-06-REPORT.md` §5.9 had to record that they were unverified. The
+knowledge, and the Phase 06 report §5.9 (git history, tag `phase-09-final`) had to record that they were unverified. The
 jar confirms the values that were guessed (`iron_ingot_from_smelting_raw_iron` is
 `cookingtime: 200, experience: 0.7`). Loading the real data is what retires that
 caveat, and it is why the loader exists before the world generator does.
@@ -99,7 +99,7 @@ that contributes nothing, so `#a → #b → #a` terminates and says why.
   (`DataPackSet::load_plan`, `tag_resolve::merge`), so "why did my pack not take
   effect" has one place to look.
 - When real recipe/fuel tables replace the Phase 06 hand-written ones, the "unverified
-  values" caveat in `PHASE-06-REPORT.md` §5 shrinks to nothing — that is the intended
+  values" caveat recorded during Phase 06 shrinks to nothing — that is the intended
   payoff, and P07-09/P07-10 are where it lands.
 - **Loot tables, advancements, functions, predicates, worldgen data and item modifiers
   are NOT loaded** by this crate yet. They are listed in `DATA_DIRECTORIES` as intent,

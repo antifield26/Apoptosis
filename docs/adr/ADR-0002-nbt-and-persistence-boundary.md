@@ -6,7 +6,7 @@ serialization. Phase 02 already owned a network-NBT implementation inside
 `mc-protocol`. Two crates of persistence code could have grown three or four
 private NBT models.
 Evidence: `crates/nbt/`, `crates/persistence/`, `docs/research/protocol-baseline.md`
-§2, `docs/phases/PHASE-03-REPORT.md`, `docs/research/provenance.md`.
+§2, the Phase 03 report (git history, tag `phase-09-final`), `docs/research/provenance.md`.
 
 ## 1. Decision: one NBT implementation, two encodings
 

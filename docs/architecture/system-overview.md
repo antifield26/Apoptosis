@@ -37,14 +37,14 @@ in `ADR-0002`: `mc-nbt` is shared by `mc-protocol` and `mc-persistence`, and
 Protocol facts: `docs/research/protocol-baseline.md`. Parity/test strategy:
 `docs/research/parity-and-testing-strategy.md`. Risks: ADR-0001 §2.
 
-Phase 03 status (persistence, `docs/phases/PHASE-03-REPORT.md`): Anvil region
+Phase 03 status (persistence; the Phase 03 report is in git history, tag `phase-09-final`): Anvil region
 read/write, `level.dat` (DataVersion 4790 / level version 19133), the 26.1
 `dimensions/<ns>/<value>` layout with legacy fallback, chunk serialization,
 dirty tracking, autosave and the ordered/atomic save barrier are implemented and
 verified — including a differential run where a real vanilla 26.1.2 server booted
 on a world this code wrote and re-saved it.
 
-Phase 05 status (simulation, `docs/phases/PHASE-05-REPORT.md`): a new
+Phase 05 status (simulation; Phase 05 report in git history, tag `phase-09-final`): a new
 `mc-simulation` crate owns the **shape of a tick** — a `const` six-phase order
 (network → scheduled ticks → entities → players → block entities → broadcast),
 per-phase timing, and a seeded `RandomSource` verified byte-for-byte against
@@ -53,11 +53,11 @@ reused), status effects, dropped items, a projectile trajectory baseline, and mo
 with goal-based AI plus bounded A* pathfinding. The game loop now runs through the
 scheduler and owns the open world, so a stored chunk is read before a placeholder
 can exist (a Phase 04 defect that silently destroyed terrain; see
-`docs/phases/AUDIT-02-FINDINGS.md`). Not implemented, and named as such: mob
+Audit 02, git history tag `phase-09-final`). Not implemented, and named as such: mob
 spawning, entity packets, entity persistence, scheduled block/fluid ticks, and any
 world-side effect of an AI decision.
 
-Phase 04 status (survival slice, `docs/phases/PHASE-04-REPORT.md`): `mc-registry`
+Phase 04 status (survival slice; Phase 04 report in git history, tag `phase-09-final`): `mc-registry`
 (29 873 block states / 1 506 items, from the official jar's own registry),
 `mc-world` (runtime chunks, swept collision, ray casting) and `mc-entity` (player,
 inventory, item stacks, health/food/XP) exist; `mc-network` publishes joins and

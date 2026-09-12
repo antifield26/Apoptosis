@@ -7,7 +7,7 @@ problem, and each could have been modelled with a trait object hierarchy (which 
 how Vanilla's class hierarchy and most JVM ports read) or with a closed enum.
 Evidence: `crates/entity/src/entity.rs`, `crates/entity/src/mob.rs`,
 `crates/container/src/container.rs`, `crates/simulation/src/phase.rs`,
-`docs/phases/PHASE-05-REPORT.md`, `docs/phases/AUDIT-02-FINDINGS.md`.
+the Phase 05 report and Audit 02 (git history, tag `phase-09-final`).
 
 ## 1. Decision: closed enums, not `dyn Trait`, for entity and container kinds
 

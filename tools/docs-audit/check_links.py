@@ -41,6 +41,20 @@ broken_links: list[tuple[str, str]] = []
 broken_paths: list[tuple[str, str]] = []
 untracked_refs: list[tuple[str, str]] = []
 
+ARCHIVE_TAG = 'phase-09-final'
+
+
+def resolvable_in_history(target: str) -> bool:
+    """A path cited as retired history is fine when the declared archive tag
+    actually contains it — the citation resolves, just not in the worktree."""
+    probe = target.rstrip('/')
+    result = subprocess.run(
+        ['git', 'cat-file', '-e', f'{ARCHIVE_TAG}:{probe}'],
+        cwd=ROOT, capture_output=True,
+    )
+    return result.returncode == 0
+
+
 for rel in docs:
     text = (ROOT / rel).read_text(encoding='utf-8', errors='strict')
     for match in LINK.finditer(text):
@@ -67,6 +81,8 @@ for rel in docs:
         if target.startswith('OpenSourceMinecraftServer/'):
             continue
         if target not in tracked_set and not (ROOT / target).exists():
+            if resolvable_in_history(target):
+                continue
             broken_paths.append((rel, target))
     for name in UNTRACKED_NAMES:
         if name in text:

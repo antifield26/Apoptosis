@@ -82,7 +82,7 @@ Also measured in the same run and used by P03-06/07/08/10:
 Evidence artifacts: `crates/test-support/fixtures/anvil/` (a vanilla `level.dat`
 plus a derived one-chunk region file, with MANIFEST and hashes), the ignored
 differential test `crates/persistence/tests/vanilla_differential.rs`, and
-`docs/phases/PHASE-03-REPORT.md`.
+the Phase 03 report (git history, tag `phase-09-final`).
 
 ## 3. World-layout break at 26.1 (confirmed)
 
