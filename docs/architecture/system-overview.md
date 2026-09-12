@@ -1,7 +1,13 @@
-# System Overview (Phase 00)
+# System Overview
 
-Target: pure-Rust Minecraft Java 26.1.2 dedicated server, 10-player Vanilla Survival,
-fixed 20 TPS, Tokio I/O, Pi 5 aarch64 first-class. See ADR-0001 for decisions.
+Target: a from-scratch, pure-Rust Minecraft Java **26.1.2** dedicated server (protocol **775**), serving
+10 concurrent Vanilla-Survival players at a fixed 20 TPS, with Tokio only at the I/O edges and a
+Raspberry Pi 5 (aarch64, Debian 13) as the first-class deployment target. Architecture decisions and the
+risk register: [ADR-0001](../adr/ADR-0001-system-architecture.md).
+
+**This document describes what the system is now.** For how it came to be, see
+[CHANGELOG.md](../../CHANGELOG.md); the per-phase reports it distils are in git history at tag
+`phase-09-final`.
 
 ```text
                     +------------------- clients (real 26.1.2) -------------------+
@@ -9,61 +15,101 @@ fixed 20 TPS, Tokio I/O, Pi 5 aarch64 first-class. See ADR-0001 for decisions.
                     +------------------------------+----------------------------+
                                                    | TCP (hostile input)
                                      +-------------v-------------+
-                                     | network (Tokio edge)      |  P02
+                                     | network (Tokio edge)      |  mc-network
                                      | accept/framing fast-path  |
                                      +-------------+-------------+
                                                    | validated intents (bounded queue)
                                      +-------------v-------------+
-                                     | simulation (tick thread)  |  P01-09 clock, P05
+                                     | simulation (tick thread)  |  mc-simulation
                                      | 50ms phases, serial order |
                                      +--+------+------+------+---+
                        +----------------+ +----v---+ +----v---+ +-----------v--...--+
-                       | world/dimens.  | | entity | | command| | persistence     |  P03/P04/P05/P07
-                       | chunks/blocks  | | AI/phys| |dispatch| | anvil/nbt/level |
-                       +----------------+ +--------+ +--------+ +--------+--------+
-                                                                    | tmp→rename, barrier
+                       | world/dimens.  | | entity | | command| | persistence     |  mc-world
+                       | chunks/blocks  | | AI/phys| |dispatch| | anvil/nbt/level |  mc-entity
+                       +----------------+ +--------+ +--------+ +--------+--------+  mc-command
+                                                                    | tmp→rename,   mc-persistence
+                                                                    | barrier
                                                               +-----v-----+
                                                               | disk: Anvil |
                                                               | level.dat   |
                                                               +-------------+
 ```
 
-Data flow (CONVENTIONS.md §8): `TCP/Tokio → decoded events → tick scheduler → 20 TPS sim → state changes → packet scheduler → socket`.
-Workers (chunkgen/compression/persistence) join at tick boundary; gameplay order never depends on I/O completion.
+Data flow ([CONVENTIONS.md](../CONVENTIONS.md) §8):
+`TCP/Tokio → decoded events → tick scheduler → 20 TPS sim → state changes → packet scheduler → socket`.
+Workers (chunkgen, compression, persistence) join at a tick boundary; gameplay order never depends on I/O
+completion.
 
-Crate map: `docs/adr/ADR-0001-system-architecture.md` §D-01 (Phase 03 refined it
-in `ADR-0002`: `mc-nbt` is shared by `mc-protocol` and `mc-persistence`, and
-`ChunkData` is the schema boundary that `world` will convert to/from).
-Protocol facts: `docs/research/protocol-baseline.md`. Parity/test strategy:
-`docs/research/parity-and-testing-strategy.md`. Risks: ADR-0001 §2.
+## Crate map
 
-Phase 03 status (persistence; the Phase 03 report is in git history, tag `phase-09-final`): Anvil region
-read/write, `level.dat` (DataVersion 4790 / level version 19133), the 26.1
-`dimensions/<ns>/<value>` layout with legacy fallback, chunk serialization,
-dirty tracking, autosave and the ordered/atomic save barrier are implemented and
-verified — including a differential run where a real vanilla 26.1.2 server booted
-on a world this code wrote and re-saved it.
+Sixteen crates plus one binary. Each boundary exists for a stated reason; the ones that were contested are
+recorded as decisions rather than left implicit.
 
-Phase 05 status (simulation; Phase 05 report in git history, tag `phase-09-final`): a new
-`mc-simulation` crate owns the **shape of a tick** — a `const` six-phase order
-(network → scheduled ticks → entities → players → block entities → broadcast),
-per-phase timing, and a seeded `RandomSource` verified byte-for-byte against
-`java.util.Random`. `mc-entity` gained the entity store (monotonic ids never
-reused), status effects, dropped items, a projectile trajectory baseline, and mobs
-with goal-based AI plus bounded A* pathfinding. The game loop now runs through the
-scheduler and owns the open world, so a stored chunk is read before a placeholder
-can exist (a Phase 04 defect that silently destroyed terrain; see
-Audit 02, git history tag `phase-09-final`). Not implemented, and named as such: mob
-spawning, entity packets, entity persistence, scheduled block/fluid ticks, and any
-world-side effect of an AI decision.
+| Crate | Owns |
+|---|---|
+| `mc-core` | Error taxonomy, resource ids, the deterministic tick clock |
+| `mc-nbt` | The NBT model and both encodings (big-endian network, gzip'd on disk) |
+| `mc-protocol` | The 775 wire codec: VarInt/VarLong, framing, and every packet the server sends or reads |
+| `mc-network` | Tokio listener and connection lifecycle; the offline/online authentication boundary; admission limits |
+| `mc-registry` | Block-state and item tables read from the jar-derived fixtures, with the documented search order |
+| `mc-world` | Runtime chunks, swept collision, ray casting |
+| `mc-persistence` | Anvil regions, `level.dat`, palette packing, dirty tracking, autosave and the atomic save barrier |
+| `mc-simulation` | The shape of a tick: a `const` six-phase order, per-phase timing, and a seeded `RandomSource` |
+| `mc-entity` | Entity store, players, inventories and item stacks, mobs with goal-based AI, bounded A*, effects, projectiles |
+| `mc-container` | Menus and server-authoritative click transactions, crafting, furnace, hopper, block entities |
+| `mc-redstone` | The power model, budgeted propagation, the update queue |
+| `mc-worldgen` | Seeds, noise, biomes, terrain, features, structures, and existing-world-first generation |
+| `mc-data` | Tags, recipes, loot tables, advancements, functions, pack discovery — the loader, separate from the registry ([ADR-0004](../adr/ADR-0004-data-loading-and-registry-split.md)) |
+| `mc-command` | The command tree, dispatcher, argument types, selectors and the `execute` context |
+| `mc-server` | Lifecycle and the game loop, config, logging, operational metrics, storage, data packs, ops, backup |
+| `mc-test-support` | Fixtures, temp directories, the protocol `TestClient` |
+| `apps/server` | The `mc-server` binary: read config, init logging, run until shutdown |
 
-Phase 04 status (survival slice; Phase 04 report in git history, tag `phase-09-final`): `mc-registry`
-(29 873 block states / 1 506 items, from the official jar's own registry),
-`mc-world` (runtime chunks, swept collision, ray casting) and `mc-entity` (player,
-inventory, item stacks, health/food/XP) exist; `mc-network` publishes joins and
-intents across a bounded bridge into `mc-server`'s game loop, which streams
-terrain, validates movement and block edits, applies fall damage, and saves the
-world. Verified end to end over a **real TCP socket** and against a **real vanilla
-chunk**. World generation, lighting, entities and commands are explicitly not
-implemented.
+Two boundaries are worth naming because they are easy to get wrong and are recorded as decisions:
+`mc-nbt` is shared by `mc-protocol` and `mc-persistence`, with `ChunkData` as the schema boundary
+([ADR-0002](../adr/ADR-0002-nbt-and-persistence-boundary.md)); and simulation uses enums and one geometry
+type rather than trait objects ([ADR-0003](../adr/ADR-0003-simulation-layering.md)). Plugin readiness is a
+boundary with three named seams and **zero API types** — deliberately not an API
+([ADR-0005](../adr/ADR-0005-plugin-boundary.md)). The project is MIT
+([ADR-0006](../adr/ADR-0006-licensing.md)).
 
+## What runs today
+
+Every claim below has a test or a measurement behind it; the per-domain evidence and every known
+divergence live in [PARITY-MATRIX.md](../vanilla-parity/PARITY-MATRIX.md), which is the single authority.
+`README.md` carries the same list for a reader who has not opened `docs/`.
+
+| Domain | State |
+|---|---|
+| Protocol & networking | handshake → status → login → config → play over Tokio TCP; packet ids verified against the jar's registration bytecode; hostile-input hardening (non-terminating varints, oversized frames, decompression bombs, slow drips, floods); per-IP and global admission limits |
+| Survival slice | join/stream, server-authoritative movement with swept collision, break/place validation, inventory transactions, health/hunger/XP, death and respawn, save/reload |
+| Persistence | NBT + Anvil read/write with atomic saves; verified end to end — a world this code rewrote was **booted on a real vanilla 26.1.2 server**, which preserved the edits and re-saved every dimension |
+| Commands & data | 8 commands plus `/function`, permission levels from `ops.json`; real data-pack loading from the configured vanilla pack and from world packs; the deployed vanilla pack resolves 758 tags and loads 1 421 recipes |
+| World generation | seeded terrain with six biomes, trees, and a single-chunk subset of the jar's 1 202 structure templates |
+| Performance | the documented 20 TPS acceptance procedure ran on a Raspberry Pi 5: a 30-minute soak with 10 scripted clients held settled tick p50/p95/p99 medians of 0.21/0.27/0.29 ms with zero settled overruns ([record](../performance/BENCHMARK-BASELINE.md)) |
+
+## What is deliberately absent
+
+Recorded rather than papered over; the full catalogue with per-row evidence is the parity matrix.
+
+- **No lighting propagation.** Chunks go out with zero light masks, so a client renders them dark.
+- **Entities are not synced or persisted.** Mobs and dropped items vanish on restart and clients never see
+  them, even though the simulation models them.
+- **Redstone is a tested model, not wired into the tick loop.** Propagation, budgets and determinism have
+  tests; no tick drives them.
+- **8 of roughly 90 Vanilla commands**, and only the player inventory opens as a container window.
+- **No real-client acceptance.** The protocol `TestClient` and scripted soak clients are the only partners;
+  a Java client may disagree where the fixtures cannot see (KD-38).
+- **Offline mode only.** `online_mode = true` refuses to start rather than degrading silently.
+
+## Invariants a change must not break
+
+- **A stored chunk is read before a placeholder can exist.** Generation is gated on being able to read
+  storage, so a game that cannot look cannot generate over a saved world.
+- **Generated chunks stay clean.** They are reproducible from the seed, so marking them dirty broke
+  unloading and let placeholders be written back over real terrain.
+- **The world is only replaced by `rename`.** `level.dat` must never be absent, so the save barrier writes a
+  staged file, fsyncs, and renames — the replace is one atomic step.
+- **Gameplay order never depends on I/O completion.** Workers join at a tick boundary.
+- **Collections that a tick walks are ordered**, and all randomness comes from `mc-simulation`'s seeded
+  `RandomSource`, so a replay is reproducible.
