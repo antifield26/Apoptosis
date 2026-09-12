@@ -1,0 +1,38 @@
+Apoptosis — a pure-Rust Minecraft Java Edition 26.1.2 server
+Copyright (c) 2026 Antifield
+
+This project is licensed under the MIT License (see LICENSE).
+
+## Independent implementation
+
+This is an original, clean-room implementation. The behaviour of Minecraft
+Java Edition 26.1.2 (protocol 775) was studied from public observation and
+from the reference projects listed below; **no source code, patches or
+assets were copied from any of them**. Where a design idea was directly
+inspired by a reference project, the inspiration is recorded in
+docs/research/provenance.md.
+
+## Reference projects (studied, not copied)
+
+| Project | Licence (upstream) | What was studied |
+|---|---|---|
+| Pumpkin (github.com/Pumpkin-MC/Pumpkin) | GPL-3.0 (plugin API crates MIT OR Apache-2.0) | server architecture, tick/threading model, persistence layout |
+| Paper (github.com/PaperMC/Paper) | GPL-3.0 | networking structure, persistence integration, threading direction |
+| Valence (github.com/valence-rs/valence) | MIT | codec/protocol crate organisation, ECS boundary ideas |
+| Minestom (github.com/Minestom/Minestom) | Apache-2.0 | packet lifecycle, configuration state, tick dispatch |
+
+The GPL-licensed projects above are treated as read-only references under the
+project's clean-room policy (docs/legal/third-party.md): nothing derived from
+them is vendored, translated or linked. Reference-clone inventory with
+file-level citations: docs/research/reference-repos.md.
+
+## Minecraft data
+
+Minecraft is a product of Mojang Studios / Microsoft. Minecraft data formats
+(Anvil region files, NBT, the data pack format, registry dumps) are
+documented here solely for interoperability, in the spirit of the Mojang
+EULA and the format documentation the community maintains. No Minecraft
+assets are distributed with this project; runtime data is produced from an
+operator-supplied server jar. The registry id tables under
+crates/test-support/fixtures/registry/ are generated dumps of protocol ids
+needed for interoperability.

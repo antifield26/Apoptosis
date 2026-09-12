@@ -1,0 +1,146 @@
+# Changelog
+
+All notable changes to this project are documented here. The project keeps a
+linear history on `main`; this file distills it per phase. The complete
+per-phase reports and five adversarial audits that this file condenses live in
+git history — the pre-governance snapshot (which still contains them as files)
+is the tag **`phase-09-final`** (`git show phase-09-final:docs/phases/…`).
+
+Format follows [Keep a Changelog](https://keepachangelog.com/) in spirit; the
+project has shipped no tagged release yet, so the first entry is the release
+candidate matching the workspace version (`0.1.0` in [Cargo.toml](Cargo.toml)).
+
+## [0.1.0-rc.1] — 2026-09-12 (release candidate)
+
+### Phase 00 — Research (2026-09-10)
+
+- Inventoried the four local reference clones (Pumpkin, Paper, Valence,
+  Minestom) with licence and module citations; established the 26.1.2 protocol
+  baseline (protocol 775, DataVersion 4790 — later measured, not guessed).
+- Architecture decision: crate-per-boundary workspace, one tick thread with
+  Tokio only at I/O edges, vanilla-compatible Anvil subset, 775-only protocol.
+  Recorded as [ADR-0001](docs/adr/ADR-0001-system-architecture.md) with a risk
+  register whose items (R-01…R-10) were tracked to closure across the project.
+- Clean-room policy set: behaviour may be studied from references, source may
+  never be copied ([NOTICE](NOTICE), [docs/legal/third-party.md](docs/legal/third-party.md)).
+
+### Phase 01 — Foundation (2026-09-10)
+
+- Virtual-manifest workspace (16 crates + server binary), pinned toolchain
+  1.98.1, fmt/clippy/pedantic lint contract, CI workflow, TOML config with
+  validation, structured logging, deterministic tick clock, lifecycle with
+  graceful shutdown, shared test-support crate.
+
+### Phase 02 — Network & protocol (2026-09-10)
+
+- Tokio connection lifecycle, VarInt/VarLong and frame codecs with
+  hostile-input caps (5/10-byte, 2 MiB), handshake/status/login/config state
+  machines, offline authentication, compression negotiation with bomb
+  rejection, connection admission limits, packet-fixture and fuzz harnesses,
+  and an end-to-end test client reaching Play.
+
+### Phase 03 — Persistence (2026-09-11)
+
+- NBT (disk + network encodings), Anvil region reader/writer with atomic
+  tmp→rename saves, chunk serde that preserves unknown fields, dirty tracking
+  with retry-on-failure, autosave scheduling, corruption and restart suites.
+- Closed risk R-03 by measurement: DataVersion 4790, `version` 19133; the
+  writer stamps what vanilla 26.1.2 writes.
+- The differential proof of the phase: a vanilla-world round trip where our
+  rewritten regions and `level.dat` were accepted by a real vanilla server.
+
+### Phase 04 — Survival vertical slice (2026-09-11)
+
+- Block/item registries loaded from the jar's own registry dump (1 168 blocks,
+  29 873 states, 1 506 items); world/chunk runtime with swept collision and
+  ray casting; player state (health/hunger/XP with hostile-NBT hardening);
+  break/place validation; death and respawn; join streaming with per-tick
+  budgets; real-socket E2E tests; the first tick-cost baseline.
+
+### Phase 05 — Simulation, entities, physics, AI (2026-09-11)
+
+- Six-phase tick order as a compile-time contract, tick metrics, a
+  byte-exact `java.util.Random` reimplementation (verified against JDK 25
+  vectors — it caught two real bugs), entity lifecycle/ids that are never
+  reused, item entities, projectiles, effect containers, mob tables and
+  goal-based AI, bounded deterministic pathfinding, entity-heavy tick baseline.
+- Opened with the second adversarial audit (data loss: streamed chunks could
+  overwrite stored terrain; a placement DoS; RNG sign-extension bugs).
+
+### Phase 06 — Inventory, containers, block entities, redstone (2026-09-11)
+
+- Server-authoritative inventory transactions: stale-state-id resync,
+  computed slots, conservation proven under 2 000-click adversarial floods;
+  shaped/shapeless crafting; furnace with exact burn/cook accounting;
+  hopper transfer model; block-entity lifecycle.
+- Redstone: power model, budgeted propagation that never drops updates,
+  golden circuit tests, determinism proofs — model-complete and explicitly
+  not yet wired into the tick loop.
+- Third adversarial audit; the first project commit (`b7b1c99`) landed here
+  with owner approval.
+
+### Phase 07 — Commands, data packs, worldgen (2026-09-11)
+
+- Command tree/dispatcher with permission-before-grammar checking; eight
+  commands reachable from a real client; `execute` modifier chains; `/function`
+  with recursion and privilege bounds.
+- Real data-pack loading: 758/758 vanilla tags resolve cleanly, 1 421 recipes
+  load (94 counted as unmodelled), registry split fix, `ops.json` read at
+  startup, pack discovery from world directories.
+- Worldgen: seeded Perlin terrain, six biomes, trees, structure loading
+  (1 182 of 1 202 templates) with a single-chunk placement policy, wired into
+  generation with golden tests; existing-world-first generation.
+
+### Phase 08 — Pi hardening & operations (2026-09-12)
+
+- Operational guardrails: config bounds, structured 30-second metrics lines,
+  shutdown barrier (drain 5 s → bounded save 30 s), systemd unit, offline
+  whole-copy backup/restore with manifest and overwrite guard, named
+  connection limits with a full-server bypass path, slow-drip and registry
+  reservation caps, command-flood proof, admin-safety review.
+- The benchmark harness (10-player workload driver, chunkgen burst, dirty-save
+  timing, profile run) with the burst/settled separation rule; honest no-fix
+  verdict where evidence did not support a change; operational runbook.
+
+### Phase 09 — Conformance & release candidate (2026-09-12)
+
+- Full-matrix sweeps across every domain (final counts: **1 191 passed /
+  0 failed / 21 ignored, 74 suites**); all seven differential suites green
+  including the vanilla round trip; both build profiles measured; release
+  build reproducible with a real-socket smoke.
+- Known-divergence catalog, release-candidate documentation, plugin-boundary
+  ADR (three named seams, zero API types), independent adversarial review
+  (10 findings, all dispositioned), acceptance report.
+- Fixed the one known flaky: three metrics tests shared a `TempDir` tag whose
+  uniqueness collapsed under parallel I/O (probe-proven: duplicate paths in
+  160 000 same-tag constructions); per-test tags now follow the codebase
+  convention.
+
+### Platform work (2026-09-12, post-phase)
+
+- **Raspberry Pi 5 acceptance executed**: on-device release build with the
+  pinned toolchain; 30-minute soak under the installed systemd unit with 10
+  scripted clients — settled MSPT p50/p95/p99 medians 0.21/0.27/0.29 ms, zero
+  overruns outside the join burst, clean autosaves, graceful stop verified.
+  Full record: [docs/performance/BENCHMARK-BASELINE.md](docs/performance/BENCHMARK-BASELINE.md).
+- **Deployment defect found and fixed by that run**: the registry tables were
+  read from a build-tree path baked in at compile time, so the first real
+  systemd application could not start. `Registries::vanilla()` now searches
+  `$MC_FIXTURE_DIR`, then `fixtures/registry/` next to the executable, then
+  the build tree, with ordering regression tests.
+
+### Governance (2026-09-12)
+
+- **MIT license adopted** (owner decision; [ADR-0006](docs/adr/ADR-0006-licensing.md),
+  closing risk R-09) — `LICENSE`, license fields on all 17 manifests, the
+  cargo-deny licence gate now covers the workspace's own crates.
+- Source published at `github.com/antifield26/Apoptosis`.
+- Repository governance: standard project facade (README, CHANGELOG,
+  CONTRIBUTING, SECURITY, NOTICE, `.editorconfig`), the engineering
+  conventions carried in-repo ([docs/CONVENTIONS.md](docs/CONVENTIONS.md)),
+  divergence catalogs merged into a single parity matrix, the test matrix
+  restructured to a current view plus a deduplicated defect history,
+  per-phase reports distilled into this file and retired to git history, and
+  the documentation-audit scripts committed to `tools/docs-audit/`.
+
+[0.1.0-rc.1]: https://github.com/antifield26/Apoptosis
