@@ -20,7 +20,7 @@ a verifiable fact, not a decision: the repository is **public**).
   2 tsv, 2 under `apps/`, 11 root files). The pre-governance audit's "246" was
   the encoding script's count of tracked *text* files (the two `.tsv` baselines
   and nine other non-text-suffix files are excluded by its suffix filter).
-- `docs/` was 444.5 KB across 38 markdown files; `docs/phases/` alone was
+- `docs/` was 444.5 KB across 38 markdown files; the retired phases directory alone was
   194.1 KB (43.7%). All figures re-verified with `tools/docs-audit/` scripts.
 - 78 references to the git-ignored prompt pack; 4 broken backticked paths;
   0 broken markdown links. All three numbers reproduced from the committed

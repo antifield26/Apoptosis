@@ -90,6 +90,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      # The link checker resolves citations of retired documentation against
+      # the archive tag; a shallow checkout would not have it, so fetch it
+      # explicitly.
+      - run: git fetch --depth=1 origin +refs/tags/phase-09-final:refs/tags/phase-09-final
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
