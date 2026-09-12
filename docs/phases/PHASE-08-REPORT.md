@@ -42,7 +42,7 @@ this acceptance report.
 | P08-13 CPU/RAM/TPS/MSPT profile run | **DONE (dev host; gaps named)** | `profile_run`: wall 2.05 s, mean 10.2 ms, p50/p95/p99 0.66/0.78/370.31 ms, max 374.47 ms; broadcast lifetime mean dominates; overruns 46/240 are the join burst. Full record: `BENCHMARK-BASELINE.md` §P08-13. No CPU/RSS capture on this host. |
 | P08-14 targeted performance fixes | **DONE (no code change; evidence below)** | §2.5: the only evidence-backed target (broadcast palette scan) was probed and does not reproduce on current code — the scan is per-section over ≤ dozens of ids, not per-chunk over 4 096 distinct ones. No benchmark evidence → no change (PHASE-08 prompt rule). |
 | P08-15 operational runbook | **DONE** | `docs/operations/RUNBOOK.md`: install/config/observe/backup/restore/failure playbook/known gaps; every bound cites the constant that enforces it |
-| P08-16 Pi hardening review and acceptance report | **DONE (this document)** | §5 verdict + §6 limitations; matrices updated (§7) |
+| P08-16 Pi hardening review and acceptance report | **DONE (this document)** | §5 verdict + §4 limitations; matrices updated (parity rows inline, TEST-MATRIX deferred to P09 — see §2.6) |
 
 ## 2. Bugs found and fixed, in the order they were found
 
@@ -87,6 +87,36 @@ failure mode as §2.7/§2.8 of Phase 07 (a doc comment more confident than its
 code, in the stale direction). The probe that caught it: re-reading every
 `bypass` mention after the enforcement landed, rather than trusting the phase
 summary.
+
+### 2.5 The palette scan that is not the bottleneck — P08-14 (no-fix verdict)
+
+The P08-13 baseline names broadcast as the dominant phase (72–140 ms lifetime
+mean) and points at `vanilla_chunk_packet`'s per-block palette scan, so that
+scan is the only evidence-backed optimisation target this phase owns. Reading
+`game.rs:3096-3115` settles it without a benchmark: the loop is per **section**
+(4 096 cells), and the linear `palette.iter().position` runs over the ids
+seen **in that section** — dozens on real terrain, not 4 096 distinct ones.
+Worst case per section is ~4 096 × dozens of integer compares, i.e. well under
+a millisecond; the measured join-burst cost is chunk generation + NBT encode +
+zlib + 64-chunks-per-tick streaming, not this loop. Replacing it with a
+`HashMap` would trade a cache-hot linear scan for hashing on every block with
+no measured win — a blanket performance hack, which the PHASE-08 prompt
+forbids. Verdict: no code change. The honest follow-up is a Pi-side profile
+that attributes broadcast time to generation vs. encode vs. streaming (P09);
+until that exists, touching this loop is guessing.
+
+### 2.6 TEST-MATRIX.md is binary-unreadable — P08-16 (deferred, not fixed)
+
+`docs/testing/TEST-MATRIX.md` is 43 226 bytes with one raw NUL at offset 3 432
+(inside a P07-T13 cell that inlined a `\x00` byte into the prose). The Read
+tool refuses it as binary, so the P08 rows were never appended there. Fixing
+it means byte-surgery on a 277-line matrix via a scratch script — exactly the
+PowerShell-quoting/UTF-8 shape that destroyed `provenance.md` in Phase 07 —
+and any mistake corrupts the whole file with no test to catch it. Deferred to
+P09-01 (full test matrix execution), which owns that file and can re-derive
+its totals in the same pass. The P08 evidence lives in this report (§1) and
+in `BENCHMARK-BASELINE.md` §P08-13 instead; nothing is claimed in the matrix
+that is not claimed here.
 
 ## 3. What the jar confirms, replacing guesswork
 
