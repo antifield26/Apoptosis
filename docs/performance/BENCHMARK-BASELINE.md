@@ -178,8 +178,62 @@ Interpretation, stated carefully:
 | Smoke 2 | second start on the same dir: world reused, no error, smoke passes again |
 | Distribution | **unblocked 2026-09-12** — the owner adopted MIT (ADR-0006, closing R-09, after this build was recorded); no publication channel exists yet (no git remote), so the artifact remains a local build. The build is reproducible; a release announcement is not claimed |
 
-## 2. Planned workloads
+### P09-Pi — the acceptance run on real hardware (Pi 5, §4 executed 2026-09-12)
 
+The §4 procedure was executed end to end by the owner's Raspberry Pi 5. This is
+the record §4 step 6 asks for. Verdict first, per the §4 rule: **the 20 TPS
+acceptance is met for the scripted 10-player workload** — 30 minutes, zero
+overruns outside the join burst, every settled window an order of magnitude
+under the 50 ms budget. The boundary below names what this does and does not
+cover (scripted clients, loopback, microSD).
+
+| Field | Value |
+|---|---|
+| Date | 2026-09-12 (soak window 14:33–15:03 local; sampler 10 s cadence) |
+| Hardware | Raspberry Pi 5 Model B Rev 1.0, 4 × Cortex-A76, 8 GB (`/proc/device-tree/model`) |
+| OS / kernel | Debian GNU/Linux 13 (trixie), aarch64; kernel 6.18.39+rpt-rpi-2712 |
+| Toolchain | pinned 1.98.1 via rustup on the device (`rust-toolchain.toml` channel) |
+| Commit | `14759bc` plus the uncommitted `Registries::vanilla()` fixture-search fix — the deployment defect this run found (see below); rebuilt **on the device** |
+| Build profile | `release`, `--locked`, built on the Pi (`cargo build --workspace --release --locked`, 1 m 18 s clean / 26 s incremental) |
+| Binary | `/srv/mc-server/mc-server`, SHA-256 `62067e04b4c3f9e5958293425ad056c590fd5bd93c32ea07b2e7c0d3467ae02f`, 4 524 624 B |
+| Storage | **microSD** (`/dev/mmcblk0p2`, 29 GB free) — explicitly *not* the performance acceptance target (AGENTS.md §2); storage-bound figures are labelled below |
+| Workload | 10 scripted clients (`target/pi_soak_client2.py`, the TestClient conversation): MOVE_PLAYER_ROT 20 Hz, one 0.2-block MOVE_PLAYER_POS step per 20th tick, rotating `/list` (~2/min each), view 8; clients ran **on the Pi** at `nice -n 19` with one loopback source address each (127.0.0.2…11) because the per-IP admission cap (correctly) refuses 10 connections from one address |
+| Duration / warmup | 1800 s measured after staggered joins; 62 × 600-tick `tick metrics` windows captured, 60 with all 10 players |
+| TPS | the fixed 20 TPS clock held for the whole soak: **zero overruns in 60 settled windows** (lifetime overruns 5, all in the join window); the §4 verdict rule (mean MSPT < 50 ms, no settled-tick overrun) is **passed** |
+| MSPT p50/p95/p99 — settled, 10 players | medians across the 60 windows: **0.206 / 0.268 / 0.289 ms** (window p50 max 0.243; window p99 max 29.23 — see the spike note) |
+| Join burst | worst single tick 105.2 ms, window p95/p99 27.8/29.2 ms (tick 600 window only); five 55–110 ms ticks at 10 joins, never again |
+| Per-phase means | not captured by the soak (OperationalSnapshot reports aggregate MSPT only); the P08-13 harness owns per-phase figures |
+| CPU | median **1.0 %** of one core, max 21.3 % (join burst) — sampler on `/proc/<pid>/stat` |
+| RSS | median 125 MB, max 125 MB (up from 105 MB at first join) — far under the unit's 6 GB `MemoryMax` |
+| Storage | autosaves at ticks 6000/12000/18000/24000/30000/36000 all completed (`dirty_chunks=0` in every window); the microSD save cost from the bench: **45.0 ms/chunk** (81 dirty in 3.65 s) vs 10.9 ms/chunk on the dev host's SSD — the save path is where storage shows, and it stayed inside the budget |
+| Network | **loopback**, not the LAN (clients co-located per the per-IP constraint above); the LAN path was exercised separately by the status smoke + a 2-client smoke from the dev host over SSH |
+| Graceful stop | `systemctl stop` → SIGTERM → `server stopping ticks=40580` → listener stopped → world saved and closed → `shutdown complete` → unit `inactive` in ~1 s — the P08-03 barrier verified on hardware |
+
+In-process benches on the same device (§4 step 2, release, driven loop — not
+rate measurements): 10-player workload settled p50/p95/p99 0.123/0.153/0.183 ms;
+`profile_run` p99 27.2 ms (burst); chunkgen 684 resident / 1 360 streamed in
+0.68 s; 81-chunk dirty save 3.65 s (45.0 ms/chunk, microSD); tick_baseline
+10-player ≈ 0.10 ms, entity-heavy ≈ 1.82 ms mean. Logs: `~/bench.log`,
+`~/soak_metrics2.csv`, `~/soak_metrics_lines.txt`, `~/soak_run2.log` on the Pi.
+
+**Defect found and fixed by this run** (the acceptance run's first real catch):
+`deploy/mc-server.service` had been reviewed but never applied (KD-36); the
+first application failed at startup because `Registries::vanilla()` read its
+tables from a `env!(CARGO_MANIFEST_DIR)`-relative path — a build-tree path the
+service user cannot read. Fixed by a documented search order (`$MC_FIXTURE_DIR`
+→ `fixtures/registry` next to the executable → build-tree fallback), fixture
+installation added to the unit header and `RUNBOOK.md` §1, regression tests
+added (`mc-registry` lib), and the deployed service verified: status smoke from
+the dev host over the LAN, then this soak. The §P09-09 Windows smoke missed
+this because it ran the binary in-tree.
+
+**Boundary of the verdict (stated, not hidden):** the clients are scripted
+(KD-38 real-client acceptance remains open), the traffic is loopback rather
+than LAN, and the storage is microSD rather than the NVMe target. None of
+these plausibly moves MSPT by 250×, which is the headroom the settled windows
+show — but the record says so, not "production-ready".
+
+## 2. Planned workloads
 
 1. `idle` — empty server, tick overhead floor.
 2. `single-roam` — 1 scripted client roaming + chunk streaming.
@@ -197,12 +251,13 @@ plus an aarch64 build verification
 (`cargo check --target aarch64-unknown-linux-gnu --workspace --all-targets`),
 which is green as of Phase 04.
 
-## 4. Pi acceptance procedure (P09-08 — the run to do when hardware exists)
+## 4. Pi acceptance procedure (P09-08 — **executed 2026-09-12; record in §P09-Pi**)
 
-No Pi 5 exists in this environment, so the 20 TPS verdict is **unknown, not
-claimed** (KD-35). This section is the prepared substitute: the exact procedure
-the owner runs when a Pi 5 is available, so the verdict needs no re-derivation.
-Every step cites what already exists in the tree.
+No Pi 5 existed in this environment when Phase 08 closed, so the 20 TPS verdict
+was **unknown, not claimed** (KD-35). This section is the procedure that was
+then executed end to end on the owner's Raspberry Pi 5 the same day — the
+record is §P09-Pi above; the steps stay here so a re-run on other hardware
+needs no re-derivation.
 
 1. **Build on the Pi** (Debian 13 Trixie aarch64, NVMe, 8 GB): `rustup` installs
    the pinned 1.98.1 toolchain from `rust-toolchain.toml`, then

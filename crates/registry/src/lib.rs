@@ -47,8 +47,9 @@ mod items;
 pub use blocks::{BlockRegistry, BlockStateRef};
 pub use items::ItemRegistry;
 
-use mc_core::error::ServerResult;
-use std::path::Path;
+use mc_core::error::{ServerError, ServerResult};
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
 
 /// Registry data shipped with the test-support fixtures.
 ///
@@ -83,11 +84,79 @@ impl Registries {
 
     /// Load the vanilla tables shipped in this repository.
     ///
+    /// Search order (first directory holding `blocks.tsv` wins):
+    /// `$MC_FIXTURE_DIR` (operator override), `fixtures/registry` next to the
+    /// running executable (the deployed layout — `/srv/mc-server/fixtures/registry`),
+    /// the build tree two levels above the executable (a binary run in-place
+    /// under `target/release`), and finally the compiled-in workspace path
+    /// (dev builds and tests).
+    ///
     /// # Errors
     ///
-    /// As for [`Registries::load`].
+    /// As for [`Registries::load`], or [`ServerError::Operational`] naming every
+    /// directory tried when no candidate holds the tables.
     pub fn vanilla() -> ServerResult<Self> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        Self::load(&root.join(FIXTURE_DIR))
+        let exe_dir = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(Path::to_path_buf));
+        let mut tried = String::new();
+        for dir in candidate_dirs(exe_dir.as_deref()) {
+            if dir.join("blocks.tsv").is_file() {
+                return Self::load(&dir);
+            }
+            let _ = write!(tried, "\n  tried {}", dir.display());
+        }
+        Err(ServerError::Operational(format!(
+            "registry fixtures not found;{tried}"
+        )))
+    }
+}
+
+/// The search list behind [`Registries::vanilla`], exposed for testing.
+fn candidate_dirs(exe_dir: Option<&Path>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(dir) = std::env::var("MC_FIXTURE_DIR") {
+        dirs.push(PathBuf::from(dir));
+    }
+    if let Some(exe_dir) = exe_dir {
+        dirs.push(exe_dir.join("fixtures/registry"));
+        dirs.push(exe_dir.join("../../crates/test-support/fixtures/registry"));
+    }
+    dirs.push(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(FIXTURE_DIR),
+    );
+    dirs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FIXTURE_DIR, candidate_dirs};
+    use std::path::Path;
+
+    // The Pi acceptance run (P09) applied deploy/mc-server.service for the first
+    // time and the server could not start: the compiled-in path pointed back
+    // into the build tree, unreadable by the service user. This pins the order
+    // that makes the deployed layout win before the build-tree fallback.
+    #[test]
+    fn the_fixture_search_prefers_the_executable_side_over_the_build_tree() {
+        let dirs = candidate_dirs(Some(Path::new("/srv/mc-server")));
+        assert_eq!(
+            dirs[0],
+            Path::new("/srv/mc-server/fixtures/registry"),
+            "the deployed layout must be searched first"
+        );
+        assert!(
+            dirs.iter().any(|d| d.ends_with(FIXTURE_DIR)),
+            "the compiled-in path must remain the last resort: {dirs:?}"
+        );
+    }
+
+    #[test]
+    fn the_fixture_search_works_without_an_executable() {
+        let dirs = candidate_dirs(None);
+        assert_eq!(dirs.len(), 1, "no exe means only the compiled-in path");
+        assert!(dirs[0].ends_with(FIXTURE_DIR));
     }
 }

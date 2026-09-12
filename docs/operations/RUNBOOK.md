@@ -29,8 +29,15 @@ useradd --system --no-create-home --shell /usr/sbin/nologin mc-server
 mkdir -p /srv/mc-server /var/lib/mc-server /var/backups/mc-server
 chown mc-server:mc-server /var/lib/mc-server /var/backups/mc-server
 install -m 0755 target/release/mc-server /srv/mc-server/mc-server
+# The registry tables are read at runtime from next to the binary (P09 finding:
+# the binary does not carry them compiled-in, and the service user cannot read
+# the build tree):
+mkdir -p /srv/mc-server/fixtures/registry
+install -m 0644 crates/test-support/fixtures/registry/blocks.tsv \
+                crates/test-support/fixtures/registry/items.tsv \
+                /srv/mc-server/fixtures/registry/
 install -m 0644 config.example.toml /srv/mc-server/config.toml
-# then edit /srv/mc-server/config.toml (bind, world_dir, vanilla_data)
+# then edit /srv/mc-server/config.toml (bind, world_dir)
 install -m 0644 deploy/mc-server.service /etc/systemd/system/mc-server.service
 systemctl daemon-reload
 systemctl enable --now mc-server.service

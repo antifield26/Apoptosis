@@ -163,5 +163,25 @@ re-derivation.
   because no distribution channel (git remote, registry) exists.
 - **Pi 5 hardware became available** the same day (`antifield@10.130.136.226`,
   Raspberry Pi 5 Model B, Debian 13 trixie aarch64, 8 GB, microSD): the KD-35
-  acceptance run of `BENCHMARK-BASELINE.md` §4 is being executed; results land
-  as §P09-Pi in that file and in the KD-35 / parity-matrix updates.
+  acceptance run of `BENCHMARK-BASELINE.md` §4 was executed end to end. The
+  §4 verdict rule **passed for the scripted workload**: 30-minute soak under
+  the installed systemd unit, 10 clients, settled MSPT p50/p95/p99 medians
+  **0.21/0.27/0.29 ms**, zero overruns outside the join burst, graceful stop
+  verified on hardware. Full record: `BENCHMARK-BASELINE.md` §P09-Pi; KD-35
+  and KD-36 are resolved with named boundaries (scripted clients, loopback,
+  microSD — KD-38 stays open).
+
+### 7.1 The deployment defect the acceptance run caught
+
+The first-ever application of `deploy/mc-server.service` failed at startup:
+the server read its registry tables from a path compiled in relative to the
+**build tree** (`env!("CARGO_MANIFEST_DIR")` in `Registries::vanilla()`), which
+the service user cannot read — every prior smoke ran the binary in-tree, so
+the defect was invisible until a real deployment existed. Fixed by a documented
+search order (`$MC_FIXTURE_DIR` → `fixtures/registry` next to the executable →
+build-tree fallback), two ordering regression tests in `mc-registry`, fixture
+installation added to the unit header and `RUNBOOK.md` §1 (whose install steps
+also named a `vanilla_data` config key that does not exist — removed), the fix
+rebuilt and re-verified **on the Pi**, and the soak then run under the real
+unit. The §P09-09 smoke procedure now has a successor that would have caught
+it: run the smoke against the *installed* service, not the build tree.

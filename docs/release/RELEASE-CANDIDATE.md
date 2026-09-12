@@ -70,8 +70,8 @@ reviewed — never applied to a real host), `docs/operations/DEPENDENCY-POLICY.m
 | Conformance report produced | Yes — `docs/phases/PHASE-09-REPORT.md` + sweep rows in `docs/testing/TEST-MATRIX.md` |
 | Known divergences documented | Yes — `docs/vanilla-parity/KNOWN-DIVERGENCES.md` (38 entries) |
 | Release artifacts published | **No** — publishing is now *legally unblocked* (MIT, ADR-0006) but no publication channel exists (no git remote, no registry); the artifact is a recorded local build. When a channel appears, the MIT `LICENSE` ships with it |
-| 20 TPS on Pi 5 with 10 players | **No verdict exists** — no hardware in this environment (KD-35); the Pi acceptance procedure to run when hardware exists is in `BENCHMARK-BASELINE.md` §Pi-acceptance |
-| Real-client acceptance | **No** — no Java client in this environment (KD-38); the protocol test client is the partner |
+| 20 TPS on Pi 5 with 10 players | **Met for the scripted workload** — the `BENCHMARK-BASELINE.md` §4 acceptance run executed on a Pi 5 (Debian 13, release, on-device build): 30-min soak, settled MSPT medians 0.21/0.27/0.29 ms, zero settled overruns (§P09-Pi). Boundaries: scripted clients (KD-38), loopback, microSD |
+| Real-client acceptance | **No** — no Java client was driven; the scripted clients speak the exact TestClient conversation the E2E suite proves (KD-38) |
 
 ## 5. Document map
 

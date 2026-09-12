@@ -6,8 +6,13 @@
 #        mkdir -p /srv/mc-server /var/lib/mc-server /var/backups/mc-server
 #        chown mc-server:mc-server /var/lib/mc-server /var/backups/mc-server
 #        install -m 0755 target/release/mc-server /srv/mc-server/mc-server
+#        # registry tables are read at runtime from next to the binary (P09):
+#        mkdir -p /srv/mc-server/fixtures/registry
+#        install -m 0644 crates/test-support/fixtures/registry/blocks.tsv \
+#                        crates/test-support/fixtures/registry/items.tsv \
+#                        /srv/mc-server/fixtures/registry/
 #        install -m 0644 config.example.toml /srv/mc-server/config.toml
-#      then edit /srv/mc-server/config.toml (bind, world_dir, vanilla_data).
+#      then edit /srv/mc-server/config.toml (bind, world_dir).
 #   2. install the unit and start it:
 #        install -m 0644 deploy/mc-server.service /etc/systemd/system/mc-server.service
 #        systemctl daemon-reload

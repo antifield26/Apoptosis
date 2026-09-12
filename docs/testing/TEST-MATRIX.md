@@ -3,14 +3,13 @@
 Conventions: `L1` unit · `L2` property/fuzz · `L3` integration · `L4` golden/fixture ·
 `L5` end-to-end · `L6` differential vs vanilla · `L7` regression-per-bug`.
 Status: `planned | pass | fail | skipped(reason) | ignored(needs external input)`.
-Totals: **1 189 passed, 0 failed, 21 ignored**, re-derived from **two consecutive**
-`cargo test --workspace --no-fail-fast` runs on 2026-09-12 (74 suites; both
-exit 0; both after the P09 TempDir-tag fix — `target/p09_full_test.log` at
-12:02, and `target/p09_full_test2.log` after the final P09 code change, which
-also re-ran the four non-test gates the same day: `gate_fmt.log`,
-`gate_clippy.log`, `gate_aarch64.log`, `gate_deny.log`). The 21 ignored = 7
-differential suites (15 tests, env-gated) + `pi_profile` 4 + `tick_baseline`
-2 — all run on demand the same day (P09 rows below).
+Totals: **1 191 passed, 0 failed, 21 ignored**, re-derived from **three**
+`cargo test --workspace --no-fail-fast` runs on 2026-09-12 (74 suites; all
+exit 0). The first two ran after the P09 TempDir-tag fix (`target/p09_full_test.log`,
+`p09_full_test2.log`); the third after the registry fixture-search fix found by
+the Pi acceptance run (`p09_full_test3.log`, +2 `mc-registry` ordering tests).
+The 21 ignored = 7 differential suites (15 tests, env-gated) + `pi_profile` 4
++ `tick_baseline` 2 — all run on demand the same day (P09 rows below).
 
 ## Phase 07 — Commands, data packs and worldgen
 
@@ -318,14 +317,14 @@ below are the named integration/fixture/differential suites only.
 
 | ID | Case | Level | Status | Evidence |
 |---|---|---|---|---|
-| P09-T01 | Full test matrix execution | all | **pass** | two consecutive full-workspace runs, 1 189 / 0 / 21, 74 suites (2026-09-12); Phase 08 section added in the same pass (commit `bf118c8`) |
+| P09-T01 | Full test matrix execution | all | **pass** | three full-workspace runs on 2026-09-12 (1 189 / 0 / 21 twice, then **1 191** / 0 / 21 after the registry fix), 74 suites each; Phase 08 section added in the same pass (commit `bf118c8`) |
 | P09-T02 | Protocol conformance sweep | L1+L2+L4+L5 | **pass** | `packet_ids` 4 (jar-extracted ids incl. the `chat_command`=7 regression), `fixtures` 4 (golden bytes), `keepalive` 1, `login_tolerance` 2, `e2e_login_play` 6, plus the hostile VarInt/frame/packet corpus inside the `mc-protocol` lib binaries |
 | P09-T03 | Persistence compatibility sweep | L1+L3+L6 | **pass** | `restart` 7, `corruption` 16, `anvil_fixture` 9 (byte-identical palette repack), `vanilla_chunk` 4, and the env-gated `vanilla_differential` 2 run green with `MC_VANILLA_DATA`+`MC_VANILLA_JAR`+`MC_VANILLA_WORLD` — vanilla booted on our rewritten world (2026-09-12) |
 | P09-T04 | Survival regression sweep | L3+L4+L5 | **pass** | `survival_e2e` 7 (join/stream/move/break/place/death/save-reload), `network_game_bridge` 4 (real-socket login → play), `vanilla_chunk` 4 (real terrain walkable) |
 | P09-T05 | Entity/redstone regression sweep | L1+L2+L3+L5 | **pass** | `entity_lifecycle` 9, redstone suites 47 (`propagation` 17, `world_integration` 4, `budget_exhaustion` 7, `determinism` 6, `golden_circuits` 5, `power_model` 8), inventory/container: `container_e2e` 6, `block_entity_e2e` 6, `inventory_duplication` 5 |
 | P09-T06 | Commands/data/worldgen regression sweep | L1+L3+L5+L6 | **pass** | `command_e2e` 11, `execute_e2e` 9, `function_e2e` 14, `pack_discovery` 10, `pack_loading_e2e` 8, `worldgen_e2e` 7, worldgen golden suites 30 (`structure_golden` 9, `seed_derivation` 8, `golden` 6, `determinism` 7), differential: `vanilla_pack` 1, `vanilla_data` 1, `vanilla_smelting` 1, `structure_pack` 6, `scenario_vanilla` 2, `structure_wiring` 2 |
 | P09-T07 | Security adversarial sweep | L1+L2+L3+L5 | **pass** | hostile-input classes green in the full run: non-terminating VarInt/frames + random-byte connections (protocol/network libs), slow-drip bound + registry cap + `framing.rs` drip test, `command_e2e` flood test, `ops_e2e` 7 (permission/impersonation), `inventory_duplication` 5 (2 000-click conservation), `corruption` 16 (hostile disk), config guardrails |
-| P09-T08 | Pi performance release sweep | L4 (perf) | **pass (ignored, on demand; dev host, both profiles)** | 2026-09-12: debug settled p50/p95/p99 0.67/0.74/0.84 ms max 1.02; release figures in `BENCHMARK-BASELINE.md` §P09-08; chunkgen 684 resident/1 360 streamed; 81 dirty saved; **no Pi 5, no 20 TPS verdict** — the prepared acceptance run is `BENCHMARK-BASELINE.md` §4 |
+| P09-T08 | Pi performance release sweep | L4 (perf) | **pass (ignored, on demand; dev host both profiles + Pi 5 acceptance)** | 2026-09-12: dev-host debug settled p50/p95/p99 0.67/0.74/0.84 ms max 1.02; release figures in `BENCHMARK-BASELINE.md` §P09-08; **the §4 Pi run was then executed on real hardware** — 30-min soak, 10 scripted clients, settled medians 0.21/0.27/0.29 ms, zero settled overruns → 20 TPS accepted for the scripted workload (§P09-Pi; boundaries named there) |
 | P09-T09 | Reproducible release build | — | **pass (build) / blocked (publish)** | `cargo build --workspace --release --locked` green + real-socket status smoke; **no artifact published** — at the time, R-09 license decision pending (resolved same day by ADR-0006, MIT; no publication channel exists); recorded in `BENCHMARK-BASELINE.md` §P09-09 |
 | P09-T10 | Release documentation | — | **pass** | `docs/release/RELEASE-CANDIDATE.md`: build/run/claims table, every "no" tied to a KD entry |
 | P09-T11 | Known divergence catalog | — | **pass** | `docs/vanilla-parity/KNOWN-DIVERGENCES.md` KD-01..38, each sourced to a matrix row or phase report |

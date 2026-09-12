@@ -78,8 +78,8 @@ Divergence IDs are stable (`KD-01`…) so reports and reviews can cite them.
 
 | ID | Domain | Production | Ours | Class | Source |
 |---|---|---|---|---|---|
-| KD-35 | 20 TPS verdict | Pi 5 8GB, 10 players | no Pi 5 hardware here: dev-host baselines only (settled p95 ≈ 0.8 ms debug; release figures in `BENCHMARK-BASELINE.md` §P09). **No 20 TPS claim exists** | boundary (evidence pending hardware) | `BENCHMARK-BASELINE.md`; PHASE-08-REPORT §4 |
-| KD-36 | systemd unit | applied on a real host | reviewed line-by-line, never installed here | boundary (no Pi) | `RUNBOOK.md`; P08-16 |
+| KD-35 | 20 TPS verdict | Pi 5 8GB, 10 players | **met for the scripted workload** — the §4 acceptance run executed on a Pi 5 (Debian 13, release, on-device build): 30-min soak, 10 players, settled MSPT p50/p95/p99 medians 0.21/0.27/0.29 ms, zero overruns outside the join burst. Boundaries: scripted clients (KD-38), loopback traffic, microSD storage | resolved (with named boundaries) | `BENCHMARK-BASELINE.md` §P09-Pi |
+| KD-36 | systemd unit | applied on a real host | **applied on the Pi 5**: unit installed per `RUNBOOK.md` §1, enabled, soak run under it, graceful stop verified on hardware. First application exposed the registry-fixture deployment defect (fixed; see §P09-Pi) | resolved | `BENCHMARK-BASELINE.md` §P09-Pi |
 | KD-37 | Backup/restore CLI | operator tooling | library calls with 5 tests; no CLI wrapper | gap | P08-16 |
 | KD-38 | Real-client acceptance | any Java client 26.1.x | protocol test client only; no real client in this environment | boundary (no client) | `PARITY-MATRIX` handshake row; P04-T23, P02-T12 |
 
