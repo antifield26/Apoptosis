@@ -1,11 +1,10 @@
 # Release Candidate Documentation (P09-10)
 
-Status: **release candidate, distributable under MIT** (ADR-0006, owner
-decision 2026-09-12 — closes ADR-0001 R-09). The artifact below is a local
-build; the repository has no remote yet, so no publication channel exists —
-"may be distributed" means the legal blocker is gone, not that artifacts are
-uploaded anywhere. This document is what a builder or operator needs to
-produce and run the server from source today.
+Status: **release candidate, published as source under MIT** (ADR-0006, owner
+decision 2026-09-12 — closes ADR-0001 R-09). The full history is on
+`github.com/antifield26/Apoptosis` (public) as of 2026-09-12; the binary below
+is a local build and no tagged binary release exists yet. This document is what
+a builder or operator needs to produce and run the server from source today.
 
 ## 1. What ships
 
@@ -69,7 +68,7 @@ reviewed — never applied to a real host), `docs/operations/DEPENDENCY-POLICY.m
 | Full regression matrix passes | **Yes** — five gates green on 2026-09-12, each with a retained run: `cargo test --workspace --no-fail-fast` (1 189/0/21, 74 suites; `target/p09_full_test.log` + `target/p09_full_test2.log`), `cargo fmt --check` (`gate_fmt.log`), `cargo clippy --workspace --all-targets -- -D warnings` (`gate_clippy.log`), `cargo check --target aarch64-unknown-linux-gnu` (`gate_aarch64.log`), `cargo deny check licenses bans sources` (`gate_deny.log`) — all exit 0; re-runnable per §2 |
 | Conformance report produced | Yes — `docs/phases/PHASE-09-REPORT.md` + sweep rows in `docs/testing/TEST-MATRIX.md` |
 | Known divergences documented | Yes — `docs/vanilla-parity/KNOWN-DIVERGENCES.md` (38 entries) |
-| Release artifacts published | **No** — publishing is now *legally unblocked* (MIT, ADR-0006) but no publication channel exists (no git remote, no registry); the artifact is a recorded local build. When a channel appears, the MIT `LICENSE` ships with it |
+| Release artifacts published | **Source: yes** — `github.com/antifield26/Apoptosis` (public, MIT). **Binary: no** — no tagged release with build artifacts exists yet; build from source per §2 |
 | 20 TPS on Pi 5 with 10 players | **Met for the scripted workload** — the `BENCHMARK-BASELINE.md` §4 acceptance run executed on a Pi 5 (Debian 13, release, on-device build): 30-min soak, settled MSPT medians 0.21/0.27/0.29 ms, zero settled overruns (§P09-Pi). Boundaries: scripted clients (KD-38), loopback, microSD |
 | Real-client acceptance | **No** — no Java client was driven; the scripted clients speak the exact TestClient conversation the E2E suite proves (KD-38) |
 

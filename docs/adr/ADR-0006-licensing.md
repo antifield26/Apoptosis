@@ -41,6 +41,8 @@ workspace's own crates).
   updated to cite this ADR; documents written before the decision (phase
   reports, audits) stand as history and gain dated addenda only where they
   make forward-looking claims.
-- A distribution channel does not exist yet (the repository has no remote);
-  "may be distributed" means the legal blocker is gone, not that artifacts are
-  published anywhere. Publication infrastructure remains future work.
+- A distribution channel now exists: the source is published at
+  `github.com/antifield26/Apoptosis` (public, MIT, pushed 2026-09-12, merge
+  commit `b9f76f4`). Binary release artifacts are still not attached to it —
+  "source published" is not "release announced"; a tagged binary release
+  remains future work.

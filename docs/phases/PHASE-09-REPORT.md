@@ -170,6 +170,12 @@ re-derivation.
   verified on hardware. Full record: `BENCHMARK-BASELINE.md` §P09-Pi; KD-35
   and KD-36 are resolved with named boundaries (scripted clients, loopback,
   microSD — KD-38 stays open).
+- **Source published**: the same day, the owner pushed the full history to
+  `github.com/antifield26/Apoptosis` (public, MIT; merge commit `b9f76f4`
+  resolves the GitHub initial commit's LICENSE to the owner's copyright line,
+  as ADR-0006 pre-authorised). The "no publication channel" statements in this
+  report and the release documents described the write-time state; the binary
+  artifact remains a local build.
 
 ### 7.1 The deployment defect the acceptance run caught
 
