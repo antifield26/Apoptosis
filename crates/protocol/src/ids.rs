@@ -241,6 +241,11 @@ pub mod clientbound {
         pub const KEEP_ALIVE: i32 = 44;
         /// `minecraft:level_chunk_with_light`
         pub const LEVEL_CHUNK_WITH_LIGHT: i32 = 45;
+        /// `minecraft:light_update`
+        ///
+        /// Carries the same light data as the tail of `level_chunk_with_light`, but with **`VarInt`**
+        /// coordinates where that packet uses `i32` — settled with `javap` on the jar, not by analogy.
+        pub const LIGHT_UPDATE: i32 = 48;
         /// `minecraft:login` (`JoinGame`)
         pub const LOGIN: i32 = 49;
         /// `minecraft:ping`

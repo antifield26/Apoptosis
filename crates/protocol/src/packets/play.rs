@@ -1137,12 +1137,7 @@ impl Packet for LevelChunkWithLight {
                 data,
             });
         }
-        let sky_light_mask = read_light_mask(&mut reader, "sky light")?;
-        let block_light_mask = read_light_mask(&mut reader, "block light")?;
-        let empty_sky_light_mask = read_light_mask(&mut reader, "empty sky light")?;
-        let empty_block_light_mask = read_light_mask(&mut reader, "empty block light")?;
-        let sky_light = decode_light_arrays(&mut reader, &sky_light_mask)?;
-        let block_light = decode_light_arrays(&mut reader, &block_light_mask)?;
+        let light = read_light_data(&mut reader)?;
         if !reader.is_empty() {
             return Err(ServerError::Protocol(format!(
                 "level_chunk_with_light has {} trailing bytes",
@@ -1155,12 +1150,12 @@ impl Packet for LevelChunkWithLight {
             heightmaps,
             sections,
             block_entities,
-            sky_light_mask,
-            block_light_mask,
-            empty_sky_light_mask,
-            empty_block_light_mask,
-            sky_light,
-            block_light,
+            sky_light_mask: light.sky_light_mask,
+            block_light_mask: light.block_light_mask,
+            empty_sky_light_mask: light.empty_sky_light_mask,
+            empty_block_light_mask: light.empty_block_light_mask,
+            sky_light: light.sky_light,
+            block_light: light.block_light,
         })
     }
 
@@ -1173,12 +1168,15 @@ impl Packet for LevelChunkWithLight {
         writer.write_varint(packed_len(data.len())?);
         writer.write_bytes(&data);
         encode_block_entities(&mut writer, &self.block_entities)?;
-        write_light_mask(&mut writer, &self.sky_light_mask);
-        write_light_mask(&mut writer, &self.block_light_mask);
-        write_light_mask(&mut writer, &self.empty_sky_light_mask);
-        write_light_mask(&mut writer, &self.empty_block_light_mask);
-        encode_light_arrays(&mut writer, &self.sky_light)?;
-        encode_light_arrays(&mut writer, &self.block_light)?;
+        write_light_data(
+            &mut writer,
+            &self.sky_light_mask,
+            &self.block_light_mask,
+            &self.empty_sky_light_mask,
+            &self.empty_block_light_mask,
+            &self.sky_light,
+            &self.block_light,
+        )?;
         Ok(writer.finish())
     }
 }
@@ -1220,6 +1218,72 @@ fn encode_light_arrays(writer: &mut PacketWriter, arrays: &[Vec<u8>]) -> ServerR
         writer.write_bytes(array);
     }
     Ok(())
+}
+
+/// The light half of both chunk packets: four masks and two array lists.
+///
+/// Returned owned by `read_light_data`; `write_light_data` borrows the fields instead, so encoding a packet
+/// does not clone a single 2 048-byte array.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LightData {
+    /// Sections an array follows for, by index. See [`LevelChunkWithLight::sky_light_mask`].
+    pub sky_light_mask: Vec<u32>,
+    /// Sections a block-light array follows for.
+    pub block_light_mask: Vec<u32>,
+    /// Sections that are uniformly sky-lit.
+    pub empty_sky_light_mask: Vec<u32>,
+    /// Sections that are uniformly dark.
+    pub empty_block_light_mask: Vec<u32>,
+    /// Sky-light arrays, in ascending mask-bit order.
+    pub sky_light: Vec<Vec<u8>>,
+    /// Block-light arrays, in ascending mask-bit order.
+    pub block_light: Vec<Vec<u8>>,
+}
+
+/// Write the four masks and two array lists that `level_chunk_with_light` and `light_update` share.
+///
+/// # Errors
+///
+/// [`ServerError::Invariant`] for an array that is not `LIGHT_ARRAY_BYTES`.
+#[allow(clippy::too_many_arguments)]
+pub fn write_light_data(
+    writer: &mut PacketWriter,
+    sky_light_mask: &[u32],
+    block_light_mask: &[u32],
+    empty_sky_light_mask: &[u32],
+    empty_block_light_mask: &[u32],
+    sky_light: &[Vec<u8>],
+    block_light: &[Vec<u8>],
+) -> ServerResult<()> {
+    write_light_mask(writer, sky_light_mask);
+    write_light_mask(writer, block_light_mask);
+    write_light_mask(writer, empty_sky_light_mask);
+    write_light_mask(writer, empty_block_light_mask);
+    encode_light_arrays(writer, sky_light)?;
+    encode_light_arrays(writer, block_light)
+}
+
+/// Read the four masks and two array lists that both chunk packets share.
+///
+/// # Errors
+///
+/// [`ServerError::Protocol`] on a malformed mask, a count that disagrees with its mask, or an array that is not
+/// `LIGHT_ARRAY_BYTES`.
+pub fn read_light_data(reader: &mut PacketReader<'_>) -> ServerResult<LightData> {
+    let sky_light_mask = read_light_mask(reader, "sky light")?;
+    let block_light_mask = read_light_mask(reader, "block light")?;
+    let empty_sky_light_mask = read_light_mask(reader, "empty sky light")?;
+    let empty_block_light_mask = read_light_mask(reader, "empty block light")?;
+    let sky_light = decode_light_arrays(reader, &sky_light_mask)?;
+    let block_light = decode_light_arrays(reader, &block_light_mask)?;
+    Ok(LightData {
+        sky_light_mask,
+        block_light_mask,
+        empty_sky_light_mask,
+        empty_block_light_mask,
+        sky_light,
+        block_light,
+    })
 }
 
 /// Read a light-array section and check the count against the mask that indexes
@@ -1309,6 +1373,106 @@ fn write_light_mask(writer: &mut PacketWriter, mask: &[u32]) {
         }
         #[allow(clippy::cast_possible_wrap)]
         writer.write_i64(value as i64);
+    }
+}
+
+/// `minecraft:light_update` (clientbound play 48).
+///
+/// Sent when a chunk's light changes without its blocks being re-sent — placing a torch, breaking a block that
+/// was casting a shadow. It carries **the same light data** as the tail of [`LevelChunkWithLight`], which is
+/// why both go through [`write_light_data`] and [`read_light_data`].
+///
+/// **The coordinates are `VarInt`s.** The chunk packet writes the same two numbers as `i32`; this one does
+/// not, and reading them the other way consumes two extra bytes per coordinate and misparses the light data
+/// that follows. That difference is the whole reason this packet is not a struct re-use of the chunk one, and
+/// it is pinned by a test.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LightUpdate {
+    /// Chunk x.
+    pub chunk_x: i32,
+    /// Chunk z.
+    pub chunk_z: i32,
+    /// Sections an array follows for, by index.
+    pub sky_light_mask: Vec<u32>,
+    /// Sections a block-light array follows for.
+    pub block_light_mask: Vec<u32>,
+    /// Sections that are uniformly sky-lit.
+    pub empty_sky_light_mask: Vec<u32>,
+    /// Sections that are uniformly dark.
+    pub empty_block_light_mask: Vec<u32>,
+    /// Sky-light arrays, in ascending mask-bit order.
+    pub sky_light: Vec<Vec<u8>>,
+    /// Block-light arrays, in ascending mask-bit order.
+    pub block_light: Vec<Vec<u8>>,
+}
+
+impl LightUpdate {
+    /// Build one from a computed chunk, taking only what changed.
+    ///
+    /// Every light section is accounted for, the same way [`LevelChunkWithLight`] does it: a section that is
+    /// uniformly the layer's default goes in the matching `empty_*` mask and needs no array, and bit `i` is
+    /// light section `i`, i.e. world section `i - 1`.
+    #[must_use]
+    pub fn from_chunk_light(
+        chunk_x: i32,
+        chunk_z: i32,
+        light: &crate::packets::play::LightData,
+    ) -> Self {
+        Self {
+            chunk_x,
+            chunk_z,
+            sky_light_mask: light.sky_light_mask.clone(),
+            block_light_mask: light.block_light_mask.clone(),
+            empty_sky_light_mask: light.empty_sky_light_mask.clone(),
+            empty_block_light_mask: light.empty_block_light_mask.clone(),
+            sky_light: light.sky_light.clone(),
+            block_light: light.block_light.clone(),
+        }
+    }
+}
+
+impl Packet for LightUpdate {
+    const ID: i32 = clientbound::play::LIGHT_UPDATE;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        // **`VarInt`, not `i32`** — see the type's documentation. The chunk packet beside it uses `i32` for
+        // the same two numbers.
+        let chunk_x = reader.read_varint()?;
+        let chunk_z = reader.read_varint()?;
+        let light = read_light_data(&mut reader)?;
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "light_update has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self {
+            chunk_x,
+            chunk_z,
+            sky_light_mask: light.sky_light_mask,
+            block_light_mask: light.block_light_mask,
+            empty_sky_light_mask: light.empty_sky_light_mask,
+            empty_block_light_mask: light.empty_block_light_mask,
+            sky_light: light.sky_light,
+            block_light: light.block_light,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.chunk_x);
+        writer.write_varint(self.chunk_z);
+        write_light_data(
+            &mut writer,
+            &self.sky_light_mask,
+            &self.block_light_mask,
+            &self.empty_sky_light_mask,
+            &self.empty_block_light_mask,
+            &self.sky_light,
+            &self.block_light,
+        )?;
+        Ok(writer.finish())
     }
 }
 
@@ -2483,9 +2647,9 @@ impl PlayIntent {
 #[cfg(test)]
 mod tests {
     use super::{
-        COMMAND_MAX_CHARS, ConfigurationAcknowledged, JoinGame, KeepAlive, PlayDisconnect,
-        PlayIntent, PlayPingRequest, PlayPong, PlayerPosition, SIGNATURE_LEN, SetChunkCacheCenter,
-        SetChunkCacheRadius,
+        COMMAND_MAX_CHARS, ConfigurationAcknowledged, JoinGame, KeepAlive, LightUpdate,
+        PlayDisconnect, PlayIntent, PlayPingRequest, PlayPong, PlayerPosition, SIGNATURE_LEN,
+        SetChunkCacheCenter, SetChunkCacheRadius,
     };
     use crate::packets::Packet;
     use crate::text::TextComponent;
@@ -2557,6 +2721,74 @@ mod tests {
     /// Eighteen packets at this id are all nine bytes, with the `i64` incrementing by exactly 20 — one second
     /// of ticks, which is this packet's send rate. We previously sent `i64` + `i64` + `bool` (17 bytes) and a
     /// real client reported `was larger than I expected`.
+    #[test]
+    fn light_update_round_trips_its_light_data() {
+        let packet = LightUpdate {
+            chunk_x: -3,
+            chunk_z: 7,
+            // A sky array for light section 1 and an empty-block declaration for section 0: one of each mask
+            // kind, so the round trip exercises both branches.
+            sky_light_mask: vec![1],
+            block_light_mask: Vec::new(),
+            empty_sky_light_mask: Vec::new(),
+            empty_block_light_mask: vec![0],
+            sky_light: vec![vec![0xAB; 2048]],
+            block_light: Vec::new(),
+        };
+        let encoded = packet.encode().expect("encodes");
+        assert_eq!(
+            LightUpdate::decode(&encoded).expect("decodes"),
+            packet,
+            "the light data and the coordinates must survive the wire"
+        );
+    }
+
+    /// **`light_update` writes its coordinates as `VarInt`; `level_chunk_with_light` writes them as `i32`.**
+    ///
+    /// The two packets carry identical light data, so "they are shaped alike" is the natural assumption and it
+    /// is wrong for exactly these two fields. Reading them the other way consumes six extra bytes and misparses
+    /// everything after — settled with `javap` on the jar rather than by analogy, and pinned here so a later
+    /// reader cannot quietly unify them.
+    #[test]
+    fn light_update_coordinates_are_varints_where_the_chunk_packet_uses_i32() {
+        let update = LightUpdate {
+            chunk_x: 1,
+            chunk_z: 2,
+            ..LightUpdate::default()
+        };
+        let encoded = update.encode().expect("encodes");
+        assert_eq!(
+            &encoded[..2],
+            &[0x01, 0x02],
+            "one byte each: the coordinates are VarInts here"
+        );
+
+        let chunk = LevelChunkWithLight {
+            chunk_x: 1,
+            chunk_z: 2,
+            heightmaps: Vec::new(),
+            sections: Vec::new(),
+            block_entities: Vec::new(),
+            sky_light_mask: Vec::new(),
+            block_light_mask: Vec::new(),
+            empty_sky_light_mask: Vec::new(),
+            empty_block_light_mask: Vec::new(),
+            sky_light: Vec::new(),
+            block_light: Vec::new(),
+        };
+        let chunk_encoded = chunk.encode().expect("encodes");
+        assert_eq!(
+            &chunk_encoded[..4],
+            &[0x00, 0x00, 0x00, 0x01],
+            "four bytes each: the chunk packet's are i32"
+        );
+        assert_ne!(
+            &encoded[..2],
+            &chunk_encoded[..2],
+            "if these ever match, one of the two encodings has changed"
+        );
+    }
+
     #[test]
     fn the_captured_vanilla_set_time_is_reproduced() {
         let captured: [u8; 9] = [

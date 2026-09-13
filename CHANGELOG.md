@@ -672,6 +672,40 @@ The differential results stand behind it: sky light matches a real server on eve
 If the world looks wrong anyway, the fault is somewhere the comparison does not reach — which is worth knowing
 either way.
 
+### KD-48 \u2014 `light_update`, the packet P10-05 named and did not have
+
+A placed block changed the block and **not the light**. The client kept rendering the old light until that
+chunk happened to be re-sent, so a torch did nothing visible \u2014 the limitation recorded under KD-45, now
+closed.
+
+P10-05 lists "encode `light_update` for changes" and it was the one named item with no implementation, only a
+doc comment referring to it.
+
+**The coordinate encoding is the trap, and `javap` settled it.** The packet carries the **same light data** as
+the tail of `level_chunk_with_light` \u2014 the same four `BitSet` masks, the same two array lists, written by the
+same `ClientboundLightUpdatePacketData`. It is natural to assume the packets are shaped alike. They are not:
+`light_update` writes its two chunk coordinates as **`VarInt`**, the chunk packet as **`i32`**. Reading them the
+other way consumes two extra bytes each and misparses everything after. A test asserts both encodings side by
+side so the difference lives in the test rather than only in a comment.
+
+**The shared half is shared.** `write_light_data` and `read_light_data` are one implementation used by both
+packets. The last time a format in this phase was implemented twice \u2014 once in Rust, once in a script \u2014 the
+two agreed with each other and were both wrong. The coordinate encoding is deliberately **not** shared: it is
+the one thing that differs, and a helper parameterised by "which packet is this" is how that gets lost.
+
+**The wiring is bounded on purpose.** Recomputing one chunk is three passes over 124 320 cells and the packet
+is kilobytes, so work is **queued on block change and spent at four chunks a tick**. Nothing is dropped \u2014 a
+chunk stays queued until sent \u2014 so a burst is delayed rather than lost; a dropped update would leave the
+client showing stale light until that chunk was re-sent, which is the silent-wrong this phase keeps finding.
+The changed chunk's **neighbours** are queued too, since the light they were read for has changed as well.
+
+**Verified by an end-to-end test**, not a counter: breaking a block must make `light_update` arrive at a joined
+client. A counter would say the sender loop ran; the packet id says the client was told. A `light_updates`
+counter was added to the tick report anyway, because a light update that stops being sent is invisible.
+
+Five gates green: 1234 passed / 0 failed / 24 ignored across 81 suites, fmt, clippy -D warnings, aarch64 and
+cargo deny clean.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

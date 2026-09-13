@@ -577,3 +577,36 @@ fn the_world_survives_a_save_and_reload() {
         "a block that was never placed is still air"
     );
 }
+
+/// Breaking a block changes the light around it, and the client has to be told (P10-05).
+///
+/// The block update alone would leave the client rendering the hole with the old light — which is what
+/// happened before `light_update` existed, and what placing a torch still looked like: the block changed and
+/// the light did not.
+#[tokio::test]
+async fn breaking_a_block_sends_a_light_update() {
+    let mut harness = Harness::new("p10-light-update");
+    let (sx, sy, sz) = harness.build_floor();
+    let mut out = harness.join("Digger");
+    // Everything the join queued: those packets include the chunks themselves, and the light update has to be
+    // told apart from them.
+    let _ = Harness::drain_ids(&mut out);
+
+    // Dig the block the player stands on, opening a hole the sky light can fall into.
+    harness.intent(PlayIntent::PlayerAction {
+        status: 0,
+        position: block_position(sx, sy - 1, sz),
+        facing: 1,
+        sequence: 0,
+    });
+
+    // One tick broads the block change and queues the chunk; the budget is four chunks a tick, so one tick is
+    // enough for the single chunk that changed.
+    harness.game.tick().expect("tick");
+
+    let ids = Harness::drain_ids(&mut out);
+    assert!(
+        ids.contains(&clientbound::play::LIGHT_UPDATE),
+        "breaking a block must relight its chunk and tell the client; got {ids:?}"
+    );
+}

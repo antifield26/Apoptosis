@@ -158,7 +158,7 @@ use mc_protocol::RawPacket;
 use mc_protocol::packets::Packet;
 use mc_protocol::packets::play::{
     BIOMES_PER_SECTION, BlockUpdate, ChunkSection, ContainerSetContent, ContainerSetSlot,
-    HEIGHTMAP_WORLD_SURFACE, Heightmap, LevelChunkWithLight, NETWORK_BIOME_MIN_BITS,
+    HEIGHTMAP_WORLD_SURFACE, Heightmap, LevelChunkWithLight, LightUpdate, NETWORK_BIOME_MIN_BITS,
     PalettedContainer as WireContainer, PlayDisconnect, PlayIntent, PlayerPosition, Respawn,
     SetDefaultSpawnPosition, SetExperience, SetHealth, SetHeldSlot, SetTime, SystemChat,
     block_position, unpack_block_position,
@@ -171,6 +171,80 @@ use mc_world::light::LightArray;
 use mc_world::{Aabb, Vec3, World};
 use std::collections::{BTreeMap, BTreeSet};
 use tracing::{debug, info, trace, warn};
+
+/// A chunk's light as the wire wants it: four masks and two array lists.
+///
+/// Both `level_chunk_with_light` and `light_update` carry exactly this, so it is built once here rather than
+/// twice. A drift between two copies would be invisible — both packets stay well-formed, and the client renders
+/// whichever arrived last.
+struct LightFields {
+    sky_mask: Vec<u32>,
+    block_mask: Vec<u32>,
+    empty_sky_mask: Vec<u32>,
+    empty_block_mask: Vec<u32>,
+    sky: Vec<Vec<u8>>,
+    block: Vec<Vec<u8>>,
+}
+
+/// Split computed light into the masks and arrays the wire carries (P10-05).
+///
+/// Every light section is accounted for: light section `i` is world section `i - 1`, so there is one below the
+/// world and one above it, and both hold no blocks — full sky, no block light. A section that is uniformly the
+/// layer's default (15 for sky, 0 for block) goes in the matching `empty_*` mask and needs no array; anything
+/// else gets a 2 048-byte array and a bit in the matching mask. That is what a real server does and what keeps
+/// the packet small.
+///
+/// # Errors
+///
+/// [`ServerError::Invariant`] for more light sections than a mask can index.
+fn light_fields(
+    light: &mc_world::light::ChunkLight,
+    section_count: usize,
+) -> ServerResult<LightFields> {
+    let light_sections = section_count + 2;
+    let mut fields = LightFields {
+        sky_mask: Vec::new(),
+        block_mask: Vec::new(),
+        empty_sky_mask: Vec::new(),
+        empty_block_mask: Vec::new(),
+        sky: Vec::new(),
+        block: Vec::new(),
+    };
+    for index in 0..light_sections {
+        let outside = index == 0 || index == light_sections - 1;
+        let (sky, block) = if outside {
+            (
+                LightArray::filled(mc_world::light::MAX_LIGHT),
+                LightArray::filled(0),
+            )
+        } else {
+            (light.sky[index - 1].clone(), light.block[index - 1].clone())
+        };
+        let index = u32::try_from(index).map_err(|_| {
+            ServerError::Invariant("more light sections than a mask can index".to_owned())
+        })?;
+        if sky.uniform() == Some(mc_world::light::MAX_LIGHT) {
+            fields.empty_sky_mask.push(index);
+        } else {
+            fields.sky_mask.push(index);
+            fields.sky.push(sky.as_bytes().to_vec());
+        }
+        if block.uniform() == Some(0) {
+            fields.empty_block_mask.push(index);
+        } else {
+            fields.block_mask.push(index);
+            fields.block.push(block.as_bytes().to_vec());
+        }
+    }
+    Ok(fields)
+}
+
+/// How many chunks a tick may relight and announce.
+///
+/// Each one is a full recompute of the chunk plus a packet of a few kilobytes, so this bounds the tick's cost
+/// by the clock rather than by what a player did. Four is enough that a hand-placed block is announced the
+/// same tick, and small enough that a burst cannot stall the server.
+pub const LIGHT_UPDATES_PER_TICK: usize = 4;
 
 /// How far a player can reach to break or place a block (Vanilla survival).
 pub const REACH: f64 = 4.5;
@@ -435,6 +509,11 @@ pub struct TickReport {
     pub events: usize,
     /// Block changes broadcast to at least one player.
     pub block_changes: usize,
+    /// Light updates sent this tick (`light_update` packets).
+    ///
+    /// Counted because a light update that stops being sent is invisible: the client keeps rendering stale
+    /// light and reports nothing.
+    pub light_updates: usize,
     /// Chunk packets queued this tick.
     pub chunks_sent: usize,
     /// Packets queued this tick.
@@ -493,6 +572,12 @@ pub struct Game {
     scheduler: Scheduler,
     /// Intents drained this tick, applied by the Players phase in arrival order.
     pending_intents: Vec<(ConnectionId, PlayIntent)>,
+    /// Chunks whose light changed and whose `light_update` has not been sent yet.
+    ///
+    /// A queue rather than an immediate send because the cost per chunk is a full recompute and the traffic is
+    /// kilobytes; a burst of block changes would otherwise stall the tick. Nothing is dropped — a chunk stays
+    /// here until it is sent — so a burst is delayed rather than lost.
+    pending_light: BTreeSet<ChunkPos>,
     /// This tick's counters, shared by every phase while it runs.
     report: TickReport,
     tick: u64,
@@ -710,6 +795,7 @@ impl Game {
             random: RandomSource::new(seed),
             scheduler: Scheduler::new(),
             pending_intents: Vec::new(),
+            pending_light: BTreeSet::new(),
             report: TickReport::default(),
             tick: 0,
             overflowed: Vec::new(),
@@ -1233,6 +1319,7 @@ impl Game {
     /// Phase 6: flush everything a client should see about this tick.
     fn phase_broadcast(&mut self, report: &mut TickReport, tick: Tick) -> ServerResult<()> {
         self.broadcast_block_changes(report)?;
+        self.broadcast_light_updates(report)?;
         self.stream_all(report)?;
         self.send_world_time(report, tick)?;
         self.sweep_entity_removals(report);
@@ -1270,6 +1357,57 @@ impl Game {
     /// needs a per-item position, which is P06-08's caller. The previous comment here
     /// claimed they were dropped, which the log a few lines below contradicts
     /// (Audit 05).
+    /// Spend the per-tick light budget: recompute the light of queued chunks and tell the clients that hold
+    /// them.
+    ///
+    /// Bounded on purpose. Recomputing one chunk is three passes over 124 320 cells and the packet is
+    /// kilobytes, so the rate is fixed per tick and the queue absorbs whatever exceeds it — a burst is sent a
+    /// little later rather than dropped.
+    fn broadcast_light_updates(&mut self, report: &mut TickReport) -> ServerResult<()> {
+        for _ in 0..LIGHT_UPDATES_PER_TICK {
+            let Some(pos) = self.pending_light.iter().next().copied() else {
+                break;
+            };
+            self.pending_light.remove(&pos);
+            // A chunk that has been unloaded has nothing to light and nobody to tell.
+            if !self.world.is_loaded(pos) {
+                continue;
+            }
+            self.world.compute_light(pos, &self.registries.light)?;
+            let Some(light) = self.world.cached_light(pos) else {
+                continue;
+            };
+            let Some(chunk) = self.world.chunk(pos) else {
+                continue;
+            };
+            let fields = light_fields(light, chunk.sections.len())?;
+            let update = LightUpdate {
+                chunk_x: pos.x,
+                chunk_z: pos.z,
+                sky_light_mask: fields.sky_mask,
+                block_light_mask: fields.block_mask,
+                empty_sky_light_mask: fields.empty_sky_mask,
+                empty_block_light_mask: fields.empty_block_mask,
+                sky_light: fields.sky,
+                block_light: fields.block,
+            };
+            // Only to clients that have the chunk: one that has never been sent it has the light it needs
+            // coming with the chunk itself. The ids are collected first because `send` needs the whole `self`
+            // while the iteration borrows `self.sessions`.
+            let holders: Vec<ConnectionId> = self
+                .sessions
+                .values()
+                .filter(|session| session.sent_chunks.contains(&pos))
+                .map(|session| session.id)
+                .collect();
+            for id in holders {
+                self.send(id, &update, report)?;
+            }
+            report.light_updates += 1;
+        }
+        Ok(())
+    }
+
     fn broadcast_block_changes(&mut self, report: &mut TickReport) -> ServerResult<()> {
         let changes = self.world.take_block_changes();
         for change in changes {
@@ -1296,6 +1434,27 @@ impl Game {
             .to_raw()?;
             if self.broadcast_chunk(change.pos, &packet, report) > 0 {
                 report.block_changes += 1;
+            }
+            // The changed chunk *and* the neighbours `World::set_block` invalidated, since the light the
+            // client holds for those changed too.
+            self.pending_light.insert(change.pos);
+            let local_x = change.x.rem_euclid(16);
+            let local_z = change.z.rem_euclid(16);
+            if local_x == 0 {
+                self.pending_light
+                    .insert(ChunkPos::new(change.pos.x - 1, change.pos.z));
+            }
+            if local_x == 15 {
+                self.pending_light
+                    .insert(ChunkPos::new(change.pos.x + 1, change.pos.z));
+            }
+            if local_z == 0 {
+                self.pending_light
+                    .insert(ChunkPos::new(change.pos.x, change.pos.z - 1));
+            }
+            if local_z == 15 {
+                self.pending_light
+                    .insert(ChunkPos::new(change.pos.x, change.pos.z + 1));
             }
         }
         Ok(())
@@ -3175,45 +3334,7 @@ impl Game {
             &computed
         };
 
-        // Light section `i` is world section `i - 1`, so there is one below the world and one above it.
-        let light_sections = chunk.sections.len() + 2;
-        let mut sky_light_mask = Vec::new();
-        let mut block_light_mask = Vec::new();
-        let mut empty_sky_light_mask = Vec::new();
-        let mut empty_block_light_mask = Vec::new();
-        let mut sky_light = Vec::new();
-        let mut block_light = Vec::new();
-
-        for index in 0..light_sections {
-            let outside = index == 0 || index == light_sections - 1;
-            let (sky, block) = if outside {
-                // No blocks out there, so the sky reaches it undiminished and nothing emits.
-                (
-                    LightArray::filled(mc_world::light::MAX_LIGHT),
-                    LightArray::filled(0),
-                )
-            } else {
-                (light.sky[index - 1].clone(), light.block[index - 1].clone())
-            };
-            let index = u32::try_from(index).map_err(|_| {
-                ServerError::Invariant("more light sections than a mask can index".to_owned())
-            })?;
-
-            // Full sky needs no array: the client's default for that layer is exactly `MAX_LIGHT`, and the
-            // empty mask is how a real server says so (P10-05, from the capture).
-            if sky.uniform() == Some(mc_world::light::MAX_LIGHT) {
-                empty_sky_light_mask.push(index);
-            } else {
-                sky_light_mask.push(index);
-                sky_light.push(sky.as_bytes().to_vec());
-            }
-            if block.uniform() == Some(0) {
-                empty_block_light_mask.push(index);
-            } else {
-                block_light_mask.push(index);
-                block_light.push(block.as_bytes().to_vec());
-            }
-        }
+        let light = light_fields(light, chunk.sections.len())?;
 
         Ok(LevelChunkWithLight {
             chunk_x: chunk.pos.x,
@@ -3224,12 +3345,12 @@ impl Game {
             }],
             sections,
             block_entities: Vec::new(),
-            sky_light_mask,
-            block_light_mask,
-            empty_sky_light_mask,
-            empty_block_light_mask,
-            sky_light,
-            block_light,
+            sky_light_mask: light.sky_mask,
+            block_light_mask: light.block_mask,
+            empty_sky_light_mask: light.empty_sky_mask,
+            empty_block_light_mask: light.empty_block_mask,
+            sky_light: light.sky,
+            block_light: light.block,
         })
     }
 
