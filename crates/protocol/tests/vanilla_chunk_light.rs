@@ -134,19 +134,15 @@ fn every_captured_vanilla_chunk_decodes_with_our_decoder() {
         longest.first().map_or(0, |index| index + 2 + 2048)
     );
 
-    // The part that is solid, and independent of any decoder: every captured packet fails identically at the
-    // same point. That is what makes this a layout defect rather than a quirk of one packet.
-    //
-    // When the layout is fixed, this becomes `assert_eq!(decoded_ok, files.len())`.
+    // Every captured packet must decode. This read `assert_eq!(decoded_ok, 0)` while the mask encoding was
+    // wrong (KD-44): the failure was systematic, which is what identified it as a layout defect rather than a
+    // quirk of one packet, and the same systematic property is what the fix restores.
     assert_eq!(
-        decoded_ok, 0,
-        "some captured packets now decode; the assertion above should be inverted to require all of them to"
+        decoded_ok,
+        files.len(),
+        "every captured vanilla chunk must parse with our decoder: {failures:?}"
     );
-    assert_eq!(
-        failures.len(),
-        1,
-        "the captured packets must fail identically for the finding to be a layout defect: {failures:?}"
-    );
+    assert!(failures.is_empty(), "unexpected failures: {failures:?}");
 }
 
 /// Report the mask structure of one chunk, which is the shape the light engine has to fill.
@@ -174,17 +170,17 @@ fn report_the_light_shape_of_a_captured_chunk() {
     println!("  heightmaps       : {}", decoded.heightmaps.len());
     println!("  block entities   : {}", decoded.block_entities.len());
     println!(
-        "  sky light mask   : {:#x} ({} bits)",
+        "  sky light mask   : {:?} ({} bits)",
         decoded.sky_light_mask,
-        decoded.sky_light_mask.count_ones()
+        decoded.sky_light_mask.len()
     );
     println!(
-        "  block light mask : {:#x} ({} bits)",
+        "  block light mask : {:?} ({} bits)",
         decoded.block_light_mask,
-        decoded.block_light_mask.count_ones()
+        decoded.block_light_mask.len()
     );
-    println!("  empty sky mask   : {:#x}", decoded.empty_sky_light_mask);
-    println!("  empty block mask : {:#x}", decoded.empty_block_light_mask);
+    println!("  empty sky mask   : {:?}", decoded.empty_sky_light_mask);
+    println!("  empty block mask : {:?}", decoded.empty_block_light_mask);
     println!("  sky arrays       : {}", decoded.sky_light.len());
     println!("  block arrays     : {}", decoded.block_light.len());
 

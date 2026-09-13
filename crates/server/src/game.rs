@@ -3149,10 +3149,11 @@ impl Game {
             }],
             sections,
             block_entities: Vec::new(),
-            sky_light_mask: 0,
-            block_light_mask: 0,
-            empty_sky_light_mask: 0,
-            empty_block_light_mask: 0,
+            // Empty: filling these is P10-05, and the encoding is a `BitSet` (KD-44).
+            sky_light_mask: Vec::new(),
+            block_light_mask: Vec::new(),
+            empty_sky_light_mask: Vec::new(),
+            empty_block_light_mask: Vec::new(),
             sky_light: Vec::new(),
             block_light: Vec::new(),
         })

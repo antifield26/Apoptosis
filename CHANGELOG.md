@@ -353,6 +353,54 @@ rather than a quirk of one packet.
 about the packet. **P10-05 is blocked**, because filling four masks is meaningless while the field order around
 them is wrong.
 
+### KD-44 closed \u2014 the light masks are `BitSet`s, and the fix is verified in both directions
+
+The reconnaissance finding from this round is now fixed, and the root cause came from the jar rather than from
+more reasoning.
+
+**`javap -c` on `ClientboundLightUpdatePacketData`** gives the authoritative read order:
+
+```text
+readBitSet() -> skyYMask          readBitSet() -> blockYMask
+readBitSet() -> emptySkyYMask     readBitSet() -> emptyBlockYMask
+readList(DATA_LAYER_STREAM_CODEC) -> skyUpdates
+readList(DATA_LAYER_STREAM_CODEC) -> blockUpdates
+```
+
+`readBitSet` is a **`VarInt` count of longs followed by that many `i64`s**. We read the four masks as
+`VarInt`s.
+
+**Why that survived.** An empty mask is a single `0x00` in **both** encodings. Our reading therefore agreed
+with a real server for every mask Phase 04 ever sent \u2014 all of them empty \u2014 and disagreed the moment one
+had content. A single captured packet with light in it exposed it.
+
+**Re-running the layout search under the correct model** finds exactly one offset per packet, the same offset
+across twenty captured packets, and the arithmetic closes exactly:
+
+```text
+offset 3150 (where our header parse already ended)
+  sky bits [1, 2]  -> 2 arrays      block bits []  -> 0 arrays
+  sky array lengths [2048, 2048]   block array lengths []
+```
+
+So **our header parse was right all along**; only the mask encoding was wrong. The "24 missing bytes" from the
+previous round were an artifact of the wrong model, not a second defect.
+
+**The fix.** The masks are now `Vec<u32>` of set section indices rather than an integer bit pattern \u2014 what a
+`BitSet` means, which makes the "arrays follow the mask bits" check the array count itself, and which encodes
+without the trailing-zero hazard: vanilla's `BitSet.toLongArray()` trims, so a fixed-width integer would emit
+bytes no real server produces.
+
+**Verified in both directions.**
+
+* **Decode:** all **117** captured vanilla chunk packets now parse, where before **zero** did.
+* **Encode:** a real 26.1.2 client still reaches play through the rig with **no protocol-error report**, on a
+  783-packet session.
+
+**Consequence.** P10-05 is unblocked: the field order around the masks is now known to be right, so filling
+them is meaningful. P10-04 (the light engine itself) is still to build \u2014 that is what actually puts light in
+those arrays.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

@@ -937,14 +937,20 @@ pub struct LevelChunkWithLight {
     pub sections: Vec<ChunkSection>,
     /// Block entities in this chunk.
     pub block_entities: Vec<ChunkBlockEntity>,
-    /// Bit `i` set ⇒ an array for light section `i - 1` follows.
-    pub sky_light_mask: i32,
-    /// Bit `i` set ⇒ an array for light section `i - 1` follows.
-    pub block_light_mask: i32,
-    /// Bit `i` set ⇒ light section `i - 1` is uniformly sky-lit.
-    pub empty_sky_light_mask: i32,
-    /// Bit `i` set ⇒ light section `i - 1` is uniformly dark.
-    pub empty_block_light_mask: i32,
+    /// Light sections whose sky light an array follows for, as **set indices**.
+    ///
+    /// These four are `java.util.BitSet` on the wire (P10-03, KD-44): a `VarInt` count of longs followed by
+    /// that many `i64`s. They were read as `VarInt`s, which survives an empty mask — `0` in both encodings —
+    /// and silently misreads any mask with content, which is why every captured vanilla chunk failed to parse.
+    ///
+    /// Index `i` is light section `i`, which is world section `i - 1`. Sorted, deduplicated.
+    pub sky_light_mask: Vec<u32>,
+    /// Light sections whose block light an array follows for. See [`Self::sky_light_mask`].
+    pub block_light_mask: Vec<u32>,
+    /// Light sections that are uniformly sky-lit, so need no array.
+    pub empty_sky_light_mask: Vec<u32>,
+    /// Light sections that are uniformly dark, so need no array.
+    pub empty_block_light_mask: Vec<u32>,
     /// Sky-light arrays, in ascending mask-bit order.
     pub sky_light: Vec<Vec<u8>>,
     /// Block-light arrays, in ascending mask-bit order.
@@ -1135,8 +1141,8 @@ impl Packet for LevelChunkWithLight {
         let block_light_mask = read_light_mask(&mut reader, "block light")?;
         let empty_sky_light_mask = read_light_mask(&mut reader, "empty sky light")?;
         let empty_block_light_mask = read_light_mask(&mut reader, "empty block light")?;
-        let sky_light = decode_light_arrays(&mut reader, sky_light_mask)?;
-        let block_light = decode_light_arrays(&mut reader, block_light_mask)?;
+        let sky_light = decode_light_arrays(&mut reader, &sky_light_mask)?;
+        let block_light = decode_light_arrays(&mut reader, &block_light_mask)?;
         if !reader.is_empty() {
             return Err(ServerError::Protocol(format!(
                 "level_chunk_with_light has {} trailing bytes",
@@ -1167,10 +1173,10 @@ impl Packet for LevelChunkWithLight {
         writer.write_varint(packed_len(data.len())?);
         writer.write_bytes(&data);
         encode_block_entities(&mut writer, &self.block_entities)?;
-        writer.write_varint(self.sky_light_mask);
-        writer.write_varint(self.block_light_mask);
-        writer.write_varint(self.empty_sky_light_mask);
-        writer.write_varint(self.empty_block_light_mask);
+        write_light_mask(&mut writer, &self.sky_light_mask);
+        write_light_mask(&mut writer, &self.block_light_mask);
+        write_light_mask(&mut writer, &self.empty_sky_light_mask);
+        write_light_mask(&mut writer, &self.empty_block_light_mask);
         encode_light_arrays(&mut writer, &self.sky_light)?;
         encode_light_arrays(&mut writer, &self.block_light)?;
         Ok(writer.finish())
@@ -1218,11 +1224,9 @@ fn encode_light_arrays(writer: &mut PacketWriter, arrays: &[Vec<u8>]) -> ServerR
 
 /// Read a light-array section and check the count against the mask that indexes
 /// it (the arrays carry no section index of their own).
-fn decode_light_arrays(reader: &mut PacketReader<'_>, mask: i32) -> ServerResult<Vec<Vec<u8>>> {
-    // A mask can set at most `MAX_LIGHT_SECTIONS + 1` bits, so that is the
-    // largest array count that can ever be consistent with one.
+fn decode_light_arrays(reader: &mut PacketReader<'_>, mask: &[u32]) -> ServerResult<Vec<Vec<u8>>> {
     let count = read_count(reader, "light array", MAX_LIGHT_SECTIONS as usize + 1)?;
-    let expected = mask.count_ones() as usize;
+    let expected = mask.len();
     if count != expected {
         return Err(ServerError::Protocol(format!(
             "light mask has {expected} sections set but {count} arrays follow"
@@ -1242,20 +1246,70 @@ fn decode_light_arrays(reader: &mut PacketReader<'_>, mask: i32) -> ServerResult
     Ok(arrays)
 }
 
-/// Read and range-check one light mask.
-fn read_light_mask(reader: &mut PacketReader<'_>, what: &str) -> ServerResult<i32> {
-    let mask = reader.read_varint()?;
-    if mask < 0 {
+/// Upper bound on the longs a light-mask `BitSet` may claim.
+///
+/// `MAX_LIGHT_SECTIONS + 1` bits need `(MAX_LIGHT_SECTIONS + 1).div_ceil(64)` longs; one more is allowed so a
+/// server that pads is still readable. The bound exists so one hostile `VarInt` cannot drive a large
+/// allocation, as with every other count in this packet.
+const MAX_LIGHT_MASK_LONGS: i32 = 2;
+
+/// Read one light mask: vanilla's `BitSet` form, a `VarInt` count of longs then that many `i64`s (P10-03,
+/// KD-44). Returns the **set indices**, sorted.
+fn read_light_mask(reader: &mut PacketReader<'_>, what: &str) -> ServerResult<Vec<u32>> {
+    let longs = reader.read_varint()?;
+    if longs < 0 {
         return Err(ServerError::Protocol(format!(
-            "{what} mask {mask} is negative"
+            "{what} mask claims {longs} longs"
         )));
     }
-    if mask >> (MAX_LIGHT_SECTIONS + 1) != 0 {
+    if longs > MAX_LIGHT_MASK_LONGS {
         return Err(ServerError::Protocol(format!(
-            "{what} mask {mask:#x} sets bits beyond section {MAX_LIGHT_SECTIONS}"
+            "{what} mask claims {longs} longs, above the {MAX_LIGHT_MASK_LONGS} a light section range needs"
         )));
     }
-    Ok(mask)
+    let mut indices = Vec::new();
+    for index in 0..longs {
+        // The bit pattern is what matters, so the signed read is reinterpreted rather than range-checked.
+        #[allow(clippy::cast_sign_loss)]
+        let value = reader.read_i64()? as u64;
+        for bit in 0..64u32 {
+            if value >> bit & 1 == 1 {
+                let section = index as u32 * 64 + bit;
+                if section > MAX_LIGHT_SECTIONS {
+                    return Err(ServerError::Protocol(format!(
+                        "{what} mask sets bit {section}, beyond section {MAX_LIGHT_SECTIONS}"
+                    )));
+                }
+                indices.push(section);
+            }
+        }
+    }
+    Ok(indices)
+}
+
+/// Write one light mask as a `BitSet`: a `VarInt` count of longs then that many `i64`s.
+///
+/// Trailing zero longs are trimmed, which is what vanilla's `BitSet.toLongArray()` does. Writing a fixed-width
+/// integer instead would emit bytes no real server produces — and the client reads a count, so it would read
+/// the wrong number of them.
+fn write_light_mask(writer: &mut PacketWriter, mask: &[u32]) {
+    let Some(highest) = mask.iter().copied().max() else {
+        writer.write_varint(0);
+        return;
+    };
+    let longs = highest / 64 + 1;
+    #[allow(clippy::cast_possible_wrap)]
+    writer.write_varint(longs as i32);
+    for index in 0..longs {
+        let mut value = 0u64;
+        for bit in 0..64 {
+            if mask.contains(&(index * 64 + bit)) {
+                value |= 1u64 << bit;
+            }
+        }
+        #[allow(clippy::cast_possible_wrap)]
+        writer.write_i64(value as i64);
+    }
 }
 
 /// A single block change (`minecraft:block_update`).
@@ -2919,10 +2973,10 @@ mod tests {
                     Nbt::String("minecraft:chest".to_owned()),
                 )]),
             }],
-            sky_light_mask: 0b10,
-            block_light_mask: 0,
-            empty_sky_light_mask: 0,
-            empty_block_light_mask: 0,
+            sky_light_mask: vec![1],
+            block_light_mask: Vec::new(),
+            empty_sky_light_mask: Vec::new(),
+            empty_block_light_mask: Vec::new(),
             sky_light: vec![vec![0xAA; super::LIGHT_ARRAY_BYTES]],
             block_light: Vec::new(),
         }
@@ -3218,7 +3272,7 @@ mod tests {
     #[test]
     fn level_chunk_with_light_light_mask_carries_full_array_count() {
         let mut packet = sample_chunk();
-        packet.sky_light_mask = 0b101;
+        packet.sky_light_mask = vec![0, 2];
         packet.sky_light = vec![
             vec![0x00; super::LIGHT_ARRAY_BYTES],
             vec![0xFF; super::LIGHT_ARRAY_BYTES],
@@ -3265,7 +3319,7 @@ mod tests {
         writer.write_varint(super::LIGHT_ARRAY_BYTES as i32);
         writer.write_bytes(&[0xAA; super::LIGHT_ARRAY_BYTES - 1]);
         assert!(
-            super::decode_light_arrays(&mut crate::wire::PacketReader::new(&writer.finish()), 0b1)
+            super::decode_light_arrays(&mut crate::wire::PacketReader::new(&writer.finish()), &[0])
                 .is_err()
         );
     }
@@ -3278,8 +3332,11 @@ mod tests {
         writer.write_varint(super::LIGHT_ARRAY_BYTES as i32);
         writer.write_bytes(&[0x00; super::LIGHT_ARRAY_BYTES]);
         assert!(
-            super::decode_light_arrays(&mut crate::wire::PacketReader::new(&writer.finish()), 0b11)
-                .is_err(),
+            super::decode_light_arrays(
+                &mut crate::wire::PacketReader::new(&writer.finish()),
+                &[0, 1]
+            )
+            .is_err(),
             "arrays carry no section index, so the count must match the mask"
         );
     }
@@ -3415,10 +3472,10 @@ mod tests {
     fn level_chunk_with_light_accepts_the_phase_04_zero_light_form() {
         // What Phase 04 actually sends: four zero masks and no arrays.
         let mut packet = sample_chunk();
-        packet.sky_light_mask = 0;
-        packet.block_light_mask = 0;
-        packet.empty_sky_light_mask = 0;
-        packet.empty_block_light_mask = 0;
+        packet.sky_light_mask = Vec::new();
+        packet.block_light_mask = Vec::new();
+        packet.empty_sky_light_mask = Vec::new();
+        packet.empty_block_light_mask = Vec::new();
         packet.sky_light = Vec::new();
         packet.block_light = Vec::new();
         let body = packet.encode().expect("encodes");
@@ -3438,19 +3495,51 @@ mod tests {
         );
 
         // A mask that sets bits above the last light section is refused too.
+        // A `BitSet` that sets a bit beyond the light section range is refused. Under the wire model the mask
+        // is a long count plus longs (KD-44), so the offending bit lives in a long rather than an integer.
         let mut beyond = PacketWriter::new();
-        beyond.write_varint(1 << (super::MAX_LIGHT_SECTIONS + 1));
+        beyond.write_varint(2);
+        beyond.write_i64(0);
+        beyond.write_i64(1 << 40); // section 64 + 40 = 104
         let beyond = beyond.finish();
         assert!(
             super::read_light_mask(&mut crate::wire::PacketReader::new(&beyond), "sky").is_err()
         );
 
-        // The all-zero mask Phase 04 sends is accepted.
+        // A hostile long count is refused before anything is allocated.
+        let mut greedy = PacketWriter::new();
+        greedy.write_varint(99);
+        let greedy = greedy.finish();
+        assert!(
+            super::read_light_mask(&mut crate::wire::PacketReader::new(&greedy), "sky").is_err()
+        );
+
+        // **The empty mask is a single `0x00` byte in both encodings**, which is the whole of KD-44: reading
+        // the masks as `VarInt`s agrees with the real wire for an empty mask and disagrees for any other, so
+        // the defect survived until a server sent one with content.
         assert_eq!(
             super::read_light_mask(&mut crate::wire::PacketReader::new(&[0x00]), "sky")
-                .expect("zero mask"),
-            0
+                .expect("empty mask"),
+            Vec::<u32>::new()
         );
+
+        // A mask with content decodes to its set indices.
+        let mut two = PacketWriter::new();
+        two.write_varint(1);
+        two.write_i64(0b110);
+        let two = two.finish();
+        assert_eq!(
+            super::read_light_mask(&mut crate::wire::PacketReader::new(&two), "sky")
+                .expect("two sections"),
+            vec![1, 2]
+        );
+
+        // And it survives a round trip through the writer, including the trailing-zero trim that makes the
+        // output byte-identical to vanilla's `BitSet.toLongArray()`.
+        let mut round_trip = PacketWriter::new();
+        super::write_light_mask(&mut round_trip, &[1, 2]);
+        let round_trip = round_trip.finish();
+        assert_eq!(round_trip, two, "a mask must encode exactly as it was read");
     }
 
     /// Pins the six `Heightmap.Types` ids to `docs/protocol/heightmap-types.tsv`.
