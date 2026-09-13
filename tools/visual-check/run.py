@@ -20,6 +20,10 @@ window stays open.
 
 * **Is the sky bright and the ground lit?** Before P10-05 every chunk shipped four empty masks, which the
   client renders as an unlit world. If it still looks black, something regressed.
+* **Are the colours right?** Grass green, leaves green, water blue, sky that matches. A biome decides all of
+  that, and every chunk said `minecraft:badlands` until KD-65 \u2014 red sand and orange terracotta under a hazy
+  sky, wherever you stood, with the terrain and the light entirely correct. **This is the check that found it,
+  and the only kind that could**: nothing in the repository compared the biome id with the registry it indexes.
 * **Are there shadows under overhangs and in holes?** Light that is uniformly 15 everywhere would look flat
   and washed out even though it is "lit".
 * **Does the light change when you break or place a block?** It should, **immediately** — the server now
@@ -155,7 +159,7 @@ def main() -> int:
         print('--- look at the game window ---')
         print('the world should be lit: bright sky, shaded ground, shadows under overhangs')
         print('and breaking or placing a block should change the light around it at once — that is')
-        print('light_update, which no real client has received yet\n')
+        print('light_update, which a real client now receives: see light_update_trigger\n')
 
         # Wait for the client to be in the world, then report what its own log says about rendering.
         for _ in range(60):
