@@ -867,6 +867,43 @@ method names.
 `SetChunkCacheCenter { x: 0, z: 0 }` **hard-coded**. The test world's spawn happens to be chunk (0, 0), so it is
 not this symptom, but a player spawning elsewhere would be handed the wrong centre.
 
+### KD-50 closed \u2014 the missing `game_event(LEVEL_CHUNKS_LOAD_START)`, and the client is in the world
+
+**The owner confirmed the client enters the world** after this fix. Before it, the client sat on "Loading
+terrain" indefinitely with every packet well-formed and no error anywhere.
+
+**The chain, every link measured rather than inferred:**
+
+1. `LevelLoadingScreen` dismisses on `LevelLoadTracker.isLevelReady()` (`javap` on the **client** jar).
+2. `isLevelReady()` is true only once `clientState` has become `ClientLevelReady`, and `startClientLoad` puts it
+   in **`WaitingForServer`** (`javap`).
+3. The **only** caller of `LevelLoadTracker.loadingPacketsReceived()` \u2014 the thing that moves it out of that
+   state \u2014 is `ClientPacketListener.handleGameEvent` (`javap`).
+4. `ClientboundGameEventPacket` has an event type **`LEVEL_CHUNKS_LOAD_START`** (`javap`).
+5. A real vanilla server sends it on join, and the capture gives the wire values with nothing inferred:
+   `game_event` (clientbound play 38), body 6 bytes, **`26 0d 00000000`** \u2014 id 38, event **13**, value
+   `0.0`.
+6. Our join sequence contained **no `game_event` at all**: `49, 94, 95, 95, 94, 72, 97, 104, 103, 121`.
+
+Our server now sends it, and the packet is **byte-for-byte identical to the real server's** \u2014 `26 0d
+00000000`, at the same point in the join sequence, between the chunk-cache packets and the teleport.
+
+**Two wrong turns are recorded because they cost real time and both had the same shape.** First I claimed the
+chunk-cache packets were never sent, having labelled their ids from memory as 11 and 12 \u2014 which are
+`chunk_batch_finished` and `chunk_batch_start`; the real ids are 94 and 95 and they were always sent, so the
+"fix" duplicated them and had to be reverted. Then I hypothesised the chunk-batch protocol was the gate, and
+`javap` on `handleChunkBatchFinished` disproved it: it only paces the calculator and never touches the load
+tracker. **The successful conclusion came from reading the client's own bytecode and then taking the number
+from a real server's wire \u2014 not from reasoning about names.** That is the same lesson as KD-44, KD-46 and
+KD-49, and this time it was learned from the other side.
+
+**One latent bug found on the way**, recorded but not fixed: `connection.rs:542` sends
+`SetChunkCacheCenter { x: 0, z: 0 }` **hard-coded**. The test world's spawn happens to be chunk (0, 0), so it is
+not this symptom, but a player spawning elsewhere would be handed the wrong centre.
+
+**What this changes for the phase.** The claim that a real client is "live and rendering" was withdrawn as
+unproven; it is now **established**, by the owner seeing the world.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

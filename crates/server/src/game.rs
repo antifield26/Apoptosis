@@ -158,10 +158,10 @@ use mc_protocol::RawPacket;
 use mc_protocol::packets::Packet;
 use mc_protocol::packets::play::{
     BIOMES_PER_SECTION, BlockUpdate, ChunkSection, ContainerSetContent, ContainerSetSlot,
-    HEIGHTMAP_WORLD_SURFACE, Heightmap, LevelChunkWithLight, LightUpdate, NETWORK_BIOME_MIN_BITS,
-    PalettedContainer as WireContainer, PlayDisconnect, PlayIntent, PlayerPosition, Respawn,
-    SetDefaultSpawnPosition, SetExperience, SetHealth, SetHeldSlot, SetTime, SystemChat,
-    block_position, unpack_block_position,
+    GameEvent, HEIGHTMAP_WORLD_SURFACE, Heightmap, LevelChunkWithLight, LightUpdate,
+    NETWORK_BIOME_MIN_BITS, PalettedContainer as WireContainer, PlayDisconnect, PlayIntent,
+    PlayerPosition, Respawn, SetDefaultSpawnPosition, SetExperience, SetHealth, SetHeldSlot,
+    SetTime, SystemChat, block_position, unpack_block_position,
 };
 use mc_protocol::text::TextComponent;
 use mc_registry::Registries;
@@ -238,6 +238,13 @@ fn light_fields(
     }
     Ok(fields)
 }
+
+/// `ClientboundGameEventPacket.Type.LEVEL_CHUNKS_LOAD_START` on the wire.
+///
+/// The server sends it to say "chunks are about to arrive", and a 26.x client's loading screen does not lift
+/// until it has. **Measured, not inferred**: a real vanilla server's join sequence carries
+/// `game_event` (clientbound play 38) with the body `26 0d 00000000` — id 38, event **13**, value `0.0`.
+pub const GAME_EVENT_LEVEL_CHUNKS_LOAD_START: u8 = 13;
 
 /// How many chunks a tick may relight and announce.
 ///
@@ -1657,7 +1664,25 @@ impl Game {
         );
 
         // The network layer already sent JoinGame; this is the world-side
-        // continuation: position, spawn marker, vitals, then terrain.
+        // continuation: the level-load signal, position, spawn marker, vitals, then terrain.
+        //
+        // **This one is not optional, and nothing complains when it is missing.** A 26.x client's loading
+        // screen dismisses on `LevelLoadTracker.isLevelReady()`, which only becomes true once
+        // `loadingPacketsReceived()` has moved the tracker out of `WaitingForServer` — and the only caller of
+        // that is `ClientPacketListener.handleGameEvent`. So the client sits on "Loading terrain" forever,
+        // with every packet involved well-formed and no error anywhere (KD-50).
+        //
+        // The values are quoted from a real server's capture rather than from the enum, whose numeric ids I
+        // could not read: `game_event` (clientbound play 38), body `26 0d 00000000` — id 38, event **13**,
+        // value `0.0`.
+        self.send(
+            id,
+            &GameEvent {
+                event: GAME_EVENT_LEVEL_CHUNKS_LOAD_START,
+                value: 0.0,
+            },
+            report,
+        )?;
         self.send(
             id,
             &PlayerPosition {
