@@ -361,30 +361,137 @@ impl Packet for RegistryData {
 /// from driving a large `Vec::with_capacity` before the loop validates it.
 pub const MAX_REGISTRY_ENTRIES: usize = 4096;
 
-/// `minecraft:update_tags` (clientbound 13). Phase 02 sends an empty set.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct UpdateTags;
+/// One tag: a name plus the **numeric ids** of its members in the enclosing registry.
+///
+/// Numbers rather than names because that is what the wire carries. A tag reference inside a tag is resolved
+/// by the sender before it gets here — see `registry_data::synced_tags`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tag {
+    /// Tag name, e.g. `minecraft:in_overworld`.
+    pub name: String,
+    /// Member ids, ascending in practice but not required to be.
+    pub entries: Vec<i32>,
+}
+
+/// The tags of one registry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagRegistry {
+    /// Registry identifier, e.g. `minecraft:timeline`.
+    pub registry: String,
+    /// Tags in that registry.
+    pub tags: Vec<Tag>,
+}
+
+/// `minecraft:update_tags` (clientbound 13).
+///
+/// Until P10-03 this was a unit struct that always encoded zero registries and whose decoder rejected anything
+/// else, so **tags could not be sent at all** — which is half of KD-39: the overworld dimension declares
+/// `timelines: "#minecraft:in_overworld"`, and a client refuses the session when that tag is unbound.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct UpdateTags {
+    /// One entry per registry that has tags in this update.
+    pub registries: Vec<TagRegistry>,
+}
 
 impl Packet for UpdateTags {
     const ID: i32 = clientbound::config::UPDATE_TAGS;
 
     fn decode(payload: &[u8]) -> ServerResult<Self> {
         let mut reader = PacketReader::new(payload);
-        let registries = reader.read_varint()?;
-        if registries != 0 {
-            return Err(ServerError::Protocol(
-                "phase-02 update_tags must contain no registries".to_owned(),
-            ));
+
+        // Hostile-count hardening, as in `RegistryData`: refuse a negative count and a count that cannot fit
+        // in the remaining bytes *before* reserving anything.
+        let registry_count = reader.read_varint()?;
+        if registry_count < 0 {
+            return Err(ServerError::Protocol(format!(
+                "negative tag registry count {registry_count}"
+            )));
         }
-        Ok(Self)
+        let registry_count = registry_count as usize;
+        if registry_count > reader.remaining() {
+            return Err(ServerError::Protocol(format!(
+                "tag registry count {registry_count} exceeds remaining bytes {}",
+                reader.remaining()
+            )));
+        }
+
+        let mut registries = Vec::with_capacity(registry_count.min(MAX_TAG_REGISTRIES));
+        for _ in 0..registry_count {
+            let registry = reader.read_string(crate::MAX_IDENTIFIER_LEN)?;
+            let tag_count = reader.read_varint()?;
+            if tag_count < 0 {
+                return Err(ServerError::Protocol(format!(
+                    "negative tag count {tag_count}"
+                )));
+            }
+            let tag_count = tag_count as usize;
+            if tag_count > reader.remaining() {
+                return Err(ServerError::Protocol(format!(
+                    "tag count {tag_count} in {registry} exceeds remaining bytes {}",
+                    reader.remaining()
+                )));
+            }
+            let mut tags = Vec::with_capacity(tag_count.min(MAX_TAGS_PER_REGISTRY));
+            for _ in 0..tag_count {
+                let name = reader.read_string(crate::MAX_IDENTIFIER_LEN)?;
+                let entry_count = reader.read_varint()?;
+                if entry_count < 0 {
+                    return Err(ServerError::Protocol(format!(
+                        "negative entry count {entry_count} in tag {name}"
+                    )));
+                }
+                let entry_count = entry_count as usize;
+                // Each id is at least one byte.
+                if entry_count > reader.remaining() {
+                    return Err(ServerError::Protocol(format!(
+                        "tag {name} claims {entry_count} entries but {} bytes remain",
+                        reader.remaining()
+                    )));
+                }
+                let mut entries = Vec::with_capacity(entry_count.min(MAX_TAG_ENTRIES));
+                for _ in 0..entry_count {
+                    entries.push(reader.read_varint()?);
+                }
+                tags.push(Tag { name, entries });
+            }
+            registries.push(TagRegistry { registry, tags });
+        }
+        Ok(Self { registries })
     }
 
     fn encode(&self) -> ServerResult<Vec<u8>> {
         let mut writer = PacketWriter::new();
-        writer.write_varint(0);
+        writer.write_varint(
+            i32::try_from(self.registries.len()).map_err(|_| {
+                ServerError::Protocol("too many tag registries to encode".to_owned())
+            })?,
+        );
+        for registry in &self.registries {
+            writer.write_string(&registry.registry)?;
+            writer.write_varint(
+                i32::try_from(registry.tags.len())
+                    .map_err(|_| ServerError::Protocol("too many tags to encode".to_owned()))?,
+            );
+            for tag in &registry.tags {
+                writer.write_string(&tag.name)?;
+                writer.write_varint(i32::try_from(tag.entries.len()).map_err(|_| {
+                    ServerError::Protocol("too many tag entries to encode".to_owned())
+                })?);
+                for entry in &tag.entries {
+                    writer.write_varint(*entry);
+                }
+            }
+        }
         Ok(writer.finish())
     }
 }
+
+/// Cap on tag registries decoded from one packet (hostile-input bound).
+pub const MAX_TAG_REGISTRIES: usize = 64;
+/// Cap on tags per registry.
+pub const MAX_TAGS_PER_REGISTRY: usize = 4096;
+/// Cap on members per tag.
+pub const MAX_TAG_ENTRIES: usize = 65_536;
 
 /// `minecraft:disconnect` (configuration clientbound 2). NBT text component.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -5,11 +5,12 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 207 passed, 0 failed, 21 ignored** across **78 suites**, re-derived from
-`cargo test --workspace --no-fail-fast` on the P10-02 tree. The count has moved
-1 191 -> 1 194 -> 1 196 -> 1 206 -> 1 207 as tests were added: three from the Audit 07 remediation,
-two Audit 08 coverage tests, ten from the `mc-capture-rig` crate (P10-01), and one regression test
-for the compression-transition defect that real-client first contact exposed (P10-02). The 21 ignored = 7 differential suites (15 tests, jar-gated) + `pi_profile` 4 +
+Totals: **1 212 passed, 0 failed, 21 ignored** across **78 suites**, re-derived from
+`cargo test --workspace --no-fail-fast` on the P10-03 tree. The count has moved
+1 191 -> 1 194 -> 1 196 -> 1 206 -> 1 207 -> 1 212 as tests were added: three from the Audit 07
+remediation, two Audit 08 coverage tests, ten from the `mc-capture-rig` crate (P10-01), one regression
+test for the compression-transition defect (P10-02), and the synced-registry work (P10-03), which also
+replaced a magic registry count in `e2e_login_play` with the rule it was standing in for. The 21 ignored = 7 differential suites (15 tests, jar-gated) + `pi_profile` 4 +
 `tick_baseline` 2 — all run on demand (see the last section).
 
 **Every per-crate count below was re-measured with `cargo test -p <crate> --lib`** while updating this
@@ -17,8 +18,8 @@ total, and five were wrong: `mc-protocol` said 126, `mc-world` 103, `mc-command`
 `mc-worldgen` 64, where the real figures are 103, 31, 89, 126 and 81. Each stated value turned out to be
 **another crate's** count, so the figures were right and the names were rotated (Audit 07 remediation;
 the audit itself missed it — see `docs/audits/AUDIT-07-REMEDIATION.md` §"what the audit missed"). The lib
-counts sum to 967, the 5 doc-tests and 235 named-suite tests complete the 1 207
-(967 + 5 + 235 = 1 207; re-derived from the run log with a cargo-metadata
+counts sum to 972, the 5 doc-tests and 235 named-suite tests complete the 1 212
+(972 + 5 + 235 = 1 212; re-derived from the run log with a cargo-metadata
 target-to-package mapping, 0 of 78 suites unattributed).
 
 This file replaced an accumulator that had grown one per-phase section per
@@ -31,7 +32,7 @@ each suite proves, and the deduplicated defect history.
 
 Counts are from the 2026-09-12 run log. Named integration suites are counted
 explicitly; the remaining per-crate lib binaries (core, nbt, registry,
-simulation, redstone, server, test-support and the rest) complete the 1 207
+simulation, redstone, server, test-support and the rest) complete the 1 212
 total and are itemised in the run log rather than here.
 
 | Area | Named suites (count) | What they prove |

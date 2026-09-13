@@ -102,6 +102,59 @@ verifies the repair against a real client rather than against a fixture.
 session ends at the registry refusal, so nothing after `finish_configuration` — lighting, entities, chat —
 has been reached by a real client yet, and those remain exactly as unverified as KD-38 says.
 
+### P10-03 — first-contact remediation: the synced registries (KD-39)
+
+P10-02 measured the refusal; this fixes the first two causes of it and records the third. Three real-client
+runs, each naming the next gap in its own protocol-error report — which is the loop working, and the reason a
+`TestClient` cannot stand in for a client.
+
+| Run | The client said | Outcome |
+|---|---|---|
+| 1 (P10-02) | `timeline: Unbound tags [in_overworld]`, `world_clock: Unbound values [overworld]` | **fixed** |
+| 2 | `Registry must be non-empty` for 13 variant registries | **fixed** |
+| 3 | `Missing tag TagKey[minecraft:damage_type / minecraft:is_fire]` | **not fixed** |
+
+**What was actually wrong, run 1.** The overworld `dimension_type` declares `timelines: "#minecraft:in_overworld"`
+and `default_clock: "minecraft:overworld"` — two **references** — and nothing verified that the names exist in
+anything the server sends. Neither the `timeline` nor the `world_clock` registry was sent, and `UpdateTags` was
+a unit struct that always encoded **zero registries** and whose decoder *rejected* anything else, so tags could
+not be sent at all. Both were fixed, and the client's next report shows `timeline: elements=4 tags=4` and
+`world_clock: elements=2` with both errors gone.
+
+**Run 2** then reported thirteen variant registries as `Registry must be non-empty`, so a 26.1.2 client requires
+every synced registry the pack defines. They total 33 KB, so the probe now extracts the whole set and the server
+sends **whatever the fixture holds** rather than a list of its own — the same information in two places would go
+stale the first time one grew.
+
+**Run 3** still refuses, on a missing `minecraft:damage_type / minecraft:is_fire` tag. The pattern is now
+unambiguous and the remedy is mechanical: add the remaining pack registries (`damage_type`, `enchantment`,
+`jukebox_song`, `instrument`, `banner_pattern`, `chat_type`, `trim_material`, `trim_pattern`, `dialog`,
+`trade_set`, `villager_trade`, `trial_spawner`, `enchantment_provider`, `test_environment`, `test_instance`) to
+the probe's list. That is a one-line change plus a re-run. It is deliberately **not** claimed here: it needs the
+same real-client verification, and asserting it without that run is exactly what KD-38 exists to prevent.
+
+**Pipeline.** `tools/vanilla-probe/extract_synced_registries.py` extracts the registries and their tags from the
+jar's own pack into a committed fixture, on the same footing as `blocks.tsv`/`items.tsv`. It resolves
+`#minecraft:universal` inside `in_overworld` at extraction time, because the wire carries a tag's members as
+numeric registry ids and a nested tag is not representable. The server maps the resolved names back to ids from
+its own entry order, so the id assignment lives in exactly one place.
+
+**A derived rule, labelled.** JSON cannot distinguish a float from a double and Minecraft's codec does. Every
+non-integer in the vanilla timelines (50 of them: track `value`s and `cubic_bezier` coefficients) is a
+float-typed field, so the converter maps float → `Nbt::Float`. That is a **derivation from the data, not a
+verified fact**, and the real client is what adjudicates it — so far without complaint.
+
+**The test that would have caught run 1 without a client.**
+`every_reference_the_overworld_declares_is_actually_sent` walks the dimension element's `#tag` and value
+references and requires each to resolve in the payload. KD-39 was never a wrong value; it was a reference with
+no referent, and nothing checked. Two other tests were replaced rather than edited: the packet sequence now
+asserts its **ordering rule** instead of an exact id list, and `e2e_login_play` asserts that no registry is sent
+empty instead of pinning a count of two — a count that was itself the limitation, which is why the test agreed
+with the bug for as long as it did.
+
+**Still unverified, and therefore still claimed by nobody:** nothing after `finish_configuration` has been
+reached by a real client. Lighting, entities and chat remain exactly as unmeasured as KD-38 says.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

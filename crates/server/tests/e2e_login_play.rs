@@ -60,11 +60,42 @@ async fn offline_login_reaches_play_with_registry_payload() {
         joined.login.properties.is_empty(),
         "offline profiles carry no properties"
     );
-    assert_eq!(
-        joined.registries.len(),
-        2,
-        "dimension_type + worldgen/biome expected"
+    // The count is derived, not pinned: the server sends the two hand-authored registries plus every
+    // registry the extracted fixture holds, and that set grew when a real client named what it required
+    // (P10-03). What matters is the rule below, not the number.
+    assert!(
+        joined.registries.len() >= 2,
+        "at least dimension_type and worldgen/biome are expected, got {}",
+        joined.registries.len()
     );
+    for registry in &joined.registries {
+        assert!(
+            !registry.entries.is_empty(),
+            "{} was sent empty; a real 26.1.2 client refuses an empty synced registry (P10-03)",
+            registry.registry
+        );
+    }
+    for expected in [
+        "minecraft:dimension_type",
+        "minecraft:worldgen/biome",
+        // The two the overworld dimension *references*. Absent, a real client refuses the session in its
+        // registry loader — that was KD-39.
+        "minecraft:world_clock",
+        "minecraft:timeline",
+    ] {
+        assert!(
+            joined
+                .registries
+                .iter()
+                .any(|registry| registry.registry == expected),
+            "{expected} must be sent; got {:?}",
+            joined
+                .registries
+                .iter()
+                .map(|registry| &registry.registry)
+                .collect::<Vec<_>>()
+        );
+    }
     let dimension = joined
         .registries
         .iter()
