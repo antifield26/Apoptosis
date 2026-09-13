@@ -1395,6 +1395,32 @@ read, and the counts are what make it usable: `distinguishable` appears three ti
 parentheses also three, and those are the two signatures of the defects already confirmed. This finding came
 from six of those lines.
 
+### KD-64 \u2014 clue 4's equality claims are clean, and that says where the defects live
+
+The signatures that **equate two things** \u2014 `same as`, `equivalent`, `identical` \u2014 are about twenty-five doc
+lines in product code, and every one is checkable by looking at both sides. Four were read in full:
+
+* `ClientInformation::encode_body`'s `# Errors` says "Same as `Packet::encode`" \u2014 looser than the others, since
+  the two write different bodies, but both write the same fields and the error conditions coincide;
+* `Packet::to_raw`'s says "Same as `Packet::encode`" and its body is `Ok(RawPacket::new(Self::ID, self.encode()?))`
+  \u2014 **the only error source is that call**, so it is exact;
+* `PacketWriter::write_identifier`'s says "Same as `write_string`" and its body is
+  `self.write_string(&value.to_string())` \u2014 likewise exact;
+* `mc_entity::Vec3`'s says the parallel `mc_world::Vec3` is "structurally identical and conversion is a field
+  move" \u2014 and both are exactly `{ x: f64, y: f64, z: f64 }`. **Correct.**
+
+**None is a defect.** That is worth recording rather than passing over, because it locates the problem: every
+prose defect this review has found \u2014 KD-52, KD-54, KD-56 and KD-63 \u2014 is in prose that **defines a term**
+(`default`, `distinguishable`, `indices`), not in prose that **equates two things**.
+
+The difference is not stylistic. "A is the same as B" is checkable in one reading, and the author writing it has
+both sides in front of them. "The default state" is a term the author believes they know, and the belief is what
+turns out to be wrong \u2014 642 times, in KD-56's case.
+
+**So clue 4's remaining work is the defining prose**: `(default)` in parentheses (three lines, one read, one
+verified correct), `must` and `cannot` (358 lines), and `invariant` (48). The counts are what make 1044 lines
+readable, and they now have a direction.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
