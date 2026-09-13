@@ -1113,11 +1113,23 @@ mod tests {
                 .default_state("minecraft:stone_bricks")
                 .expect("stone_bricks")
         );
-        // The log's `axis=y` state is a different id from the property-less
-        // first state, which is what proves properties were applied.
-        assert_ne!(
+        // Properties were applied: `axis=y` is the log's **default**, and `axis=x` is a different state.
+        //
+        // The version of this assertion that stood here compared against
+        // `default_state("minecraft:oak_log")` and required the two to **differ**, describing it as "the
+        // property-less first state" — which is what `default_state` returned then, and is wrong for 642 of
+        // 1168 blocks. The assertion was the bug written down as an expectation.
+        assert_eq!(
             resolved.palette[1],
-            blocks.default_state("minecraft:oak_log").expect("log")
+            blocks.default_state("minecraft:oak_log").expect("log"),
+            "a log's default state is `axis=y`, so resolving `axis=y` must name it"
+        );
+        assert_ne!(
+            blocks
+                .state_id("minecraft:oak_log", &[("axis".to_owned(), "x".to_owned())])
+                .expect("oak_log axis=x"),
+            blocks.default_state("minecraft:oak_log").expect("log"),
+            "`axis=x` must not be the default, which is what shows properties are applied"
         );
         assert_eq!(resolved.highest_palette_index(), Some(2));
 

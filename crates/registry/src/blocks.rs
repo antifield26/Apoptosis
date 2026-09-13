@@ -17,17 +17,65 @@ use mc_core::error::{ServerError, ServerResult};
 use std::collections::HashMap;
 use std::path::Path;
 
+/// Replace each entry's default with the state the jar names, from `block_defaults.tsv` beside `blocks.tsv`.
+///
+/// **A warning, not an error, when the file is absent.** The table is generated rather than hand-written, and a
+/// deployment without it still works — with 642 of 1168 defaults wrong, which is what it did before this
+/// existed. Saying so is the point: the difference between two deployments must not be silent.
+fn apply_default_states(by_name: &mut HashMap<String, BlockEntry>, blocks_path: &Path) {
+    let Some(dir) = blocks_path.parent() else {
+        return;
+    };
+    let defaults = dir.join("block_defaults.tsv");
+    let Ok(text) = std::fs::read_to_string(&defaults) else {
+        tracing::warn!(
+            path = %defaults.display(),
+            "no default-state table beside the block table; blocks will use their lowest state id, which is \
+             wrong for most of them"
+        );
+        return;
+    };
+    let mut applied = 0_usize;
+    for line in text.lines() {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let (Some(name), Some(id)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        let Ok(id) = id.parse::<i32>() else {
+            continue;
+        };
+        if let Some(entry) = by_name.get_mut(name) {
+            entry.default_state_id = id;
+            applied += 1;
+        }
+    }
+    tracing::debug!(applied, "default block states loaded");
+}
+
 /// One block's state layout.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BlockEntry {
     first_state_id: i32,
+    /// The state `Block.defaultBlockState()` names.
+    ///
+    /// **Not [`BlockEntry::first_state_id`].** Vanilla chooses the default with `registerDefaultState`, and
+    /// 642 of 1168 blocks disagree with their lowest id — `oak_log` registers `axis` as `x, y, z` and defaults
+    /// to `y`; `oak_leaves` registers `distance`, `persistent` and `waterlogged` and defaults to 7, false,
+    /// false. Reading the first as the default put every log on its side and water inside every leaf.
+    default_state_id: i32,
     state_count: i32,
     /// `(property, ordered values)`, in the order the id index is built.
     axes: Vec<(String, Vec<String>)>,
 }
 
 impl BlockEntry {
-    /// The id of this block's first (default) state.
+    /// The id of this block's **lowest** state.
+    ///
+    /// **Not its default**, which is what this doc comment claimed until a tree was looked at. See
+    /// [`BlockEntry::default_state_id`].
     ///
     /// Public so [`BlockRegistry::block_names`] can order by it without reaching into
     /// a private field.
@@ -128,7 +176,11 @@ impl BlockRegistry {
         let text = std::fs::read_to_string(path).map_err(|e| {
             ServerError::Operational(format!("cannot read {}: {e}", path.display()))
         })?;
-        Self::parse(&text)
+        let mut registry = Self::parse(&text)?;
+        // **The real defaults**, from the table the jar probe writes. `parse` cannot do this: it takes text and
+        // has no directory to look beside. See `apply_default_states` for what the fallback costs.
+        apply_default_states(&mut registry.by_name, path);
+        Ok(registry)
     }
 
     /// Parse a table from memory (tests, embedded tables).
@@ -207,6 +259,7 @@ impl BlockRegistry {
                 name.to_owned(),
                 BlockEntry {
                     first_state_id,
+                    default_state_id: first_state_id,
                     state_count,
                     axes,
                 },
@@ -318,14 +371,15 @@ impl BlockRegistry {
     pub fn default_state(&self, name: &str) -> ServerResult<i32> {
         self.by_name
             .get(name)
-            .map(|entry| entry.first_state_id)
+            .map(|entry| entry.default_state_id)
             .ok_or_else(|| ServerError::CorruptData(format!("unknown block {name:?}")))
     }
 
     /// Resolve a name plus properties to a state id.
     ///
-    /// An empty property list resolves to the block's first state. Unknown
-    /// properties, unknown values and unknown blocks are all errors.
+    /// An empty property list resolves to the block's **default** state, which is
+    /// [`BlockRegistry::default_state`]'s answer and not its lowest id. Unknown properties, unknown values and
+    /// unknown blocks are all errors.
     ///
     /// # Errors
     ///
@@ -336,7 +390,7 @@ impl BlockRegistry {
             .get(name)
             .ok_or_else(|| ServerError::CorruptData(format!("unknown block {name:?}")))?;
         if properties.is_empty() {
-            return Ok(entry.first_state_id);
+            return Ok(entry.default_state_id);
         }
         let index = entry.index_of(properties).ok_or_else(|| {
             ServerError::CorruptData(format!("block {name:?} has no state for {properties:?}"))

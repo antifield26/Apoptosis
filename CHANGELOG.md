@@ -1095,6 +1095,47 @@ asserts both that the pass ran and that logs and leaves are **in the loaded chun
 **The order is terrain, structures, trees.** Structures already ran after terrain and that is unchanged; trees
 go last so one cannot be planted through a structure placed a line earlier.
 
+### KD-56 \u2014 `default_state` returned the lowest state id, and 642 of 1168 blocks disagree with it
+
+**The owner looked at a tree and said what was wrong:** "the leaves contain water, the logs are lying on their
+side". Both are one mistake.
+
+`BlockRegistry::default_state(name)` returned `first_state_id`, and its doc comment said *"the id of this
+block's first (default) state"* \u2014 **the assumption written into the comment**. Vanilla chooses the default
+explicitly with `registerDefaultState`, and it is not in general the lowest id:
+
+```text
+minecraft:oak_log     137   (lowest 136 -> axis=x;  137 is axis=y)
+minecraft:oak_leaves  279   (lowest 252 -> distance 1, persistent, waterlogged=true)
+minecraft:grass_block   9   (lowest   8 -> snowy=true)
+```
+
+A probe of the jar says **642 of 1168 blocks** differ, **55%**. So every log a world generator placed lay on its
+side, every leaf held water, and every grass block was snowy \u2014 and none of it had an error anywhere: the
+blocks were all real, the light was plausible, and the chunks were well-formed.
+
+**Extracted, not guessed.** `tools/vanilla-probe/DefaultStateProbe.java` boots the server's own registry and
+reads `Block.defaultBlockState()`, the same method `LightProbe` uses, and writes
+`crates/test-support/fixtures/registry/block_defaults.tsv`. The registry reads it beside `blocks.tsv`; a missing
+table warns rather than failing, because the difference between two deployments must not be silent.
+
+**Three call sites conflated the two**, and all three were wrong: `default_state`, `state_id`'s empty-property
+path, and the absence of any table to consult.
+
+### The tests that agreed with it
+
+Two asserted the bug as an expectation, and both said so in their own words:
+
+* `structure.rs` compared a resolved `axis=y` log against `default_state("minecraft:oak_log")` and required them
+  to **differ**, with the comment *"a different id from the property-less **first** state"* \u2014 naming the
+  thing it was really comparing against. It now asserts that resolving `axis=y` names the default, and that
+  `axis=x` is what differs, which is the property it existed for.
+* The doc comment on `first_state_id` read *"the id of this block's first (default) state"*.
+
+**This is the third time this round that a test encoded the implementation's mistake** \u2014 after KD-52's
+palette fixture and KD-49's vacuous teleport \u2014 and the pattern is worth naming: the suites pass because the
+code and the tests were written from one understanding, so an audit of either confirms the other.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
