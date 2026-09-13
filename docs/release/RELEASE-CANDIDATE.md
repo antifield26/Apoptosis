@@ -17,7 +17,7 @@ matrix counts under data packs), data
 packs (tags/recipes/functions), seeded terrain with a single-chunk structure
 subset, Anvil-compatible persistence verified against real vanilla worlds.
 Scope boundaries and every known divergence:
-[docs/vanilla-parity/PARITY-MATRIX.md](../vanilla-parity/PARITY-MATRIX.md) (KD-01…KD-38; the
+[docs/vanilla-parity/PARITY-MATRIX.md](../vanilla-parity/PARITY-MATRIX.md) (KD-01…KD-39; the
 release-affecting highlights: no lighting propagation yet — clients render
 dark; entities are not persisted or synced; redstone is modelled but not
 tick-driven; 8 of ~90 commands).
@@ -30,7 +30,7 @@ reproducibility failure, not a configuration.
 
 ```text
 cargo build --workspace --release --locked     # the server binary
-cargo test  --workspace --no-fail-fast         # the full matrix (1 206 passed / 0 failed / 21 ignored, 78 suites)
+cargo test  --workspace --no-fail-fast         # the full matrix (1 207 passed / 0 failed / 21 ignored, 78 suites)
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo check --target aarch64-unknown-linux-gnu  # the Pi 5 target compiles (no cross-run on x86_64)
@@ -66,9 +66,9 @@ reviewed — never applied to a real host), `docs/operations/DEPENDENCY-POLICY.m
 
 | Claim | Status |
 |---|---|
-| Full regression matrix passes | **Yes** — five gates green on 2026-09-12: `cargo test --workspace --no-fail-fast` (**1 206** passed / 0 failed / 21 ignored, 78 suites), `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo check --target aarch64-unknown-linux-gnu`, `cargo deny check licenses bans sources` — all exit 0. **The run logs live under the git-ignored `target/` on the build machine, not in this repository**, so they are evidence a reader cannot inspect; re-run the five commands in §2 to reproduce them. The P09 logs that were originally cited here record **1 189**, a run from before five tests were added — the current figure is 1 196, as `docs/testing/TEST-MATRIX.md` and CI both report |
+| Full regression matrix passes | **Yes** — five gates green on 2026-09-12: `cargo test --workspace --no-fail-fast` (**1 207** passed / 0 failed / 21 ignored, 78 suites), `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo check --target aarch64-unknown-linux-gnu`, `cargo deny check licenses bans sources` — all exit 0. **The run logs live under the git-ignored `target/` on the build machine, not in this repository**, so they are evidence a reader cannot inspect; re-run the five commands in §2 to reproduce them. The P09 logs that were originally cited here record **1 189**, a run from before five tests were added — the current figure is 1 196, as `docs/testing/TEST-MATRIX.md` and CI both report |
 | Conformance report produced | Yes — the Phase 09 acceptance report (git history, tag `phase-09-final`) + the sweep rows in `docs/testing/TEST-MATRIX.md` |
-| Known divergences documented | Yes — [PARITY-MATRIX.md](../vanilla-parity/PARITY-MATRIX.md), the single authority (KD-01…KD-38 tagged in its rows) |
+| Known divergences documented | Yes — [PARITY-MATRIX.md](../vanilla-parity/PARITY-MATRIX.md), the single authority (KD-01…KD-39 tagged in its rows) |
 | Release artifacts published | **Yes** — tag `v0.1.0-rc.1` on GitHub Releases with the x86_64 (Windows) and aarch64 (Pi) `mc-server` binaries and SHA-256 sums; source is the repository itself (public, MIT) |
 | 20 TPS on Pi 5 with 10 players | **Met for the scripted workload** — the `BENCHMARK-BASELINE.md` §4 acceptance run executed on a Pi 5 (Debian 13, release, on-device build): 30-min soak, settled MSPT medians 0.21/0.27/0.29 ms, zero settled overruns (§P09-Pi). Boundaries: scripted clients (KD-38), loopback, microSD |
 | Real-client acceptance | **No** — no Java client was driven; the scripted clients speak the exact TestClient conversation the E2E suite proves (KD-38) |
@@ -78,7 +78,7 @@ reviewed — never applied to a real host), `docs/operations/DEPENDENCY-POLICY.m
 - the Phase 09 acceptance report — git history (tag `phase-09-final`), distilled into `CHANGELOG.md`
 - `docs/testing/TEST-MATRIX.md` — what every test claims and how it could fail
 - [vanilla-parity/PARITY-MATRIX.md](../vanilla-parity/PARITY-MATRIX.md) — per-domain parity with cited evidence
-- `docs/vanilla-parity/PARITY-MATRIX.md` — the single parity/divergence authority (KD-01…KD-38)
+- `docs/vanilla-parity/PARITY-MATRIX.md` — the single parity/divergence authority (KD-01…KD-39)
 - `docs/performance/BENCHMARK-BASELINE.md` — every benchmark record + the Pi acceptance procedure
 - `docs/adr/ADR-0005-plugin-boundary.md` — plugin readiness: boundary, not API
 - `docs/architecture/system-overview.md` — how the crates fit together

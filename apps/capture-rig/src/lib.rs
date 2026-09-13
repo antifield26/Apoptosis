@@ -362,36 +362,6 @@ impl Observer {
             degraded_reported: false,
         }
     }
-
-    /// Feed bytes and return each complete frame's `(wire_bytes, packet)`.
-    ///
-    /// The consumed count comes from `FrameCodec::buffered()` deltas, so a caller can forward exactly the
-    /// bytes a frame occupied without re-encoding it.
-    fn push(&mut self, chunk: &[u8]) -> Vec<(usize, RawPacket)> {
-        if self.degraded.is_some() {
-            return Vec::new();
-        }
-        if let Err(error) = self.codec.feed(chunk) {
-            self.degraded = Some(error.to_string());
-            return Vec::new();
-        }
-        let mut frames = Vec::new();
-        loop {
-            let before = self.codec.buffered();
-            match self.codec.try_next() {
-                Ok(Some(packet)) => {
-                    let consumed = before.saturating_sub(self.codec.buffered());
-                    frames.push((consumed, packet));
-                }
-                Ok(None) => break,
-                Err(error) => {
-                    self.degraded = Some(error.to_string());
-                    break;
-                }
-            }
-        }
-        frames
-    }
 }
 
 /// The trace writer plus the session state machine.
@@ -479,15 +449,55 @@ impl Session {
             Direction::ClientToServer => self.c2s_bytes += chunk.len() as u64,
             Direction::ServerToClient => self.s2c_bytes += chunk.len() as u64,
         }
-        let compressed = self.compression.is_some();
+        // Feed once, then extract **one frame at a time**, applying any state transition between them.
+        //
+        // Extracting the whole chunk first was a real defect: `SetCompression` and the packet after it can
+        // arrive in the same chunk, and the second frame would then be parsed with compression still off.
+        // Because a below-threshold compressed packet is `[len][data_len = 0][raw id + payload]`, parsing it
+        // as uncompressed reads the `0` as the packet id — the trace recorded a `login_disconnect` the server
+        // never sent, while framing stayed aligned and nothing else looked wrong.
+        {
+            let observer = match direction {
+                Direction::ClientToServer => &mut self.c2s,
+                Direction::ServerToClient => &mut self.s2c,
+            };
+            if observer.degraded.is_none()
+                && let Err(error) = observer.codec.feed(chunk)
+            {
+                observer.degraded = Some(error.to_string());
+            }
+        }
 
-        let observer = match direction {
-            Direction::ClientToServer => &mut self.c2s,
-            Direction::ServerToClient => &mut self.s2c,
-        };
-        let frames = observer.push(chunk);
+        loop {
+            let extracted = {
+                let observer = match direction {
+                    Direction::ClientToServer => &mut self.c2s,
+                    Direction::ServerToClient => &mut self.s2c,
+                };
+                if observer.degraded.is_some() {
+                    None
+                } else {
+                    let before = observer.codec.buffered();
+                    match observer.codec.try_next() {
+                        Ok(Some(packet)) => {
+                            let consumed = before.saturating_sub(observer.codec.buffered());
+                            Some((consumed, packet))
+                        }
+                        Ok(None) => None,
+                        Err(error) => {
+                            observer.degraded = Some(error.to_string());
+                            None
+                        }
+                    }
+                }
+            };
+            let Some((wire_bytes, packet)) = extracted else {
+                break;
+            };
 
-        for (wire_bytes, packet) in frames {
+            // Sampled per frame: the frame after `SetCompression` is compressed, and reading this once per
+            // chunk labelled it with the pre-transition state.
+            let compressed = self.compression.is_some();
             let body = body_of(&packet);
             let record = PacketRecord {
                 seq: self.next(),
@@ -880,6 +890,51 @@ mod tests {
             packets(&raw_text).len(),
             4,
             "the raw-in-compressed frames must be recorded"
+        );
+    }
+
+    #[test]
+    fn a_compression_transition_inside_one_chunk_does_not_mis_decode_the_next_frame() {
+        // Found by first contact with a real client (P10-02).
+        //
+        // `SetCompression` and the packet that follows it can arrive in the same TCP chunk. The following
+        // packet is the first *compressed* one, so it has to be parsed with compression already applied.
+        // Parsed with it still off, a below-threshold packet's `data_len = 0` marker is read as the packet
+        // id — which is how a trace came to record a `login_disconnect` the server never sent, while framing
+        // stayed perfectly aligned and nothing else looked wrong.
+        let mut threshold = Vec::new();
+        let _ = mc_protocol::varint::write_varint(&mut threshold, 256);
+
+        let mut chunk = frame(clientbound::login::LOGIN_COMPRESSION, &threshold);
+        chunk.extend_from_slice(&frame_raw_in_compressed(
+            clientbound::login::LOGIN_FINISHED,
+            &[],
+        ));
+
+        let (mut session, buf) = new_session();
+        enter_login(&mut session);
+        session.observe(Direction::ServerToClient, &chunk);
+
+        let records = packets(&buf.text());
+        let last = records
+            .last()
+            .expect("the frame after the transition must be recorded");
+        assert_ne!(
+            last["id"], 0,
+            "id 0 here is the compression marker read as a packet id — the defect this test exists for"
+        );
+        assert_eq!(
+            last["id"],
+            clientbound::login::LOGIN_FINISHED,
+            "the frame after SetCompression must decode as itself"
+        );
+        assert_eq!(
+            last["compressed"], true,
+            "and must be recorded as compressed"
+        );
+        assert!(
+            !buf.text().contains("observer_error"),
+            "the transition must not degrade framing either"
         );
     }
 

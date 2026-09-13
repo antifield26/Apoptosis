@@ -32,8 +32,9 @@ right" is not evidence.
   timestamps, because a trace is meant to be diffable between runs.
 - A session ends when **either** direction does, with a bounded 3 s drain, so a peer that never closes cannot
   leave a capture without an end marker.
-- 10 tests: 8 unit (framing, state machine, compression in both wire forms, digest invariance, degradation,
-  write-failure reporting) and 2 integration that drive the `TestClient` through the rig to a **real server**
+- 11 tests: 9 unit (framing, state machine, compression in both wire forms, the compression-transition
+  regression from P10-02, digest invariance, degradation, write-failure reporting) and 2 integration that
+  drive the `TestClient` through the rig to a **real server**
   and require the trace to show handshake → login → config → play with no degradation.
 
 **Two real defects the integration tests found**, both invisible to the unit tests:
@@ -52,6 +53,54 @@ the covering test confirmed to fail, and the file restored byte-exact.
 
 **Still blocked:** P10-02 and every acceptance task in this phase need an owner-provided runnable Java 26.1.2
 client. The `TestClient` is not a substitute and has not been used as one.
+
+### P10-02 — real-client first contact
+
+The owner supplied the client (`D:\HMCL`, HMCL 3.16.3 with a vanilla `26.1.2` instance). A minimal launcher
+was built from the version manifest — libraries selected by the manifest's own platform rules, placeholders
+substituted, offline UUID derived the same way the server does — and the client was pointed at the rig with
+`--quickPlayMultiplayer`. Evidence is the JSONL trace plus the protocol-error report the vanilla client writes
+to `debug/`; the game window is not evidence of anything.
+
+**Result: the client joins, completes login and configuration, and is then refused by its own registry
+loader.** Its report names both missing registries:
+
+```text
+Description: Registry Loading
+Errors:
+  minecraft:root/minecraft:timeline:    Unbound tags   ...: [minecraft:in_overworld]
+  minecraft:root/minecraft:world_clock: Unbound values ...: [minecraft:overworld]
+Dynamic Registries:
+  minecraft:dimension_type: elements=1 tags=0
+  minecraft:worldgen/biome: elements=1 tags=0
+```
+
+The server sends two dynamic registries; a 26.1.2 client needs those two plus `timeline` and `world_clock`.
+Recorded as **KD-39**, and the login row in the parity matrix now says "fails with a real client" instead of
+"partial (test client)". The fix belongs to P10-03.
+
+**A defect in the P10-01 rig, found by this run.** The trace recorded `login id=0 login_disconnect` — a packet
+the server never sent — immediately after `set_compression`. The cause: `observe` extracted **every** frame in
+a chunk with the codec's current compression setting and applied the transition only afterwards, so a
+`SetCompression` and the following packet arriving in one TCP chunk left the second frame parsed with
+compression still off. Below the threshold that packet is `[len][data_len = 0][raw id + payload]`, so the `0`
+marker was read as the packet id; framing stayed aligned because the outer length prefix is the same in both
+forms, and nothing else looked wrong.
+
+It was caught because the client's own report says it reached `finish_configuration`, which is impossible if
+the login state had ended in a disconnect — **the two artefacts disagreed, and the disagreement was the
+finding.** Fixed by extracting one frame at a time with transitions applied between frames, plus a regression
+test that delivers the two frames in a single chunk. A second instance of the same mistake sat one line above:
+`compressed` was sampled once per chunk, so the frame after the transition was labelled uncompressed; also
+fixed and covered by the same test.
+
+Re-running first contact after the fix produces `login_finished` where the phantom disconnect was, which
+verifies the repair against a real client rather than against a fixture.
+
+**Limitations, stated rather than implied.** First contact was run against a **vanilla** client only, not the
+`26.1.2_Fabric` instance also present. The launcher is a test harness in `target/`, not a supported tool. The
+session ends at the registry refusal, so nothing after `finish_configuration` — lighting, entities, chat —
+has been reached by a real client yet, and those remain exactly as unverified as KD-38 says.
 
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
