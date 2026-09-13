@@ -28,6 +28,9 @@ RIG_EXE = ROOT / 'target' / 'debug' / 'capture-rig.exe'
 JAVA = Path(r'C:\Program Files\Microsoft\jdk-25.0.4.7-hotspot\bin\java.exe')
 JAR = ROOT / 'target' / 'vanilla-26.1.2' / 'server.jar'
 
+# game clientbound 33, from docs/protocol/packet-ids-775.tsv.
+DISGUISED_CHAT = 33
+
 SERVER_PORT = 25583
 RIG_PORT = 25584
 
@@ -140,12 +143,14 @@ def main() -> int:
               (SCRATCH / 'trace.jsonl').read_text(encoding='utf-8', errors='ignore').splitlines()
               if line.strip()]
     s2c = [e for e in events if e.get('kind') == 'packet' and e['state'] == 'play' and e['dir'] == 's2c']
-    chat = [e for e in s2c if e.get('name') == 'system_chat' or e['id'] == 119]
+    # **33, looked up in the table rather than remembered.** A console say is disguised_chat; filtering for
+    # system_chat or a guessed id reported "no chat was sent" while two of them sat in the trace.
+    chat = [e for e in s2c if e['id'] == DISGUISED_CHAT]
     print(f'\nplay packets: {len(s2c)}   system_chat: {len(chat)}')
     for e in chat[:4]:
         print(f'  seq={e["seq"]} id={e["id"]} body={e["body_bytes"]} head={e["head"][:80]}')
-    files = sorted(BODIES.glob('*_s2c_play_119.bin')) if BODIES.is_dir() else []
-    print(f'system_chat bodies: {len(files)}')
+    files = sorted(BODIES.glob(f'*_s2c_play_{DISGUISED_CHAT}.bin')) if BODIES.is_dir() else []
+    print(f'disguised_chat bodies: {len(files)}')
     for path in files[:4]:
         print(f'  {path.name}  {path.stat().st_size} bytes  {path.read_bytes()[:40].hex(" ")}')
     return 0
