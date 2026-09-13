@@ -540,6 +540,38 @@ server** \u2014 only against synthetic unit tests, which is the kind of evidence
 test asserts that gap explicitly so a reader cannot take 100% as covering both layers. Verifying block light
 needs a capture of a world with light sources in it.
 
+### KD-47 \u2014 block light verified against a real server, and the margin quantified
+
+The first capture could not test block light at all: a superflat world has no light sources, so vanilla sent no
+block-light arrays and the test asserted `block_total == 0` to keep that gap visible. A **second capture** fixes
+that, and the method is worth recording because it needs no GUI: the dedicated server reads commands from
+**stdin**, so eight glowstone blocks were placed through the server console \u2014 after `forceload add`, because
+`setblock` on a fresh server answers **"That position is not loaded"** and no player has been near spawn to load
+it.
+
+**Block light agrees on 40 939 of 40 960 cells** \u2014 99.95%, worst difference 3, with every disagreement
+confined to the two chunks adjacent to the glowstone. The chunk containing it matches exactly.
+
+**The cause is a design approximation, not a bug**, and the test now names it at the assertion.
+`compute_chunk_light` reads a **one-block margin** in x and z, which lets light enter a chunk across its border
+but not travel several blocks outside it first. Being exact would need a margin of **15** \u2014 light loses at
+least one level per block, so nothing further can matter \u2014 which enlarges the work region from 18x18x384 to
+46x46x384, **6.5x the work per chunk**. Against an engine that already recomputes everything on every send
+(KD-45), that is the wrong trade for 0.05% of cells.
+
+**The real fix is the one vanilla uses and the one KD-45 already points at**: compute light over the **loaded
+world** rather than per chunk, so a border is answered by a neighbour's already-computed light instead of by a
+margin. Caching, incremental relighting and this all become one piece of work.
+
+**A second false negative, also mine, also found by the comparison.** The first run with light sources showed
+block light at 3455/4096 for a chunk *next to* the glowstone while ours read 0. The engine was right and the
+**test** was wrong: it approximated the margin by replicating the chunk's own edge column, which is exactly
+right for uniform terrain and exactly wrong for a source in the next chunk along \u2014 replicating the edge
+replicates the absence of the source. The capture holds 117 chunks, so the margin no longer has to be
+approximated at all: they are stitched into one world and the answer comes from real neighbouring blocks. That
+change also made the **sky** verification stronger \u2014 262 144 of 262 144 cells, worst difference 0, across 32
+chunks with light crossing borders through real blocks rather than through an assumption.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
