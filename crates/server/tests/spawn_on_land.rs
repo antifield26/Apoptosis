@@ -64,7 +64,9 @@ async fn a_fresh_world_spawns_the_player_on_land() {
 /// The production-seed test above asserts the property — a fresh world starts a player on land — and that holds
 /// whatever the seed. This one asserts that the land search *runs*, which can only be shown at a seed whose
 /// origin is water, and it says which: **seed 0**, where the origin is ocean. The run's own log records the move:
-/// "the stored spawn is under water; moved to the nearest land from_x=0 from_z=0 to_x=-8 to_z=-8".
+/// `	ext
+/// the stored spawn is under water; moved to the nearest land from_x=0 from_z=0 to_x=-8 to_z=-8
+/// `
 ///
 /// The two were one test, and its assertion carried the seed dependence in its message while the body used
 /// whatever the production seed happened to be. Changing the seed for an unrelated reason — a perturbation
