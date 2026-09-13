@@ -572,6 +572,41 @@ approximated at all: they are stitched into one world and the answer comes from 
 change also made the **sky** verification stronger \u2014 262 144 of 262 144 cells, worst difference 0, across 32
 chunks with light crossing borders through real blocks rather than through an assumption.
 
+### KD-45 (part 1) \u2014 chunk light is cached and invalidated on change
+
+Light was recomputed on **every** `level_chunk_with_light` the server built \u2014 every chunk, for every recipient,
+on every send. That cost is what started timing out an unrelated command test in CI.
+
+It is now computed once per chunk and kept in `World`, keyed by the same `ChunkPos` as the chunk itself. The
+cache lives in `World` rather than in `Chunk` because `Chunk` is built in persistence, worldgen and many tests,
+so a field there means touching every struct literal, while `World` already owns the chunks and has one
+constructor.
+
+**Invalidation drops the changed chunk and the neighbours whose margin reads it** \u2014 the chunks across
+whichever border the block sits within one block of, since the margin is one block. Six tests pin this,
+including the case that catches an over-eager implementation: an **interior** change must leave the neighbours
+alone, or the invalidation is simply "drop everything" wearing a condition.
+
+**What it is not, said plainly.** This is **invalidation, not incremental relighting**. Vanilla relights only
+the region a change can reach; this drops the whole chunk and recomputes it when next needed. It is correct and
+it is cheaper than what it replaced by the ratio of how often a chunk is *sent* to how often it *changes* \u2014 but
+a torch placed in a large lit chunk still costs a full recompute.
+
+**It also does not help a first join**, which must compute each chunk once whatever the cache does. The honest
+numbers: the command suite went **11.5 s \u2192 9.17 s** in debug, and runs in **3.46 s in release**. So a
+substantial part of the CI failure was a **debug-build cost rather than a production one** \u2014 which is worth
+knowing before treating it as an alarm, and is not a reason to leave it.
+
+The remaining cost is the first computation: three passes over 124 320 cells, with the frontier scan dominating
+at six neighbour comparisons per cell per layer. **The next step is to skip that scan for sections that are
+uniformly lit** \u2014 most sections in an open world are, and for those the scan reads 4 096 cells to conclude
+nothing can spread, where a section-level check would settle it far more cheaply.
+
+**One design detail worth recording.** `vanilla_chunk_packet` takes `&self`, so it **cannot fill** the cache; the
+pre-warm happens in `send_chunk`, which has `&mut self` and runs before the borrow that builds the packet. The
+builder reads the cache and falls back to computing without keeping the result, so a caller that forgets to
+pre-warm gets a **correct packet at the old cost rather than a wrong one**.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

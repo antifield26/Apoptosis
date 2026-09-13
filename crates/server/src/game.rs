@@ -3013,6 +3013,10 @@ impl Game {
     ) -> ServerResult<()> {
         // Disk first, placeholder second; see `load_or_create_chunk`.
         self.load_or_create_chunk(pos);
+        // Light before the borrow below, not inside the packet builder: the builder takes `&self` and reaches
+        // the world through its argument, so it cannot fill the cache. Computing here means each chunk is lit
+        // once rather than on every send (KD-45).
+        self.world.compute_light(pos, &self.registries.light)?;
         // The packet is built from a borrow rather than a clone: a chunk is
         // ~384 KiB, and this is the per-chunk hot path of a join. Both borrows are
         // immutable, so the compiler accepts them together.
@@ -3152,14 +3156,24 @@ impl Game {
         // Light, over the chunk plus a margin so it crosses borders. An unloaded neighbour reads as `None`,
         // which `compute_chunk_light` treats as air — the same assumption the client makes about ungenerated
         // space.
-        let light = mc_world::light::compute_chunk_light(
-            &self.registries.light,
-            chunk.pos.x,
-            chunk.pos.z,
-            chunk.min_y(),
-            chunk.sections.len(),
-            |x, y, z| self.world.get_block_loaded(x, y, z),
-        )?;
+        //
+        // Read from the cache where it exists — `send_chunk` fills it before calling this — and compute
+        // without keeping the result otherwise. This takes `&self`, so it cannot fill the cache itself; a
+        // caller that forgets to pre-warm gets a correct packet at the old cost rather than a wrong one.
+        let computed;
+        let light = if let Some(cached) = self.world.cached_light(chunk.pos) {
+            cached
+        } else {
+            computed = mc_world::light::compute_chunk_light(
+                &self.registries.light,
+                chunk.pos.x,
+                chunk.pos.z,
+                chunk.min_y(),
+                chunk.sections.len(),
+                |x, y, z| self.world.get_block_loaded(x, y, z),
+            )?;
+            &computed
+        };
 
         // Light section `i` is world section `i - 1`, so there is one below the world and one above it.
         let light_sections = chunk.sections.len() + 2;

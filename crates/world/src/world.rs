@@ -13,8 +13,9 @@
 
 use crate::chunk::{Chunk, ChunkPos, SECTION_HEIGHT, SECTION_WIDTH};
 use crate::collision::{Aabb, Vec3, is_solid_or_unknown};
+use crate::light::ChunkLight;
 use crate::ray::{BlockSampler, Selector, ray_cast};
-use mc_core::error::ServerResult;
+use mc_core::error::{ServerError, ServerResult};
 use mc_persistence::dimension::Dimension;
 use mc_registry::BlockRegistry;
 use std::collections::BTreeMap;
@@ -42,6 +43,12 @@ pub struct World {
     dimension: Dimension,
     registry: BlockRegistry,
     chunks: BTreeMap<ChunkPos, Chunk>,
+    /// Computed light per chunk, dropped when the chunk or a neighbour it reads changes.
+    ///
+    /// `Chunk` would be the natural home, but it is built in persistence, worldgen and many tests, so a field
+    /// there means touching every struct literal; `World` already owns the chunks and keys this by the same
+    /// position.
+    light: BTreeMap<ChunkPos, ChunkLight>,
     changes: Vec<BlockChange>,
     min_section_y: i8,
     section_count: usize,
@@ -73,6 +80,7 @@ impl World {
             dimension,
             registry,
             chunks: BTreeMap::new(),
+            light: BTreeMap::new(),
             changes: Vec::new(),
             min_section_y,
             section_count,
@@ -157,6 +165,7 @@ impl World {
 
     /// Remove a chunk from memory (it is not deleted from disk).
     pub fn unload_chunk(&mut self, pos: ChunkPos) -> Option<Chunk> {
+        self.light.remove(&pos);
         self.chunks.remove(&pos)
     }
 
@@ -233,7 +242,88 @@ impl World {
             new_id,
         };
         self.changes.push(change);
+        self.invalidate_light_around(pos, x, z);
         Ok(Some(change))
+    }
+
+    /// Drop cached light for the chunks a change at `(x, z)` can affect.
+    ///
+    /// The changed chunk always, plus whichever neighbour's one-block margin reads across the border the block
+    /// sits within one block of.
+    ///
+    /// This is **invalidation, not incremental relighting**: the whole chunk is dropped and recomputed when
+    /// next needed, where vanilla relights only the region a change can reach. It is correct, and cheaper than
+    /// what it replaces by the ratio of how often a chunk is sent to how often it changes — but a torch placed
+    /// in a large lit chunk still costs a full recompute.
+    fn invalidate_light_around(&mut self, pos: ChunkPos, x: i32, z: i32) {
+        self.light.remove(&pos);
+        let local_x = x.rem_euclid(16);
+        let local_z = z.rem_euclid(16);
+        if local_x == 0 {
+            self.light.remove(&ChunkPos::new(pos.x - 1, pos.z));
+        }
+        if local_x == 15 {
+            self.light.remove(&ChunkPos::new(pos.x + 1, pos.z));
+        }
+        if local_z == 0 {
+            self.light.remove(&ChunkPos::new(pos.x, pos.z - 1));
+        }
+        if local_z == 15 {
+            self.light.remove(&ChunkPos::new(pos.x, pos.z + 1));
+        }
+    }
+
+    /// Compute and cache a chunk's light, unless it is already cached.
+    ///
+    /// Reads the chunk plus a one-block margin, so light crosses chunk borders; an unloaded neighbour reads as
+    /// air, the same assumption the client makes about ungenerated space. `table` is passed in because the
+    /// light properties live in `mc_registry::Registries` and a `World` holds only a `BlockRegistry`.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Invariant`] when the chunk is not loaded, or whatever
+    /// [`crate::light::compute_chunk_light`] reports.
+    pub fn compute_light(
+        &mut self,
+        pos: ChunkPos,
+        table: &mc_registry::LightTable,
+    ) -> ServerResult<()> {
+        if self.light.contains_key(&pos) {
+            return Ok(());
+        }
+        let Some(chunk) = self.chunks.get(&pos) else {
+            return Err(ServerError::Invariant(format!(
+                "no chunk at ({}, {}) to light",
+                pos.x, pos.z
+            )));
+        };
+        let light = crate::light::compute_chunk_light(
+            table,
+            pos.x,
+            pos.z,
+            chunk.min_y(),
+            chunk.sections.len(),
+            |x, y, z| self.get_block_loaded(x, y, z),
+        )?;
+        self.light.insert(pos, light);
+        Ok(())
+    }
+
+    /// The cached light for a chunk, if it has been computed.
+    #[must_use]
+    pub fn cached_light(&self, pos: ChunkPos) -> Option<&ChunkLight> {
+        self.light.get(&pos)
+    }
+
+    /// Drop every cached light, for a caller that has changed the world wholesale.
+    pub fn clear_light(&mut self) {
+        self.light.clear();
+    }
+
+    /// How many chunks have cached light, for tests and diagnostics.
+    #[must_use]
+    pub fn light_cache_len(&self) -> usize {
+        self.light.len()
     }
 
     /// Block changes recorded since the last [`World::take_block_changes`].
