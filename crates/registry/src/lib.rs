@@ -43,9 +43,11 @@
 
 mod blocks;
 mod items;
+pub mod light;
 
 pub use blocks::{BlockRegistry, BlockStateRef};
 pub use items::ItemRegistry;
+pub use light::LightTable;
 
 use mc_core::error::{ServerError, ServerResult};
 use std::fmt::Write as _;
@@ -65,6 +67,8 @@ pub struct Registries {
     pub blocks: BlockRegistry,
     /// Items.
     pub items: ItemRegistry,
+    /// Per-state light properties, consumed by the light engine in `mc-world`.
+    pub light: LightTable,
 }
 
 impl Registries {
@@ -76,9 +80,13 @@ impl Registries {
     /// unreadable, [`mc_core::error::ServerError::CorruptData`] when its contents
     /// are malformed.
     pub fn load(dir: &Path) -> ServerResult<Self> {
+        // The block registry first: the light table is indexed by state id, so the registry is what sizes it.
+        let blocks = BlockRegistry::load(&dir.join("blocks.tsv"))?;
+        let state_count = blocks.state_count();
         Ok(Self {
-            blocks: BlockRegistry::load(&dir.join("blocks.tsv"))?,
             items: ItemRegistry::load(&dir.join("items.tsv"))?,
+            light: LightTable::load(&dir.join("block_light.tsv"), state_count)?,
+            blocks,
         })
     }
 

@@ -401,6 +401,46 @@ bytes no real server produces.
 them is meaningful. P10-04 (the light engine itself) is still to build \u2014 that is what actually puts light in
 those arrays.
 
+### P10-04 (part 1) \u2014 the light engine, and the per-state table it runs on
+
+**The table comes from the jar's own accessors, not from documentation.** `tools/vanilla-probe/LightProbe.java`
+boots the registry the dedicated server boots and calls the three methods `LevelLightEngine` itself reads:
+`getLightEmission()`, `getLightDampening()` and `propagatesSkylightDown()`. It writes `block_light.tsv`
+(738 block rows plus 20 883 state rows, for the blocks whose states differ), which now loads beside `blocks.tsv`
+and `items.tsv` as `Registries::light`.
+
+The values were spot-checked against known blocks before anything was built on them: air `0/0/1`, stone
+`0/15/0`, torch emission 14, glowstone `15/15/0`, water `0/1/0`, magma block 3, and `redstone_lamp` and
+`light` correctly falling to per-state rows because their light varies by state.
+
+**The engine** (`mc_world::light`) computes both layers:
+
+* **Sky light** falls straight down at 15 while every block it passes propagates sky light, then spreads
+  sideways losing at least one level per block.
+* **Block light** seeds from each state's emission and spreads the same way, losing `max(1, dampening)`.
+
+The one rule that matters most is `max(1, dampening)`: it is why a shadow never brightens as it spreads, and it
+is what makes an opaque block opaque — a block with dampening 15 absorbs the whole level however bright its
+neighbour is. Two of the three test failures while writing this were my own expectations contradicting that
+rule, not the engine: I had light passing *through stone*, and I had a cell with open sky above it decaying
+because I had mis-drawn a pillar.
+
+**The approximation is stated, not implied.** A chunk is computed with a **one-block margin** in x and z, read
+through a caller-supplied accessor, so light crosses chunk borders. Where the accessor reports an unloaded
+chunk the cell is treated as air — the same assumption the client makes about ungenerated space. The symptom is
+that a chunk at the edge of the loaded area can be brighter at its border than it will be once its neighbour
+exists; the alternative, treating an unloaded neighbour as opaque, would make every frontier chunk visibly
+dark, which is worse and less true.
+
+Verified by 11 unit tests over synthetic three-state tables, including the cases that catch a
+plausible-but-wrong engine: a sideways decay of exactly one per block under a roof (which a "spread without
+decrement" bug would leave at 15 everywhere), stone absorbing all light, an emitter decaying outward, and a
+torch **outside the chunk** lighting cells inside it — the last being the only test that would fail if the
+margin were removed.
+
+**Not yet done, and therefore not claimed:** the masks and arrays are still empty on the wire, so the client
+still renders a dark world. `Game` does not yet call the engine. That is the rest of P10-05.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

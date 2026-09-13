@@ -40,6 +40,7 @@
 
 pub mod chunk;
 pub mod collision;
+pub mod light;
 pub mod ray;
 pub mod world;
 
