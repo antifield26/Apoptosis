@@ -16,6 +16,8 @@
 *.dat binary
 *.png binary
 *.jar binary
+# Captured wire payloads, replayed verbatim and compared by byte (P10-03).
+*.bin binary
 
 # Rust and docs are text; listed for clarity rather than necessity.
 *.rs text
