@@ -651,6 +651,8 @@ pub struct Game {
     /// with the terrain" are indistinguishable from the outside, and only the decorator knows which
     /// happened. Exposed so a test can assert the difference.
     structure_stats: StructureStats,
+    /// Running total from the oak-tree pass, so a world that has none is visible without standing in it.
+    tree_stats: mc_worldgen::features::TreeStats,
     /// The placement rule, derived **once** when the templates are installed.
     ///
     /// `StructureSet::from_registry` sorts the names and caps the selectable slice, which is O(n log n)
@@ -877,6 +879,7 @@ impl Game {
             functions: mc_data::function::FunctionRegistry::new(),
             structures: mc_worldgen::structures::StructureRegistry::new(),
             structure_stats: StructureStats::default(),
+            tree_stats: mc_worldgen::features::TreeStats::default(),
             // Derived from an empty registry: the rule for "no templates", which is the correct
             // initial state. `set_structures` re-derives it when a pack loads.
             structure_set: mc_worldgen::structures::StructureSet::from_registry(
@@ -3037,6 +3040,31 @@ impl Game {
                     // missing decoration is strictly better than losing the terrain a player stands
                     // on.
                     self.decorate_with_structures(pos, &mut chunk);
+                    // **The oak features.** `generate_chunk` is terrain only — `decorate` is a separate pass,
+                    // exactly as vanilla separates them — and **nothing called it**, so every world this
+                    // server generated had no trees in it at all. The biome surface blocks were right (grass
+                    // over dirt over stone, podzol and coarse dirt for taiga, sand and water for ocean), which
+                    // is why the world read as terrain stripped of its features rather than as broken terrain.
+                    //
+                    // Last, so a tree is not planted through a structure placed a line earlier.
+                    if self.generator.is_some() {
+                        // Rebuilt from the seed for the same reason `decorate_with_structures` rebuilds its
+                        // context: one source of truth for the seed, and no borrow of `self` held across the
+                        // mutable use of `chunk`.
+                        let context = mc_worldgen::WorldgenContext::overworld(
+                            mc_worldgen::WorldSeed::from_raw(self.random_seed),
+                        );
+                        match mc_worldgen::TerrainGenerator::new(context, &self.registries.blocks) {
+                            Ok(generator) => {
+                                let stats =
+                                    generator.decorate(&mut chunk, pos, &self.registries.blocks);
+                                self.tree_stats.record(stats);
+                            }
+                            Err(error) => {
+                                warn!(?pos, %error, "a chunk could not be decorated with trees");
+                            }
+                        }
+                    }
                     self.world.load_chunk(chunk);
                 }
                 Some(Err(error)) => {
@@ -3110,6 +3138,15 @@ impl Game {
     #[must_use]
     pub const fn structure_stats(&self) -> StructureStats {
         self.structure_stats
+    }
+
+    /// What the oak-tree decorator has done so far.
+    ///
+    /// Counted because "no trees" is invisible: the chunks are well-formed, the light is right, and a world
+    /// with no features in it looks exactly like a working one until somebody stands in it.
+    #[must_use]
+    pub const fn tree_stats(&self) -> mc_worldgen::features::TreeStats {
+        self.tree_stats
     }
 
     /// The structure templates this game has loaded.

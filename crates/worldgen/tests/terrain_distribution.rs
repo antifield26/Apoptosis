@@ -78,3 +78,109 @@ fn the_terrain_distribution() {
         );
     }
 }
+
+/// What the generator actually writes, over a strip of chunks on land.
+///
+/// See the module comment: the height and biome fields can both be perfect while the blocks are not, and the
+/// blocks are what a player sees.
+#[test]
+#[ignore = "a diagnostic, not an assertion; run with --ignored --nocapture"]
+fn the_blocks_a_chunk_actually_contains() {
+    use mc_persistence::chunk::ChunkPos;
+    use mc_worldgen::ChunkGenerator as _;
+    use std::collections::BTreeMap;
+
+    let registries = Registries::vanilla().expect("registry tables");
+    let context = WorldgenContext::overworld(WorldSeed::from_raw(0));
+    let generator = TerrainGenerator::new(context.clone(), &registries.blocks).expect("generator");
+    let blocks = &registries.blocks;
+
+    let name_of = |state: i32| -> String {
+        for name in [
+            "minecraft:stone",
+            "minecraft:dirt",
+            "minecraft:grass_block",
+            "minecraft:sand",
+            "minecraft:water",
+            "minecraft:gravel",
+            "minecraft:oak_log",
+            "minecraft:oak_leaves",
+            "minecraft:coarse_dirt",
+            "minecraft:podzol",
+            "minecraft:air",
+        ] {
+            if let Ok(id) = blocks.default_state(name)
+                && id == state
+            {
+                return name.trim_start_matches("minecraft:").to_owned();
+            }
+        }
+        format!("state#{state}")
+    };
+
+    let mut census: BTreeMap<String, u32> = BTreeMap::new();
+    let mut surfaces: BTreeMap<String, u32> = BTreeMap::new();
+    let mut printed = 0_u32;
+
+    for chunk_x in -2..=2 {
+        for chunk_z in -2..=2 {
+            let pos = ChunkPos::new(chunk_x, chunk_z);
+            let chunk = match generator.generate_chunk(pos, blocks) {
+                Ok(chunk) => chunk,
+                Err(error) => {
+                    println!("  chunk {pos:?} failed: {error}");
+                    continue;
+                }
+            };
+            let air = blocks.air_id();
+            for x in 0..16 {
+                for z in 0..16 {
+                    let bx = chunk_x * 16 + x;
+                    let bz = chunk_z * 16 + z;
+                    let mut top = None;
+                    for y in (OVERWORLD_SEA_LEVEL - 40..=OVERWORLD_SEA_LEVEL + 60).rev() {
+                        let state = chunk.get_block(x, y, z);
+                        if state != air && top.is_none() {
+                            top = Some((y, state));
+                        }
+                        if state != air {
+                            *census.entry(name_of(state)).or_default() += 1;
+                        }
+                    }
+                    if let Some((y, state)) = top {
+                        *surfaces.entry(name_of(state)).or_default() += 1;
+                        // A few columns in full, so the shape under the surface is visible too.
+                        if printed < 8 && chunk_x == -1 && chunk_z == -1 && x % 5 == 0 && z % 5 == 0
+                        {
+                            printed += 1;
+                            let biome = generator.biome_source().biome_at_with_height(
+                                bx,
+                                bz,
+                                y,
+                                OVERWORLD_SEA_LEVEL,
+                                100,
+                            );
+                            println!("--- column ({bx}, {bz}) biome {} top y={y} ---", biome.id());
+                            for yy in (y - 4..=y + 2).rev() {
+                                println!("    y={yy:>4}  {}", name_of(chunk.get_block(x, yy, z)));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    println!("=== block census over a 5x5 of chunks ===");
+    let mut entries: Vec<_> = census.into_iter().collect();
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.1));
+    for (name, count) in &entries {
+        println!("  {name:<20} {count}");
+    }
+    println!("=== what is on top of each column ===");
+    let mut tops: Vec<_> = surfaces.into_iter().collect();
+    tops.sort_by_key(|entry| std::cmp::Reverse(entry.1));
+    for (name, count) in &tops {
+        println!("  {name:<20} {count}");
+    }
+}

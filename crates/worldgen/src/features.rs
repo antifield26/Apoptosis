@@ -227,6 +227,20 @@ pub struct TreeStats {
     pub blocks_written: usize,
 }
 
+impl TreeStats {
+    /// Add one chunk's decoration into a running total.
+    ///
+    /// `TreeStats` is per chunk because that is what the pass produces; a caller decorating a world needs a
+    /// total, and putting the addition here keeps it next to the fields it adds.
+    pub const fn record(&mut self, other: Self) {
+        self.columns_considered += other.columns_considered;
+        self.trees_placed += other.trees_placed;
+        self.refused_straddling += other.refused_straddling;
+        self.refused_vertical += other.refused_vertical;
+        self.blocks_written += other.blocks_written;
+    }
+}
+
 /// The outcome of one tree placement attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OakPlacement {

@@ -1067,6 +1067,34 @@ combined. Bare `~` and `~0` collapse to the same value, which is right \u2014 bo
 coordinate" \u2014 and the old comment's insistence that they differ was part of the same confusion. **This affects
 every command that takes coordinates, not just `/tp`.**
 
+### KD-55 \u2014 no world this server generated ever contained a tree
+
+**`TerrainGenerator::generate_chunk` produces terrain only.** Trees are `TerrainGenerator::decorate`, a separate
+pass \u2014 "terrain and decoration are two passes in Vanilla too", as its own doc says \u2014 and **the server never
+called it**. `decorate_with_structures` runs structures and nothing else, and returns early when no structure
+templates are loaded, which they are not.
+
+**The block census settled it.** Over a 5x5 of chunks:
+
+```text
+stone 256758 \u00b7 water 10754 \u00b7 sand 9114 \u00b7 dirt 4724 \u00b7 grass_block 2362 \u00b7 podzol 2000 \u00b7 coarse_dirt 1000
+```
+
+Grass over dirt over stone, podzol and coarse dirt for taiga, sand and water for ocean \u2014 **the biome surface
+rule is working perfectly** \u2014 and not one `oak_log` or `oak_leaves` anywhere.
+
+**That is why the world read as broken terrain rather than as an unlit one.** Every block was the right block for
+its biome; the features that make a biome recognisable were simply absent, and nothing anywhere said so: the
+chunks were well-formed, the light was right, the biomes were right, and no unit test of terrain, biomes, blocks
+or light can see a missing feature pass because none of them is wrong.
+
+**Fixed** by calling `decorate` after structures, with a running `TreeStats` on the game so that "no trees" is
+something a counter reports rather than something a player has to notice. `crates/server/tests/world_features.rs`
+asserts both that the pass ran and that logs and leaves are **in the loaded chunks**, not merely counted.
+
+**The order is terrain, structures, trees.** Structures already ran after terrain and that is unchanged; trees
+go last so one cannot be planted through a structure placed a line earlier.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
