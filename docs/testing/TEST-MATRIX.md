@@ -5,10 +5,11 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 196 passed, 0 failed, 21 ignored** across **74 suites**, re-derived
-from `cargo test --workspace --no-fail-fast` on the remediated tree (Audit 07;
-1 191 before its three tests and two Audit 08 coverage tests were added). The
-21 ignored = 7 differential suites (15 tests, jar-gated) + `pi_profile` 4 +
+Totals: **1 206 passed, 0 failed, 21 ignored** across **78 suites**, re-derived from
+`cargo test --workspace --no-fail-fast` on the P10-01 tree. The count has moved
+1 191 -> 1 194 -> 1 196 -> 1 206 as tests were added: three from the Audit 07 remediation, two
+Audit 08 coverage tests, and ten from the `mc-capture-rig` crate (P10-01: eight unit, two
+integration). The 21 ignored = 7 differential suites (15 tests, jar-gated) + `pi_profile` 4 +
 `tick_baseline` 2 — all run on demand (see the last section).
 
 **Every per-crate count below was re-measured with `cargo test -p <crate> --lib`** while updating this
@@ -16,9 +17,9 @@ total, and five were wrong: `mc-protocol` said 126, `mc-world` 103, `mc-command`
 `mc-worldgen` 64, where the real figures are 103, 31, 89, 126 and 81. Each stated value turned out to be
 **another crate's** count, so the figures were right and the names were rotated (Audit 07 remediation;
 the audit itself missed it — see `docs/audits/AUDIT-07-REMEDIATION.md` §"what the audit missed"). The lib
-counts sum to 958, the 5 doc-tests and 233 named-suite tests complete the 1 196
-(958 + 5 + 233 = 1 196; re-derived from the 2026-09-12 run log with a
-cargo-metadata target-to-package mapping, 0 of 74 suites unattributed).
+counts sum to 966, the 5 doc-tests and 235 named-suite tests complete the 1 206
+(966 + 5 + 235 = 1 206; re-derived from the run log with a cargo-metadata
+target-to-package mapping, 0 of 78 suites unattributed).
 
 This file replaced an accumulator that had grown one per-phase section per
 phase (255 rows, six duplicated "Bugs found" tables). The per-phase historical
@@ -30,7 +31,7 @@ each suite proves, and the deduplicated defect history.
 
 Counts are from the 2026-09-12 run log. Named integration suites are counted
 explicitly; the remaining per-crate lib binaries (core, nbt, registry,
-simulation, redstone, server, test-support and the rest) complete the 1 194
+simulation, redstone, server, test-support and the rest) complete the 1 206
 total and are itemised in the run log rather than here.
 
 | Area | Named suites (count) | What they prove |

@@ -7,8 +7,16 @@ documents contradicting each other. Fixing that instance is not the fix; this is
 `docs/testing/TEST-MATRIX.md` is the **single owner** of the figure. Every other document that states it
 must agree, and this fails (exit 1) when one does not.
 
-`docs/audits/**` is exempt as *history*: an audit report records what it measured on the revision it
-audited, so an older figure there is correct and is reported as exempt rather than as a finding.
+Two kinds of document are exempt as *history*, and the distinction is the point: a **cumulative record**
+states what past rounds measured, so an older figure in it is correct and rewriting it would falsify the
+record. Those are `docs/audits/**` (audit reports), `CHANGELOG.md` and `docs/GOVERNANCE-REPORT.md`
+(per-round records). Everything else must agree with the owner.
+
+**Limitation, stated rather than left as a trap:** this compares documents **to each other**, not to the
+tree. Nothing here can run `cargo test`, so a canonical figure that is stale while every other document
+agrees with it passes silently — which is exactly what happened when P10-01 moved the total from 1 196 to
+1 206 and this checker still exited 0. Update the owner when the total changes; the checker catches
+disagreement, not staleness.
 
 Usage: python tools/docs-audit/check_gate_totals.py
 """
@@ -42,6 +50,15 @@ STATED = re.compile(r'(\d[\d,\u202f ]{2,})\s*passed')
 # stale number.
 PLACEHOLDER = re.compile(r'\{[a-z_]{3,}\}')
 
+#: Documents that record what *past* rounds measured. An older figure in these is correct, and rewriting it
+#: would falsify the record; current-state documents must agree with the owner instead.
+HISTORY = ('docs/audits/',)
+HISTORY_FILES = ('CHANGELOG.md', 'docs/GOVERNANCE-REPORT.md')
+
+
+def is_history(rel: str) -> bool:
+    return rel.startswith(HISTORY) or rel in HISTORY_FILES
+
 findings = []
 exempt = []
 for rel in docs:
@@ -61,12 +78,12 @@ for rel in docs:
             if value == TOTAL:
                 continue
             entry = (rel, number, value, line.strip()[:100])
-            if rel.startswith('docs/audits/'):
+            if is_history(rel):
                 exempt.append(entry)
             else:
                 findings.append(entry)
 
-print(f'exempt (historical audit records): {len(exempt)}')
+print(f'exempt (cumulative records and audit reports): {len(exempt)}')
 for rel, number, value, line in exempt:
     print(f'    {rel}:{number} states {value} (predates the current tree)')
 print()

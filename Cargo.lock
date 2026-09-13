@@ -195,6 +195,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mc-capture-rig"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "mc-protocol",
+ "mc-server",
+ "mc-test-support",
+ "md-5",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "mc-command"
 version = "0.1.0"
 dependencies = [

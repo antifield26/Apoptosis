@@ -11,6 +11,48 @@ entry is the release candidate matching the workspace version (`0.1.0` in
 [Cargo.toml](Cargo.toml)); it is **published** as tag `v0.1.0-rc.1` with built
 artifacts, and no later version has been released.
 
+## Unreleased — Phase 10 (client compatibility and rendering)
+
+### P10-01 — client-capture rig
+
+A TCP proxy that relays a real Minecraft 26.1.2 client to the server **byte for byte** while writing a
+normalized JSONL trace of the conversation, in both directions. It is CONVENTIONS.md §12's differential-testing
+contract applied to clients instead of servers, and it exists because "a real client joined and it looked
+right" is not evidence.
+
+- **New crate** `apps/capture-rig` (`mc-capture-rig`), with the binary `capture-rig`. No new third-party
+  dependencies: `mc-protocol`, `serde_json`, `md-5`, `tokio` were all workspace deps already.
+- Frames are split by the project's own `FrameCodec`, with consumed-byte counts taken from `buffered()`
+  deltas, so the bytes forwarded are the bytes read.
+- **The observer is passive.** Forwarding never depends on decoding: if framing fails for a direction, that
+  direction degrades to opaque passthrough and the trace records `observer_error` plus the direction in
+  `session_end.degraded`. A capture that ends early is visibly early rather than looking like a short session.
+- **Normalized for comparison:** the digest is over the *uncompressed* body, so two sessions differing only in
+  compression produce identical digests; `wire_bytes` keeps the framed size separately; no per-packet
+  timestamps, because a trace is meant to be diffable between runs.
+- A session ends when **either** direction does, with a bounded 3 s drain, so a peer that never closes cannot
+  leave a capture without an end marker.
+- 10 tests: 8 unit (framing, state machine, compression in both wire forms, digest invariance, degradation,
+  write-failure reporting) and 2 integration that drive the `TestClient` through the rig to a **real server**
+  and require the trace to show handshake → login → config → play with no degradation.
+
+**Two real defects the integration tests found**, both invisible to the unit tests:
+
+1. The handshake intent was read as the payload's *second* VarInt, which is the **address length**. The state
+   machine therefore never left `handshake`, and every later packet was interpreted against the wrong id
+   table. The unit test passed because it built a payload matching the same wrong assumption; it now builds a
+   real handshake with the typed encoder. *A unit test that constructs its input from the same mental model as
+   the implementation cannot catch a wrong mental model.*
+2. `relay_pair` waited for **both** directions, so a server holding its half open after the client left meant
+   `session_end` was never written and the capture had no end marker.
+
+Six falsification probes confirm the load-bearing mechanisms: framing, digest-over-uncompressed-body, typed
+handshake decoding, the bounded drain, the per-connection sink, and degradation reporting. Each was disabled,
+the covering test confirmed to fail, and the file restored byte-exact.
+
+**Still blocked:** P10-02 and every acceptance task in this phase need an owner-provided runnable Java 26.1.2
+client. The `TestClient` is not a substitute and has not been used as one.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
