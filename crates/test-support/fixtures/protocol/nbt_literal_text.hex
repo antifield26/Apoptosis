@@ -1,4 +1,14 @@
 # Golden bytes: network NBT for the text component {"text":"bye"}.
+#
+# **Checked against real network NBT**, which it had never been. A vanilla 26.1.2 server, told to `say bye` on
+# its console with a client connected, sends:
+#
+#   08 00 03 62 79 65  05 08 00 06 53 65 72 76 65 72  00
+#   ^TAG_String ^len3 "bye" ...
+#
+# -- the same encoding this file uses for its string entry: tag type `08`, a two-byte name length, UTF-8
+# payload. Vanilla wrote the **bare-string** form of the component and this fixture writes the **compound**
+# form; both are valid, and the encoding they share is what the test exercises.
 # 0A                compound
 #   08 0004 "text"  string entry named text
 #   0003 "bye"      string payload

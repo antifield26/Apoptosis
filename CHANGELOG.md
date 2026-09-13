@@ -1175,6 +1175,39 @@ through the rig, is `00 87 06 09 <"127.0.0.1"> 63 eb 02` against the fixture's `
 semantics the code does not implement \u2014 are untouched. Both have already produced confirmed findings
 (KD-49, KD-54, KD-56), and both are still open.
 
+### KD-58 \u2014 the last hand-written fixture is checked, and `say` does not use `system_chat`
+
+**`nbt_literal_text.hex` had never been compared with anything real.** No vanilla capture contained a
+`system_chat`, so nothing in the repository could contradict it, and comparing it with our own chat output would
+have been the round-trip trap this review exists to find. The fix was to make a real server say something: a
+vanilla 26.1.2 server, a connected client, and `say bye` on the console **after** the join.
+
+**The encoding verifies.** The real packet carries
+
+```text
+08 00 03 62 79 65  05 08 00 06 53 65 72 76 65 72  00
+^TAG_String ^len3 "bye"
+```
+
+\u2014 tag type `08`, a two-byte name length, UTF-8 payload, exactly the form the fixture uses for its string
+entry. Vanilla wrote the **bare-string** form of the component there and the fixture writes the **compound**
+form; both are valid, and the encoding the test exercises is the one they share.
+
+**And the capture turned up a parity difference.** The console `say` is carried by **`disguised_chat`
+(clientbound play 33)**, not `system_chat` \u2014 two commands, two packets, and `system_chat` (121) appears zero
+times. Our server uses `system_chat` for its own welcome message, which is a legitimate use of that packet, but
+**a `/say` implemented with it would be wrong**, and nothing in the repository says which of the two a given
+message belongs in.
+
+**Two of my own errors on the way**, both of the kind this review keeps finding:
+
+* I filtered the capture for **id 119** and then for `system_chat`, and reported "no chat was sent" twice. The
+  table said **121** all along \u2014 the same mislabelled-id mistake as KD-50, made again after recording it as a
+  lesson. The packets were in the capture the first time.
+* The first two capture attempts failed on `server.properties`: the vanilla server defaults to port **25565**,
+  which this project must not bind because it belongs to the owner's own server. Both the port and offline mode
+  are now set before boot, and `eula.txt` with it, which a fresh scratch directory does not have.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
