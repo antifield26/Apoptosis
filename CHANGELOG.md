@@ -795,6 +795,47 @@ relative to vanilla is not**, and that is recorded rather than papered over.
 The method is committed: `tools/light-update-trigger/run.py`, with the driver as
 `crates/server/tests/light_update_trigger.rs`.
 
+### KD-50 \u2014 the client never left "Loading terrain", and my "live and rendering" claim was wrong
+
+**The owner looked at the screen and reported the client stuck on "加载地形中".** That overrides everything I
+had inferred, and it corrects a claim I made twice: that a real client was "live and **rendering**".
+
+**Why that claim was wrong.** I had three pieces of evidence and all three are true on the loading screen:
+the client answers keepalives while it waits, it sends its per-tick packets, and `Chunk Sections UBO` grows as
+chunk geometry is uploaded. None of them requires being *in* the world. I read them as proof of something they
+do not establish, and only a person looking settled it.
+
+**The measured cause.** The trace from that session:
+
+```text
+chunks sent: 289                  a 17x17 grid, -8..8 in both axes
+teleport: x=0.50 y=64.00 z=0.50   the player stands in chunk (0, 0)
+was that chunk sent? True         the player's own chunk WAS sent
+set_chunk_cache_center (id 12): sent 0 times
+set_chunk_cache_radius (id 11): sent 0 times
+```
+
+Vanilla sends both on join and **we send neither**. A client's chunk storage is a ring indexed modulo its view
+range, so a client never told the range does not keep the chunks it is handed \u2014 `hasChunk` at the player's
+position stays false and the screen never lifts.
+
+**Every packet involved is well-formed**, which is why nothing complained: the client accepted and discarded
+them with no error, no warning and no log line. That is the failure mode this phase kept naming, and this is
+the largest instance of it.
+
+**The fix is written but not yet effective, and that is stated rather than glossed.** Both packets are now sent
+in the join continuation, immediately before the teleport, matching vanilla's order. They **still do not appear
+on the wire**, and the reason is **not established** \u2014 the code is in the right place, it compiles into the
+binary that ran, and the sends are not conditional. Two false starts are worth recording so they are not
+repeated: an earlier verification ran against a binary that **had not recompiled**, so three runs tested the
+old code; and a first attempt at decoding the trace read packet bodies from byte 0, which made the id byte part
+of the first coordinate and produced obviously nonsense values.
+
+**What this means for the phase.** The differential results stand \u2014 the light data we send is measurably
+identical to a real server's \u2014 but the claim that a real client has been *seen in the world* was never true
+and is withdrawn. What is established is that a real client accepts every packet we send without complaint,
+including `light_update`; what is not is that it ever rendered the result.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
