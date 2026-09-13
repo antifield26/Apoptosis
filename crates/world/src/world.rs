@@ -37,6 +37,33 @@ pub struct BlockChange {
     pub new_id: i32,
 }
 
+/// A block accessor with a one-chunk memo; see [`World::block_cursor`].
+///
+/// Owned separately from `World` so the borrow it holds can be scoped: the light engine reads the world
+/// through it and then the computed light is written, which cannot happen while the world is still borrowed.
+#[derive(Debug, Clone, Copy)]
+pub struct BlockCursor<'a> {
+    world: &'a World,
+    /// The chunk position the memo below was resolved for.
+    last: Option<(i32, i32)>,
+    chunk: Option<&'a Chunk>,
+}
+
+impl BlockCursor<'_> {
+    /// The block-state id at a world position, or `None` when the chunk is not loaded.
+    ///
+    /// A missing chunk is cached too: an unloaded neighbour is asked about as often as a loaded one along an
+    /// edge, and re-looking it up every cell would give back much of what this exists to save.
+    pub fn get(&mut self, x: i32, y: i32, z: i32) -> Option<i32> {
+        let key = (x >> 4, z >> 4);
+        if self.last != Some(key) {
+            self.chunk = self.world.chunks.get(&ChunkPos::new(key.0, key.1));
+            self.last = Some(key);
+        }
+        self.chunk.map(|chunk| chunk.get_block(x, y, z))
+    }
+}
+
 /// A dimension's loaded chunks.
 #[derive(Debug)]
 pub struct World {
@@ -191,6 +218,21 @@ impl World {
         }
     }
 
+    /// A block accessor that remembers the chunk it last looked in.
+    ///
+    /// [`World::get_block_loaded`] builds a `ChunkPos` and walks a `BTreeMap` per call, and the light engine
+    /// calls it **per cell** — about a quarter of a million times per chunk, since it seeds the sky and block
+    /// layers in two passes. It walks a column at a time, so consecutive questions are almost always about the
+    /// same chunk, and one remembered chunk removes essentially all of those lookups.
+    #[must_use]
+    pub fn block_cursor(&self) -> BlockCursor<'_> {
+        BlockCursor {
+            world: self,
+            last: None,
+            chunk: None,
+        }
+    }
+
     /// Block id at a position; air when the chunk is not loaded or `y` is outside
     /// the world.
     #[must_use]
@@ -297,14 +339,18 @@ impl World {
                 pos.x, pos.z
             )));
         };
-        let light = crate::light::compute_chunk_light(
-            table,
-            pos.x,
-            pos.z,
-            chunk.min_y(),
-            chunk.sections.len(),
-            |x, y, z| self.get_block_loaded(x, y, z),
-        )?;
+        // Scoped so the cursor's borrow of `self` ends before the cache is written.
+        let light = {
+            let mut cursor = self.block_cursor();
+            crate::light::compute_chunk_light(
+                table,
+                pos.x,
+                pos.z,
+                chunk.min_y(),
+                chunk.sections.len(),
+                |x, y, z| cursor.get(x, y, z),
+            )?
+        };
         self.light.insert(pos, light);
         Ok(())
     }

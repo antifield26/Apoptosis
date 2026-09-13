@@ -159,7 +159,7 @@ pub fn compute_chunk_light(
     chunk_z: i32,
     min_y: i32,
     section_count: usize,
-    block_at: impl Fn(i32, i32, i32) -> Option<i32>,
+    mut block_at: impl FnMut(i32, i32, i32) -> Option<i32>,
 ) -> ServerResult<ChunkLight> {
     // Declared first: a `const` exists from the start of its scope wherever it is written, and putting it
     // below the guard reads as though it were conditional on it.
@@ -255,7 +255,7 @@ pub fn compute_chunk_light(
         origin_z,
         min_y,
         top,
-        &block_at,
+        &mut block_at,
         table,
         true,
     );
@@ -267,7 +267,7 @@ pub fn compute_chunk_light(
         origin_z,
         min_y,
         top,
-        &block_at,
+        &mut block_at,
         table,
         false,
     );
@@ -419,7 +419,7 @@ fn spread(
     origin_z: i32,
     min_y: i32,
     top: i32,
-    block_at: &impl Fn(i32, i32, i32) -> Option<i32>,
+    block_at: &mut impl FnMut(i32, i32, i32) -> Option<i32>,
     table: &LightTable,
     is_sky: bool,
 ) {

@@ -607,6 +607,45 @@ pre-warm happens in `send_chunk`, which has `&mut self` and runs before the borr
 builder reads the cache and falls back to computing without keeping the result, so a caller that forgets to
 pre-warm gets a **correct packet at the old cost rather than a wrong one**.
 
+### KD-45 (part 2) \u2014 the cost was where I was not looking
+
+The remaining cost of computing light per chunk looked like the frontier scan, which does six neighbour
+comparisons per cell per layer. It was not. **`World::get_block_loaded` builds a `ChunkPos` and walks a
+`BTreeMap` on every call**, and the light engine calls it **per cell** \u2014 124 320 of them, twice, once for the
+sky seeding pass and once for the block pass. That is about a **quarter of a million map lookups per chunk**,
+against array arithmetic worth a few milliseconds.
+
+**`BlockCursor` fixes it**: the engine walks a column at a time, so consecutive questions are almost always
+about the same chunk, and one remembered chunk removes essentially all of those lookups. A missing chunk is
+memoised too, since an unloaded neighbour along an edge is asked about as often as a loaded one.
+
+**The measurements, which say more than the optimisation does:**
+
+| Build | none | cached | cached + cursor |
+|---|---|---|---|
+| debug | 11.5 s | 9.17 s | **6.59 s** |
+| release | \u2014 | 3.46 s | **3.20 s** |
+
+**The release column is the honest one, and it undercuts the story I was telling.** The cursor removed a
+quarter of a million lookups per chunk and bought **7% in release**, where the compiler and the cache were
+already hiding them. So the remaining cost is the **inherent array work** \u2014 three passes over 124 320 cells \u2014
+and KD-45's severity in production is much lower than the CI failure suggested. It was a debug-build cost that
+happened to break a deadline.
+
+**What is still not done, and is a different thing from what was done:**
+
+* **Incremental relighting.** The cache invalidates; it does not relight a region. A torch in a large lit chunk
+  costs a full recompute where vanilla touches only what the change can reach.
+* **Anything helping a first join**, which must compute each chunk once whatever the cache does.
+* **The section-uniformity shortcut**, which is now the clearest remaining lever: most sections in an open
+  world are uniformly lit, and for those the frontier scan reads 4 096 cells to conclude that nothing can
+  spread.
+
+**A note on the shape of this.** Two rounds of performance work have both been corrected by measurement \u2014 the
+first by a test failing for an unrelated reason, this one by the release column disagreeing with the debug
+column. The instinct to optimise the thing that looks expensive has been wrong twice; the release number is
+what a player experiences.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
