@@ -754,6 +754,47 @@ something real rather than by more tests: KD-44 (the jar's bytecode, after two i
 other), KD-46 (vanilla's own light, after the unit tests passed), and now KD-49. The pattern is not that tests
 are weak; it is that tests written by the same author as the code share its assumptions.
 
+### KD-49 closed \u2014 a real 26.1.2 client accepts our `light_update`
+
+The gap was that no real client had ever received one, and that self-testing cannot close it: our `TestClient`
+agreeing with our encoder is the evidence that failed in KD-44.
+
+**A real client only receives a `light_update` when the server changes a block while it is connected**, and the
+server changes blocks only when a player breaks or places one. So the method is **two clients**: the real one
+through the rig, and a `TestClient` that logs in separately, reads its own position, and breaks the block
+beneath itself. The resulting update goes to **every** session holding that chunk.
+
+Two details the driver had to get right, both from the wire rather than from assumption:
+
+* the position arrives in `player_position`, which is sent **after** `join_game` — the packet `login_join` stops
+  at — so it is read afterwards. Without it there is nothing to reach, since the server refuses a break beyond
+  4.5 blocks.
+* the break is a **raw** packet: there is no serverbound `PlayerAction` struct in this crate, because the server
+  decodes raw packets into `PlayIntent`.
+
+**Result:**
+
+```text
+logged in as Trigger
+breaking the block at (0, 63, 0) under the player at (0.5, 64, 0.5)
+test result: ok. 1 passed
+
+client still running after the light update: True
+new protocol-error reports: none
+```
+
+The client's only ERROR lines are the offline profile's expected 401s. The check is a **new protocol-error
+report** rather than "did it stay connected", because a wedged client is silent; the directory is snapshotted
+first, and twelve reports were already sitting there from the owner's own sessions.
+
+**What remains open.** Vanilla's own trigger for this packet is still not established: two captures with a
+connected player and console-placed glowstone produced no id-48 packet, and the `javap`-based guess about the
+block-update flag was wrong. Our use of the packet is now verified against a client; **its faithful use
+relative to vanilla is not**, and that is recorded rather than papered over.
+
+The method is committed: `tools/light-update-trigger/run.py`, with the driver as
+`crates/server/tests/light_update_trigger.rs`.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
