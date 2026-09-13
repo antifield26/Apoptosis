@@ -1136,6 +1136,45 @@ Two asserted the bug as an expectation, and both said so in their own words:
 palette fixture and KD-49's vacuous teleport \u2014 and the pattern is worth naming: the suites pass because the
 code and the tests were written from one understanding, so an audit of either confirms the other.
 
+### KD-57 \u2014 the review's second clue: where every fixture came from, and the two that cannot say
+
+**Every fixture in `crates/test-support/fixtures/` now has a known source**, which is the property that decides
+whether a test can disagree with the wire at all:
+
+| fixture | source |
+|---|---|
+| `anvil/level_26_1_2.dat`, `anvil/region_26_1_2.mca` | **a real server** \u2014 the manifest records the jar's sha1, the seed, and a sha256 per file |
+| `registry/blocks.tsv` | jar (`DumpRegistries` + `compact_blocks.py`, with ids verified before writing) |
+| `registry/block_light.tsv` | jar (`LightProbe.java`) |
+| `registry/block_defaults.tsv` | jar (`DefaultStateProbe.java`, KD-56) |
+| `registry/items.tsv` | jar \u2014 **verified this round**, see below |
+| `protocol/handshake_login.hex` | hand-assembled \u2014 **verified against a real client**, see below |
+| `protocol/frame_uncompressed.hex` | hand-written, no source stated |
+| `protocol/nbt_literal_text.hex` | hand-written, **never compared to anything real** |
+
+**`items.tsv` was the one table that only claimed a source.** Its header says "Vanilla 26.1.2 item registry
+order" and nothing in the repository would have failed had it been wrong \u2014 a transcription error in 1 506 ids
+would leave every lookup succeeding and naming the wrong item. `tools/vanilla-probe/ItemProbe.java` now extracts
+the same three columns from the jar, and the two agree **row for row, 1506 of 1506, zero differences**.
+
+**`handshake_login.hex` was the one golden byte string written from a reading of the spec** rather than
+captured \u2014 the shape every confirmed failure of this review has had. A real 26.1.2 handshake, captured
+through the rig, is `00 87 06 09 <"127.0.0.1"> 63 eb 02` against the fixture's `87 06 09 <"localhost"> 63 dd 02`:
+**identical in every field the test exercises**, and it verifies.
+
+**Two fixtures still cannot say where they came from**, and one of them has never been checked against anything:
+
+* `frame_uncompressed.hex` is four bytes and is self-consistent by inspection \u2014 `03` is the length of
+  `2A 01 02` \u2014 which is why it has not mattered;
+* **`nbt_literal_text.hex` claims to be "network NBT for the text component `{"text":"bye"}`" and has never been
+  compared with network NBT from a real server.** The vanilla captures contain no `system_chat` at all, so
+  nothing in the repository can contradict it, and comparing it with our own server's chat would be the
+  round-trip trap this review exists to find. The next capture must have the vanilla server say something.
+
+**What this round did not do:** clues 3 and 4 \u2014 tests that cannot fail, and doc comments that describe a
+semantics the code does not implement \u2014 are untouched. Both have already produced confirmed findings
+(KD-49, KD-54, KD-56), and both are still open.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
