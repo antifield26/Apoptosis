@@ -1,5 +1,9 @@
 # Build output (workspace target dir; per-crate dirs inherit via workspace)
 /target
+# Bytecode left beside the Python tools by running any of them. Not source, and it reaches the index
+# silently because a `.pyc` looks like any other file.
+__pycache__/
+*.pyc
 # The server logging setup, invoked by the Java probes in tools/vanilla-probe (they call
 # `Bootstrap.bootStrap()`, as the dedicated server does), writes a logs/ directory into the working
 # directory. It is output, not source, and it is not committed.

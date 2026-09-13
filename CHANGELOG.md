@@ -646,6 +646,32 @@ first by a test failing for an unrelated reason, this one by the release column 
 column. The instinct to optimise the thing that looks expensive has been wrong twice; the release number is
 what a player experiences.
 
+### Real-client evidence: the client is drawing the world
+
+An evidence source I had been overlooking: **the client writes its own log**, and it says things the protocol
+trace cannot.
+
+* **`Resizing Chunk Sections UBO, capacity limit of 2 reached … New capacity will be 128`** — the client is
+  uploading chunk geometry to the GPU, which it only does for chunks it is actually drawing. It is not sat
+  behind a loading screen.
+* **`[System] [CHAT] Welcome to the Rust Minecraft server.`** — our chat message reached its screen.
+* **Three ERROR lines in the whole session**, all `InvalidCredentialsException: Status: 401` from the offline
+  profile fetching user properties. Expected, and unrelated to the server.
+
+**What this does not establish, and nothing in a log could: whether the lighting *looks* right.** Light is not
+a field a client validates — it is baked into the chunk mesh — so a wrong level produces no error, no warning
+and no log line. It is the one claim in this phase that more tests cannot close.
+
+So it is handed over rather than asserted: **`tools/visual-check/run.py`** starts the server, the rig and the
+client and then **leaves them running** instead of tearing everything down like every other script here. It
+prints what the client's log says about rendering, and what to look for: a bright sky, shaded ground, shadows
+under overhangs — and the known behaviour that a hand-placed torch will *not* relight its chunk until that
+chunk is re-sent (KD-45).
+
+The differential results stand behind it: sky light matches a real server on every cell, block light on 99.95%.
+If the world looks wrong anyway, the fault is somewhere the comparison does not reach — which is worth knowing
+either way.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
