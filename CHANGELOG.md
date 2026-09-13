@@ -441,6 +441,46 @@ margin were removed.
 **Not yet done, and therefore not claimed:** the masks and arrays are still empty on the wire, so the client
 still renders a dark world. `Game` does not yet call the engine. That is the rest of P10-05.
 
+### P10-05 \u2014 light on the wire, and a performance bug of my own
+
+The masks and arrays are no longer empty: a real client now receives computed light instead of an unlit world.
+
+**The mask rule came from the capture, not from assumption.** Across all 117 packets: no section is ever in a
+mask *and* an empty mask; `empty_sky` only ever sets bit **0** (the section below the world); the sky arrays are
+exactly two per chunk \u2014 the open-sky section (uniformly 15) and the surface section (mixed). That matches
+vanilla's `DataLayer`, whose default is 15 for sky and 0 for block, and it fixes the encoding:
+
+* a `*_mask` bit means an array follows for that section;
+* an `empty_sky` bit means uniformly **15**, an `empty_block` bit uniformly **0**;
+* bit `i` is light section `i`, which is world section `i - 1`.
+
+Every light section is accounted for, including the two outside the world \u2014 a section no mask mentions is one
+whose value we did not choose.
+
+**Evidence it is really there.** In a real 26.1.2 session the chunk bodies are now **4 626..8 732 bytes, mean
+6 108**, where the empty-mask version was about 3 KB and vanilla's comparable chunks were 7 280 and 9 322. The
+session has **no protocol error**, and the client is live: 447 client-to-server packets including per-tick
+reports. The client's own decoder reads four `BitSet`s and two lists without complaint, which is itself a
+structural check.
+
+**A performance bug I introduced, and how it surfaced.** Seeding queued **every** sky-lit cell \u2014 124 000 per
+chunk for an open column \u2014 which made chunk sends slow enough that an unrelated test,
+`an_over_long_command_ends_only_that_connection`, began timing out: its five-second deadline expired before a
+command reply was generated. The fix is exact rather than a tuning: a cell can only raise a neighbour if some
+neighbour is **strictly darker**, because `candidate = level - max(1, dampening)` can never exceed `level`. So
+queueing only those cells is the precise precondition, and the scan that finds them uses flat-array strides
+(`1`, `width`, `width * width`) instead of recomputing coordinates per neighbour. The suite went from 39.9 s to
+11.5 s and the test passes; the 11 unit tests were unchanged throughout, which is what says the optimisation
+did not alter the result.
+
+**What is not verified, and cannot be from here: whether the world *looks* right.** Light is not a field a
+client validates, so a wrong light level produces no error and no log \u2014 the same silence that hid the
+empty-mask version. What is established is that the data is well-formed, is the right order of magnitude, and
+is accepted. Confirming it looks correct needs a person looking at the screen.
+
+**Also not done: incremental updates on block change.** Light is recomputed when a chunk is sent, so placing a
+torch does not relight the chunk until it is resent. That is the remaining part of P10-04.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

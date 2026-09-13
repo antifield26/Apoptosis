@@ -110,6 +110,17 @@ impl LightArray {
         &self.bytes
     }
 
+    /// An array with every cell at `level`.
+    ///
+    /// Used for the light sections outside the world, which contain no blocks: full sky and no block light.
+    #[must_use]
+    pub fn filled(level: u8) -> Self {
+        let level = level & 0x0F;
+        Self {
+            bytes: [level | (level << 4); LIGHT_ARRAY_BYTES],
+        }
+    }
+
     /// The single level every cell holds, when they agree.
     ///
     /// This is what the `empty_*` masks describe: a section whose light is uniform needs no array, and the
@@ -197,8 +208,9 @@ pub fn compute_chunk_light(
             while y >= min_y {
                 let state = block_at(x, y, z).unwrap_or(0);
                 if level == MAX_LIGHT && table.propagates_skylight_down(state) {
+                    // Recorded, not queued: the frontier scan below decides which cells can spread. Queueing
+                    // every lit cell here cost 124 000 queue entries per chunk for an open column.
                     sky[index(x, y, z)] = MAX_LIGHT;
-                    sky_queue.push_back((x, y, z));
                 } else {
                     // Stopped: nothing below this column is lit from above, and spreading takes over.
                     break;
@@ -214,12 +226,23 @@ pub fn compute_chunk_light(
                     let cell = index(x, y, z);
                     if emission > block[cell] {
                         block[cell] = emission;
-                        block_queue.push_back((x, y, z));
                     }
                 }
             }
         }
     }
+
+    queue_frontier(
+        &sky,
+        &block,
+        &mut sky_queue,
+        &mut block_queue,
+        width,
+        origin_x,
+        origin_z,
+        min_y,
+        top,
+    );
 
     // --- spreading ----------------------------------------------------------------------
     // Both layers use the same rule; only the sky's straight-down case differs, and only when the source is
@@ -250,6 +273,42 @@ pub fn compute_chunk_light(
     );
 
     // --- copy the interior out ----------------------------------------------------------
+    Ok(copy_interior(
+        &sky,
+        &block,
+        chunk_x,
+        chunk_z,
+        min_y,
+        section_count,
+        width,
+        origin_x,
+        origin_z,
+    ))
+}
+
+/// Copy the chunk's own 16x16 cells out of a work region that carries a one-block margin.
+///
+/// The margin exists so light crosses chunk borders; the client only wants the interior, indexed the way a
+/// [`LightArray`] expects.
+#[allow(clippy::too_many_arguments)]
+fn copy_interior(
+    sky: &[u8],
+    block: &[u8],
+    chunk_x: i32,
+    chunk_z: i32,
+    min_y: i32,
+    section_count: usize,
+    width: i32,
+    origin_x: i32,
+    origin_z: i32,
+) -> ChunkLight {
+    let index = |x: i32, y: i32, z: i32| -> usize {
+        let lx = x - origin_x;
+        let lz = z - origin_z;
+        let ly = y - min_y;
+        (lx + lz * width + ly * width * width) as usize
+    };
+
     let mut result = ChunkLight {
         sky: vec![LightArray::default(); section_count],
         block: vec![LightArray::default(); section_count],
@@ -269,7 +328,85 @@ pub fn compute_chunk_light(
             }
         }
     }
-    Ok(result)
+    result
+}
+
+/// Queue every cell that can raise a neighbour's light.
+///
+/// A cell can only spread if some neighbour is strictly darker: with `candidate = level - max(1, dampening)` a
+/// neighbour at or above `level` can never be raised, so a cell whose neighbours are all at least as bright
+/// cannot start a chain.
+///
+/// Seeding does not queue; this does. Queueing every lit cell during seeding cost 124 000 entries per chunk
+/// for an open column, which is what made chunk sends slow enough to time out an unrelated command test.
+#[allow(clippy::too_many_arguments)]
+fn queue_frontier(
+    sky: &[u8],
+    block: &[u8],
+    sky_queue: &mut VecDeque<(i32, i32, i32)>,
+    block_queue: &mut VecDeque<(i32, i32, i32)>,
+    width: i32,
+    origin_x: i32,
+    origin_z: i32,
+    min_y: i32,
+    top: i32,
+) {
+    let plane = (width * width) as usize;
+    let height_cells = (top - min_y + 1) as usize;
+    for lz in 0..width {
+        for lx in 0..width {
+            let column_base = (lx + lz * width) as usize;
+            for ly in 0..height_cells {
+                let cell = column_base + ly * plane;
+                let x = origin_x + lx;
+                let z = origin_z + lz;
+                let y = min_y + ly as i32;
+
+                if sky[cell] > 0 && darker_neighbour(sky, cell, width as usize, plane) {
+                    sky_queue.push_back((x, y, z));
+                }
+                if block[cell] > 0 && darker_neighbour(block, cell, width as usize, plane) {
+                    block_queue.push_back((x, y, z));
+                }
+            }
+        }
+    }
+}
+
+/// Whether any of a cell's six neighbours holds less light than the cell itself.
+///
+/// The precise precondition for a cell being able to spread: with `candidate = level - max(1, dampening)` a
+/// neighbour at or above `level` can never be raised, so a cell whose neighbours are all at least as bright
+/// cannot start a chain and does not need queueing.
+///
+/// Neighbours are the three flat-array strides — `1` for x, `width` for z, `width * width` for y — so the
+/// interior needs no coordinate arithmetic at all, which is the point: this scan runs over 124 320 cells per
+/// layer per chunk.
+fn darker_neighbour(light: &[u8], cell: usize, width: usize, plane: usize) -> bool {
+    let own = light[cell];
+    let in_plane = cell % plane;
+    let row = in_plane / width;
+    let column = in_plane % width;
+
+    if cell >= plane && light[cell - plane] < own {
+        return true;
+    }
+    if cell + plane < light.len() && light[cell + plane] < own {
+        return true;
+    }
+    if column + 1 < width && light[cell + 1] < own {
+        return true;
+    }
+    if column >= 1 && light[cell - 1] < own {
+        return true;
+    }
+    if row + 1 < width && light[cell + width] < own {
+        return true;
+    }
+    if row >= 1 && light[cell - width] < own {
+        return true;
+    }
+    false
 }
 
 /// Breadth-first spread for one layer.

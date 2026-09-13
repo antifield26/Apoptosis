@@ -167,6 +167,7 @@ use mc_protocol::text::TextComponent;
 use mc_registry::Registries;
 use mc_simulation::{PhaseRunner, RandomSource, Scheduler, TickMetrics, TickPhase};
 use mc_world::chunk::Chunk;
+use mc_world::light::LightArray;
 use mc_world::{Aabb, Vec3, World};
 use std::collections::{BTreeMap, BTreeSet};
 use tracing::{debug, info, trace, warn};
@@ -3095,9 +3096,17 @@ impl Game {
 
     /// Build the `level_chunk_with_light` packet for a runtime chunk.
     ///
-    /// Light: four zero masks and no arrays, which the client treats as "dark until
-    /// told otherwise". A real lighting engine is P05; the consequence (players see
-    /// no sky light) is recorded in the parity matrix.
+    /// Light is computed by `mc_world::light` over the chunk plus a one-block margin, so it crosses chunk
+    /// borders, and every light section is then accounted for in a mask (P10-05):
+    ///
+    /// * a section that is uniformly the layer's default — 15 for sky, 0 for block — goes in the matching
+    ///   `empty_*` mask, which is what a real server does and what keeps the packet small;
+    /// * anything else gets a 2048-byte array and a bit in the matching mask.
+    ///
+    /// Bit `i` is light section `i`, which is world section `i - 1`, so the two sections outside the world
+    /// (below and above) are included: they contain no blocks, so both are full sky and no block light. The
+    /// earlier version of this function sent four **empty masks and no arrays**, which is why a real client
+    /// rendered an unlit world.
     ///
     /// # Errors
     ///
@@ -3140,6 +3149,58 @@ impl Game {
                 biomes,
             });
         }
+        // Light, over the chunk plus a margin so it crosses borders. An unloaded neighbour reads as `None`,
+        // which `compute_chunk_light` treats as air — the same assumption the client makes about ungenerated
+        // space.
+        let light = mc_world::light::compute_chunk_light(
+            &self.registries.light,
+            chunk.pos.x,
+            chunk.pos.z,
+            chunk.min_y(),
+            chunk.sections.len(),
+            |x, y, z| self.world.get_block_loaded(x, y, z),
+        )?;
+
+        // Light section `i` is world section `i - 1`, so there is one below the world and one above it.
+        let light_sections = chunk.sections.len() + 2;
+        let mut sky_light_mask = Vec::new();
+        let mut block_light_mask = Vec::new();
+        let mut empty_sky_light_mask = Vec::new();
+        let mut empty_block_light_mask = Vec::new();
+        let mut sky_light = Vec::new();
+        let mut block_light = Vec::new();
+
+        for index in 0..light_sections {
+            let outside = index == 0 || index == light_sections - 1;
+            let (sky, block) = if outside {
+                // No blocks out there, so the sky reaches it undiminished and nothing emits.
+                (
+                    LightArray::filled(mc_world::light::MAX_LIGHT),
+                    LightArray::filled(0),
+                )
+            } else {
+                (light.sky[index - 1].clone(), light.block[index - 1].clone())
+            };
+            let index = u32::try_from(index).map_err(|_| {
+                ServerError::Invariant("more light sections than a mask can index".to_owned())
+            })?;
+
+            // Full sky needs no array: the client's default for that layer is exactly `MAX_LIGHT`, and the
+            // empty mask is how a real server says so (P10-05, from the capture).
+            if sky.uniform() == Some(mc_world::light::MAX_LIGHT) {
+                empty_sky_light_mask.push(index);
+            } else {
+                sky_light_mask.push(index);
+                sky_light.push(sky.as_bytes().to_vec());
+            }
+            if block.uniform() == Some(0) {
+                empty_block_light_mask.push(index);
+            } else {
+                block_light_mask.push(index);
+                block_light.push(block.as_bytes().to_vec());
+            }
+        }
+
         Ok(LevelChunkWithLight {
             chunk_x: chunk.pos.x,
             chunk_z: chunk.pos.z,
@@ -3149,13 +3210,12 @@ impl Game {
             }],
             sections,
             block_entities: Vec::new(),
-            // Empty: filling these is P10-05, and the encoding is a `BitSet` (KD-44).
-            sky_light_mask: Vec::new(),
-            block_light_mask: Vec::new(),
-            empty_sky_light_mask: Vec::new(),
-            empty_block_light_mask: Vec::new(),
-            sky_light: Vec::new(),
-            block_light: Vec::new(),
+            sky_light_mask,
+            block_light_mask,
+            empty_sky_light_mask,
+            empty_block_light_mask,
+            sky_light,
+            block_light,
         })
     }
 
