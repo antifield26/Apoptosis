@@ -1,6 +1,17 @@
 # Golden bytes: login handshake packet body, protocol 775, address "localhost",
 # port 25565, intent 2 (login). Hand-assembled from the wire spec; the test
 # decodes it and compares re-encoded output byte-for-byte.
+#
+# **Hand-assembled, but checked against a real client.** These are the only golden bytes in the tree written
+# from a reading of the spec rather than captured, which is the shape every confirmed failure of the P00-P09
+# review round has had: an expectation written from the same understanding as the code it checks, so the two
+# agree whether or not either is right. A real 26.1.2 handshake, captured through the rig, is
+#
+#   00 87 06 09 31 32 37 2e 30 2e 30 2e 31 63 eb 02
+#
+# -- the same encoding with "127.0.0.1" and port 25579: identical in every field the test exercises, differing
+# only in the two values that must differ. So this fixture agrees with the wire and not merely with our reader
+# of it. See docs/vanilla-parity/PARITY-MATRIX.md.
 87 06
 09 6C 6F 63 61 6C 68 6F 73 74
 63 DD
