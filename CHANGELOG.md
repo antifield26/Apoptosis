@@ -1208,6 +1208,46 @@ message belongs in.
   which this project must not bind because it belongs to the owner's own server. Both the port and offline mode
   are now set before boot, and `eula.txt` with it, which a fresh scratch directory does not have.
 
+### KD-59 \u2014 the review's third clue: tests that cannot fail, and why the interesting half resists a search
+
+**The crude form does not exist here.** A scan of every test in the workspace \u2014 around twelve hundred \u2014 for
+bodies that name no `assert`, no `expect`, no `unwrap`, no `panic!`, and no helper called `check_*`, `verify_*`
+or `ensure_*`, returns **nothing that is actually vacuous**. The four candidates it did surface were each
+verified by reading them: `byte_compare_passes_on_equal_input` and `fractal_noise_matches_five_frozen_values`
+assert through helpers named `assert_bytes_eq` and `assert_bits`; `every_tag_type_round_trips_on_disk` calls a
+`round_trip_disk` that carries three assertions; and `the_whole_pipeline_runs_against_the_real_pack` drives four
+`stage_*` helpers carrying three, seven, nine and six.
+
+**Two versions of the filter were wrong before that answer was trustworthy**, and both failed the same way \u2014 by
+producing a tidy list:
+
+* `\bassert\b` does not match `assert_bytes_eq`, because `_` is a word character, and `\bpanic!\b` does not
+  match `panic!(..)`, because `!` is not one. It reported **sixteen** tests.
+* The naming conventions it then looked for were incomplete, so it reported **two**.
+
+**A tidy list is not a correct one** \u2014 which is the failure this review exists to find, arriving this time in
+the tool doing the reviewing.
+
+### And the interesting half cannot be found this way at all
+
+KD-49's relative-teleport test had a real assertion, and it was structurally satisfiable: it teleported the
+player to the spawn and stepped with `~1` **while the spawn was the origin**, so `0 + 1` and the correct answer
+were the same number. No scan of test bodies can see that. It took **moving the spawn** \u2014 an unrelated change
+\u2014 for the assertion to become capable of failing, and it failed immediately.
+
+KD-52's palette fixture has the same shape: a test helper that encoded the decoder's own misunderstanding, found
+only when the decoder was corrected for an unrelated reason.
+
+**So clue 3's method is not a search, it is a perturbation**: change an input the tests hold fixed \u2014 a spawn
+point, a seed, a coordinate, a default \u2014 and see which assertions stop holding. Both of this review's
+clue-3 findings arrived that way by accident, from changes made for other reasons. Making it deliberate is the
+remaining work.
+
+**What this round did change.** Nothing in the product. The filter is committed as
+`tools/review/scan_vacuous_tests.py`: its answer is negative **today**, and a check whose answer is none is
+worth re-running after the next round of changes rather than rewriting from memory \u2014 which is exactly how the
+two broken versions of it happened.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
