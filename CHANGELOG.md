@@ -795,46 +795,41 @@ relative to vanilla is not**, and that is recorded rather than papered over.
 The method is committed: `tools/light-update-trigger/run.py`, with the driver as
 `crates/server/tests/light_update_trigger.rs`.
 
-### KD-50 \u2014 the client never left "Loading terrain", and my "live and rendering" claim was wrong
+### KD-50 \u2014 the client never left "Loading terrain"; my diagnosis of it was wrong twice over
 
-**The owner looked at the screen and reported the client stuck on "加载地形中".** That overrides everything I
-had inferred, and it corrects a claim I made twice: that a real client was "live and **rendering**".
+**The owner looked at the screen and reported the client stuck on "加载地形中".** That is real, it corrects a
+claim I made twice, and the explanation I then produced was **wrong**.
 
-**Why that claim was wrong.** I had three pieces of evidence and all three are true on the loading screen:
-the client answers keepalives while it waits, it sends its per-tick packets, and `Chunk Sections UBO` grows as
-chunk geometry is uploaded. None of them requires being *in* the world. I read them as proof of something they
-do not establish, and only a person looking settled it.
+**First, the claim it corrects.** I said a real client was "live and **rendering**". All three of my reasons hold
+on the loading screen: the client answers keepalives while it waits, it sends its per-tick packets, and
+`Chunk Sections UBO` grows as chunk geometry arrives. None requires being *in* the world. I read them as proof
+of something they do not establish, and only a person looking settled it. The claim is withdrawn.
 
-**The measured cause.** The trace from that session:
+**Second, the diagnosis I then offered was wrong in two ways.**
 
-```text
-chunks sent: 289                  a 17x17 grid, -8..8 in both axes
-teleport: x=0.50 y=64.00 z=0.50   the player stands in chunk (0, 0)
-was that chunk sent? True         the player's own chunk WAS sent
-set_chunk_cache_center (id 12): sent 0 times
-set_chunk_cache_radius (id 11): sent 0 times
-```
+* **I labelled the packets from memory instead of looking them up.** I wrote "(id 12)" and "(id 11)" and then
+  measured the trace for those ids, found zero, and called it the cause. The table says
+  `11 -> chunk_batch_finished` and `12 -> chunk_batch_start`; the chunk-cache packets are **94** and **95**, and
+  our own `ids.rs` has always said so. **The measurement was against two constants that have nothing to do with
+  the packets.** \"Sent 0 times\" was an artefact of my own labelling.
+* **They were already being sent**, by the network layer at `crates/network/src/connection.rs:542`. So the
+  \"fix\" sent correct packets **twice** \u2014 visible in the next trace as `94, 95, 95, 94` where the original
+  was `94, 95`. It is reverted.
 
-Vanilla sends both on join and **we send neither**. A client's chunk storage is a ring indexed modulo its view
-range, so a client never told the range does not keep the chunks it is handed \u2014 `hasChunk` at the player's
-position stays false and the screen never lifts.
+**What the episode is actually worth.** A wrong number that looks measured is worse than no number: I reported
+\"sent 0 times\" as evidence, built a fix on it, and only the trace from the *next* run contradicted it. The
+lesson is the one this phase keeps teaching from the other direction \u2014 the earlier corrections came from
+comparing against something real, and this error came from not doing that: I never looked up the ids in the
+table that exists for exactly that purpose.
 
-**Every packet involved is well-formed**, which is why nothing complained: the client accepted and discarded
-them with no error, no warning and no log line. That is the failure mode this phase kept naming, and this is
-the largest instance of it.
+**What is still true and still unexplained.** The client does sit on the loading screen. It receives
+`join_game`, the chunk-cache centre and radius, its position, and 289 chunks including the one it stands in. So
+the cause is something else, and it is **not known**.
 
-**The fix is written but not yet effective, and that is stated rather than glossed.** Both packets are now sent
-in the join continuation, immediately before the teleport, matching vanilla's order. They **still do not appear
-on the wire**, and the reason is **not established** \u2014 the code is in the right place, it compiles into the
-binary that ran, and the sends are not conditional. Two false starts are worth recording so they are not
-repeated: an earlier verification ran against a binary that **had not recompiled**, so three runs tested the
-old code; and a first attempt at decoding the trace read packet bodies from byte 0, which made the id byte part
-of the first coordinate and produced obviously nonsense values.
-
-**What this means for the phase.** The differential results stand \u2014 the light data we send is measurably
-identical to a real server's \u2014 but the claim that a real client has been *seen in the world* was never true
-and is withdrawn. What is established is that a real client accepts every packet we send without complaint,
-including `light_update`; what is not is that it ever rendered the result.
+**One latent bug found on the way.** `connection.rs:542` sends `SetChunkCacheCenter { x: 0, z: 0 }`
+**hard-coded**. The test world's spawn happens to be chunk (0, 0), so it is not this symptom, but a player
+spawning anywhere else would be given the wrong centre. Recorded rather than fixed here, since the join path is
+not something to change again without knowing what is actually wrong.
 
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 

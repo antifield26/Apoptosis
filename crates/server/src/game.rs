@@ -160,8 +160,8 @@ use mc_protocol::packets::play::{
     BIOMES_PER_SECTION, BlockUpdate, ChunkSection, ContainerSetContent, ContainerSetSlot,
     HEIGHTMAP_WORLD_SURFACE, Heightmap, LevelChunkWithLight, LightUpdate, NETWORK_BIOME_MIN_BITS,
     PalettedContainer as WireContainer, PlayDisconnect, PlayIntent, PlayerPosition, Respawn,
-    SetChunkCacheCenter, SetChunkCacheRadius, SetDefaultSpawnPosition, SetExperience, SetHealth,
-    SetHeldSlot, SetTime, SystemChat, block_position, unpack_block_position,
+    SetDefaultSpawnPosition, SetExperience, SetHealth, SetHeldSlot, SetTime, SystemChat,
+    block_position, unpack_block_position,
 };
 use mc_protocol::text::TextComponent;
 use mc_registry::Registries;
@@ -1657,27 +1657,7 @@ impl Game {
         );
 
         // The network layer already sent JoinGame; this is the world-side
-        // continuation: chunk-cache setup, position, spawn marker, vitals, then terrain.
-        //
-        // **These two are not optional.** A client's chunk storage is a ring indexed modulo its view range, so
-        // a client that is never told the range does not keep the chunks it is sent: `hasChunk` at the player's
-        // position stays false and the loading screen never lifts. Not sending them produced exactly that, with
-        // no error anywhere, because every packet involved is well-formed (P10-05).
-        self.send(
-            id,
-            &SetChunkCacheRadius {
-                radius: self.view_distance,
-            },
-            report,
-        )?;
-        self.send(
-            id,
-            &SetChunkCacheCenter {
-                x: sx >> 4,
-                z: sz >> 4,
-            },
-            report,
-        )?;
+        // continuation: position, spawn marker, vitals, then terrain.
         self.send(
             id,
             &PlayerPosition {
