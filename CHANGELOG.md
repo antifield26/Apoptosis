@@ -1015,6 +1015,58 @@ was a measurement rather than a subject.
   `seq` numbers that no longer match the per-run body file names.
 * the capture driver waits for chunks before digging, which is what made the `light_update` capture empty.
 
+### KD-53 \u2014 the world was an ocean, and the spawn was in it
+
+**The owner reported that terrain and biomes were wrong**: no trees, no structures, only "dirt variants and
+stone". The blocks confirmed it \u2014 the chunks the server had sent use **exactly three states**, `stone`,
+`water` and `sand` \u2014 and none of that is a generation defect. Those three states are what an **ocean** is made
+of.
+
+Sampling the height field over a 1024-block square says the generator is healthy:
+
+```text
+height: min 24, max 112, mean 66      sea level 63
+below sea level: 39.2%
+biomes: ocean 39.2% \u00b7 plains 26.6% \u00b7 forest 25.3% \u00b7 desert 4.6% \u00b7 taiga 3.9% \u00b7 mountains 0.5%
+```
+
+**Six biomes, sensible heights, and two columns in five are ocean.** The defect was where the player starts: a
+fresh world's `level.dat` names `(0, 64, 0)`, and `(0, 0)` is water. With a view distance of four to eight
+chunks, everything visible was sea bed \u2014 no grass, no trees, no biome variety, and an ocean floor that is
+**correctly** dark because water attenuates sky light. Every part of the report follows from one hard-coded
+spawn.
+
+**Fixed by searching for land**, as vanilla does, and only when the stored spawn is **in water**: a stored
+world's own choice is left alone. `crates/server/tests/spawn_on_land.rs` asserts it, and asserts that the search
+*moved* the spawn rather than the origin having been dry by luck.
+
+### KD-54 \u2014 `~12` and `12` were the same value, so `/tp ~` ignored the player
+
+Fixing the spawn broke `command_e2e`'s relative-teleport test, with `-7.5 -> 1.5`. The reference was right
+(`base=(-8, 66, -8)`) and the resolution was wrong:
+
+```rust
+let resolve = |offset: Option<i32>, base: i32| offset.unwrap_or(base);
+```
+
+`~1` arrived as `Some(1)`, so `unwrap_or` returned **`1`** \u2014 the offset was used as an absolute coordinate and
+the source's position was discarded.
+
+**The argument type could not have done better.** `parse_axis` produced `Some(12)` for both `12` and `~12`, so no
+consumer could tell them apart; its own doc comment claimed the two were "distinguishable once the source
+moves", which was true of the intent and false of the code.
+
+**And the test was vacuous.** It teleported the player to the spawn and then stepped with `~1` \u2014 while the
+spawn *was* the origin, so `0 + 1` and the right answer were the same number. It passed without the property it
+named. It now acknowledges the teleport (the server holds a teleport pending until the client confirms, which is
+vanilla's `awaitingPositionFromClient` and correct), and the parser test asserts the thing the type exists for:
+**`12` and `~12` must differ, and must resolve to different places from a source away from the origin.**
+
+`Coordinate { value, relative }` replaces `Option<i32>`, with `resolve(base)` as the one place the two are
+combined. Bare `~` and `~0` collapse to the same value, which is right \u2014 both mean "the source's own
+coordinate" \u2014 and the old comment's insistence that they differ was part of the same confusion. **This affects
+every command that takes coordinates, not just `/tp`.**
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

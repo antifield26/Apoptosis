@@ -54,6 +54,7 @@ pub mod selector;
 pub mod source;
 pub mod tree;
 
+pub use argument::Coordinate;
 pub use argument::{Argument, ArgumentKind, ArgumentValue, ParseError, ValueRange};
 pub use dispatch::{CommandOutcome, Dispatcher, Suggestion};
 pub use execute::{ExecuteChain, ExecuteError, Modifier};

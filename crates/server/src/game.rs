@@ -239,6 +239,46 @@ fn light_fields(
     Ok(fields)
 }
 
+/// How far the spawn search looks, in blocks, and how finely.
+///
+/// A step of eight blocks can miss a one-block island, which does not matter: the search is looking for
+/// somewhere to start a player, not for the closest dry block. The radius bounds the work — the whole spiral is
+/// about four thousand height samples, each a few noise evaluations, and it runs once at startup.
+const SPAWN_SEARCH_RADIUS: i32 = 256;
+const SPAWN_SEARCH_STEP: i32 = 8;
+
+/// The nearest column at or above sea level, searched outward in rings from `from_x, from_z`.
+///
+/// Returns `None` when the whole radius is water, in which case the caller keeps the stored spawn: an ocean
+/// start is better than no answer, and the radius is deliberately large enough that it will not happen on the
+/// shipped generator.
+fn find_land_spawn(
+    generator: &mc_worldgen::TerrainGenerator,
+    from_x: i32,
+    from_z: i32,
+) -> Option<(i32, i32)> {
+    let mut radius = SPAWN_SEARCH_STEP;
+    while radius <= SPAWN_SEARCH_RADIUS {
+        // Walk the ring: the four edges, stepping by the search step, so a ring costs 8 * radius / step probes.
+        let mut offset = -radius;
+        while offset <= radius {
+            for (x, z) in [
+                (from_x + offset, from_z - radius),
+                (from_x + offset, from_z + radius),
+                (from_x - radius, from_z + offset),
+                (from_x + radius, from_z + offset),
+            ] {
+                if generator.surface_height(x, z) >= mc_worldgen::OVERWORLD_SEA_LEVEL {
+                    return Some((x, z));
+                }
+            }
+            offset += SPAWN_SEARCH_STEP;
+        }
+        radius += SPAWN_SEARCH_STEP;
+    }
+    None
+}
+
 /// `ClientboundGameEventPacket.Type.LEVEL_CHUNKS_LOAD_START` on the wire.
 ///
 /// The server sends it to say "chunks are about to arrive", and a 26.x client's loading screen does not lift
@@ -789,6 +829,33 @@ impl Game {
             }
         };
 
+        // **A spawn on land.** A fresh world's `level.dat` names `(0, 64, 0)`, and roughly two columns in five
+        // of this generator are ocean — so the default dropped the player into open sea, where every chunk in
+        // view is ocean floor: no grass, no trees, no biome variety, and a sea bed that is *correctly* dark
+        // because water attenuates sky light. Vanilla searches for a suitable spawn for the same reason.
+        //
+        // Only a spawn that is **in water** is moved: a stored world's own choice is its own.
+        if let Some(generator) = generator.as_ref() {
+            let (sx, _, sz) = world.spawn();
+            if generator.surface_height(sx, sz) < mc_worldgen::OVERWORLD_SEA_LEVEL
+                && let Some((lx, lz)) = find_land_spawn(generator, sx, sz)
+            {
+                let y = generator
+                    .surface_height(lx, lz)
+                    .saturating_add(1)
+                    .clamp(min_y + 1, max_y - 2);
+                world.set_spawn(lx, y, lz);
+                info!(
+                    from_x = sx,
+                    from_z = sz,
+                    to_x = lx,
+                    to_z = lz,
+                    y,
+                    "the stored spawn is under water; moved to the nearest land"
+                );
+            }
+        }
+
         Ok(Self {
             registries,
             storage: owned,
@@ -833,6 +900,15 @@ impl Game {
     /// Mutable world access.
     pub fn world_mut(&mut self) -> &mut World {
         &mut self.world
+    }
+
+    /// The terrain generator, when this game has one.
+    ///
+    /// Exposed for the spawn check: whether a world starts a player on land is a property of the generator and
+    /// the stored spawn together, and there is no other way to ask from outside.
+    #[must_use]
+    pub const fn terrain_generator(&self) -> Option<&mc_worldgen::TerrainGenerator> {
+        self.generator.as_ref()
     }
 
     /// The registry tables.

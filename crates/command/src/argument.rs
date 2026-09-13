@@ -198,18 +198,18 @@ pub enum ArgumentValue {
     Bool(bool),
     /// A resource id.
     Resource(ResourceId),
-    /// A block position, with `None` for an axis left relative (`~`).
+    /// A block position.
     ///
-    /// `~` with no offset means "the source's own coordinate", which is *not* the same
-    /// as `~0` once the source moves, so the distinction is carried rather than
-    /// resolved at parse time.
+    /// Each axis is a [`Coordinate`], because **`Option<i32>` could not carry the one thing that matters**:
+    /// `~12` and `12` both parsed to `Some(12)`, so a consumer resolving `Some(n)` as absolute — which is what
+    /// `/tp` did — silently discarded the source's position for every offset form.
     BlockPos {
-        /// X, or `None` for a bare `~`.
-        x: Option<i32>,
-        /// Y, or `None` for a bare `~`.
-        y: Option<i32>,
-        /// Z, or `None` for a bare `~`.
-        z: Option<i32>,
+        /// X.
+        x: Coordinate,
+        /// Y.
+        y: Coordinate,
+        /// Z.
+        z: Coordinate,
     },
 }
 
@@ -478,20 +478,68 @@ pub fn parse_value(argument: &Argument, token: &str) -> Result<ArgumentValue, Pa
     }
 }
 
-/// Parse one axis of a block position: `12`, `~` or `~5`.
+/// One axis of a block position: an absolute coordinate, or an offset from the source's.
 ///
-/// Returns `Ok(None)` for a bare `~` (meaning "the source's own coordinate") and
-/// `Ok(Some(offset))` otherwise. A bare number is an absolute coordinate, which is
-/// distinguishable from `~0` once the source moves — which is why the two are not
-/// collapsed here.
-fn parse_axis(token: &str) -> Result<Option<i32>, ()> {
+/// **`Option<i32>` was the wrong shape for this** and its doc comment said the opposite of what the code did:
+/// `~12` and `12` are both `Some(12)`, so "absolute" and "relative by twelve" were indistinguishable and every
+/// consumer had to guess. Bare `~` and `~0` are the *same* value here, which is correct — both mean "the
+/// source's own coordinate" — and the old comment's claim that they must differ was part of the same confusion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Coordinate {
+    /// The number written, or `0` for a bare `~`.
+    pub value: i32,
+    /// Whether it was written as an offset from the source.
+    pub relative: bool,
+}
+
+impl Coordinate {
+    /// An absolute coordinate.
+    #[must_use]
+    pub const fn absolute(value: i32) -> Self {
+        Self {
+            value,
+            relative: false,
+        }
+    }
+
+    /// An offset from the source's own coordinate.
+    #[must_use]
+    pub const fn relative(value: i32) -> Self {
+        Self {
+            value,
+            relative: true,
+        }
+    }
+
+    /// The absolute coordinate this names, given the source's own.
+    ///
+    /// Saturating: an offset near `i32::MAX` from a source near the other end is a nonsense request, and a
+    /// clamped answer is better than a wrapped one.
+    #[must_use]
+    pub const fn resolve(self, base: i32) -> i32 {
+        if self.relative {
+            base.saturating_add(self.value)
+        } else {
+            self.value
+        }
+    }
+}
+
+/// Parse one axis of a block position: `12`, `~` or `~5`.
+fn parse_axis(token: &str) -> Result<Coordinate, ()> {
     let Some(offset) = token.strip_prefix('~') else {
-        return token.parse::<i32>().map(Some).map_err(|_| ());
+        return token
+            .parse::<i32>()
+            .map(Coordinate::absolute)
+            .map_err(|_| ());
     };
     if offset.is_empty() {
-        return Ok(None);
+        return Ok(Coordinate::relative(0));
     }
-    offset.parse::<i32>().map(Some).map_err(|_| ())
+    offset
+        .parse::<i32>()
+        .map(Coordinate::relative)
+        .map_err(|_| ())
 }
 
 /// Parse `x y z`, accepting `~` on any axis.
@@ -508,7 +556,7 @@ fn parse_block_pos(argument: &Argument, token: &str) -> Result<ArgumentValue, Pa
             found: truncate(token, 32),
         });
     }
-    let mut axes = [None; 3];
+    let mut axes = [Coordinate::default(); 3];
     for (index, part) in parts.iter().enumerate() {
         axes[index] = parse_axis(part).map_err(|()| ParseError::Invalid {
             name: argument.name,

@@ -2,6 +2,7 @@
 //! (P07-02, P07-04, P07-15).
 
 use super::{CommandOutcome, Dispatcher, Suggestion};
+use crate::argument::Coordinate;
 use crate::argument::{Argument, ArgumentKind, ArgumentValue};
 use crate::source::{CommandSource, PermissionLevel, SourcePosition};
 use crate::tree::{Command, CommandTree, TreeError};
@@ -109,9 +110,9 @@ fn a_block_pos_argument_consumes_three_tokens() {
     assert_eq!(
         parsed.argument(1),
         Some(&ArgumentValue::BlockPos {
-            x: Some(10),
-            y: Some(64),
-            z: Some(-5)
+            x: Coordinate::absolute(10),
+            y: Coordinate::absolute(64),
+            z: Coordinate::absolute(-5)
         })
     );
     // A relative position survives as relative.
@@ -120,9 +121,9 @@ fn a_block_pos_argument_consumes_three_tokens() {
     assert_eq!(
         parsed.argument(1),
         Some(&ArgumentValue::BlockPos {
-            x: None,
-            y: Some(2),
-            z: Some(-1)
+            x: Coordinate::relative(0),
+            y: Coordinate::relative(2),
+            z: Coordinate::relative(-1)
         })
     );
 }

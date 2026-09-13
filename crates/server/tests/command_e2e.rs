@@ -76,6 +76,39 @@ impl Harness {
         self.settle(3).await;
     }
 
+    /// Acknowledge the next teleport the server sends, as a real client does.
+    ///
+    /// The server keeps a teleport **pending** until this arrives, so commands that resolve `~` against the
+    /// player's position see the old one until then. Reading the packet and replying with its own teleport id
+    /// is exactly the client's side of the handshake.
+    async fn acknowledge_teleport(&mut self) {
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(500);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(Duration::from_millis(60), self.client.recv()).await {
+                Ok(Ok(raw)) if raw.id == clientbound::play::PLAYER_POSITION => {
+                    // `player_position` leads with a `VarInt` teleport id.
+                    let payload = &raw.payload;
+                    let id = payload.first().copied().unwrap_or(0);
+                    self.client
+                        .send_raw_packet(&RawPacket::new(
+                            serverbound::play::ACCEPT_TELEPORTATION,
+                            vec![id],
+                        ))
+                        .await
+                        .expect("teleport acknowledged");
+                    self.settle(2).await;
+                    return;
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(_)) => break,
+                Err(_) => {
+                    self.game.tick().expect("tick");
+                }
+            }
+        }
+        panic!("the server sent no teleport to acknowledge");
+    }
+
     async fn settle(&mut self, ticks: usize) {
         for _ in 0..ticks {
             tokio::time::sleep(Duration::from_millis(30)).await;
@@ -415,6 +448,10 @@ async fn a_relative_teleport_resolves_against_the_player() {
     harness
         .command(&format!("tp Commander {} {} {}", home.0, home.1, home.2))
         .await;
+    // **The teleport has to be acknowledged before it counts.** Without this the server still holds the
+    // pending position, `~1` resolves against where the player *was*, and the assertion below passes only when
+    // moving to the spawn happened to be a no-op — which is what it was while the spawn was the origin.
+    harness.acknowledge_teleport().await;
     let absolute = harness.game.player(id).expect("player").position;
     harness.command("tp Commander ~1 ~ ~").await;
     let stepped = harness.game.player(id).expect("player").position;

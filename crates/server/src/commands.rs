@@ -389,13 +389,10 @@ impl Game {
             return CommandResult::message("Usage: /tp <target> <pos>");
         };
         let base = parsed.source.block_position().unwrap_or((0, 0, 0));
-        // `~` takes the source's own coordinate; a bare number is absolute.
-        let resolve = |offset: Option<i32>, base: i32| offset.unwrap_or(base);
-        let (tx, ty, tz) = (
-            resolve(*x, base.0),
-            resolve(*y, base.1),
-            resolve(*z, base.2),
-        );
+        // `~` takes the source's own coordinate; a bare number is absolute. The two are carried separately by
+        // `Coordinate` — an `Option<i32>` could not tell them apart, which is why `~1` used to land at the
+        // absolute `1`.
+        let (tx, ty, tz) = (x.resolve(base.0), y.resolve(base.1), z.resolve(base.2));
         match self.teleport_source(&parsed.source, tx, ty, tz) {
             Ok(()) => CommandResult::message(format!("Teleported to {tx} {ty} {tz}")),
             Err(reason) => CommandResult::message(reason),

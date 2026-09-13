@@ -1,8 +1,8 @@
 //! Argument tests, weighted towards hostile input (P07-02, P07-15).
 
 use super::{
-    Argument, ArgumentKind, ArgumentValue, ParseError, ValueRange, parse_value, split_root,
-    tokenize,
+    Argument, ArgumentKind, ArgumentValue, Coordinate, ParseError, ValueRange, parse_value,
+    split_root, tokenize,
 };
 use mc_core::ids::ResourceId;
 
@@ -215,30 +215,50 @@ fn block_positions_accept_absolute_and_relative_forms() {
     assert_eq!(
         absolute,
         ArgumentValue::BlockPos {
-            x: Some(1),
-            y: Some(2),
-            z: Some(3)
+            x: Coordinate::absolute(1),
+            y: Coordinate::absolute(2),
+            z: Coordinate::absolute(3)
         }
     );
-    // A bare `~` is not the same as `~0`: it means "wherever the source is".
     let relative = parse_value(&argument, "~ ~ ~").expect("valid");
     assert_eq!(
         relative,
         ArgumentValue::BlockPos {
-            x: None,
-            y: None,
-            z: None
+            x: Coordinate::relative(0),
+            y: Coordinate::relative(0),
+            z: Coordinate::relative(0)
         }
     );
     let offsets = parse_value(&argument, "~5 ~-3 ~").expect("valid");
     assert_eq!(
         offsets,
         ArgumentValue::BlockPos {
-            x: Some(5),
-            y: Some(-3),
-            z: None
+            x: Coordinate::relative(5),
+            y: Coordinate::relative(-3),
+            z: Coordinate::relative(0)
         }
     );
+
+    // **The assertion this type exists for.** `12` and `~12` used to parse to the same value, so a consumer
+    // that read one as absolute — which `/tp` did — threw the source's position away for every offset form.
+    // They must differ as values, and they must resolve to different places from a source away from the origin.
+    let absolute_twelve = parse_value(&argument, "12 0 0").expect("valid");
+    let relative_twelve = parse_value(&argument, "~12 0 0").expect("valid");
+    assert_ne!(
+        absolute_twelve, relative_twelve,
+        "an absolute coordinate and a relative one must not be the same value"
+    );
+    let (ArgumentValue::BlockPos { x: abs, .. }, ArgumentValue::BlockPos { x: rel, .. }) =
+        (&absolute_twelve, &relative_twelve)
+    else {
+        panic!("both are block positions");
+    };
+    assert_eq!(
+        abs.resolve(100),
+        12,
+        "an absolute coordinate ignores the source"
+    );
+    assert_eq!(rel.resolve(100), 112, "a relative one is measured from it");
     // Wrong number of axes.
     for bad in ["1 2", "1 2 3 4", "", "1 2 x", "~x 0 0"] {
         assert!(
