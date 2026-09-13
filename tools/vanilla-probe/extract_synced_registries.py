@@ -64,7 +64,64 @@ REGISTRIES = (
     'wolf_sound_variant',
     'wolf_variant',
     'zombie_nautilus_variant',
+    # named by the third run: `Missing tag TagKey[minecraft:damage_type / minecraft:is_fire]`, so this one is
+    # required *with its tags*. The rest of this group are added in the same pass rather than one refusal at a
+    # time, because run 2 already established that the client validates every synced registry it knows about.
+    'banner_pattern',
+    'chat_type',
+    'damage_type',
+    'dialog',
+    'enchantment_provider',
+    'instrument',
+    'jukebox_song',
+    'test_environment',
+    'test_instance',
+    'trade_set',
+    'trial_spawner',
+    'trim_material',
+    'trim_pattern',
+    # `enchantment` is **excluded**, and the reason is a limit of this pipeline rather than a missing
+    # registry. Every entry comes back from a real client as `Failed to parse value`: its fields use
+    # *dispatch* codecs (a bare number or an object with a `type`), and JSON shape cannot express which.
+    # NBT lists are homogeneous and a float is a different tag from a double, so a converter that infers
+    # everything from shape cannot encode it. The remedy is to stop re-implementing codecs and capture
+    # the real payload from a vanilla server (see the module doc).
+    # `villager_trade` is **excluded**, and the reason is a real limit of this pipeline rather than an
+    # oversight. Seven of its arrays are mixed-type (`number_of_dyes.summands` is `[{…}, 1]`), because vanilla
+    # encodes that field with a *dispatch* codec — a number or an object — not a list of one shape. NBT lists
+    # are homogeneous, so a shape-based converter cannot represent it, and guessing the dispatch encoding is
+    # not something this project does. Nothing has shown a client requires this registry; if one does, the
+    # finding is that the converter needs a schema.
 )
+
+
+def json_kind(value) -> str:
+    if isinstance(value, bool):
+        return 'bool'
+    if isinstance(value, (int, float)):
+        return 'number'
+    if isinstance(value, str):
+        return 'string'
+    if isinstance(value, list):
+        return 'array'
+    if isinstance(value, dict):
+        return 'object'
+    return 'null'
+
+
+def mixed_arrays(node, path='') -> list:
+    """Every array in `node` whose elements are not all of one JSON kind."""
+    found = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            found.extend(mixed_arrays(value, f'{path}.{key}'))
+    elif isinstance(node, list):
+        kinds = {json_kind(item) for item in node}
+        if len(kinds) > 1:
+            found.append((path, sorted(kinds)))
+        for index, value in enumerate(node):
+            found.extend(mixed_arrays(value, f'{path}[{index}]'))
+    return found
 
 
 def load_registry(name: str) -> dict:
@@ -147,6 +204,19 @@ def main() -> int:
             }
 
     document['tags'] = tags
+
+    # Refuse a registry this pipeline cannot represent, naming the offending path. Failing here is far
+    # better than emitting NBT that decodes as garbage on a live connection.
+    for registry, entries in document.items():
+        if registry == 'tags':
+            continue
+        for entry_id, element in entries.items():
+            for path, kinds in mixed_arrays(element):
+                raise SystemExit(
+                    f'{registry}/{entry_id}{path} is a mixed-type array {kinds}; NBT lists are homogeneous, '
+                    'so a shape-based converter cannot represent it. Exclude the registry or teach the '
+                    'converter the field\'s schema.'
+                )
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False) + '\n',

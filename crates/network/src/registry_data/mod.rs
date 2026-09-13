@@ -142,9 +142,31 @@ fn json_to_nbt(value: &Value) -> ServerResult<Nbt> {
             }
         }
         Value::Array(items) => {
+            // NBT lists are **homogeneous**: `mc_nbt` writes the element type once, from the first element,
+            // and then bare payloads. Building a list from mixed JSON would declare one type and write
+            // another, which decodes as garbage — 44 tests caught exactly that when `villager_trade` was
+            // added, because vanilla encodes `number_of_dyes.summands` with a dispatch codec (a number *or*
+            // an object) and JSON shape cannot express that.
+            //
+            // So a mixed array is refused by name. Guessing the dispatch encoding is what this project does
+            // not do; the probe refuses these at extraction time for the same reason.
+            let mut element_kind: Option<std::mem::Discriminant<Nbt>> = None;
             let mut converted = Vec::with_capacity(items.len());
             for item in items {
-                converted.push(json_to_nbt(item)?);
+                let value = json_to_nbt(item)?;
+                let kind = std::mem::discriminant(&value);
+                match element_kind {
+                    None => element_kind = Some(kind),
+                    Some(seen) if seen == kind => {}
+                    Some(_) => {
+                        return Err(ServerError::Protocol(
+                            "a registry array mixes element types; NBT lists are homogeneous, so this needs \
+                             the field's schema rather than its shape"
+                                .to_owned(),
+                        ));
+                    }
+                }
+                converted.push(value);
             }
             Nbt::List(converted)
         }

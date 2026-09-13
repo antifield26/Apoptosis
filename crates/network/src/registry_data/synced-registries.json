@@ -1,4 +1,178 @@
 {
+  "banner_pattern": {
+    "minecraft:base": {
+      "asset_id": "minecraft:base",
+      "translation_key": "block.minecraft.banner.base"
+    },
+    "minecraft:border": {
+      "asset_id": "minecraft:border",
+      "translation_key": "block.minecraft.banner.border"
+    },
+    "minecraft:bricks": {
+      "asset_id": "minecraft:bricks",
+      "translation_key": "block.minecraft.banner.bricks"
+    },
+    "minecraft:circle": {
+      "asset_id": "minecraft:circle",
+      "translation_key": "block.minecraft.banner.circle"
+    },
+    "minecraft:creeper": {
+      "asset_id": "minecraft:creeper",
+      "translation_key": "block.minecraft.banner.creeper"
+    },
+    "minecraft:cross": {
+      "asset_id": "minecraft:cross",
+      "translation_key": "block.minecraft.banner.cross"
+    },
+    "minecraft:curly_border": {
+      "asset_id": "minecraft:curly_border",
+      "translation_key": "block.minecraft.banner.curly_border"
+    },
+    "minecraft:diagonal_left": {
+      "asset_id": "minecraft:diagonal_left",
+      "translation_key": "block.minecraft.banner.diagonal_left"
+    },
+    "minecraft:diagonal_right": {
+      "asset_id": "minecraft:diagonal_right",
+      "translation_key": "block.minecraft.banner.diagonal_right"
+    },
+    "minecraft:diagonal_up_left": {
+      "asset_id": "minecraft:diagonal_up_left",
+      "translation_key": "block.minecraft.banner.diagonal_up_left"
+    },
+    "minecraft:diagonal_up_right": {
+      "asset_id": "minecraft:diagonal_up_right",
+      "translation_key": "block.minecraft.banner.diagonal_up_right"
+    },
+    "minecraft:flow": {
+      "asset_id": "minecraft:flow",
+      "translation_key": "block.minecraft.banner.flow"
+    },
+    "minecraft:flower": {
+      "asset_id": "minecraft:flower",
+      "translation_key": "block.minecraft.banner.flower"
+    },
+    "minecraft:globe": {
+      "asset_id": "minecraft:globe",
+      "translation_key": "block.minecraft.banner.globe"
+    },
+    "minecraft:gradient": {
+      "asset_id": "minecraft:gradient",
+      "translation_key": "block.minecraft.banner.gradient"
+    },
+    "minecraft:gradient_up": {
+      "asset_id": "minecraft:gradient_up",
+      "translation_key": "block.minecraft.banner.gradient_up"
+    },
+    "minecraft:guster": {
+      "asset_id": "minecraft:guster",
+      "translation_key": "block.minecraft.banner.guster"
+    },
+    "minecraft:half_horizontal": {
+      "asset_id": "minecraft:half_horizontal",
+      "translation_key": "block.minecraft.banner.half_horizontal"
+    },
+    "minecraft:half_horizontal_bottom": {
+      "asset_id": "minecraft:half_horizontal_bottom",
+      "translation_key": "block.minecraft.banner.half_horizontal_bottom"
+    },
+    "minecraft:half_vertical": {
+      "asset_id": "minecraft:half_vertical",
+      "translation_key": "block.minecraft.banner.half_vertical"
+    },
+    "minecraft:half_vertical_right": {
+      "asset_id": "minecraft:half_vertical_right",
+      "translation_key": "block.minecraft.banner.half_vertical_right"
+    },
+    "minecraft:mojang": {
+      "asset_id": "minecraft:mojang",
+      "translation_key": "block.minecraft.banner.mojang"
+    },
+    "minecraft:piglin": {
+      "asset_id": "minecraft:piglin",
+      "translation_key": "block.minecraft.banner.piglin"
+    },
+    "minecraft:rhombus": {
+      "asset_id": "minecraft:rhombus",
+      "translation_key": "block.minecraft.banner.rhombus"
+    },
+    "minecraft:skull": {
+      "asset_id": "minecraft:skull",
+      "translation_key": "block.minecraft.banner.skull"
+    },
+    "minecraft:small_stripes": {
+      "asset_id": "minecraft:small_stripes",
+      "translation_key": "block.minecraft.banner.small_stripes"
+    },
+    "minecraft:square_bottom_left": {
+      "asset_id": "minecraft:square_bottom_left",
+      "translation_key": "block.minecraft.banner.square_bottom_left"
+    },
+    "minecraft:square_bottom_right": {
+      "asset_id": "minecraft:square_bottom_right",
+      "translation_key": "block.minecraft.banner.square_bottom_right"
+    },
+    "minecraft:square_top_left": {
+      "asset_id": "minecraft:square_top_left",
+      "translation_key": "block.minecraft.banner.square_top_left"
+    },
+    "minecraft:square_top_right": {
+      "asset_id": "minecraft:square_top_right",
+      "translation_key": "block.minecraft.banner.square_top_right"
+    },
+    "minecraft:straight_cross": {
+      "asset_id": "minecraft:straight_cross",
+      "translation_key": "block.minecraft.banner.straight_cross"
+    },
+    "minecraft:stripe_bottom": {
+      "asset_id": "minecraft:stripe_bottom",
+      "translation_key": "block.minecraft.banner.stripe_bottom"
+    },
+    "minecraft:stripe_center": {
+      "asset_id": "minecraft:stripe_center",
+      "translation_key": "block.minecraft.banner.stripe_center"
+    },
+    "minecraft:stripe_downleft": {
+      "asset_id": "minecraft:stripe_downleft",
+      "translation_key": "block.minecraft.banner.stripe_downleft"
+    },
+    "minecraft:stripe_downright": {
+      "asset_id": "minecraft:stripe_downright",
+      "translation_key": "block.minecraft.banner.stripe_downright"
+    },
+    "minecraft:stripe_left": {
+      "asset_id": "minecraft:stripe_left",
+      "translation_key": "block.minecraft.banner.stripe_left"
+    },
+    "minecraft:stripe_middle": {
+      "asset_id": "minecraft:stripe_middle",
+      "translation_key": "block.minecraft.banner.stripe_middle"
+    },
+    "minecraft:stripe_right": {
+      "asset_id": "minecraft:stripe_right",
+      "translation_key": "block.minecraft.banner.stripe_right"
+    },
+    "minecraft:stripe_top": {
+      "asset_id": "minecraft:stripe_top",
+      "translation_key": "block.minecraft.banner.stripe_top"
+    },
+    "minecraft:triangle_bottom": {
+      "asset_id": "minecraft:triangle_bottom",
+      "translation_key": "block.minecraft.banner.triangle_bottom"
+    },
+    "minecraft:triangle_top": {
+      "asset_id": "minecraft:triangle_top",
+      "translation_key": "block.minecraft.banner.triangle_top"
+    },
+    "minecraft:triangles_bottom": {
+      "asset_id": "minecraft:triangles_bottom",
+      "translation_key": "block.minecraft.banner.triangles_bottom"
+    },
+    "minecraft:triangles_top": {
+      "asset_id": "minecraft:triangles_top",
+      "translation_key": "block.minecraft.banner.triangles_top"
+    }
+  },
   "cat_sound_variant": {
     "minecraft:classic": {
       "adult_sounds": {
@@ -163,6 +337,130 @@
       ]
     }
   },
+  "chat_type": {
+    "minecraft:chat": {
+      "chat": {
+        "parameters": [
+          "sender",
+          "content"
+        ],
+        "translation_key": "chat.type.text"
+      },
+      "narration": {
+        "parameters": [
+          "sender",
+          "content"
+        ],
+        "translation_key": "chat.type.text.narrate"
+      }
+    },
+    "minecraft:emote_command": {
+      "chat": {
+        "parameters": [
+          "sender",
+          "content"
+        ],
+        "translation_key": "chat.type.emote"
+      },
+      "narration": {
+        "parameters": [
+          "sender",
+          "content"
+        ],
+        "translation_key": "chat.type.emote"
+      }
+    },
+    "minecraft:msg_command_incoming": {
+      "chat": {
+        "parameters": [
+          "sender",
+          "content"
+        ],
+        "style": {
+          "color": "gray",
+          "italic": true
+        },
+        "translation_key": "commands.message.display.incoming"
+      },
+      "narration": {
+        "parameters": [
+          "sender",
+          "content"
+        ],
+        "translation_key": "chat.type.text.narrate"
+      }
+    },
+    "minecraft:msg_command_outgoing": {
+      "chat": {
+        "parameters": [
+          "target",
+          "content"
+        ],
+        "style": {
+          "color": "gray",
+          "italic": true
+        },
+        "translation_key": "commands.message.display.outgoing"
+      },
+      "narration": {
+        "parameters": [
+          "sender",
+          "content"
+        ],
+        "translation_key": "chat.type.text.narrate"
+      }
+    },
+    "minecraft:say_command": {
+      "chat": {
+        "parameters": [
+          "sender",
+          "content"
+        ],
+        "translation_key": "chat.type.announcement"
+      },
+      "narration": {
+        "parameters": [
+          "sender",
+          "content"
+        ],
+        "translation_key": "chat.type.text.narrate"
+      }
+    },
+    "minecraft:team_msg_command_incoming": {
+      "chat": {
+        "parameters": [
+          "target",
+          "sender",
+          "content"
+        ],
+        "translation_key": "chat.type.team.text"
+      },
+      "narration": {
+        "parameters": [
+          "sender",
+          "content"
+        ],
+        "translation_key": "chat.type.text.narrate"
+      }
+    },
+    "minecraft:team_msg_command_outgoing": {
+      "chat": {
+        "parameters": [
+          "target",
+          "sender",
+          "content"
+        ],
+        "translation_key": "chat.type.team.sent"
+      },
+      "narration": {
+        "parameters": [
+          "sender",
+          "content"
+        ],
+        "translation_key": "chat.type.text.narrate"
+      }
+    }
+  },
   "chicken_sound_variant": {
     "minecraft:classic": {
       "adult_sounds": {
@@ -284,6 +582,365 @@
       ]
     }
   },
+  "damage_type": {
+    "minecraft:arrow": {
+      "exhaustion": 0.1,
+      "message_id": "arrow",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:bad_respawn_point": {
+      "death_message_type": "intentional_game_design",
+      "exhaustion": 0.1,
+      "message_id": "badRespawnPoint",
+      "scaling": "always"
+    },
+    "minecraft:cactus": {
+      "exhaustion": 0.1,
+      "message_id": "cactus",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:campfire": {
+      "effects": "burning",
+      "exhaustion": 0.1,
+      "message_id": "inFire",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:cramming": {
+      "exhaustion": 0.0,
+      "message_id": "cramming",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:dragon_breath": {
+      "exhaustion": 0.0,
+      "message_id": "dragonBreath",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:drown": {
+      "effects": "drowning",
+      "exhaustion": 0.0,
+      "message_id": "drown",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:dry_out": {
+      "exhaustion": 0.1,
+      "message_id": "dryout",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:ender_pearl": {
+      "death_message_type": "fall_variants",
+      "exhaustion": 0.0,
+      "message_id": "fall",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:explosion": {
+      "exhaustion": 0.1,
+      "message_id": "explosion",
+      "scaling": "always"
+    },
+    "minecraft:fall": {
+      "death_message_type": "fall_variants",
+      "exhaustion": 0.0,
+      "message_id": "fall",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:falling_anvil": {
+      "exhaustion": 0.1,
+      "message_id": "anvil",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:falling_block": {
+      "exhaustion": 0.1,
+      "message_id": "fallingBlock",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:falling_stalactite": {
+      "exhaustion": 0.1,
+      "message_id": "fallingStalactite",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:fireball": {
+      "effects": "burning",
+      "exhaustion": 0.1,
+      "message_id": "fireball",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:fireworks": {
+      "exhaustion": 0.1,
+      "message_id": "fireworks",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:fly_into_wall": {
+      "exhaustion": 0.0,
+      "message_id": "flyIntoWall",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:freeze": {
+      "effects": "freezing",
+      "exhaustion": 0.0,
+      "message_id": "freeze",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:generic": {
+      "exhaustion": 0.0,
+      "message_id": "generic",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:generic_kill": {
+      "exhaustion": 0.0,
+      "message_id": "genericKill",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:hot_floor": {
+      "effects": "burning",
+      "exhaustion": 0.1,
+      "message_id": "hotFloor",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:in_fire": {
+      "effects": "burning",
+      "exhaustion": 0.1,
+      "message_id": "inFire",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:in_wall": {
+      "exhaustion": 0.0,
+      "message_id": "inWall",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:indirect_magic": {
+      "exhaustion": 0.0,
+      "message_id": "indirectMagic",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:lava": {
+      "effects": "burning",
+      "exhaustion": 0.1,
+      "message_id": "lava",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:lightning_bolt": {
+      "exhaustion": 0.1,
+      "message_id": "lightningBolt",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:mace_smash": {
+      "exhaustion": 0.1,
+      "message_id": "mace_smash",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:magic": {
+      "exhaustion": 0.0,
+      "message_id": "magic",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:mob_attack": {
+      "exhaustion": 0.1,
+      "message_id": "mob",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:mob_attack_no_aggro": {
+      "exhaustion": 0.1,
+      "message_id": "mob",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:mob_projectile": {
+      "exhaustion": 0.1,
+      "message_id": "mob",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:on_fire": {
+      "effects": "burning",
+      "exhaustion": 0.0,
+      "message_id": "onFire",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:out_of_world": {
+      "exhaustion": 0.0,
+      "message_id": "outOfWorld",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:outside_border": {
+      "exhaustion": 0.0,
+      "message_id": "outsideBorder",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:player_attack": {
+      "exhaustion": 0.1,
+      "message_id": "player",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:player_explosion": {
+      "exhaustion": 0.1,
+      "message_id": "explosion.player",
+      "scaling": "always"
+    },
+    "minecraft:sonic_boom": {
+      "exhaustion": 0.0,
+      "message_id": "sonic_boom",
+      "scaling": "always"
+    },
+    "minecraft:spear": {
+      "exhaustion": 0.1,
+      "message_id": "spear",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:spit": {
+      "exhaustion": 0.1,
+      "message_id": "mob",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:stalagmite": {
+      "exhaustion": 0.0,
+      "message_id": "stalagmite",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:starve": {
+      "exhaustion": 0.0,
+      "message_id": "starve",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:sting": {
+      "exhaustion": 0.1,
+      "message_id": "sting",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:sweet_berry_bush": {
+      "effects": "poking",
+      "exhaustion": 0.1,
+      "message_id": "sweetBerryBush",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:thorns": {
+      "effects": "thorns",
+      "exhaustion": 0.1,
+      "message_id": "thorns",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:thrown": {
+      "exhaustion": 0.1,
+      "message_id": "thrown",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:trident": {
+      "exhaustion": 0.1,
+      "message_id": "trident",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:unattributed_fireball": {
+      "effects": "burning",
+      "exhaustion": 0.1,
+      "message_id": "onFire",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:wind_charge": {
+      "exhaustion": 0.1,
+      "message_id": "mob",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:wither": {
+      "exhaustion": 0.0,
+      "message_id": "wither",
+      "scaling": "when_caused_by_living_non_player"
+    },
+    "minecraft:wither_skull": {
+      "exhaustion": 0.1,
+      "message_id": "witherSkull",
+      "scaling": "when_caused_by_living_non_player"
+    }
+  },
+  "dialog": {
+    "minecraft:custom_options": {
+      "button_width": 310,
+      "columns": 1,
+      "dialogs": "#minecraft:pause_screen_additions",
+      "exit_action": {
+        "label": {
+          "translate": "gui.back"
+        },
+        "width": 200
+      },
+      "external_title": {
+        "translate": "menu.custom_options"
+      },
+      "title": {
+        "translate": "menu.custom_options.title"
+      },
+      "type": "minecraft:dialog_list"
+    },
+    "minecraft:quick_actions": {
+      "button_width": 310,
+      "columns": 1,
+      "dialogs": "#minecraft:quick_actions",
+      "exit_action": {
+        "label": {
+          "translate": "gui.back"
+        },
+        "width": 200
+      },
+      "external_title": {
+        "translate": "menu.quick_actions"
+      },
+      "title": {
+        "translate": "menu.quick_actions.title"
+      },
+      "type": "minecraft:dialog_list"
+    },
+    "minecraft:server_links": {
+      "button_width": 310,
+      "columns": 1,
+      "exit_action": {
+        "label": {
+          "translate": "gui.back"
+        },
+        "width": 200
+      },
+      "external_title": {
+        "translate": "menu.server_links"
+      },
+      "title": {
+        "translate": "menu.server_links.title"
+      },
+      "type": "minecraft:server_links"
+    }
+  },
+  "enchantment_provider": {
+    "minecraft:enderman_loot_drop": {
+      "enchantment": "minecraft:silk_touch",
+      "level": 1,
+      "type": "minecraft:single"
+    },
+    "minecraft:mob_spawn_equipment": {
+      "enchantments": "#minecraft:on_mob_spawn_equipment",
+      "max_cost_span": 17,
+      "min_cost": 5,
+      "type": "minecraft:by_cost_with_difficulty"
+    },
+    "minecraft:pillager_spawn_crossbow": {
+      "enchantment": "minecraft:piercing",
+      "level": 1,
+      "type": "minecraft:single"
+    },
+    "minecraft:raid/pillager_post_wave_3": {
+      "enchantment": "minecraft:quick_charge",
+      "level": 1,
+      "type": "minecraft:single"
+    },
+    "minecraft:raid/pillager_post_wave_5": {
+      "enchantment": "minecraft:quick_charge",
+      "level": 2,
+      "type": "minecraft:single"
+    },
+    "minecraft:raid/vindicator": {
+      "enchantment": "minecraft:sharpness",
+      "level": 1,
+      "type": "minecraft:single"
+    },
+    "minecraft:raid/vindicator_post_wave_5": {
+      "enchantment": "minecraft:sharpness",
+      "level": 2,
+      "type": "minecraft:single"
+    }
+  },
   "frog_variant": {
     "minecraft:cold": {
       "asset_id": "minecraft:entity/frog/frog_cold",
@@ -316,6 +973,242 @@
           "priority": 1
         }
       ]
+    }
+  },
+  "instrument": {
+    "minecraft:admire_goat_horn": {
+      "description": {
+        "translate": "instrument.minecraft.admire_goat_horn"
+      },
+      "range": 256.0,
+      "sound_event": "minecraft:item.goat_horn.sound.4",
+      "use_duration": 7.0
+    },
+    "minecraft:call_goat_horn": {
+      "description": {
+        "translate": "instrument.minecraft.call_goat_horn"
+      },
+      "range": 256.0,
+      "sound_event": "minecraft:item.goat_horn.sound.5",
+      "use_duration": 7.0
+    },
+    "minecraft:dream_goat_horn": {
+      "description": {
+        "translate": "instrument.minecraft.dream_goat_horn"
+      },
+      "range": 256.0,
+      "sound_event": "minecraft:item.goat_horn.sound.7",
+      "use_duration": 7.0
+    },
+    "minecraft:feel_goat_horn": {
+      "description": {
+        "translate": "instrument.minecraft.feel_goat_horn"
+      },
+      "range": 256.0,
+      "sound_event": "minecraft:item.goat_horn.sound.3",
+      "use_duration": 7.0
+    },
+    "minecraft:ponder_goat_horn": {
+      "description": {
+        "translate": "instrument.minecraft.ponder_goat_horn"
+      },
+      "range": 256.0,
+      "sound_event": "minecraft:item.goat_horn.sound.0",
+      "use_duration": 7.0
+    },
+    "minecraft:seek_goat_horn": {
+      "description": {
+        "translate": "instrument.minecraft.seek_goat_horn"
+      },
+      "range": 256.0,
+      "sound_event": "minecraft:item.goat_horn.sound.2",
+      "use_duration": 7.0
+    },
+    "minecraft:sing_goat_horn": {
+      "description": {
+        "translate": "instrument.minecraft.sing_goat_horn"
+      },
+      "range": 256.0,
+      "sound_event": "minecraft:item.goat_horn.sound.1",
+      "use_duration": 7.0
+    },
+    "minecraft:yearn_goat_horn": {
+      "description": {
+        "translate": "instrument.minecraft.yearn_goat_horn"
+      },
+      "range": 256.0,
+      "sound_event": "minecraft:item.goat_horn.sound.6",
+      "use_duration": 7.0
+    }
+  },
+  "jukebox_song": {
+    "minecraft:11": {
+      "comparator_output": 11,
+      "description": {
+        "translate": "jukebox_song.minecraft.11"
+      },
+      "length_in_seconds": 71.0,
+      "sound_event": "minecraft:music_disc.11"
+    },
+    "minecraft:13": {
+      "comparator_output": 1,
+      "description": {
+        "translate": "jukebox_song.minecraft.13"
+      },
+      "length_in_seconds": 178.0,
+      "sound_event": "minecraft:music_disc.13"
+    },
+    "minecraft:5": {
+      "comparator_output": 15,
+      "description": {
+        "translate": "jukebox_song.minecraft.5"
+      },
+      "length_in_seconds": 178.0,
+      "sound_event": "minecraft:music_disc.5"
+    },
+    "minecraft:blocks": {
+      "comparator_output": 3,
+      "description": {
+        "translate": "jukebox_song.minecraft.blocks"
+      },
+      "length_in_seconds": 345.0,
+      "sound_event": "minecraft:music_disc.blocks"
+    },
+    "minecraft:cat": {
+      "comparator_output": 2,
+      "description": {
+        "translate": "jukebox_song.minecraft.cat"
+      },
+      "length_in_seconds": 185.0,
+      "sound_event": "minecraft:music_disc.cat"
+    },
+    "minecraft:chirp": {
+      "comparator_output": 4,
+      "description": {
+        "translate": "jukebox_song.minecraft.chirp"
+      },
+      "length_in_seconds": 185.0,
+      "sound_event": "minecraft:music_disc.chirp"
+    },
+    "minecraft:creator": {
+      "comparator_output": 12,
+      "description": {
+        "translate": "jukebox_song.minecraft.creator"
+      },
+      "length_in_seconds": 176.0,
+      "sound_event": "minecraft:music_disc.creator"
+    },
+    "minecraft:creator_music_box": {
+      "comparator_output": 11,
+      "description": {
+        "translate": "jukebox_song.minecraft.creator_music_box"
+      },
+      "length_in_seconds": 73.0,
+      "sound_event": "minecraft:music_disc.creator_music_box"
+    },
+    "minecraft:far": {
+      "comparator_output": 5,
+      "description": {
+        "translate": "jukebox_song.minecraft.far"
+      },
+      "length_in_seconds": 174.0,
+      "sound_event": "minecraft:music_disc.far"
+    },
+    "minecraft:lava_chicken": {
+      "comparator_output": 9,
+      "description": {
+        "translate": "jukebox_song.minecraft.lava_chicken"
+      },
+      "length_in_seconds": 134.0,
+      "sound_event": "minecraft:music_disc.lava_chicken"
+    },
+    "minecraft:mall": {
+      "comparator_output": 6,
+      "description": {
+        "translate": "jukebox_song.minecraft.mall"
+      },
+      "length_in_seconds": 197.0,
+      "sound_event": "minecraft:music_disc.mall"
+    },
+    "minecraft:mellohi": {
+      "comparator_output": 7,
+      "description": {
+        "translate": "jukebox_song.minecraft.mellohi"
+      },
+      "length_in_seconds": 96.0,
+      "sound_event": "minecraft:music_disc.mellohi"
+    },
+    "minecraft:otherside": {
+      "comparator_output": 14,
+      "description": {
+        "translate": "jukebox_song.minecraft.otherside"
+      },
+      "length_in_seconds": 195.0,
+      "sound_event": "minecraft:music_disc.otherside"
+    },
+    "minecraft:pigstep": {
+      "comparator_output": 13,
+      "description": {
+        "translate": "jukebox_song.minecraft.pigstep"
+      },
+      "length_in_seconds": 149.0,
+      "sound_event": "minecraft:music_disc.pigstep"
+    },
+    "minecraft:precipice": {
+      "comparator_output": 13,
+      "description": {
+        "translate": "jukebox_song.minecraft.precipice"
+      },
+      "length_in_seconds": 299.0,
+      "sound_event": "minecraft:music_disc.precipice"
+    },
+    "minecraft:relic": {
+      "comparator_output": 14,
+      "description": {
+        "translate": "jukebox_song.minecraft.relic"
+      },
+      "length_in_seconds": 218.0,
+      "sound_event": "minecraft:music_disc.relic"
+    },
+    "minecraft:stal": {
+      "comparator_output": 8,
+      "description": {
+        "translate": "jukebox_song.minecraft.stal"
+      },
+      "length_in_seconds": 150.0,
+      "sound_event": "minecraft:music_disc.stal"
+    },
+    "minecraft:strad": {
+      "comparator_output": 9,
+      "description": {
+        "translate": "jukebox_song.minecraft.strad"
+      },
+      "length_in_seconds": 188.0,
+      "sound_event": "minecraft:music_disc.strad"
+    },
+    "minecraft:tears": {
+      "comparator_output": 10,
+      "description": {
+        "translate": "jukebox_song.minecraft.tears"
+      },
+      "length_in_seconds": 175.0,
+      "sound_event": "minecraft:music_disc.tears"
+    },
+    "minecraft:wait": {
+      "comparator_output": 12,
+      "description": {
+        "translate": "jukebox_song.minecraft.wait"
+      },
+      "length_in_seconds": 238.0,
+      "sound_event": "minecraft:music_disc.wait"
+    },
+    "minecraft:ward": {
+      "comparator_output": 10,
+      "description": {
+        "translate": "jukebox_song.minecraft.ward"
+      },
+      "length_in_seconds": 251.0,
+      "sound_event": "minecraft:music_disc.ward"
     }
   },
   "painting_variant": {
@@ -1052,6 +1945,364 @@
     }
   },
   "tags": {
+    "minecraft:banner_pattern": {
+      "no_item_required": [
+        "minecraft:square_bottom_left",
+        "minecraft:square_bottom_right",
+        "minecraft:square_top_left",
+        "minecraft:square_top_right",
+        "minecraft:stripe_bottom",
+        "minecraft:stripe_top",
+        "minecraft:stripe_left",
+        "minecraft:stripe_right",
+        "minecraft:stripe_center",
+        "minecraft:stripe_middle",
+        "minecraft:stripe_downright",
+        "minecraft:stripe_downleft",
+        "minecraft:small_stripes",
+        "minecraft:cross",
+        "minecraft:straight_cross",
+        "minecraft:triangle_bottom",
+        "minecraft:triangle_top",
+        "minecraft:triangles_bottom",
+        "minecraft:triangles_top",
+        "minecraft:diagonal_left",
+        "minecraft:diagonal_up_right",
+        "minecraft:diagonal_up_left",
+        "minecraft:diagonal_right",
+        "minecraft:circle",
+        "minecraft:rhombus",
+        "minecraft:half_vertical",
+        "minecraft:half_horizontal",
+        "minecraft:half_vertical_right",
+        "minecraft:half_horizontal_bottom",
+        "minecraft:border",
+        "minecraft:gradient",
+        "minecraft:gradient_up"
+      ],
+      "pattern_item/bordure_indented": [
+        "minecraft:curly_border"
+      ],
+      "pattern_item/creeper": [
+        "minecraft:creeper"
+      ],
+      "pattern_item/field_masoned": [
+        "minecraft:bricks"
+      ],
+      "pattern_item/flow": [
+        "minecraft:flow"
+      ],
+      "pattern_item/flower": [
+        "minecraft:flower"
+      ],
+      "pattern_item/globe": [
+        "minecraft:globe"
+      ],
+      "pattern_item/guster": [
+        "minecraft:guster"
+      ],
+      "pattern_item/mojang": [
+        "minecraft:mojang"
+      ],
+      "pattern_item/piglin": [
+        "minecraft:piglin"
+      ],
+      "pattern_item/skull": [
+        "minecraft:skull"
+      ]
+    },
+    "minecraft:damage_type": {
+      "always_hurts_ender_dragons": [
+        "minecraft:fireworks",
+        "minecraft:explosion",
+        "minecraft:player_explosion",
+        "minecraft:bad_respawn_point"
+      ],
+      "always_kills_armor_stands": [
+        "minecraft:arrow",
+        "minecraft:trident",
+        "minecraft:fireball",
+        "minecraft:wither_skull",
+        "minecraft:wind_charge"
+      ],
+      "always_most_significant_fall": [
+        "minecraft:out_of_world"
+      ],
+      "always_triggers_silverfish": [
+        "minecraft:magic"
+      ],
+      "avoids_guardian_thorns": [
+        "minecraft:magic",
+        "minecraft:thorns",
+        "minecraft:fireworks",
+        "minecraft:explosion",
+        "minecraft:player_explosion",
+        "minecraft:bad_respawn_point"
+      ],
+      "burn_from_stepping": [
+        "minecraft:campfire",
+        "minecraft:hot_floor"
+      ],
+      "burns_armor_stands": [
+        "minecraft:on_fire"
+      ],
+      "bypasses_armor": [
+        "minecraft:on_fire",
+        "minecraft:in_wall",
+        "minecraft:cramming",
+        "minecraft:drown",
+        "minecraft:fly_into_wall",
+        "minecraft:generic",
+        "minecraft:wither",
+        "minecraft:dragon_breath",
+        "minecraft:starve",
+        "minecraft:fall",
+        "minecraft:ender_pearl",
+        "minecraft:freeze",
+        "minecraft:stalagmite",
+        "minecraft:magic",
+        "minecraft:indirect_magic",
+        "minecraft:out_of_world",
+        "minecraft:generic_kill",
+        "minecraft:sonic_boom",
+        "minecraft:outside_border"
+      ],
+      "bypasses_effects": [
+        "minecraft:starve"
+      ],
+      "bypasses_enchantments": [
+        "minecraft:sonic_boom"
+      ],
+      "bypasses_invulnerability": [
+        "minecraft:out_of_world",
+        "minecraft:generic_kill"
+      ],
+      "bypasses_resistance": [
+        "minecraft:out_of_world",
+        "minecraft:generic_kill"
+      ],
+      "bypasses_shield": [
+        "minecraft:on_fire",
+        "minecraft:in_wall",
+        "minecraft:cramming",
+        "minecraft:drown",
+        "minecraft:fly_into_wall",
+        "minecraft:generic",
+        "minecraft:wither",
+        "minecraft:dragon_breath",
+        "minecraft:starve",
+        "minecraft:fall",
+        "minecraft:ender_pearl",
+        "minecraft:freeze",
+        "minecraft:stalagmite",
+        "minecraft:magic",
+        "minecraft:indirect_magic",
+        "minecraft:out_of_world",
+        "minecraft:generic_kill",
+        "minecraft:sonic_boom",
+        "minecraft:outside_border",
+        "minecraft:cactus",
+        "minecraft:campfire",
+        "minecraft:dry_out",
+        "minecraft:falling_anvil",
+        "minecraft:falling_stalactite",
+        "minecraft:hot_floor",
+        "minecraft:in_fire",
+        "minecraft:lava",
+        "minecraft:lightning_bolt",
+        "minecraft:sweet_berry_bush"
+      ],
+      "bypasses_wolf_armor": [
+        "minecraft:out_of_world",
+        "minecraft:generic_kill",
+        "minecraft:cramming",
+        "minecraft:drown",
+        "minecraft:dry_out",
+        "minecraft:freeze",
+        "minecraft:in_wall",
+        "minecraft:indirect_magic",
+        "minecraft:magic",
+        "minecraft:outside_border",
+        "minecraft:starve",
+        "minecraft:thorns",
+        "minecraft:wither"
+      ],
+      "can_break_armor_stand": [
+        "minecraft:player_explosion",
+        "minecraft:player_attack",
+        "minecraft:spear",
+        "minecraft:mace_smash"
+      ],
+      "damages_helmet": [
+        "minecraft:falling_anvil",
+        "minecraft:falling_block",
+        "minecraft:falling_stalactite"
+      ],
+      "ignites_armor_stands": [
+        "minecraft:in_fire",
+        "minecraft:campfire"
+      ],
+      "is_drowning": [
+        "minecraft:drown"
+      ],
+      "is_explosion": [
+        "minecraft:fireworks",
+        "minecraft:explosion",
+        "minecraft:player_explosion",
+        "minecraft:bad_respawn_point"
+      ],
+      "is_fall": [
+        "minecraft:fall",
+        "minecraft:ender_pearl",
+        "minecraft:stalagmite"
+      ],
+      "is_fire": [
+        "minecraft:in_fire",
+        "minecraft:campfire",
+        "minecraft:on_fire",
+        "minecraft:lava",
+        "minecraft:hot_floor",
+        "minecraft:unattributed_fireball",
+        "minecraft:fireball"
+      ],
+      "is_freezing": [
+        "minecraft:freeze"
+      ],
+      "is_lightning": [
+        "minecraft:lightning_bolt"
+      ],
+      "is_player_attack": [
+        "minecraft:player_attack",
+        "minecraft:spear",
+        "minecraft:mace_smash"
+      ],
+      "is_projectile": [
+        "minecraft:arrow",
+        "minecraft:trident",
+        "minecraft:mob_projectile",
+        "minecraft:unattributed_fireball",
+        "minecraft:fireball",
+        "minecraft:wither_skull",
+        "minecraft:thrown",
+        "minecraft:wind_charge"
+      ],
+      "mace_smash": [
+        "minecraft:mace_smash"
+      ],
+      "no_anger": [
+        "minecraft:mob_attack_no_aggro"
+      ],
+      "no_impact": [
+        "minecraft:drown"
+      ],
+      "no_knockback": [
+        "minecraft:explosion",
+        "minecraft:player_explosion",
+        "minecraft:bad_respawn_point",
+        "minecraft:in_fire",
+        "minecraft:lightning_bolt",
+        "minecraft:on_fire",
+        "minecraft:lava",
+        "minecraft:hot_floor",
+        "minecraft:in_wall",
+        "minecraft:cramming",
+        "minecraft:drown",
+        "minecraft:starve",
+        "minecraft:cactus",
+        "minecraft:fall",
+        "minecraft:ender_pearl",
+        "minecraft:fly_into_wall",
+        "minecraft:out_of_world",
+        "minecraft:generic",
+        "minecraft:magic",
+        "minecraft:wither",
+        "minecraft:dragon_breath",
+        "minecraft:dry_out",
+        "minecraft:sweet_berry_bush",
+        "minecraft:freeze",
+        "minecraft:stalagmite",
+        "minecraft:outside_border",
+        "minecraft:generic_kill",
+        "minecraft:campfire",
+        "minecraft:spear"
+      ],
+      "panic_causes": [
+        "minecraft:cactus",
+        "minecraft:freeze",
+        "minecraft:hot_floor",
+        "minecraft:in_fire",
+        "minecraft:lava",
+        "minecraft:lightning_bolt",
+        "minecraft:on_fire",
+        "minecraft:arrow",
+        "minecraft:dragon_breath",
+        "minecraft:explosion",
+        "minecraft:fireball",
+        "minecraft:fireworks",
+        "minecraft:indirect_magic",
+        "minecraft:magic",
+        "minecraft:mob_attack",
+        "minecraft:mob_projectile",
+        "minecraft:player_explosion",
+        "minecraft:sonic_boom",
+        "minecraft:sting",
+        "minecraft:thrown",
+        "minecraft:trident",
+        "minecraft:unattributed_fireball",
+        "minecraft:wind_charge",
+        "minecraft:wither",
+        "minecraft:wither_skull",
+        "minecraft:player_attack",
+        "minecraft:spear",
+        "minecraft:mace_smash"
+      ],
+      "panic_environmental_causes": [
+        "minecraft:cactus",
+        "minecraft:freeze",
+        "minecraft:hot_floor",
+        "minecraft:in_fire",
+        "minecraft:lava",
+        "minecraft:lightning_bolt",
+        "minecraft:on_fire"
+      ],
+      "witch_resistant_to": [
+        "minecraft:magic",
+        "minecraft:indirect_magic",
+        "minecraft:sonic_boom",
+        "minecraft:thorns"
+      ],
+      "wither_immune_to": [
+        "minecraft:drown"
+      ]
+    },
+    "minecraft:dialog": {
+      "pause_screen_additions": [],
+      "quick_actions": []
+    },
+    "minecraft:instrument": {
+      "goat_horns": [
+        "minecraft:ponder_goat_horn",
+        "minecraft:sing_goat_horn",
+        "minecraft:seek_goat_horn",
+        "minecraft:feel_goat_horn",
+        "minecraft:admire_goat_horn",
+        "minecraft:call_goat_horn",
+        "minecraft:yearn_goat_horn",
+        "minecraft:dream_goat_horn"
+      ],
+      "regular_goat_horns": [
+        "minecraft:ponder_goat_horn",
+        "minecraft:sing_goat_horn",
+        "minecraft:seek_goat_horn",
+        "minecraft:feel_goat_horn"
+      ],
+      "screaming_goat_horns": [
+        "minecraft:admire_goat_horn",
+        "minecraft:call_goat_horn",
+        "minecraft:yearn_goat_horn",
+        "minecraft:dream_goat_horn"
+      ]
+    },
     "minecraft:painting_variant": {
       "placeable": [
         "minecraft:kebab",
@@ -1119,6 +2370,23 @@
       "universal": [
         "minecraft:villager_schedule"
       ]
+    }
+  },
+  "test_environment": {
+    "minecraft:default": {
+      "definitions": [],
+      "type": "minecraft:all_of"
+    }
+  },
+  "test_instance": {
+    "minecraft:always_pass": {
+      "environment": "minecraft:default",
+      "function": "minecraft:always_pass",
+      "max_ticks": 1,
+      "required": false,
+      "setup_ticks": 1,
+      "structure": "minecraft:empty",
+      "type": "minecraft:function"
     }
   },
   "timeline": {
@@ -1761,6 +3029,1195 @@
             }
           ]
         }
+      }
+    }
+  },
+  "trade_set": {
+    "minecraft:armorer/level_1": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/armorer/level_1",
+      "trades": "#minecraft:armorer/level_1"
+    },
+    "minecraft:armorer/level_2": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/armorer/level_2",
+      "trades": "#minecraft:armorer/level_2"
+    },
+    "minecraft:armorer/level_3": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/armorer/level_3",
+      "trades": "#minecraft:armorer/level_3"
+    },
+    "minecraft:armorer/level_4": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/armorer/level_4",
+      "trades": "#minecraft:armorer/level_4"
+    },
+    "minecraft:armorer/level_5": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/armorer/level_5",
+      "trades": "#minecraft:armorer/level_5"
+    },
+    "minecraft:butcher/level_1": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/butcher/level_1",
+      "trades": "#minecraft:butcher/level_1"
+    },
+    "minecraft:butcher/level_2": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/butcher/level_2",
+      "trades": "#minecraft:butcher/level_2"
+    },
+    "minecraft:butcher/level_3": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/butcher/level_3",
+      "trades": "#minecraft:butcher/level_3"
+    },
+    "minecraft:butcher/level_4": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/butcher/level_4",
+      "trades": "#minecraft:butcher/level_4"
+    },
+    "minecraft:butcher/level_5": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/butcher/level_5",
+      "trades": "#minecraft:butcher/level_5"
+    },
+    "minecraft:cartographer/level_1": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/cartographer/level_1",
+      "trades": "#minecraft:cartographer/level_1"
+    },
+    "minecraft:cartographer/level_2": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/cartographer/level_2",
+      "trades": "#minecraft:cartographer/level_2"
+    },
+    "minecraft:cartographer/level_3": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/cartographer/level_3",
+      "trades": "#minecraft:cartographer/level_3"
+    },
+    "minecraft:cartographer/level_4": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/cartographer/level_4",
+      "trades": "#minecraft:cartographer/level_4"
+    },
+    "minecraft:cartographer/level_5": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/cartographer/level_5",
+      "trades": "#minecraft:cartographer/level_5"
+    },
+    "minecraft:cleric/level_1": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/cleric/level_1",
+      "trades": "#minecraft:cleric/level_1"
+    },
+    "minecraft:cleric/level_2": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/cleric/level_2",
+      "trades": "#minecraft:cleric/level_2"
+    },
+    "minecraft:cleric/level_3": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/cleric/level_3",
+      "trades": "#minecraft:cleric/level_3"
+    },
+    "minecraft:cleric/level_4": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/cleric/level_4",
+      "trades": "#minecraft:cleric/level_4"
+    },
+    "minecraft:cleric/level_5": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/cleric/level_5",
+      "trades": "#minecraft:cleric/level_5"
+    },
+    "minecraft:farmer/level_1": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/farmer/level_1",
+      "trades": "#minecraft:farmer/level_1"
+    },
+    "minecraft:farmer/level_2": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/farmer/level_2",
+      "trades": "#minecraft:farmer/level_2"
+    },
+    "minecraft:farmer/level_3": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/farmer/level_3",
+      "trades": "#minecraft:farmer/level_3"
+    },
+    "minecraft:farmer/level_4": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/farmer/level_4",
+      "trades": "#minecraft:farmer/level_4"
+    },
+    "minecraft:farmer/level_5": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/farmer/level_5",
+      "trades": "#minecraft:farmer/level_5"
+    },
+    "minecraft:fisherman/level_1": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/fisherman/level_1",
+      "trades": "#minecraft:fisherman/level_1"
+    },
+    "minecraft:fisherman/level_2": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/fisherman/level_2",
+      "trades": "#minecraft:fisherman/level_2"
+    },
+    "minecraft:fisherman/level_3": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/fisherman/level_3",
+      "trades": "#minecraft:fisherman/level_3"
+    },
+    "minecraft:fisherman/level_4": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/fisherman/level_4",
+      "trades": "#minecraft:fisherman/level_4"
+    },
+    "minecraft:fisherman/level_5": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/fisherman/level_5",
+      "trades": "#minecraft:fisherman/level_5"
+    },
+    "minecraft:fletcher/level_1": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/fletcher/level_1",
+      "trades": "#minecraft:fletcher/level_1"
+    },
+    "minecraft:fletcher/level_2": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/fletcher/level_2",
+      "trades": "#minecraft:fletcher/level_2"
+    },
+    "minecraft:fletcher/level_3": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/fletcher/level_3",
+      "trades": "#minecraft:fletcher/level_3"
+    },
+    "minecraft:fletcher/level_4": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/fletcher/level_4",
+      "trades": "#minecraft:fletcher/level_4"
+    },
+    "minecraft:fletcher/level_5": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/fletcher/level_5",
+      "trades": "#minecraft:fletcher/level_5"
+    },
+    "minecraft:leatherworker/level_1": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/leatherworker/level_1",
+      "trades": "#minecraft:leatherworker/level_1"
+    },
+    "minecraft:leatherworker/level_2": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/leatherworker/level_2",
+      "trades": "#minecraft:leatherworker/level_2"
+    },
+    "minecraft:leatherworker/level_3": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/leatherworker/level_3",
+      "trades": "#minecraft:leatherworker/level_3"
+    },
+    "minecraft:leatherworker/level_4": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/leatherworker/level_4",
+      "trades": "#minecraft:leatherworker/level_4"
+    },
+    "minecraft:leatherworker/level_5": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/leatherworker/level_5",
+      "trades": "#minecraft:leatherworker/level_5"
+    },
+    "minecraft:librarian/level_1": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/librarian/level_1",
+      "trades": "#minecraft:librarian/level_1"
+    },
+    "minecraft:librarian/level_2": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/librarian/level_2",
+      "trades": "#minecraft:librarian/level_2"
+    },
+    "minecraft:librarian/level_3": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/librarian/level_3",
+      "trades": "#minecraft:librarian/level_3"
+    },
+    "minecraft:librarian/level_4": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/librarian/level_4",
+      "trades": "#minecraft:librarian/level_4"
+    },
+    "minecraft:librarian/level_5": {
+      "amount": 3.0,
+      "random_sequence": "minecraft:trade_set/librarian/level_5",
+      "trades": "#minecraft:librarian/level_5"
+    },
+    "minecraft:mason/level_1": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/mason/level_1",
+      "trades": "#minecraft:mason/level_1"
+    },
+    "minecraft:mason/level_2": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/mason/level_2",
+      "trades": "#minecraft:mason/level_2"
+    },
+    "minecraft:mason/level_3": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/mason/level_3",
+      "trades": "#minecraft:mason/level_3"
+    },
+    "minecraft:mason/level_4": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/mason/level_4",
+      "trades": "#minecraft:mason/level_4"
+    },
+    "minecraft:mason/level_5": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/mason/level_5",
+      "trades": "#minecraft:mason/level_5"
+    },
+    "minecraft:shepherd/level_1": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/shepherd/level_1",
+      "trades": "#minecraft:shepherd/level_1"
+    },
+    "minecraft:shepherd/level_2": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/shepherd/level_2",
+      "trades": "#minecraft:shepherd/level_2"
+    },
+    "minecraft:shepherd/level_3": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/shepherd/level_3",
+      "trades": "#minecraft:shepherd/level_3"
+    },
+    "minecraft:shepherd/level_4": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/shepherd/level_4",
+      "trades": "#minecraft:shepherd/level_4"
+    },
+    "minecraft:shepherd/level_5": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/shepherd/level_5",
+      "trades": "#minecraft:shepherd/level_5"
+    },
+    "minecraft:toolsmith/level_1": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/toolsmith/level_1",
+      "trades": "#minecraft:toolsmith/level_1"
+    },
+    "minecraft:toolsmith/level_2": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/toolsmith/level_2",
+      "trades": "#minecraft:toolsmith/level_2"
+    },
+    "minecraft:toolsmith/level_3": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/toolsmith/level_3",
+      "trades": "#minecraft:toolsmith/level_3"
+    },
+    "minecraft:toolsmith/level_4": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/toolsmith/level_4",
+      "trades": "#minecraft:toolsmith/level_4"
+    },
+    "minecraft:toolsmith/level_5": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/toolsmith/level_5",
+      "trades": "#minecraft:toolsmith/level_5"
+    },
+    "minecraft:wandering_trader/buying": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/wandering_trader/buying",
+      "trades": "#minecraft:wandering_trader/buying"
+    },
+    "minecraft:wandering_trader/common": {
+      "amount": 5.0,
+      "random_sequence": "minecraft:trade_set/wandering_trader/common",
+      "trades": "#minecraft:wandering_trader/common"
+    },
+    "minecraft:wandering_trader/uncommon": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/wandering_trader/uncommon",
+      "trades": "#minecraft:wandering_trader/uncommon"
+    },
+    "minecraft:weaponsmith/level_1": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/weaponsmith/level_1",
+      "trades": "#minecraft:weaponsmith/level_1"
+    },
+    "minecraft:weaponsmith/level_2": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/weaponsmith/level_2",
+      "trades": "#minecraft:weaponsmith/level_2"
+    },
+    "minecraft:weaponsmith/level_3": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/weaponsmith/level_3",
+      "trades": "#minecraft:weaponsmith/level_3"
+    },
+    "minecraft:weaponsmith/level_4": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/weaponsmith/level_4",
+      "trades": "#minecraft:weaponsmith/level_4"
+    },
+    "minecraft:weaponsmith/level_5": {
+      "amount": 2.0,
+      "random_sequence": "minecraft:trade_set/weaponsmith/level_5",
+      "trades": "#minecraft:weaponsmith/level_5"
+    }
+  },
+  "trial_spawner": {
+    "minecraft:trial_chamber/breeze/normal": {
+      "simultaneous_mobs": 1.0,
+      "simultaneous_mobs_added_per_player": 0.5,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:breeze"
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 20,
+      "total_mobs": 2.0,
+      "total_mobs_added_per_player": 1.0
+    },
+    "minecraft:trial_chamber/breeze/ominous": {
+      "loot_tables_to_eject": [
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/key",
+          "weight": 3
+        },
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/consumables",
+          "weight": 7
+        }
+      ],
+      "simultaneous_mobs_added_per_player": 0.5,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:breeze"
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 20,
+      "total_mobs": 4.0,
+      "total_mobs_added_per_player": 1.0
+    },
+    "minecraft:trial_chamber/melee/husk/normal": {
+      "simultaneous_mobs": 3.0,
+      "simultaneous_mobs_added_per_player": 0.5,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:husk"
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 20
+    },
+    "minecraft:trial_chamber/melee/husk/ominous": {
+      "loot_tables_to_eject": [
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/key",
+          "weight": 3
+        },
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/consumables",
+          "weight": 7
+        }
+      ],
+      "simultaneous_mobs": 3.0,
+      "simultaneous_mobs_added_per_player": 0.5,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:husk"
+            },
+            "equipment": {
+              "loot_table": "minecraft:equipment/trial_chamber_melee",
+              "slot_drop_chances": 0.0
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 20
+    },
+    "minecraft:trial_chamber/melee/spider/normal": {
+      "simultaneous_mobs": 3.0,
+      "simultaneous_mobs_added_per_player": 0.5,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:spider"
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 20
+    },
+    "minecraft:trial_chamber/melee/spider/ominous": {
+      "loot_tables_to_eject": [
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/key",
+          "weight": 3
+        },
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/consumables",
+          "weight": 7
+        }
+      ],
+      "simultaneous_mobs": 4.0,
+      "simultaneous_mobs_added_per_player": 0.5,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:spider"
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 20,
+      "total_mobs": 12.0
+    },
+    "minecraft:trial_chamber/melee/zombie/normal": {
+      "simultaneous_mobs": 3.0,
+      "simultaneous_mobs_added_per_player": 0.5,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:zombie"
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 20
+    },
+    "minecraft:trial_chamber/melee/zombie/ominous": {
+      "loot_tables_to_eject": [
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/key",
+          "weight": 3
+        },
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/consumables",
+          "weight": 7
+        }
+      ],
+      "simultaneous_mobs": 3.0,
+      "simultaneous_mobs_added_per_player": 0.5,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:zombie"
+            },
+            "equipment": {
+              "loot_table": "minecraft:equipment/trial_chamber_melee",
+              "slot_drop_chances": 0.0
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 20
+    },
+    "minecraft:trial_chamber/ranged/poison_skeleton/normal": {
+      "simultaneous_mobs": 3.0,
+      "simultaneous_mobs_added_per_player": 0.5,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:bogged"
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 20
+    },
+    "minecraft:trial_chamber/ranged/poison_skeleton/ominous": {
+      "loot_tables_to_eject": [
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/key",
+          "weight": 3
+        },
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/consumables",
+          "weight": 7
+        }
+      ],
+      "simultaneous_mobs": 3.0,
+      "simultaneous_mobs_added_per_player": 0.5,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:bogged"
+            },
+            "equipment": {
+              "loot_table": "minecraft:equipment/trial_chamber_ranged",
+              "slot_drop_chances": 0.0
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 20
+    },
+    "minecraft:trial_chamber/ranged/skeleton/normal": {
+      "simultaneous_mobs": 3.0,
+      "simultaneous_mobs_added_per_player": 0.5,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:skeleton"
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 20
+    },
+    "minecraft:trial_chamber/ranged/skeleton/ominous": {
+      "loot_tables_to_eject": [
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/key",
+          "weight": 3
+        },
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/consumables",
+          "weight": 7
+        }
+      ],
+      "simultaneous_mobs": 3.0,
+      "simultaneous_mobs_added_per_player": 0.5,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:skeleton"
+            },
+            "equipment": {
+              "loot_table": "minecraft:equipment/trial_chamber_ranged",
+              "slot_drop_chances": 0.0
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 20
+    },
+    "minecraft:trial_chamber/ranged/stray/normal": {
+      "simultaneous_mobs": 3.0,
+      "simultaneous_mobs_added_per_player": 0.5,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:stray"
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 20
+    },
+    "minecraft:trial_chamber/ranged/stray/ominous": {
+      "loot_tables_to_eject": [
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/key",
+          "weight": 3
+        },
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/consumables",
+          "weight": 7
+        }
+      ],
+      "simultaneous_mobs": 3.0,
+      "simultaneous_mobs_added_per_player": 0.5,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:stray"
+            },
+            "equipment": {
+              "loot_table": "minecraft:equipment/trial_chamber_ranged",
+              "slot_drop_chances": 0.0
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 20
+    },
+    "minecraft:trial_chamber/slow_ranged/poison_skeleton/normal": {
+      "simultaneous_mobs": 4.0,
+      "simultaneous_mobs_added_per_player": 2.0,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:bogged"
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 160
+    },
+    "minecraft:trial_chamber/slow_ranged/poison_skeleton/ominous": {
+      "loot_tables_to_eject": [
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/key",
+          "weight": 3
+        },
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/consumables",
+          "weight": 7
+        }
+      ],
+      "simultaneous_mobs": 4.0,
+      "simultaneous_mobs_added_per_player": 2.0,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:bogged"
+            },
+            "equipment": {
+              "loot_table": "minecraft:equipment/trial_chamber_ranged",
+              "slot_drop_chances": 0.0
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 160
+    },
+    "minecraft:trial_chamber/slow_ranged/skeleton/normal": {
+      "simultaneous_mobs": 4.0,
+      "simultaneous_mobs_added_per_player": 2.0,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:skeleton"
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 160
+    },
+    "minecraft:trial_chamber/slow_ranged/skeleton/ominous": {
+      "loot_tables_to_eject": [
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/key",
+          "weight": 3
+        },
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/consumables",
+          "weight": 7
+        }
+      ],
+      "simultaneous_mobs": 4.0,
+      "simultaneous_mobs_added_per_player": 2.0,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:skeleton"
+            },
+            "equipment": {
+              "loot_table": "minecraft:equipment/trial_chamber_ranged",
+              "slot_drop_chances": 0.0
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 160
+    },
+    "minecraft:trial_chamber/slow_ranged/stray/normal": {
+      "simultaneous_mobs": 4.0,
+      "simultaneous_mobs_added_per_player": 2.0,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:stray"
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 160
+    },
+    "minecraft:trial_chamber/slow_ranged/stray/ominous": {
+      "loot_tables_to_eject": [
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/key",
+          "weight": 3
+        },
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/consumables",
+          "weight": 7
+        }
+      ],
+      "simultaneous_mobs": 4.0,
+      "simultaneous_mobs_added_per_player": 2.0,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:stray"
+            },
+            "equipment": {
+              "loot_table": "minecraft:equipment/trial_chamber_ranged",
+              "slot_drop_chances": 0.0
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 160
+    },
+    "minecraft:trial_chamber/small_melee/baby_zombie/normal": {
+      "simultaneous_mobs_added_per_player": 0.5,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "IsBaby": 1,
+              "id": "minecraft:zombie"
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 20
+    },
+    "minecraft:trial_chamber/small_melee/baby_zombie/ominous": {
+      "loot_tables_to_eject": [
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/key",
+          "weight": 3
+        },
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/consumables",
+          "weight": 7
+        }
+      ],
+      "simultaneous_mobs_added_per_player": 0.5,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "IsBaby": 1,
+              "id": "minecraft:zombie"
+            },
+            "equipment": {
+              "loot_table": "minecraft:equipment/trial_chamber_melee",
+              "slot_drop_chances": 0.0
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 20
+    },
+    "minecraft:trial_chamber/small_melee/cave_spider/normal": {
+      "simultaneous_mobs": 3.0,
+      "simultaneous_mobs_added_per_player": 0.5,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:cave_spider"
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 20
+    },
+    "minecraft:trial_chamber/small_melee/cave_spider/ominous": {
+      "loot_tables_to_eject": [
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/key",
+          "weight": 3
+        },
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/consumables",
+          "weight": 7
+        }
+      ],
+      "simultaneous_mobs": 4.0,
+      "simultaneous_mobs_added_per_player": 0.5,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:cave_spider"
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 20,
+      "total_mobs": 12.0
+    },
+    "minecraft:trial_chamber/small_melee/silverfish/normal": {
+      "simultaneous_mobs": 3.0,
+      "simultaneous_mobs_added_per_player": 0.5,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:silverfish"
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 20
+    },
+    "minecraft:trial_chamber/small_melee/silverfish/ominous": {
+      "loot_tables_to_eject": [
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/key",
+          "weight": 3
+        },
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/consumables",
+          "weight": 7
+        }
+      ],
+      "simultaneous_mobs": 4.0,
+      "simultaneous_mobs_added_per_player": 0.5,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "id": "minecraft:silverfish"
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 20,
+      "total_mobs": 12.0
+    },
+    "minecraft:trial_chamber/small_melee/slime/normal": {
+      "simultaneous_mobs": 3.0,
+      "simultaneous_mobs_added_per_player": 0.5,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "Size": 1,
+              "id": "minecraft:slime"
+            }
+          },
+          "weight": 3
+        },
+        {
+          "data": {
+            "entity": {
+              "Size": 2,
+              "id": "minecraft:slime"
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 20
+    },
+    "minecraft:trial_chamber/small_melee/slime/ominous": {
+      "loot_tables_to_eject": [
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/key",
+          "weight": 3
+        },
+        {
+          "data": "minecraft:spawners/ominous/trial_chamber/consumables",
+          "weight": 7
+        }
+      ],
+      "simultaneous_mobs": 4.0,
+      "simultaneous_mobs_added_per_player": 0.5,
+      "spawn_potentials": [
+        {
+          "data": {
+            "entity": {
+              "Size": 1,
+              "id": "minecraft:slime"
+            }
+          },
+          "weight": 3
+        },
+        {
+          "data": {
+            "entity": {
+              "Size": 2,
+              "id": "minecraft:slime"
+            }
+          },
+          "weight": 1
+        }
+      ],
+      "ticks_between_spawn": 20,
+      "total_mobs": 12.0
+    }
+  },
+  "trim_material": {
+    "minecraft:amethyst": {
+      "asset_name": "amethyst",
+      "description": {
+        "color": "#9A5CC6",
+        "translate": "trim_material.minecraft.amethyst"
+      }
+    },
+    "minecraft:copper": {
+      "asset_name": "copper",
+      "description": {
+        "color": "#B4684D",
+        "translate": "trim_material.minecraft.copper"
+      },
+      "override_armor_assets": {
+        "minecraft:copper": "copper_darker"
+      }
+    },
+    "minecraft:diamond": {
+      "asset_name": "diamond",
+      "description": {
+        "color": "#6EECD2",
+        "translate": "trim_material.minecraft.diamond"
+      },
+      "override_armor_assets": {
+        "minecraft:diamond": "diamond_darker"
+      }
+    },
+    "minecraft:emerald": {
+      "asset_name": "emerald",
+      "description": {
+        "color": "#11A036",
+        "translate": "trim_material.minecraft.emerald"
+      }
+    },
+    "minecraft:gold": {
+      "asset_name": "gold",
+      "description": {
+        "color": "#DEB12D",
+        "translate": "trim_material.minecraft.gold"
+      },
+      "override_armor_assets": {
+        "minecraft:gold": "gold_darker"
+      }
+    },
+    "minecraft:iron": {
+      "asset_name": "iron",
+      "description": {
+        "color": "#ECECEC",
+        "translate": "trim_material.minecraft.iron"
+      },
+      "override_armor_assets": {
+        "minecraft:iron": "iron_darker"
+      }
+    },
+    "minecraft:lapis": {
+      "asset_name": "lapis",
+      "description": {
+        "color": "#416E97",
+        "translate": "trim_material.minecraft.lapis"
+      }
+    },
+    "minecraft:netherite": {
+      "asset_name": "netherite",
+      "description": {
+        "color": "#625859",
+        "translate": "trim_material.minecraft.netherite"
+      },
+      "override_armor_assets": {
+        "minecraft:netherite": "netherite_darker"
+      }
+    },
+    "minecraft:quartz": {
+      "asset_name": "quartz",
+      "description": {
+        "color": "#E3D4C4",
+        "translate": "trim_material.minecraft.quartz"
+      }
+    },
+    "minecraft:redstone": {
+      "asset_name": "redstone",
+      "description": {
+        "color": "#971607",
+        "translate": "trim_material.minecraft.redstone"
+      }
+    },
+    "minecraft:resin": {
+      "asset_name": "resin",
+      "description": {
+        "color": "#FC7812",
+        "translate": "trim_material.minecraft.resin"
+      }
+    }
+  },
+  "trim_pattern": {
+    "minecraft:bolt": {
+      "asset_id": "minecraft:bolt",
+      "decal": false,
+      "description": {
+        "translate": "trim_pattern.minecraft.bolt"
+      }
+    },
+    "minecraft:coast": {
+      "asset_id": "minecraft:coast",
+      "decal": false,
+      "description": {
+        "translate": "trim_pattern.minecraft.coast"
+      }
+    },
+    "minecraft:dune": {
+      "asset_id": "minecraft:dune",
+      "decal": false,
+      "description": {
+        "translate": "trim_pattern.minecraft.dune"
+      }
+    },
+    "minecraft:eye": {
+      "asset_id": "minecraft:eye",
+      "decal": false,
+      "description": {
+        "translate": "trim_pattern.minecraft.eye"
+      }
+    },
+    "minecraft:flow": {
+      "asset_id": "minecraft:flow",
+      "decal": false,
+      "description": {
+        "translate": "trim_pattern.minecraft.flow"
+      }
+    },
+    "minecraft:host": {
+      "asset_id": "minecraft:host",
+      "decal": false,
+      "description": {
+        "translate": "trim_pattern.minecraft.host"
+      }
+    },
+    "minecraft:raiser": {
+      "asset_id": "minecraft:raiser",
+      "decal": false,
+      "description": {
+        "translate": "trim_pattern.minecraft.raiser"
+      }
+    },
+    "minecraft:rib": {
+      "asset_id": "minecraft:rib",
+      "decal": false,
+      "description": {
+        "translate": "trim_pattern.minecraft.rib"
+      }
+    },
+    "minecraft:sentry": {
+      "asset_id": "minecraft:sentry",
+      "decal": false,
+      "description": {
+        "translate": "trim_pattern.minecraft.sentry"
+      }
+    },
+    "minecraft:shaper": {
+      "asset_id": "minecraft:shaper",
+      "decal": false,
+      "description": {
+        "translate": "trim_pattern.minecraft.shaper"
+      }
+    },
+    "minecraft:silence": {
+      "asset_id": "minecraft:silence",
+      "decal": false,
+      "description": {
+        "translate": "trim_pattern.minecraft.silence"
+      }
+    },
+    "minecraft:snout": {
+      "asset_id": "minecraft:snout",
+      "decal": false,
+      "description": {
+        "translate": "trim_pattern.minecraft.snout"
+      }
+    },
+    "minecraft:spire": {
+      "asset_id": "minecraft:spire",
+      "decal": false,
+      "description": {
+        "translate": "trim_pattern.minecraft.spire"
+      }
+    },
+    "minecraft:tide": {
+      "asset_id": "minecraft:tide",
+      "decal": false,
+      "description": {
+        "translate": "trim_pattern.minecraft.tide"
+      }
+    },
+    "minecraft:vex": {
+      "asset_id": "minecraft:vex",
+      "decal": false,
+      "description": {
+        "translate": "trim_pattern.minecraft.vex"
+      }
+    },
+    "minecraft:ward": {
+      "asset_id": "minecraft:ward",
+      "decal": false,
+      "description": {
+        "translate": "trim_pattern.minecraft.ward"
+      }
+    },
+    "minecraft:wayfinder": {
+      "asset_id": "minecraft:wayfinder",
+      "decal": false,
+      "description": {
+        "translate": "trim_pattern.minecraft.wayfinder"
+      }
+    },
+    "minecraft:wild": {
+      "asset_id": "minecraft:wild",
+      "decal": false,
+      "description": {
+        "translate": "trim_pattern.minecraft.wild"
       }
     }
   },

@@ -155,6 +155,45 @@ with the bug for as long as it did.
 **Still unverified, and therefore still claimed by nobody:** nothing after `finish_configuration` has been
 reached by a real client. Lighting, entities and chat remain exactly as unmeasured as KD-38 says.
 
+### P10-03 (continued) \u2014 a real 26.1.2 client reaches play
+
+Four further real-client runs, each naming the next gap. **The fifth ends with the client in the play state**,
+which is the first time a Java client has done so in this project \u2014 KD-38 has read "boundary (not yet
+exercised)" since Phase 09.
+
+| Run | Client said | Outcome |
+|---|---|---|
+| 3 | `Missing tag TagKey[minecraft:damage_type / minecraft:is_fire]` | fixed \u2014 `damage_type` sent with its 33 tags |
+| 4 | `enchantment: Failed to parse value` for every entry | **excluded, with its reason recorded** |
+| 5 | `Failed to decode clientbound/minecraft:set_default_spawn_position` | **play reached** |
+
+**Run 4 is the important negative result.** Every enchantment failed to parse, and the cause is a limit of the
+approach rather than a missing registry: those fields use *dispatch* codecs (a bare number or an object with a
+`type`), NBT lists are homogeneous, and a float is a different tag from a double. A converter that infers
+everything from JSON **shape** cannot express any of the three. Excluding the registry was the honest move and
+it is also what unblocked the phase: sending a payload the client rejects is a hard failure, while omitting it
+leaves a gap the client names precisely \u2014 and it named none.
+
+**A silent-corruption bug in that converter was found by the test suite, not by the client.** Adding
+`villager_trade` failed 44 tests with `unknown NBT tag id 64 in compound`: NBT lists are homogeneous, so seven
+mixed-type arrays (`number_of_dyes.summands` is `[{...}, 1]`) made the writer declare one element type and
+write another. The converter now refuses a mixed array **by name**, and the probe refuses to emit such a
+registry at extraction time, where a human is reading.
+
+**Run 5's divergence is the same lesson.** `set_default_spawn_position` decodes as
+`readerIndex(10) + length(4) exceeds writerIndex(13)`: our encoder writes `BlockPos: i64` + `angle: f32` = 12
+payload bytes, and 26.1.2 wants more. Recorded as **KD-40**. Like `enchantment`, it needs the packet's
+**schema**, not a guess at its width.
+
+**The remedy for both, and the recommended next step: stop re-implementing codecs from shape.** Capture the
+real payloads from a vanilla 26.1.2 server \u2014 the jar is already in this workspace and the P10-01 rig is the
+tool for exactly this \u2014 and replay them, as this project already does for packet ids, block states and the
+data pack.
+
+`villager_trade` and `enchantment` are excluded from the synced-registry fixture, each with its reason in the
+probe. The fixture stands at 128 436 bytes over 28 registries; `tools/vanilla-probe/extract_synced_registries.py`
+is the committed extractor.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
