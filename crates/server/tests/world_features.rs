@@ -77,6 +77,7 @@ async fn a_generated_world_contains_trees() {
     let (sx, _, sz) = game.spawn();
     let (cx, cz) = (sx >> 4, sz >> 4);
     let mut found = 0_u32;
+    let mut logs = 0_u32;
     for dx in -6..=6 {
         for dz in -6..=6 {
             let Some(chunk) = game
@@ -87,12 +88,21 @@ async fn a_generated_world_contains_trees() {
             };
             for x in 0..16 {
                 for z in 0..16 {
-                    for y in (min_y..top_y).rev() {
+                    // **Every log in the column, and no early break for them.** The first version counted a log
+                    // only if it was the *topmost* tree block in the column — and a trunk always has its own
+                    // canopy above it, so the count was structurally zero whatever the world contained.
+                    let mut column_has_tree = false;
+                    for y in min_y..top_y {
                         let block = chunk.get_block(x, y, z);
-                        if block == log || block == leaves {
-                            found += 1;
-                            break;
+                        if block == log {
+                            logs += 1;
+                            column_has_tree = true;
+                        } else if block == leaves {
+                            column_has_tree = true;
                         }
+                    }
+                    if column_has_tree {
+                        found += 1;
                     }
                 }
             }
@@ -101,6 +111,15 @@ async fn a_generated_world_contains_trees() {
     assert!(
         found > 0,
         "the counters say {} trees were placed but no log or leaf is in any loaded chunk",
+        stats.trees_placed
+    );
+    // **A canopy is not a tree.** The first version of this test accepted "a log *or* a leaf", and a canopy
+    // alone satisfies that: the capture showed oak_leaves in 63 of 81 sent chunks and oak_log in **none**, while
+    // the library writes trunks correctly. A test that accepts either cannot see a tree with no trunk.
+    assert!(
+        logs >= u32::try_from(stats.trees_placed).expect("tree count fits in u32"),
+        "{} trees were placed, so at least that many trunks should be in the chunks, but only {logs} log blocks \
+         are: the canopy is being written without the trunk",
         stats.trees_placed
     );
 }

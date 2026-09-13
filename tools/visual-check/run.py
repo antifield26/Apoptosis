@@ -31,6 +31,7 @@ window stays open.
 Press Ctrl+C here to stop the server and rig; the client window closes on its own or can be closed by hand.
 """
 
+import shutil
 import subprocess
 import sys
 import time
@@ -96,6 +97,11 @@ def main() -> int:
         return 2
 
     SCRATCH.mkdir(parents=True, exist_ok=True)
+    # **The world goes, and the trace with it.** An existing world is never regenerated — a property the server
+    # enforces on purpose — so reusing one means every run after the first shows the terrain the *first* run
+    # generated. That is what made "the world has not changed" true while the fixes that changed it were real.
+    shutil.rmtree(SCRATCH / 'world', ignore_errors=True)
+    (SCRATCH / 'trace.jsonl').unlink(missing_ok=True)
     config = SCRATCH / 'server.toml'
     config.write_text(
         '[network]\n'

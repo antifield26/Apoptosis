@@ -184,3 +184,92 @@ fn the_blocks_a_chunk_actually_contains() {
         println!("  {name:<20} {count}");
     }
 }
+
+/// A column through a tree: what the decorator actually left behind.
+#[test]
+#[ignore = "a diagnostic; run with --ignored --nocapture"]
+fn a_column_through_a_tree() {
+    use mc_persistence::chunk::ChunkPos;
+    use mc_worldgen::ChunkGenerator as _;
+
+    let registries = Registries::vanilla().expect("registry tables");
+    let context = WorldgenContext::overworld(WorldSeed::from_raw(0));
+    let generator = TerrainGenerator::new(context.clone(), &registries.blocks).expect("generator");
+    let blocks = &registries.blocks;
+
+    let oak_log = blocks.default_state("minecraft:oak_log").expect("oak_log");
+    let oak_leaves = blocks
+        .default_state("minecraft:oak_leaves")
+        .expect("oak_leaves");
+    println!(
+        "palette: oak_log()={:?} default oak_log={oak_log} default oak_leaves={oak_leaves}",
+        generator.palette().oak_log()
+    );
+    println!(
+        "        palette oak_leaves()={}",
+        generator.palette().oak_leaves()
+    );
+
+    let name_of = |state: i32| -> String {
+        for name in [
+            "minecraft:air",
+            "minecraft:stone",
+            "minecraft:dirt",
+            "minecraft:grass_block",
+            "minecraft:water",
+            "minecraft:sand",
+            "minecraft:oak_log",
+            "minecraft:oak_leaves",
+            "minecraft:coarse_dirt",
+            "minecraft:podzol",
+            "minecraft:gravel",
+        ] {
+            if let Ok(id) = blocks.default_state(name)
+                && id == state
+            {
+                return name.trim_start_matches("minecraft:").to_owned();
+            }
+        }
+        format!("state#{state}")
+    };
+
+    let mut shown = 0;
+    for chunk_x in -3..=3 {
+        for chunk_z in -3..=3 {
+            let pos = ChunkPos::new(chunk_x, chunk_z);
+            let mut chunk = generator.generate_chunk(pos, blocks).expect("generates");
+            let stats = generator.decorate(&mut chunk, pos, blocks);
+            if stats.trees_placed == 0 {
+                continue;
+            }
+            // Find a column with a log or a leaf and print it.
+            'outer: for x in 0..16 {
+                for z in 0..16 {
+                    // **Logs only.** A 5x5 canopy has twenty-five columns and one trunk, so searching for
+                    // "a log or a leaf" printed a canopy edge and made it look as though the trunk was
+                    // missing from the library too.
+                    let has = (-64..200).any(|y| chunk.get_block(x, y, z) == oak_log);
+                    if !has || shown >= 3 {
+                        continue;
+                    }
+                    shown += 1;
+                    println!(
+                        "--- chunk({chunk_x}, {chunk_z}) placed {} trees, column ({x}, {z}) ---",
+                        stats.trees_placed
+                    );
+                    for y in (55..=85).rev() {
+                        println!("    y={y:>4}  {}", name_of(chunk.get_block(x, y, z)));
+                    }
+                    break 'outer;
+                }
+            }
+            if shown >= 3 {
+                break;
+            }
+        }
+        if shown >= 3 {
+            break;
+        }
+    }
+    assert!(shown > 0, "no chunk in the 7x7 placed a tree at all");
+}
