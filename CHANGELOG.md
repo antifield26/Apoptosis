@@ -733,6 +733,27 @@ would *not* relight its chunk, which was true when it was written. It now asks f
 **break a block and watch the light follow it**. That is the one remaining way to learn whether a real client
 accepts the packet \u2014 and if it disconnects instead, that is a real finding rather than a surprise.
 
+### KD-49 (continued) \u2014 the unverified part is two `VarInt`s, not a packet
+
+The last round left KD-49 as a flat "no real client has received our `light_update`". That is true and it
+understated how much of the packet is already covered, so the risk is now **narrowed by evidence** instead.
+
+* the light half is written by **one implementation**, `write_light_data`, shared with
+  `level_chunk_with_light`;
+* a real client accepts that half on **every chunk it is sent** \u2014 753-packet sessions with no protocol error;
+* a test now asserts the two are **byte-identical** for equal light, so the sharing is pinned rather than
+  asserted in prose;
+* the only difference between the packets is the two coordinates, `VarInt` here and `i32` there, and that is
+  `javap`-confirmed and pinned by a test that asserts both encodings side by side.
+
+**What remains unexercised is therefore two `VarInt`s, not a packet.** That is a claim a person can settle by
+breaking one block with `tools/visual-check/run.py` running \u2014 which is what it now asks for.
+
+**A note on the shape of this.** Three times in this phase a finding has been narrowed by comparing against
+something real rather than by more tests: KD-44 (the jar's bytecode, after two implementations agreed with each
+other), KD-46 (vanilla's own light, after the unit tests passed), and now KD-49. The pattern is not that tests
+are weak; it is that tests written by the same author as the code share its assumptions.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

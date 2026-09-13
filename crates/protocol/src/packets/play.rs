@@ -2647,7 +2647,7 @@ impl PlayIntent {
 #[cfg(test)]
 mod tests {
     use super::{
-        COMMAND_MAX_CHARS, ConfigurationAcknowledged, JoinGame, KeepAlive, LightUpdate,
+        COMMAND_MAX_CHARS, ConfigurationAcknowledged, JoinGame, KeepAlive, LightData, LightUpdate,
         PlayDisconnect, PlayIntent, PlayPingRequest, PlayPong, PlayerPosition, SIGNATURE_LEN,
         SetChunkCacheCenter, SetChunkCacheRadius,
     };
@@ -2721,6 +2721,73 @@ mod tests {
     /// Eighteen packets at this id are all nine bytes, with the `i64` incrementing by exactly 20 — one second
     /// of ticks, which is this packet's send rate. We previously sent `i64` + `i64` + `bool` (17 bytes) and a
     /// real client reported `was larger than I expected`.
+    /// The light half of `light_update` must be **byte-identical** to the light half of
+    /// `level_chunk_with_light` for the same light.
+    ///
+    /// The two packets share `write_light_data`, so this is a statement about the code as much as the bytes —
+    /// but the bytes are what a client reads, and a real client already accepts the chunk packet's half on
+    /// every chunk it is sent. Pinning the equality isolates the one thing that genuinely differs between the
+    /// packets: the two coordinates, `VarInt` here and `i32` there (KD-49).
+    #[test]
+    fn the_light_half_of_both_packets_is_byte_identical() {
+        let light = LightData {
+            sky_light_mask: vec![1],
+            block_light_mask: vec![2],
+            empty_sky_light_mask: vec![0],
+            empty_block_light_mask: Vec::new(),
+            sky_light: vec![vec![0x5A; 2048]],
+            block_light: vec![vec![0xA5; 2048]],
+        };
+        let chunk = LevelChunkWithLight {
+            chunk_x: 1,
+            chunk_z: 2,
+            heightmaps: Vec::new(),
+            sections: Vec::new(),
+            block_entities: Vec::new(),
+            sky_light_mask: light.sky_light_mask.clone(),
+            block_light_mask: light.block_light_mask.clone(),
+            empty_sky_light_mask: light.empty_sky_light_mask.clone(),
+            empty_block_light_mask: light.empty_block_light_mask.clone(),
+            sky_light: light.sky_light.clone(),
+            block_light: light.block_light.clone(),
+        };
+        let update = LightUpdate {
+            chunk_x: 1,
+            chunk_z: 2,
+            sky_light_mask: light.sky_light_mask.clone(),
+            block_light_mask: light.block_light_mask.clone(),
+            empty_sky_light_mask: light.empty_sky_light_mask.clone(),
+            empty_block_light_mask: light.empty_block_light_mask.clone(),
+            sky_light: light.sky_light.clone(),
+            block_light: light.block_light.clone(),
+        };
+
+        let chunk_bytes = chunk.encode().expect("encodes");
+        let update_bytes = update.encode().expect("encodes");
+
+        // The chunk packet's header before the light half, with no heightmaps, no sections and no block
+        // entities: two `i32` coordinates and three zero counts, so eleven bytes. `light_update`'s is two
+        // `VarInt` coordinates, so two.
+        assert_eq!(
+            &chunk_bytes[11..],
+            &update_bytes[2..],
+            "the light a client reads must be the same bytes in both packets"
+        );
+        assert_eq!(chunk_bytes.len() - 11, update_bytes.len() - 2);
+        // Which also says the two headers really are those lengths, so the slices above are the light halves
+        // and not accidentally equal for some other reason.
+        assert_eq!(
+            &chunk_bytes[..2],
+            &[0x00, 0x00],
+            "the chunk packet's x is i32, high bytes first"
+        );
+        assert_eq!(
+            &update_bytes[..2],
+            &[0x01, 0x02],
+            "light_update's coordinates are one VarInt byte each"
+        );
+    }
+
     #[test]
     fn light_update_round_trips_its_light_data() {
         let packet = LightUpdate {
