@@ -1467,6 +1467,44 @@ Per-column biomes are still not modelled: `Biome::index()` is this crate's own s
 numbering** from the client's registry, so sending it would be a new defect rather than a fix. That is recorded
 rather than half-done.
 
+### KD-66 \u2014 the sweep is done, and the rule is: an id with an assertion is right, an id without one is wrong
+
+Every numeric registry id this server puts on the wire, and where each comes from:
+
+| id | source | verdict |
+|---|---|---|
+| block state | `blocks.tsv`, jar-derived, ids verified before writing | **was wrong** \u2014 KD-56, `default_state` returned the lowest id, wrong for 642 of 1168 blocks |
+| biome | the registry the client is sent, read out of `config-payload.bin` | **was wrong** \u2014 KD-65, every chunk said `badlands` |
+| item | `items.tsv`, jar-derived | **correct** \u2014 verified row for row by `ItemProbe`, 1506 of 1506 |
+| dimension type | `0`, hard-coded | **correct, and asserted** |
+| block entity type | `4` for a chest, in a golden test | **correct**, and the golden bytes came from a vanilla capture |
+
+**The dimension type is the one that shows what was missing elsewhere.** `connection.rs:529` sends
+`dimension_type_id: 0` and `registry_data/mod.rs:284` writes the assumption down:
+
+> `join_game` sends `dimension_type_id: 0`, so entry 0 of that registry must be the overworld.
+
+**and then line 311 asserts it**: "entry 0 must be the overworld, because join_game references dimension_type id
+0". Reading the registry out of the payload we send confirms it \u2014 entry 0 is `minecraft:overworld`, the
+registry is four long, and `minecraft:damage_type` begins right after it.
+
+**So the pattern is not "these ids are hard".** It is that **the two ids with nothing checking them were both
+wrong, and the three with something checking them are all right**:
+
+* the block-state id had a jar-derived table whose *rows* were verified and whose *default column did not exist*
+  \u2014 the check was one column narrow, and the missing column was the one that mattered;
+* the biome id was a constant named for one biome and valued for another, with a comment admitting the ids were
+  not modelled;
+* the item id had an independent extraction and is exact;
+* the dimension type id has an assertion naming the client's registry as the reason;
+* the block entity type id is pinned by golden bytes captured from a real server.
+
+**What follows for the rest of the project**, and it is the single most useful thing this review has produced:
+**a number sent to a client is a claim about a registry the client owns, and it needs the same evidence as any
+other compatibility claim** \u2014 a jar extraction, a capture, or an assertion that names the registry. The two
+that had none were both wrong, in ways that produced a world of sideways waterlogged logs and then a world of red
+sand, neither of which errored anywhere.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
