@@ -348,10 +348,12 @@ impl Game {
         // tick counter is not, and the modulo keeps the value small either way.
         self.set_time_offset(value - (self.tick_count() % 24_000).cast_signed());
         let time = (self.tick_count() % 24_000).cast_signed() + self.time_offset();
+        // The offset is still recorded, because it is what the query above and any future clock sync read.
+        // It can no longer reach the client through `set_time`: 26.1.2 removed `time_of_day` from that packet
+        // (P10-03, KD-43). The offset is applied to `time` for the reply below.
         let packet = SetTime {
             world_age: self.tick_count().cast_signed(),
-            time_of_day: time.rem_euclid(24_000),
-            tick_day_time: false,
+            flag: 0,
         };
         let ids: Vec<mc_network::bridge::ConnectionId> = self.sessions.keys().copied().collect();
         for target in ids {

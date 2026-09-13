@@ -1331,12 +1331,17 @@ impl Game {
         if !tick.is_multiple_of(20) {
             return Ok(());
         }
-        // The offset is what makes `/time set` stick: without it the per-second
-        // broadcast would immediately overwrite whatever the command chose.
+        // **26.1.2 removed `time_of_day` from the wire** (P10-03, KD-43): the captured vanilla payload is
+        // `i64` + one byte, and the client derives the time of day from the `world_clock` registry instead.
+        // So this packet can no longer carry the server's time of day, and `/time set` no longer moves a
+        // real client's sky. That is not a regression from this change — the old encoding carried
+        // `time_of_day` and a real client rejected the whole packet — but it is a capability the server does
+        // not have until 26.1's clock mechanism is implemented.
+        //
+        // `flag` mirrors the captured value rather than interpreting it.
         let packet = SetTime {
             world_age: tick as i64,
-            time_of_day: ((tick % 24_000) as i64 + self.time_offset).rem_euclid(24_000),
-            tick_day_time: true,
+            flag: 0,
         }
         .to_raw()?;
         self.broadcast_all(&packet, report);

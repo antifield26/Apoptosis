@@ -274,6 +274,48 @@ carrying id 7. Where two directions share a packet name the id must be chosen ex
 starting the server, then \u2014 after that was fixed \u2014 probed the rig's port by **connecting** to it, which
 consumed the single connection the rig exists to serve. A liveness probe must not change what it observes.
 
+### P10-03 (continued) \u2014 a real 26.1.2 client plays with no protocol errors
+
+**KD-43 closed, and the session is stable.** A real vanilla 26.1.2 client \u2014 the owner's installation,
+through the P10-01 rig \u2014 now runs a complete session against this server with **no protocol-error report
+written at all**, and is *live* rather than merely connected:
+
+| Signal | Reading |
+|---|---|
+| client \u2192 server, play id 28 | `keep_alive` \u2014 it **answered** the server's keepalive |
+| client \u2192 server, play id 13 | **410 per-tick reports** (\u224820/s) \u2014 the game loop is running |
+| server \u2192 client, play id 113 | 17 `set_time` packets, accepted |
+| server \u2192 client, play id 45 | 289 chunk packets |
+| rig | `degraded=[]` \u2014 everything observed cleanly |
+
+**What `set_time` actually is.** Captured: **eighteen** packets at id 113, all **9 bytes**, with the leading
+`i64` incrementing by exactly **20** \u2014 one second of ticks, which is this packet's send rate. The id is
+confirmed independently by the jar-derived `packet-ids-775.tsv` (`game clientbound 113 set_time`) and by the
+client's own error text. So **26.1.2 removed `time_of_day` from the wire**: the client derives the time of day
+from the `world_clock` registry, which is precisely why this phase had to make that registry work before play
+was reachable at all. We sent `i64` + `i64` + `bool`, 8 bytes too many. Fixed, pinned by a golden test.
+
+**One packet is left unexplained, deliberately.** Of nineteen packets at id 113, eighteen are 9 bytes and
+**one is 31**: its `world_age` of 7405 fits the sequence immediately before the first 9-byte packet, but the
+remaining 23 bytes contain `3f800000` (`1.0f`) twice, and `set_time` has no float field at all. Eighteen
+uniform packets settle the format, so the fix does not depend on it \u2014 but if that packet is genuinely
+something else then our id table and vanilla's disagree somewhere, and other id-labelled conclusions would need
+re-checking. Recorded as an open question rather than smoothed over.
+
+**A capability this removes, stated rather than hidden.** With `time_of_day` gone from the wire, the server can
+no longer tell the client what time of day it is, so `/time set` no longer moves a real client's sky. That is
+not a regression from this change: the previous encoding carried `time_of_day` and a real client **rejected the
+whole packet**, so `/time set` never reached a real client either way. Restoring it needs 26.1's clock
+mechanism, which belongs with the light engine work.
+
+**Two naming gaps the trace exposes**, recorded as format issues rather than bugs: serverbound play id 13
+(the per-tick report, 410 occurrences) and clientbound play id 45 (chunk data, 289) are both unnamed in the
+rig's table, so the trace shows bare ids for the two most frequent packets of a live session.
+
+**KD-38 moves, and not as far as it looks.** Its boundary was "no Java client has been driven". It is now
+"a client plays, and **nothing about what it renders has been verified**" \u2014 the client could be staring at
+an unlit void and nothing here would know. That is what P10-04 onward exists to settle.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

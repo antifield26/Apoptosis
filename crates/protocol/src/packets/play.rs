@@ -1495,6 +1495,14 @@ impl Packet for SetExperience {
 
 /// `minecraft:set_time` (clientbound play).
 ///
+/// **26.1.2 removed `time_of_day` from the wire.** Captured from a vanilla server (P10-03, KD-43): eighteen
+/// packets, all 9 bytes, `i64` + one byte, with the `i64` incrementing by exactly 20 per send. The client
+/// derives the time of day from the `world_clock` registry instead — which is why this phase had to make that
+/// registry work before play was reachable at all.
+///
+/// We previously sent `i64 world_age` + `i64 time_of_day` + `bool`, 8 bytes too many, which a real client
+/// reported as `was larger than I expected`.
+///
 /// Body: `i64` world age, `i64` time of day, `bool` tick day time.
 ///
 /// World age is monotonic and drives weather/statistics; time of day may be
@@ -1505,10 +1513,12 @@ impl Packet for SetExperience {
 pub struct SetTime {
     /// Ticks the world has existed.
     pub world_age: i64,
-    /// Time of day in ticks (`0` is sunrise; `6000` noon, `18000` midnight).
-    pub time_of_day: i64,
-    /// Whether the client should keep ticking the day/night cycle.
-    pub tick_day_time: bool,
+    /// The trailing byte, observed as `0x00` in every captured packet.
+    ///
+    /// Its meaning is **not established by the capture**. It is one byte, always zero, and it is carried
+    /// faithfully rather than interpreted: guessing that it means "tick the day/night cycle" and sending
+    /// `true` would be inventing a semantic from a field that never varied.
+    pub flag: u8,
 }
 
 impl Packet for SetTime {
@@ -1517,26 +1527,20 @@ impl Packet for SetTime {
     fn decode(payload: &[u8]) -> ServerResult<Self> {
         let mut reader = PacketReader::new(payload);
         let world_age = reader.read_i64()?;
-        let time_of_day = reader.read_i64()?;
-        let tick_day_time = reader.read_bool()?;
+        let flag = reader.read_u8()?;
         if !reader.is_empty() {
             return Err(ServerError::Protocol(format!(
                 "set_time has {} trailing bytes",
                 reader.remaining()
             )));
         }
-        Ok(Self {
-            world_age,
-            time_of_day,
-            tick_day_time,
-        })
+        Ok(Self { world_age, flag })
     }
 
     fn encode(&self) -> ServerResult<Vec<u8>> {
         let mut writer = PacketWriter::new();
         writer.write_i64(self.world_age);
-        writer.write_i64(self.time_of_day);
-        writer.write_bool(self.tick_day_time);
+        writer.write_u8(self.flag);
         Ok(writer.finish())
     }
 }
@@ -2487,6 +2491,41 @@ mod tests {
     /// We wrote the same fields with the teleport id **last**, so a client read the top byte of `x` as the id
     /// and reported `found 1 bytes extra` — a symptom that reads like a width problem and is actually an
     /// ordering one.
+    /// The exact payload a **vanilla 26.1.2 server** sends for `set_time`.
+    ///
+    /// Captured through the P10-01 rig (P10-03, KD-43). Nine payload bytes:
+    ///
+    /// ```text
+    /// 0000000000001cf2   i64 world age = 7410
+    /// 00                 one trailing byte, 0x00 in all eighteen captured packets
+    /// ```
+    ///
+    /// Eighteen packets at this id are all nine bytes, with the `i64` incrementing by exactly 20 — one second
+    /// of ticks, which is this packet's send rate. We previously sent `i64` + `i64` + `bool` (17 bytes) and a
+    /// real client reported `was larger than I expected`.
+    #[test]
+    fn the_captured_vanilla_set_time_is_reproduced() {
+        let captured: [u8; 9] = [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1c, 0xf2, // world age 7410
+            0x00, // the trailing byte
+        ];
+        let packet = SetTime {
+            world_age: 7410,
+            flag: 0,
+        };
+        let encoded = packet.encode().expect("encodes");
+        assert_eq!(
+            encoded.len(),
+            captured.len(),
+            "26.1.2 removed `time_of_day`; a 17-byte payload is what a real client rejected"
+        );
+        assert_eq!(
+            encoded, captured,
+            "the captured vanilla bytes must be reproduced exactly"
+        );
+        assert_eq!(SetTime::decode(&encoded).expect("decodes"), packet);
+    }
+
     #[test]
     fn the_captured_vanilla_player_position_is_reproduced() {
         let captured: [u8; 61] = [
@@ -3488,8 +3527,7 @@ mod tests {
 
         let time = SetTime {
             world_age: 12_345,
-            time_of_day: -6_000,
-            tick_day_time: true,
+            flag: 0,
         };
         assert_eq!(
             SetTime::decode(&time.encode().expect("encodes")).expect("decodes"),
