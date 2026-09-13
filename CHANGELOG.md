@@ -506,6 +506,40 @@ reason that looked unrelated: a command test that has nothing to do with lightin
 slow. The first was mine to fix outright (queueing every lit cell, 124 000 per chunk); the second is a genuine
 limitation that needs the caching work.
 
+### KD-46 \u2014 differential verification, and the bug it found immediately
+
+The goal's strongest verification: **run our engine on vanilla's own blocks and compare with vanilla's own
+light.** The captured packets carry both halves \u2014 a real world's block states and the light arrays vanilla
+computed for them \u2014 so no modelling sits between the two.
+
+**It found a bug on the first run.** Agreement was **87.5%, exactly 7/8**: fourteen of sixteen arrays matched
+cell for cell and the terrain section was uniformly 15 where vanilla's was mixed. Our engine was lighting the
+world **straight through its terrain**.
+
+The cause was in the light table's parser. `block` rows \u2014 the 738 blocks whose states share one triple, which
+covers **stone, dirt and every common terrain block** \u2014 were matched by a pattern arm that pushed them into a
+vector **nothing ever read**. Every state they covered kept the `UNKNOWN` default of `(0, 0, true)`:
+transparent air.
+
+**Why nothing else caught it.** The file was right. The parser ran. No error was raised. The payload was
+well-formed and a client renders it without complaint, because light levels are not something a client
+validates. The unit tests used synthetic tables where every state had an explicit row. Only running against a
+real server's data could see it \u2014 which is precisely why the goal asked for this.
+
+**The fix, and the format change that prevents a repeat.** `block` rows carried only the block's *name*, so a
+parser had no way to know which state ids they covered \u2014 the information was missing, not merely ignored. The
+probe now emits the range it already knew: `block <name> <first state id> <count> <emission> <dampening>
+<propagates>`. A row that cannot be applied is now impossible to write.
+
+**After the fix the agreement is 100.0000%** \u2014 65 536 of 65 536 cells, worst difference **0**, across eight
+chunks. The test asserts exact equality rather than a threshold, because that is what the evidence shows.
+
+**What it does not cover, asserted rather than implied.** Vanilla sent **no block-light arrays at all** for this
+capture, because a superflat world has no light sources, so block light is **not verified against a real
+server** \u2014 only against synthetic unit tests, which is the kind of evidence that just missed this bug. The
+test asserts that gap explicitly so a reader cannot take 100% as covering both layers. Verifying block light
+needs a capture of a world with light sources in it.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

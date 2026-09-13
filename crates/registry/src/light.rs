@@ -35,10 +35,16 @@ pub struct LightTable {
 impl LightTable {
     /// Parse the TSV `LightProbe.java` writes.
     ///
-    /// Two row kinds: `block <name> <emission> <dampening> <propagates>` for a block whose states all share
-    /// one triple, and `state <state id> <emission> <dampening> <propagates>` for one whose states differ.
-    /// The block rows carry no state ids, so the size of the table is only known once a state row or the
-    /// caller's block registry says so — this takes the state count explicitly.
+    /// Two row kinds:
+    ///
+    /// * `block <name> <first state id> <count> <emission> <dampening> <propagates>` for a block whose states
+    ///   all share one triple — which covers stone, dirt and every other common terrain block;
+    /// * `state <state id> <emission> <dampening> <propagates>` for a block whose states differ.
+    ///
+    /// **The range is on the block row for a reason.** An earlier format carried only the name, and the arm
+    /// below collected those rows into a list that nothing read: every state they covered silently kept the
+    /// transparent-air default, so the world was lit straight through its terrain. A differential test against
+    /// a real server found it; nothing else could, because the file was right and no error was raised.
     ///
     /// # Errors
     ///
@@ -50,7 +56,6 @@ impl LightTable {
             dampening: vec![UNKNOWN.1; state_count],
             propagates: vec![UNKNOWN.2; state_count],
         };
-        let mut block_rows: Vec<(String, u8, u8, bool)> = Vec::new();
         for (number, line) in text.lines().enumerate() {
             let line = line.trim_end();
             if line.is_empty() || line.starts_with('#') {
@@ -59,13 +64,39 @@ impl LightTable {
             let fields: Vec<&str> = line.split('\t').collect();
             let at = number + 1;
             match fields.as_slice() {
-                ["block", name, emission, dampening, propagates] => {
-                    block_rows.push((
-                        (*name).to_owned(),
-                        parse_level(emission, at)?,
-                        parse_level(dampening, at)?,
-                        parse_flag(propagates, at)?,
-                    ));
+                [
+                    "block",
+                    _name,
+                    first,
+                    count,
+                    emission,
+                    dampening,
+                    propagates,
+                ] => {
+                    let first: usize = first.parse().map_err(|_| {
+                        ServerError::CorruptData(format!("line {at}: {first:?} is not a state id"))
+                    })?;
+                    let count: usize = count.parse().map_err(|_| {
+                        ServerError::CorruptData(format!("line {at}: {count:?} is not a count"))
+                    })?;
+                    let emission = parse_level(emission, at)?;
+                    let dampening = parse_level(dampening, at)?;
+                    let propagates = parse_flag(propagates, at)?;
+                    // Every state the block owns gets the same triple. Rows beyond the registry's size are a
+                    // table/registry mismatch rather than something to clamp silently.
+                    let end = first.checked_add(count).ok_or_else(|| {
+                        ServerError::CorruptData(format!("line {at}: state range overflows"))
+                    })?;
+                    if end > state_count {
+                        return Err(ServerError::CorruptData(format!(
+                            "line {at}: states {first}..{end} run past the {state_count} the registry holds"
+                        )));
+                    }
+                    for id in first..end {
+                        table.emission[id] = emission;
+                        table.dampening[id] = dampening;
+                        table.propagates[id] = propagates;
+                    }
                 }
                 ["state", id, emission, dampening, propagates] => {
                     let id: usize = id.parse().map_err(|_| {
