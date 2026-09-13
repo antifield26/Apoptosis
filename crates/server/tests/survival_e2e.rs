@@ -153,19 +153,27 @@ fn a_player_joins_and_receives_terrain_and_vitals() {
         "the join must greet the player"
     );
 
-    // The whole view arrives over subsequent ticks.
+    // The whole view arrives over subsequent ticks — **as many as the streaming budget needs**, which is why
+    // this waits for the count rather than ticking a number of times. Eight ticks sufficed while
+    // `CHUNKS_PER_TICK` was 64 and did not when a perturbation lowered it to 8, whereupon this failed with 72
+    // of 81 having found no defect: the budget had been baked into an assertion about the view distance.
     let expected = ((2 * harness.game.view_distance() + 1).pow(2)) as usize;
     let mut total = chunks;
-    for _ in 0..8 {
+    let deadline = 400;
+    for _ in 0..deadline {
+        if total >= expected {
+            break;
+        }
         harness.game.tick().expect("tick");
         total += Harness::drain_ids(&mut out)
             .iter()
-            .filter(|id| **id == clientbound::play::LEVEL_CHUNK_WITH_LIGHT)
+            .filter(|id| **id == mc_protocol::ids::clientbound::play::LEVEL_CHUNK_WITH_LIGHT)
             .count();
     }
     assert_eq!(
         total, expected,
-        "the view distance must be exactly (2r+1)^2 chunks"
+        "the view distance must be exactly (2r+1)^2 chunks, and {deadline} ticks is long enough at any budget \
+         the server ships"
     );
 
     let player = harness.game.player(harness.id).expect("player");

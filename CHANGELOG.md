@@ -1290,6 +1290,46 @@ perturbation found a third **on its first attempt**. The inputs worth perturbing
 holds fixed and the code assumes: coordinates (many tests use the origin or `(8, 8)`), the view distance, chunk
 section counts, and the tick counts a test waits for.
 
+### KD-61 \u2014 the second perturbation: a tick count standing in for a property
+
+`CHUNKS_PER_TICK` from 64 to 8 failed one test, and again **having found no defect**:
+
+```text
+assertion `left == right` failed: the view distance must be exactly (2r+1)^2 chunks
+left: 72
+right: 81
+```
+
+```rust
+let expected = ((2 * view_distance + 1).pow(2)) as usize;   // 81, a property of the view distance
+for _ in 0..8 {                                             // 8,  a property of CHUNKS_PER_TICK
+    tick();
+    total += chunk packets;
+}
+assert_eq!(total, expected, "the view distance must be exactly (2r+1)^2 chunks");
+```
+
+**The server streamed 72 of 81 chunks in the eight ticks the test allowed, which is correct behaviour** \u2014 a
+view is streamed over as many ticks as the budget needs. The test had baked the budget it happened to run with
+into an assertion about the view distance.
+
+**Same shape as the seed perturbation an hour earlier** (KD-60) and the same shape as KD-49: **an assertion
+structurally satisfiable for one value of an input it never names.** The fix is to **wait for the count** with a
+deadline generous enough for any budget the server ships, which is what the test meant in the first place.
+
+**And the loop closed**: with the fix in, the same perturbation now passes \u2014 **1240 passed, 0 failed, 86
+suites** \u2014 with the budget restored and `git diff` clean.
+
+**Two perturbations, two findings, both closed loops.** Every one is a test that was green for a reason other
+than the property it names, and none of them could have been found by reading the tests: in both cases the
+assertion is real, and the input that makes it unable to fail is one the suite holds fixed.
+
+**A process note, recorded because it is now twice.** I committed with a failing `cargo clippy` in the previous
+commit (KD-60's doc comment needed fencing). It was caught and fixed immediately, and it is the second time this
+review has committed over a failing gate \u2014 the first being `check_line_endings` in KD-57. **The gates are run
+before the commit in both cases; what fails is reading their output as a formality once the interesting work is
+done.**
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
