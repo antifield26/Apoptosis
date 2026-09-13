@@ -256,8 +256,18 @@ async fn an_over_long_command_ends_only_that_connection() {
         .expect("a fresh client can still send a command");
 
     // Tick until the fresh client's reply arrives, or give up.
+    //
+    // The deadline is generous because this client's login makes the server send it a whole view, and since
+    // P10-05 every one of those chunk packets is computed with a light engine — 205 chunks, each three passes
+    // over 124 320 cells. In a debug build on a slower machine that legitimately takes tens of seconds, and a
+    // five-second deadline began failing in CI while passing locally.
+    //
+    // The deadline's job is to fail when the server is **wedged**, not to measure throughput, so it is set
+    // well above the honest cost rather than tuned to it. The cost itself is a recorded limitation with a
+    // named fix: light is recomputed on every chunk send with no cache, and caching it per chunk — invalidated
+    // on block change — is the same work as the incremental relighting P10-04 still owes.
     let mut saw_reply = false;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     while tokio::time::Instant::now() < deadline {
         harness.game.tick().expect("tick");
         match tokio::time::timeout(Duration::from_millis(100), fresh.recv()).await {

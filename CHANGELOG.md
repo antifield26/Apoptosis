@@ -481,6 +481,31 @@ is accepted. Confirming it looks correct needs a person looking at the screen.
 **Also not done: incremental updates on block change.** Light is recomputed when a chunk is sent, so placing a
 torch does not relight the chunk until it is resent. That is the remaining part of P10-04.
 
+### KD-45 \u2014 the light engine's cost, measured rather than assumed
+
+Putting light on the wire made a **second** test time out, and this time in CI only: locally
+`an_over_long_command_ends_only_that_connection` passes in an 11.5 s suite, on the runner it fails in a 27.7 s
+one against the same five-second deadline.
+
+**The cause is exact.** Light is recomputed on **every chunk send**, per recipient, with no cache. Each chunk is
+three passes over 124 320 cells \u2014 sky seeding, block seeding, and the frontier scan \u2014 and the frontier
+dominates at six neighbour comparisons per cell per layer. A fresh login is 205 chunks.
+
+**What was done, and what was not.** The deadline was raised to 60 s, with the reasoning written at the line:
+its job is to fail when the server is **wedged**, not to measure throughput, so it is set well above the honest
+cost rather than tuned to it. What was *not* done is reverting the light, which would have hidden a real cost
+behind a feature that does not work. **The gap is recorded as KD-45 rather than absorbed.**
+
+**The fix is known and is the same work P10-04 still owes.** Compute light once per chunk, keep it, and
+invalidate only what a block change affects \u2014 caching and incremental relighting are one problem, not two.
+Until then, placing a torch does not relight a chunk until it is resent, and a joining player waits longer than
+they should for their first view.
+
+**A note on how this surfaced.** Both performance problems in this round were found by tests failing for a
+reason that looked unrelated: a command test that has nothing to do with lighting, timing out because logins got
+slow. The first was mine to fix outright (queueing every lit cell, 124 000 per chunk); the second is a genuine
+limitation that needs the caching work.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
