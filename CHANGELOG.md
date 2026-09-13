@@ -831,6 +831,42 @@ the cause is something else, and it is **not known**.
 spawning anywhere else would be given the wrong centre. Recorded rather than fixed here, since the join path is
 not something to change again without knowing what is actually wrong.
 
+### KD-50 (continued) \u2014 two hypotheses tested and both disproved
+
+The client still sits on the loading screen. Two explanations were tested against the jar and **neither holds**,
+which is worth as much as a cause would be: it removes them from the search and it records that the obvious
+answers are wrong.
+
+**Hypothesis 1, disproved: the chunk-cache packets.** I claimed `set_chunk_cache_center` and
+`set_chunk_cache_radius` were never sent. They were, all along, by the network layer at
+`connection.rs:542` \u2014 and I had measured the trace for ids **11** and **12**, which are
+`chunk_batch_finished` and `chunk_batch_start`. The real ids are **94** and **95**, and our own `ids.rs` has
+always said so. My "sent 0 times" was an artefact of labelling the packets from memory. The duplicate sends
+this produced are reverted.
+
+**Hypothesis 2, disproved: the chunk-batch protocol.** 26.x has `chunk_batch_start` (12) and
+`chunk_batch_finished` (11), which we never send, and the loading screen is driven by a `LevelLoadTracker`
+whose `loadingPacketsReceived()` looked like the gate. `javap` on
+`ClientPacketListener.handleChunkBatchFinished` shows it calling only `ChunkBatchSizeCalculator.onBatchFinished`
+and replying with `ServerboundChunkBatchReceivedPacket`: **the batch is for pacing, and it does not touch the
+load tracker.** So it is not the gate either.
+
+**What the client's own classes say.** `LevelLoadingScreen` dismisses on `LevelLoadTracker.isLevelReady()`, and
+the tracker holds a `ChunkLoadStatusView` the server can push, plus a `CLIENT_WAIT_TIMEOUT_MS` and a
+`LEVEL_LOAD_CLOSE_DELAY_MS`. There is also a `ServerboundPlayerLoadedPacket` (serverbound 44), a handshake our
+server does not model \u2014 it logs it as an unmodelled packet at most.
+
+**What is established, and what is not.** The client receives `join_game`, the cache centre and radius, its
+position, and 289 chunks including the one it stands in, and it reports no protocol error. **Why
+`isLevelReady()` stays false is not known.** The next step is concrete and small: find what calls
+`LevelLoadTracker.loadingPacketsReceived()` in `ClientPacketListener` \u2014 it is at bytecode offset 658 and
+is neither chunk-batch handler \u2014 and read `isLevelReady()`'s actual condition rather than inferring it from
+method names.
+
+**One latent bug found on the way**, recorded but not fixed: `connection.rs:542` sends
+`SetChunkCacheCenter { x: 0, z: 0 }` **hard-coded**. The test world's spawn happens to be chunk (0, 0), so it is
+not this symptom, but a player spawning elsewhere would be handed the wrong centre.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
