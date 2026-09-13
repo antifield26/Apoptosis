@@ -52,7 +52,7 @@ async fn start_rig(upstream: SocketAddr) -> (SocketAddr, SharedBuf) {
     let buf = SharedBuf::default();
     let sink = buf.clone();
     tokio::spawn(async move {
-        let _ = serve(listener, upstream, Some(1), move || {
+        let _ = serve(listener, upstream, Some(1), None, move || {
             Box::new(sink.clone()) as Box<dyn Write + Send>
         })
         .await;

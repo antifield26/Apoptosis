@@ -20,6 +20,9 @@ struct Args {
     listen: SocketAddr,
     upstream: SocketAddr,
     out: PathBuf,
+    /// When set, every packet's payload is also written here, one file per packet. For payloads too large to
+    /// keep as a trace head — a `registry_data` body is hundreds of kilobytes.
+    bodies: Option<PathBuf>,
     once: bool,
 }
 
@@ -31,6 +34,7 @@ fn parse_args() -> Result<Args, String> {
     let mut listen: Option<SocketAddr> = None;
     let mut upstream: Option<SocketAddr> = None;
     let mut out: Option<PathBuf> = None;
+    let mut bodies: Option<PathBuf> = None;
     let mut once = false;
 
     let mut args = std::env::args().skip(1);
@@ -54,6 +58,7 @@ fn parse_args() -> Result<Args, String> {
                         .map_err(|e| format!("--upstream: {e}"))?,
                 );
             }
+            "--bodies" => bodies = Some(PathBuf::from(value("--bodies")?)),
             "--out" => out = Some(PathBuf::from(value("--out")?)),
             "--once" => once = true,
             "--help" | "-h" => return Err(usage()),
@@ -65,6 +70,7 @@ fn parse_args() -> Result<Args, String> {
         listen: listen.ok_or_else(|| format!("--listen is required\n{}", usage()))?,
         upstream: upstream.ok_or_else(|| format!("--upstream is required\n{}", usage()))?,
         out: out.ok_or_else(|| format!("--out is required\n{}", usage()))?,
+        bodies,
         once,
     })
 }
@@ -111,7 +117,15 @@ async fn main() {
         }
     };
 
-    if let Err(error) = serve(listener, args.upstream, args.once.then_some(1), new_sink).await {
+    if let Err(error) = serve(
+        listener,
+        args.upstream,
+        args.once.then_some(1),
+        args.bodies,
+        new_sink,
+    )
+    .await
+    {
         eprintln!("capture-rig failed: {error}");
         std::process::exit(1);
     }

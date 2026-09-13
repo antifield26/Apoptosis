@@ -38,6 +38,7 @@ use mc_protocol::ids::{clientbound, serverbound};
 use md5::{Digest, Md5};
 use serde::Serialize;
 use std::io::Write;
+use std::path::PathBuf;
 
 /// Which way a frame was travelling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -384,6 +385,8 @@ pub struct Session {
     c2s_bytes: u64,
     s2c_bytes: u64,
     write_error: Option<String>,
+    /// When set, each packet's payload is also written here as `<seq>_<dir>_<state>_<id>.bin`.
+    bodies: Option<PathBuf>,
 }
 
 impl Session {
@@ -402,6 +405,39 @@ impl Session {
             c2s_bytes: 0,
             s2c_bytes: 0,
             write_error: None,
+            bodies: None,
+        }
+    }
+
+    /// Also write each packet's payload to `dir`, one file per packet.
+    ///
+    /// The **payload** is what is written — the bytes after the id `VarInt` — because that is what a
+    /// `RawPacket` carries and therefore what a replay needs. The name encodes the metadata a file listing
+    /// cannot: `seq` for ordering, direction and state for context, id for identity.
+    ///
+    /// This exists for payloads too large to keep as a readable head, which is the case for
+    /// `registry_data`: at hundreds of kilobytes a truncated head cannot capture one at all.
+    pub fn dump_bodies_to(&mut self, dir: impl Into<PathBuf>) {
+        self.bodies = Some(dir.into());
+    }
+
+    /// Write one packet's payload, if a dump directory is set. Failures are recorded, not fatal: a capture
+    /// that cannot write one file is still a capture.
+    fn dump_body(&mut self, seq: u64, direction: Direction, state: State, id: i32, payload: &[u8]) {
+        let Some(dir) = self.bodies.clone() else {
+            return;
+        };
+        if let Err(error) = std::fs::create_dir_all(&dir) {
+            self.write_error = Some(format!("body dump: {error}"));
+            return;
+        }
+        let name = format!(
+            "{seq:06}_{}_{}_{id}.bin",
+            direction.as_str(),
+            state.as_str()
+        );
+        if let Err(error) = std::fs::write(dir.join(name), payload) {
+            self.write_error = Some(format!("body dump: {error}"));
         }
     }
 
@@ -523,7 +559,11 @@ impl Session {
                 Direction::ServerToClient => self.s2c_frames += 1,
             }
             self.advance(direction, record.id, &packet.payload);
+            let (seq, id) = (record.seq, record.id);
+            let payload = packet.payload.clone();
+            let state = record.state;
             self.emit(&TraceEvent::Packet(record));
+            self.dump_body(seq, direction, state, id, &payload);
         }
 
         // Report a degradation once, at the moment it happens.
@@ -898,6 +938,66 @@ mod tests {
             4,
             "the raw-in-compressed frames must be recorded"
         );
+    }
+
+    #[test]
+    fn a_body_dump_writes_one_named_file_per_recorded_packet() {
+        // The dump's failure mode is silence -- a missing dump leaves an empty directory and no error -- so
+        // the invariant is stated against the trace: one file per recorded packet, named as documented.
+        let dir = std::env::temp_dir().join(format!("mc-rig-bodies-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let (mut session, buf) = new_session();
+        session.dump_bodies_to(dir.clone());
+        enter_login(&mut session);
+
+        let recorded = packets(&buf.text()).len();
+        assert!(
+            recorded > 0,
+            "the fixture must record something for this to mean anything"
+        );
+
+        let mut files: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap_or_else(|error| panic!("dump directory {dir:?} was not created: {error}"))
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        files.sort();
+
+        assert_eq!(
+            files.len(),
+            recorded,
+            "one file per recorded packet, got {files:?} for {recorded} packets"
+        );
+        for name in &files {
+            // <seq>_<dir>_<state>_<id>.bin
+            let parts: Vec<&str> = name.trim_end_matches(".bin").split('_').collect();
+            assert_eq!(parts.len(), 4, "unexpected dump name {name}");
+            assert_eq!(
+                parts[0].len(),
+                6,
+                "seq should be zero-padded to six digits in {name}"
+            );
+            assert!(
+                matches!(parts[1], "c2s" | "s2c"),
+                "direction should be the short form in {name}"
+            );
+            let path = dir.join(name);
+            assert!(
+                std::fs::metadata(&path).expect("dumped file").len() > 0,
+                "{name} is empty"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_dump_directory_means_no_files_are_written() {
+        // The mode is opt-in, so a normal trace must not start scattering files.
+        let (mut session, buf) = new_session();
+        enter_login(&mut session);
+        assert!(!packets(&buf.text()).is_empty());
+        // Nothing to assert on disk: the point is that construction alone creates nothing and does not panic.
     }
 
     #[test]

@@ -526,7 +526,10 @@ impl Packet for PlayerPosition {
 
     fn decode(payload: &[u8]) -> ServerResult<Self> {
         let mut reader = PacketReader::new(payload);
+        // The teleport id **leads**. Captured from a vanilla 26.1.2 server: `01` then six `f64`s, two `f32`s
+        // and an `i32` of flags, which is exactly the 61 bytes the wire reports (P10-03).
         Ok(Self {
+            teleport_id: reader.read_varint()?,
             x: reader.read_f64()?,
             y: reader.read_f64()?,
             z: reader.read_f64()?,
@@ -536,12 +539,14 @@ impl Packet for PlayerPosition {
             yaw: reader.read_f32()?,
             pitch: reader.read_f32()?,
             flags: reader.read_i32()?,
-            teleport_id: reader.read_varint()?,
         })
     }
 
     fn encode(&self) -> ServerResult<Vec<u8>> {
         let mut writer = PacketWriter::new();
+        // Leading, and it matters: a client reads this first. Writing it last made the client consume our
+        // first byte of `x` as the id and then report one byte left over.
+        writer.write_varint(self.teleport_id);
         writer.write_f64(self.x);
         writer.write_f64(self.y);
         writer.write_f64(self.z);
@@ -551,7 +556,6 @@ impl Packet for PlayerPosition {
         writer.write_f32(self.yaw);
         writer.write_f32(self.pitch);
         writer.write_i32(self.flags);
-        writer.write_varint(self.teleport_id);
         Ok(writer.finish())
     }
 }
@@ -2466,6 +2470,62 @@ mod tests {
     /// Ours sent 12 bytes (`BlockPos` + one `f32`) and a real client rejected it with
     /// `readerIndex(10) + length(4) exceeds writerIndex(13)`. Pinning the captured bytes is what stops that
     /// returning: the shape was inferred once and never checked against anything real.
+    /// The exact payload a **vanilla 26.1.2 server** sends for `player_position`.
+    ///
+    /// Captured through the P10-01 rig (P10-03). 61 payload bytes after the id:
+    ///
+    /// ```text
+    /// 01                 VarInt teleport id          <- leading
+    /// bfe0000000000000   f64 x = -0.5
+    /// c04e000000000000   f64 y = -60.0
+    /// bfe0000000000000   f64 z = -0.5
+    /// 0000000000000000   f64 dx, dy, dz
+    /// 00000000 00000000  f32 yaw, f32 pitch
+    /// 00000000           i32 flags
+    /// ```
+    ///
+    /// We wrote the same fields with the teleport id **last**, so a client read the top byte of `x` as the id
+    /// and reported `found 1 bytes extra` — a symptom that reads like a width problem and is actually an
+    /// ordering one.
+    #[test]
+    fn the_captured_vanilla_player_position_is_reproduced() {
+        let captured: [u8; 61] = [
+            0x01, // teleport id, leading
+            0xbf, 0xe0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // x = -0.5
+            0xc0, 0x4e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // y = -60.0
+            0xbf, 0xe0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // z = -0.5
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // dx
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // dy
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // dz
+            0x00, 0x00, 0x00, 0x00, // yaw
+            0x00, 0x00, 0x00, 0x00, // pitch
+            0x00, 0x00, 0x00, 0x00, // flags
+        ];
+        let packet = PlayerPosition {
+            teleport_id: 1,
+            x: -0.5,
+            y: -60.0,
+            z: -0.5,
+            velocity_x: 0.0,
+            velocity_y: 0.0,
+            velocity_z: 0.0,
+            yaw: 0.0,
+            pitch: 0.0,
+            flags: 0,
+        };
+        let encoded = packet.encode().expect("encodes");
+        assert_eq!(
+            encoded.len(),
+            captured.len(),
+            "a real client accepted exactly this many bytes"
+        );
+        assert_eq!(
+            encoded, captured,
+            "the captured vanilla bytes must be reproduced exactly"
+        );
+        assert_eq!(PlayerPosition::decode(&encoded).expect("decodes"), packet);
+    }
+
     #[test]
     fn the_captured_vanilla_payload_is_reproduced() {
         let captured: [u8; 36] = [

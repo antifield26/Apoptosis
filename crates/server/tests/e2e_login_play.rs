@@ -101,9 +101,21 @@ async fn offline_login_reaches_play_with_registry_payload() {
         .iter()
         .find(|registry| registry.registry == "minecraft:dimension_type")
         .expect("dimension registry");
-    assert_eq!(dimension.entries.len(), 1);
+    // Entry **0** is the contract, not the count: `join_game` references `dimension_type_id: 0`, so the
+    // overworld has to be first. The payload is now the captured vanilla set (4 dimensions) rather than the
+    // single hand-authored entry this test used to expect.
     assert_eq!(dimension.entries[0].id, "minecraft:overworld");
-    assert!(dimension.entries[0].data.is_some(), "dimension element NBT");
+    assert!(
+        !dimension.entries.is_empty(),
+        "the dimension registry must not be empty: a real client refuses an empty synced registry"
+    );
+    // Ids only, and that is deliberate rather than a regression: a 26.1.2 client declared
+    // `minecraft:core = 26.1.2` under `select_known_packs`, so vanilla sends the registry shape without
+    // element data, and the client reads the content from its own jar (P10-03, captured).
+    assert!(
+        dimension.entries[0].data.is_none(),
+        "elements are ids only; sending data the protocol does not ask for is what broke enchantment"
+    );
 
     assert_eq!(joined.join.dimension_name, "minecraft:overworld");
     assert_eq!(joined.join.max_players, 10);

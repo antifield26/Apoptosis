@@ -235,6 +235,45 @@ that packet too, and it is already captured.
 the probe. The same capture now offers a way to close them too: the vanilla server's `registry_data` packets
 can be replayed rather than re-encoded from JSON shape.
 
+### P10-03 (continued) \u2014 replaying the server's own bytes, and two more play packets fixed
+
+The capture remedy, applied to the registries. **The finding inverted the approach.**
+
+**Vanilla sends registry ids and no element data.** 382 entries across 28 registries in 8 781 bytes, with every
+`has_data` flag false, followed by 32 316 bytes of tags. It can, because the client declared
+`minecraft:core = 26.1.2` under `select_known_packs`, so the server sends the registry *shape* and the client
+reads the content from its own jar.
+
+So our previous design was wrong twice over, and only the first was visible. It could not encode
+`enchantment`'s dispatch codecs or `villager_trade`'s mixed-type arrays \u2014 the failures I spent two rounds
+excluding registries over \u2014 and more fundamentally it was **sending data the protocol does not ask for**.
+The client parsed it because it was there, and refused when it did not match. Both \"problems\" were
+self-inflicted. (`villager_trade` is not even a synced registry: vanilla does not send it at all.)
+
+The converter, its JSON fixture and both exclusions are gone. The payload is now the vanilla server's own
+bytes, replayed verbatim from a committed 41 338-byte fixture built by
+`tools/vanilla-probe/build_config_payload.py`, with the rig's new `--bodies` mode as the capture path.
+
+**`player_position` (KD-42) fixed from captured bytes.** The client reported `found 1 bytes extra`, which reads
+as a width problem. The capture showed the total was right and the **order** was not: 26.1.2 leads with the
+`VarInt` teleport id and we wrote it last, so the client consumed the top byte of `x` as the id. Fixed, pinned
+by a golden test holding the 61 captured bytes, and verified \u2014 the client's session grew from **119 to 444
+packets** past it.
+
+**`set_time` is recorded, not guessed.** The client now rejects it as `was larger than I expected`. Our payload
+is 17 bytes; the capture shows 9-byte packets at that id repeating periodically, consistent with a `set_time`
+reduced to `i64` + `bool`, but **also a 31-byte packet at the same id that fits neither shape**. Until those
+reconcile, our id 113 may not be vanilla's `set_time`, and encoding from an unverified reference is precisely
+the mistake this method exists to avoid. Recorded as KD-43.
+
+**A trap worth remembering.** `SelectKnownPacks`'s `Packet::ID` is the **serverbound** id, because the type
+models the reply a client sends. Rewriting our send path as `to_raw()` therefore emitted a clientbound packet
+carrying id 7. Where two directions share a packet name the id must be chosen explicitly; a test now asserts it.
+
+**Two more of my own defects.** The capture script's readiness check trusted a **stale log** and skipped
+starting the server, then \u2014 after that was fixed \u2014 probed the rig's port by **connecting** to it, which
+consumed the single connection the rig exists to serve. A liveness probe must not change what it observes.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

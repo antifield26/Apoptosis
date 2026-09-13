@@ -120,6 +120,7 @@ pub async fn serve<F>(
     listener: tokio::net::TcpListener,
     upstream: std::net::SocketAddr,
     max_connections: Option<usize>,
+    body_dir: Option<std::path::PathBuf>,
     mut new_sink: F,
 ) -> std::io::Result<()>
 where
@@ -129,7 +130,13 @@ where
     loop {
         let (client, peer) = listener.accept().await?;
         let sink = new_sink();
-        let session = Arc::new(Mutex::new(Session::new(sink)));
+        let mut session = Session::new(sink);
+        // Opt-in and threaded rather than global: the rig owns no policy about where traces go, which is
+        // why the sink is already a caller-supplied factory.
+        if let Some(dir) = &body_dir {
+            session.dump_bodies_to(dir.clone());
+        }
+        let session = Arc::new(Mutex::new(session));
         let started = Instant::now();
         if let Err(error) = relay_one(client, upstream, Arc::clone(&session), peer).await {
             tracing::warn!(%error, %peer, "relay ended with an error");
