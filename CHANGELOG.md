@@ -1330,6 +1330,35 @@ review has committed over a failing gate \u2014 the first being `check_line_endi
 before the commit in both cases; what fails is reading their output as a formality once the interesting work is
 done.**
 
+### KD-62 \u2014 two more perturbations, and the one test in the tree that guards against this review's subject
+
+**`LIGHT_UPDATES_PER_TICK` from 4 to 1: nothing failed.** 1240 passed, 0 failed. The light-update tests wait for
+what they assert rather than assuming a budget, so lowering it changed nothing. A perturbation that finds
+nothing is worth recording as such \u2014 otherwise the method reads as though every input hides a defect.
+
+**The view-distance clamp from `(2, 16)` to `(2, 2)`: one failure, and it is the harness working correctly.**
+
+```rust
+// The replay is not accidentally empty: the game did real work in both runs.
+assert!(
+    first_reports.iter().any(|report| report.chunks_sent > 0),
+    "the script streamed chunks"
+);
+```
+
+At a view distance of two the join sends the whole 5x5 view itself, so no *subsequent* tick has a chunk in it,
+and this guard fires. **It is a sentinel against the determinism test becoming vacuous**, and at that input the
+test genuinely is vacuous \u2014 so failing is the correct behaviour, not a defect.
+
+**It is the only assertion of its kind in the codebase**, and it anticipates exactly what this review has spent
+four rounds finding: a test that passes for a reason other than the property it names. `the same seed replays
+the same tick reports` compares two runs, and two empty runs compare equal; the guard is what stops that from
+counting as a pass. Every other test examined here would have been improved by one.
+
+**That is the positive result of the perturbation work.** Three perturbations found two defects (KD-60, KD-61)
+and one deliberate guard; the guard is the pattern worth copying, and the four rounds of this review are the
+argument for it.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
