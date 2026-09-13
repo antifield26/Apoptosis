@@ -60,7 +60,14 @@ def main() -> int:
             return 2
 
     SCRATCH.mkdir(parents=True, exist_ok=True)
+    # **The world goes too.** A world that already exists is never regenerated — that is a property the
+    # server enforces on purpose — so a capture that reuses one examines terrain from whichever seed created
+    # it, which is what made the wire and the engine disagree about the same chunk.
+    shutil.rmtree(SCRATCH / "world", ignore_errors=True)
     shutil.rmtree(BODIES, ignore_errors=True)
+    # The trace too: its `seq` continues across runs while the body file names restart at zero, so leaving
+    # it makes any comparison between the two a comparison between different runs.
+    (SCRATCH / "trace.jsonl").unlink(missing_ok=True)
     config = SCRATCH / 'server.toml'
     config.write_text(
         '[network]\n'

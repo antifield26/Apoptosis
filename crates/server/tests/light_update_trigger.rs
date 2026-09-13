@@ -77,6 +77,24 @@ async fn break_a_block_so_a_real_client_receives_a_light_update() {
     let (bx, by, bz) = (x.floor() as i32, y.floor() as i32 - 1, z.floor() as i32);
     println!("breaking the block at ({bx}, {by}, {bz}) under the player at ({x}, {y}, {z})");
 
+    // **Wait until the chunks around us are there before digging.** The server refuses a break in a chunk it has
+    // not loaded, and a client is in exactly that state for a while after `join_game` — so a break sent
+    // immediately is silently discarded, which is what made the first `light_update` capture contain zero id-48
+    // packets and left KD-49 resting on a packet that was never sent.
+    let mut seen_chunks = 0_u32;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    while seen_chunks < 40 && tokio::time::Instant::now() < deadline {
+        match tokio::time::timeout(Duration::from_secs(10), client.recv()).await {
+            Ok(Ok(packet)) => {
+                if packet.id == mc_protocol::ids::clientbound::play::LEVEL_CHUNK_WITH_LIGHT {
+                    seen_chunks += 1;
+                }
+            }
+            _ => break,
+        }
+    }
+    println!("received {seen_chunks} chunks before digging");
+
     client
         .send_raw_packet(&RawPacket::new(
             serverbound::play::PLAYER_ACTION,
@@ -86,7 +104,9 @@ async fn break_a_block_so_a_real_client_receives_a_light_update() {
         .expect("the break is sent");
 
     // The server needs a few ticks: one to apply the change and queue the light, and up to a tick's worth of
-    // the per-tick budget to send it. Three seconds is far more than that and costs nothing.
-    tokio::time::sleep(Duration::from_secs(3)).await;
-    println!("done; the light_update went to every session holding that chunk");
+    // the per-tick budget to send it.
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    println!(
+        "done; if the break was accepted, a light_update went to every session holding that chunk"
+    );
 }

@@ -724,19 +724,20 @@ impl PalettedContainer {
     ) -> ServerResult<Self> {
         let bits = u32::from(reader.read_u8()?);
         if bits == 0 {
-            // Single-value form: one global palette id, no palette and no index
-            // array. `entries` is the whole container, so the decoded value list
-            // is that many copies of the id.
+            // Single-value form: one global palette id, no palette and no index array. `entries` is the whole
+            // container, so every slot indexes the one palette entry — **index `0`, not the id it holds**. The
+            // two coincide for air, whose id is `0`, which is why handing back the id went unnoticed until a
+            // uniform section of something else (`palette=[86]`, `values=[86, ..]`) made `palette[values[i]]`
+            // an out-of-range read.
             let value = reader.read_varint()?;
             if value < 0 {
                 return Err(ServerError::Protocol(format!(
                     "single-value palette id {value} is negative"
                 )));
             }
-            let value = value as u32;
             return Ok(Self {
-                palette: vec![value],
-                values: vec![value; entries],
+                palette: vec![value as u32],
+                values: vec![0; entries],
                 bits,
             });
         }
@@ -3230,14 +3231,17 @@ mod tests {
         ChunkSection {
             block_count: 0,
             fluid_count: 0,
+            // One palette entry, so every slot holds the index **`0`** — not the id the entry carries. The
+            // two are the same number only for air, which is why this fixture and the decoder it was written
+            // against could both be wrong and the suite stay green.
             block_states: PalettedContainer::new(
                 vec![block_state],
-                vec![block_state; BLOCKS_PER_SECTION],
+                vec![0; BLOCKS_PER_SECTION],
                 packing::BLOCK_MIN_BITS,
             ),
             biomes: PalettedContainer::new(
                 vec![biome],
-                vec![biome; BIOMES_PER_SECTION],
+                vec![0; BIOMES_PER_SECTION],
                 NETWORK_BIOME_MIN_BITS,
             ),
         }
@@ -3507,12 +3511,13 @@ mod tests {
 
     #[test]
     fn paletted_container_rejects_the_single_value_id_zero_and_one() {
-        // bits = 0, single palette id 1: 64 biome cells of value 1.
+        // bits = 0, single palette id 1: 64 biome cells, every one of them **index 0** into that one-entry
+        // palette. Holding the id here instead was the decoder's bug, restated as an expectation.
         let mut reader = crate::wire::PacketReader::new(&[0x00, 0x01]);
         let container =
             PalettedContainer::decode(&mut reader, BIOMES_PER_SECTION, NETWORK_BIOME_MIN_BITS)
                 .expect("decodes");
-        assert_eq!(container.values, vec![1; BIOMES_PER_SECTION]);
+        assert_eq!(container.values, vec![0; BIOMES_PER_SECTION]);
         assert_eq!(container.bits, 0);
     }
 
@@ -3704,7 +3709,10 @@ mod tests {
                 },
                 biomes: PalettedContainer {
                     palette: vec![1],
-                    values: vec![1; BIOMES_PER_SECTION],
+                    // **Index `0`, not the id.** The golden bytes carry a single-value palette of id `1`, so
+                    // every slot indexes that one entry; this expectation used to hold `1` in every slot, which
+                    // is the same misunderstanding the decoder had, and it is why the suite stayed green.
+                    values: vec![0; BIOMES_PER_SECTION],
                     bits: 0,
                 },
             }]

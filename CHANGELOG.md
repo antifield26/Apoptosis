@@ -953,6 +953,68 @@ outside them: the **block-state ids** the chunk palette carries, which a client 
 sent it and would render as the wrong block if the two disagreed; or client-side rendering of the sections
 themselves. Both are testable the same way \u2014 against what a real client does with what we send.
 
+### KD-52 \u2014 a real decoder bug, found at the end of eight errors of my own
+
+**`PalettedContainer::decode` put the block-state id where the palette index belongs.** For the single-value
+form (`bits = 0`) it returned
+
+```rust
+palette: vec![value],
+values: vec![value; entries],   // the id in every slot
+```
+
+and `values` is documented as **indices into `palette`**, so every slot must be `0`. The result is that
+`palette[values[i]]` is an out-of-range read for every container whose single value is not zero.
+
+**It hid because the single-value form is overwhelmingly used for air, whose state id is `0`** \u2014 so the
+wrong index and the right one are the same number, and every round-trip test agreed with itself. It showed only
+for a uniform section of something else: a chunk section that is **entirely leaves**, `palette=[86]`,
+`values=[86, 86, ...]`.
+
+**The test fixture had the same misunderstanding.** `uniform_section`, which every chunk test is built from,
+constructed `values: vec![block_state; BLOCKS_PER_SECTION]` \u2014 the decoder's bug written a second time, in
+the fixture, so six tests failed the moment the decoder was corrected. **This is KD-44's shape exactly**: an
+implementation and its tests sharing an assumption, green together and wrong together.
+
+**What it cost.** With the block read of a leaf section coming back as air, a correctly-shaded canopy looked like
+a cell open to the sky reading `14`, and the search went after the light engine. It ended when the engine was
+asked directly: the world has leaves through `y = 48..63`, the packet's own section 7 is `palette=[86]`, and the
+light is right.
+
+### KD-49 corrected \u2014 the acceptance test rested on a packet that was never sent
+
+The `light_update` capture contained **zero** id-48 packets. The driver announced "breaking the block at ..."
+before sending anything, and the server **refuses a break in a chunk it has not loaded** \u2014 which is exactly
+the state a client is in right after `join_game`. So the run that concluded "a real client accepts our
+`light_update`" had no `light_update` in it, and the client accepted nothing.
+
+The driver now **waits for the chunks** rather than a fixed sleep, and the same run produced **three**
+`light_update`s. A test then checks their content: every light section appears in exactly one mask, the array
+count matches the set bits, and the surface invariant holds after the update. **All three pass.**
+
+### What is now established about the light
+
+Three independent checks, all passing:
+
+* the **engine**, over a 9x9 of chunks of generated terrain, at the **production seed** (`DEFAULT_RANDOM_SEED`
+  is `0`; the test had been choosing its own, so it was examining a different world from the capture);
+* the **wire**, over **81 chunks** a real session captured, reconstructed the way a client reads it;
+* the **`light_update`** that a block change produces.
+
+**Eight measurement errors of mine were eliminated on the way**, each found by printing bytes rather than
+re-reasoning: a packet id labelled from memory, a body read from byte 0, a mask read as bitmask words, a light
+section indexed without its one-offset, a block column read a section low, a "uniformly lit" array filled with
+`0x0F` instead of `0xFF`, a capture compared against a different run's trace, and a `MIN_SECTION_Y` assumed
+rather than looked up. The white whale was a real bug, but seven of the eight were noise, and every one of them
+was a measurement rather than a subject.
+
+### Tooling corrections
+
+* `tools/surface-capture/run.py` now removes the **world** and the **trace** as well as the bodies: an existing
+  world is never regenerated, so a reused one examines terrain from a different seed, and an appended trace has
+  `seq` numbers that no longer match the per-run body file names.
+* the capture driver waits for chunks before digging, which is what made the `light_update` capture empty.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
