@@ -316,6 +316,43 @@ rig's table, so the trace shows bare ids for the two most frequent packets of a 
 "a client plays, and **nothing about what it renders has been verified**" \u2014 the client could be staring at
 an unlit void and nothing here would know. That is what P10-04 onward exists to settle.
 
+### P10-04 / P10-05 \u2014 reconnaissance: `level_chunk_with_light` cannot be parsed at all
+
+Starting the light engine turned up a defect that comes **before** it, and which changes what P10-05 has to do.
+
+**All 117 captured vanilla chunk packets fail to decode with our implementation**, every one identically:
+
+```text
+light mask has 1 sections set but 0 arrays follow
+```
+
+**Two hypotheses, one excluded.** The first was that our decoder is stricter than the protocol \u2014 that a real
+server sends a mask bit with no array. That is now ruled out by arithmetic that uses **neither** decoder: a
+light array is fixed-width, so for a packet of known size only one small (sky, block) pairing can consume the
+remainder. **None does \u2014 they are all 24 bytes short.** So the bytes being read as masks cannot be masks.
+They look plausible because light data is mostly zero, which is exactly why a shared misreading survived two
+implementations.
+
+**What the real bytes do confirm.** Scanning for the array signature \u2014 a `80 10` VarInt (2048) followed by a
+mostly-`0xFF` span \u2014 finds it at offset 5229 of a 7280-byte packet, ending at 7279. So `LIGHT_ARRAY_BYTES`
+and the length-prefixed array convention are **right**, and **one byte remains after the array**, which is
+itself unexplained.
+
+**Not established: where the 24 bytes are.** The candidates \u2014 an extra heightmap long per entry, a misread
+`data` size, or a field between them \u2014 are not distinguished yet, and guessing is what this phase keeps
+paying for. The next step is to settle it against the bytes rather than to start filling masks.
+
+**A note on method.** A diagnostic test is committed (`vanilla_chunk_light.rs`, ignored by default because the
+capture lives under `target/`). Its first version asserted the packet ends with `[0x80, 0x10]`; the slice came
+back `[0x10, 0xff]`, one byte out. That assertion was **removed rather than adjusted**, because a claim the
+evidence does not support is the failure mode this whole phase has been unlearning. What it asserts instead is
+the part that is solid: every captured packet fails identically, which is what makes this a layout defect
+rather than a quirk of one packet.
+
+**Consequence for the plan.** P10-04 (the light engine) is not blocked \u2014 it computes light and does not care
+about the packet. **P10-05 is blocked**, because filling four masks is meaningless while the field order around
+them is wrong.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
