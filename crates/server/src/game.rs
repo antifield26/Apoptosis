@@ -419,7 +419,21 @@ const ENTITY_GRAVITY: f64 = 0.04;
 /// Phase 04 streams one biome for the whole world; the id comes from the
 /// jar-extracted registry table (`docs/research/provenance.md`). P07 replaces this
 /// with real biome data.
-const PLAINS_BIOME_ID: u32 = 0;
+/// `minecraft:plains` in the registry **the client is sent**, which is not 0.
+///
+/// The client resolves a chunk's biome ids against the registry this server hands it \u2014 a verbatim replay of
+/// vanilla's \u2014 and in that registry id 0 is `minecraft:badlands`. This constant was `0` while being named for
+/// plains, so every column of every chunk was painted as badlands: red sand and orange terracotta under a hazy
+/// sky, wherever the player stood, with the terrain and the light entirely correct.
+///
+/// Measured, not guessed: `crates/network/src/registry_data/config-payload.bin` is the exact byte sequence the
+/// client receives, and the identifier run after `minecraft:worldgen/biome` is **65 names in alphabetical
+/// order** ending at `minecraft:chat_type`, the next registry. `minecraft:plains` is the 41st of them.
+///
+/// **Per-column biomes are still not modelled.** `Biome::index()` is this crate's own six-biome slot, a
+/// different numbering from the client's registry, so sending it would be a new defect rather than a fix. Every
+/// cell is plains, as the comment always claimed, and now that is what the number means.
+const PLAINS_BIOME_ID: u32 = 40;
 
 /// One connected player's server-side state.
 /// One connected player's simulation state.
@@ -3435,9 +3449,9 @@ impl Game {
             }
             let block_states =
                 WireContainer::new(palette, values, mc_persistence::packing::BLOCK_MIN_BITS);
-            // Biome ids are not modelled in P04: one plains biome fills every cell.
-            // The values array is still the full cell count, because the encoder
-            // validates the container's geometry.
+            // One plains biome fills every cell, and the id is the one the client's own registry gives
+            // plains \u2014 see [`PLAINS_BIOME_ID`]. Per-column biomes are not modelled yet, and the values array
+            // is still the full cell count because the encoder validates the container's geometry.
             let biomes = WireContainer::new(
                 vec![PLAINS_BIOME_ID],
                 vec![0u32; BIOMES_PER_SECTION],

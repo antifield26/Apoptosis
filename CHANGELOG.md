@@ -1421,6 +1421,52 @@ turns out to be wrong \u2014 642 times, in KD-56's case.
 verified correct), `must` and `cannot` (358 lines), and `invariant` (48). The counts are what make 1044 lines
 readable, and they now have a direction.
 
+### KD-65 \u2014 every chunk said `badlands`, which is what "the terrain and the biomes do not generate correctly" was
+
+```rust
+// Biome ids are not modelled in P04: one plains biome fills every cell.
+const PLAINS_BIOME_ID: u32 = 0;
+```
+
+**A constant named for one biome and valued for another.** The client resolves a chunk's biome ids against the
+registry this server hands it \u2014 a verbatim replay of vanilla's \u2014 and in that registry **id 0 is
+`minecraft:badlands`**. So every column of every chunk was painted as badlands: **red sand and orange terracotta
+under a hazy sky**, wherever the player stood, with the terrain, the blocks and the light all correct.
+
+**That is the owner's report, precisely.** A biome decides the colour of grass, leaves and water, the sky and the
+fog \u2014 so a world painted one wrong biome looks broken everywhere and nothing errors. It was reported as a
+terrain and generation problem, and three rounds of this review went after light, palettes and features before
+this.
+
+**Measured, not guessed.** `crates/network/src/registry_data/config-payload.bin` is the exact byte sequence the
+client receives. The identifier run after `minecraft:worldgen/biome` is **65 names in alphabetical order**,
+ending at `minecraft:chat_type` \u2014 the next registry, which is where the run stops being alphabetical:
+
+```text
+0 badlands \u00b7 21 forest \u00b7 35 ocean \u00b7 40 plains \u00b7 64 wooded_badlands
+```
+
+**`minecraft:plains` is id 40.** The constant now says 40.
+
+**Three attempts to read that list.** A 20 000-byte window collected 384 "biomes" including `minecraft:11`,
+`minecraft:moon` and `minecraft:villager_schedule` from later registries, and printed `plains at 40` **by
+coincidence**. A "stop at the first name containing a slash" rule failed the same way. The third bounded the
+section by the **longest strictly-increasing prefix**, which is self-validating: the next registry breaks the
+alphabetical order, so the prefix ends exactly where the biomes do, and the 65-name count matches the biomes
+vanilla ships. **Two of the three produced a confident number that meant nothing**, and only the third's
+boundary can be checked from the data.
+
+### The class, and why it keeps appearing
+
+KD-56 was a block's default state assumed to be its lowest id. KD-65 is a biome assumed to be id 0. **Both are a
+number sent to a client, resolved by a rule that was assumed rather than looked up**, and neither had anything in
+the repository that could contradict it \u2014 the prose said what the number was for, and the number was never
+compared with the registry it indexes.
+
+Per-column biomes are still not modelled: `Biome::index()` is this crate's own six-biome slot, a **different
+numbering** from the client's registry, so sending it would be a new defect rather than a fix. That is recorded
+rather than half-done.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
