@@ -21,16 +21,18 @@ window stays open.
 * **Is the sky bright and the ground lit?** Before P10-05 every chunk shipped four empty masks, which the
   client renders as an unlit world. If it still looks black, something regressed.
 * **Are the colours right?** Grass green, leaves green, water blue, sky that matches. A biome decides all of
-  that, and every chunk said `minecraft:badlands` until KD-65 \u2014 red sand and orange terracotta under a hazy
+  that, and every chunk said `minecraft:badlands` until KD-65: red sand and orange terracotta under a hazy
   sky, wherever you stood, with the terrain and the light entirely correct. **This is the check that found it,
   and the only kind that could**: nothing in the repository compared the biome id with the registry it indexes.
 * **Are there shadows under overhangs and in holes?** Light that is uniformly 15 everywhere would look flat
   and washed out even though it is "lit".
 * **Does the light change when you break or place a block?** It should, **immediately** — the server now
   sends `light_update` for a changed chunk instead of waiting for the chunk to be re-sent. This is the single
-  most useful thing to watch: our `light_update` has only ever been accepted by our own test client, and a real
-  client receiving one is the only way to find out whether that holds. If the light does *not* follow the block,
-  or the client disconnects when you break something, that is a real finding and worth reporting.
+  sends `light_update` for a changed chunk instead of waiting for the chunk to be re-sent. **A real client has
+  received one**, through `crates/server/tests/light_update_trigger.rs`; an earlier version of that driver dug
+  before the chunks had loaded, so the capture that "proved" a client accepted the packet contained no
+  `light_update` at all. If the light does *not* follow the block, or the client disconnects when you break
+  something, that is a real finding and worth reporting.
 
 Press Ctrl+C here to stop the server and rig; the client window closes on its own or can be closed by hand.
 """
