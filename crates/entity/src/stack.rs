@@ -179,7 +179,16 @@ impl ItemStack {
         !self.is_empty() && self.item_id == other.item_id
     }
 
-    /// Whether this stack is within the limits [`ItemStack::new`] enforces.
+    /// Whether this stack is within the limits [`ItemStack::new`] enforces **on `item_id` and `count`**.
+    ///
+    /// **Not the whole guarantee.** The type promises a third thing \u2014 `item_id == 0` implies `count == 0` \u2014
+    /// and this does not check it. Nothing can build a stack that violates it: every path into an `ItemStack`,
+    /// the decode path in `crates/entity/src/player.rs` included, goes through [`ItemStack::new`], which returns
+    /// [`ItemStack::EMPTY`] whenever the id is air. Checking it here would add a branch that cannot be taken.
+    ///
+    /// The doc used to claim the whole of `new`'s contract, which is the same conflation as the three other
+    /// prose defects this review found; `a_valid_stack_covers_the_whole_guarantee` pins the relationship so a
+    /// later change to `new` fails a test here rather than producing a stack this waves through.
     ///
     /// The inventory additionally checks the per-item cap before accepting a
     /// stack, so a persisted or decoded stack cannot smuggle an oversized count
@@ -991,6 +1000,33 @@ mod tests {
     fn validity_tracks_the_constructor_limits() {
         assert!(ItemStack::new(1, 64).expect("stack").is_valid());
         assert!(ItemStack::EMPTY.is_valid());
+
+        // **The third guarantee, and where it is kept.** `is_valid` does not check `item_id == 0 implies
+        // count == 0`; construction does, by returning `EMPTY` for air. This asserts the relationship rather
+        // than the check, so a change that let `new` build air-with-a-count fails here instead of silently
+        // producing a stack `is_valid` accepts and nothing else expects.
+        for (id, count) in [(0, 0), (0, 5), (0, 64), (1, 0), (1, 64)] {
+            let stack = ItemStack::new(id, count).expect("within the limits");
+            if id == 0 || count == 0 {
+                assert!(
+                    stack.is_empty(),
+                    "new({id}, {count}) must be empty: air is not a carryable item and a non-positive count \
+                     is no items"
+                );
+                assert_eq!(stack.item_id(), None);
+                assert_eq!(stack.count(), 0);
+            }
+        }
+        // And the invariant holds for everything `new` accepts, which is what makes checking it redundant.
+        for id in [0, 1, 64] {
+            for count in [0, 1, 64] {
+                let stack = ItemStack::new(id, count).expect("within the limits");
+                assert!(
+                    stack.item_id() != Some(0) || stack.count() == 0,
+                    "new({id}, {count}) violates the type's own guarantee"
+                );
+            }
+        }
         assert_eq!(ItemStack::default(), ItemStack::EMPTY);
         assert_eq!(
             ItemStack::new(1, 3).expect("stack").to_string(),

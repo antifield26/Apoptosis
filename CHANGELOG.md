@@ -1359,6 +1359,42 @@ counting as a pass. Every other test examined here would have been improved by o
 and one deliberate guard; the guard is the pattern worth copying, and the four rounds of this review are the
 argument for it.
 
+### KD-63 \u2014 clue 4 opens with a fourth instance of the same sentence
+
+Three of this review's confirmed failures came from **prose that names two ideas side by side and conflates
+them**: `first_state_id`'s "first (**default**) state" (KD-56), `parse_axis`'s "distinguishable from `~0`"
+(KD-54), and `values` documented as indices (KD-52). The first file clue 4 opened has a fourth:
+
+```rust
+/// Whether this stack is within the limits [`ItemStack::new`] enforces.
+pub fn is_valid(&self) -> bool {
+    self.item_id >= AIR_ITEM_ID && self.count >= 0 && self.count <= HARD_MAX_STACK_SIZE
+}
+```
+
+`ItemStack` promises **three** things at line 66 \u2014 `item_id >= 0`, `0 <= count <= 64`, and **`item_id == 0`
+implies `count == 0`** \u2014 and `new` enforces all three by returning `EMPTY` whenever the id is air. `is_valid`
+checks two, so its doc names a superset of what it does.
+
+**It is benign, and why it is benign is the part worth writing down.** The third invariant cannot be violated
+through the public API: every path into an `ItemStack`, **including the decode path in `player.rs` that
+inventory spoofing would use**, goes through `new`. So the omission is covered **by construction rather than by
+this function** \u2014 and nothing in the code said which.
+
+**So the doc moves and the code does not.** Adding the check would add a branch that can never be taken: dead
+code dressed as a defence, which is worse than the sentence it replaces. The doc now says exactly what is
+checked and where the rest is kept, and
+`a_valid_stack_covers_the_whole_guarantee` **pins the relationship** \u2014 it asserts that everything `new`
+accepts satisfies the third invariant, so a later change that let `new` build `{item_id: 0, count: 5}` fails
+there rather than producing a stack this function waves through.
+
+**Clue 4's method, stated.** `tools/review/` now carries a scan for prose that makes a falsifiable claim: the
+words `default`, `always`, `never`, `only`, `exactly`, `same as`, `equivalent`, `identical`, `must`, `cannot`,
+`distinguishable`, `guarantee`, `invariant`. There are **1044 such lines** in product code, which is too many to
+read, and the counts are what make it usable: `distinguishable` appears three times and `(default)` in
+parentheses also three, and those are the two signatures of the defects already confirmed. This finding came
+from six of those lines.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
