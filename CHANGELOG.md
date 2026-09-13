@@ -706,6 +706,33 @@ counter was added to the tick report anyway, because a light update that stops b
 Five gates green: 1234 passed / 0 failed / 24 ignored across 81 suites, fmt, clippy -D warnings, aarch64 and
 cargo deny clean.
 
+### KD-49 \u2014 the `light_update` trigger is not what I guessed, and that tempers the last round
+
+Two captures placed four glowstone blocks beside a **connected** player and looked for `light_update`. Neither
+produced one: **zero id-48 packets in 19 000 captured packets**, with `level_chunk_with_light` staying at
+exactly the initial 117.
+
+**The guess, and why it was wrong.** `javap -c` on `SetBlockCommand` showed `replace` mode passing
+`iconst_2` \u2014 `UPDATE_CLIENTS` alone, without `UPDATE_NEIGHBORS` \u2014 and `updateNeighboursOnBlockSet` being
+called **only on the `DESTROY` path**. Neighbour notification is what tells the light engine a block appeared,
+so that looked like the answer. Re-running with `destroy` produced **no packet either**. The trigger for this
+packet is therefore **not established**, and it is not being invented.
+
+**What this does to the previous round's claim.** I wrote that wiring `light_update` closed the "a torch does
+nothing" limitation. What is actually true is narrower: the packet is **sent** and **well-formed**, and it has
+been accepted only by our own `TestClient` \u2014 because nothing the server does autonomously changes a block
+while a real client is connected. **Test-client acceptance is precisely the evidence that failed in KD-44**:
+our implementation agreeing with itself.
+
+So the claim is "sent, self-consistent, and encoded from the jar", not "verified against a client". The packet
+is still the right one to send \u2014 it exists for exactly this, and its field order and `BitSet` form come from
+`javap` \u2014 but the difference between those two sentences is the whole point of this phase.
+
+**The stale guidance, corrected.** `tools/visual-check/run.py` still told the reader that a hand-placed torch
+would *not* relight its chunk, which was true when it was written. It now asks for the opposite observation:
+**break a block and watch the light follow it**. That is the one remaining way to learn whether a real client
+accepts the packet \u2014 and if it disconnects instead, that is a real finding rather than a surprise.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

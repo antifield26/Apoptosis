@@ -22,9 +22,11 @@ window stays open.
   client renders as an unlit world. If it still looks black, something regressed.
 * **Are there shadows under overhangs and in holes?** Light that is uniformly 15 everywhere would look flat
   and washed out even though it is "lit".
-* **Does it change when you place a torch?** It will not, until a chunk is re-sent: light is recomputed when a
-  chunk is sent, and a placed torch does not trigger a re-send. That is a **known and recorded** limitation
-  (KD-45), not a surprise.
+* **Does the light change when you break or place a block?** It should, **immediately** — the server now
+  sends `light_update` for a changed chunk instead of waiting for the chunk to be re-sent. This is the single
+  most useful thing to watch: our `light_update` has only ever been accepted by our own test client, and a real
+  client receiving one is the only way to find out whether that holds. If the light does *not* follow the block,
+  or the client disconnects when you break something, that is a real finding and worth reporting.
 
 Press Ctrl+C here to stop the server and rig; the client window closes on its own or can be closed by hand.
 """
@@ -146,7 +148,8 @@ def main() -> int:
 
         print('--- look at the game window ---')
         print('the world should be lit: bright sky, shaded ground, shadows under overhangs')
-        print('a torch placed by hand will NOT relight the chunk until it is re-sent (KD-45)\n')
+        print('and breaking or placing a block should change the light around it at once — that is')
+        print('light_update, which no real client has received yet\n')
 
         # Wait for the client to be in the world, then report what its own log says about rendering.
         for _ in range(60):
