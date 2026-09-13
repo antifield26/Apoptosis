@@ -33,6 +33,11 @@ import net.minecraft.world.level.block.state.BlockState;
  * {@code Block.defaultBlockState()} from the same object graph the server uses. Nothing is transcribed and
  * nothing is inferred from ordering.
  *
+ * <p><b>Line endings are written explicitly as LF.</b> {@code PrintWriter.println} uses the platform
+ * separator, so on Windows the table came out CRLF while the repository holds LF, and the docs-audit
+ * line-ending check failed on the working tree. The committed bytes were always right, which is exactly
+ * why a generator that produces the wrong ones is worth fixing rather than normalising afterwards.
+ *
  * <p>Output is one TSV of {@code <block name> <default state id>}, which the registry reads beside
  * {@code blocks.tsv}.
  *
@@ -65,7 +70,7 @@ public final class DefaultStateProbe {
                 if (id != first) {
                     differing++;
                 }
-                writer.println(name + " " + id);
+                writer.print(name + " " + id + "\\n");
             }
         }
         System.out.println("blocks=" + blocks + " default_differs_from_lowest=" + differing);
