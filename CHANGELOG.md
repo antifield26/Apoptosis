@@ -1248,6 +1248,48 @@ remaining work.
 worth re-running after the next round of changes rather than rewriting from memory \u2014 which is exactly how the
 two broken versions of it happened.
 
+### KD-60 \u2014 the perturbation method works, and it found KD-49's shape in my own test on the first try
+
+Clue 3's crude half \u2014 a test that cannot fail \u2014 is absent from this codebase (KD-59). The half that matters
+cannot be found by reading tests at all, because the assertion is real and merely **structurally satisfiable for
+one input**. So the method is to **perturb an input the tests hold fixed** and see which assertions stop holding.
+
+**The first perturbation was the world seed**, from 0 to 12345, and it failed **exactly one test in the
+workspace**:
+
+```text
+---- a_fresh_world_spawns_the_player_on_land stdout ----
+```
+
+That test is mine, written last round, and its assertion said the thing out loud:
+
+```rust
+assert_ne!((sx, sz), (0, 0),
+    "the default spawn at the origin is ocean at this seed, so a spawn still there means no search ran");
+```
+
+**"at this seed"** \u2014 in a test that uses whatever the production seed is. At seed 0 the origin is ocean and the
+assertion holds; at any other seed the origin may be dry, the search correctly does nothing, and the test fails
+**having found no defect**. That is KD-49's shape exactly: satisfiable for one input, unsatisfiable for another,
+with nothing in the test saying which it needs.
+
+**The fix is a split**, and it is what the perturbation taught:
+
+* the **property** stays with the production seed \u2014 a fresh world spawns the player on land, true whatever the
+  seed;
+* the **evidence that the search runs** moves to its own test which **names the seed it needs**, because it is
+  *about* that precondition: `WATER_AT_ORIGIN_SEED = 0`, and it asserts the precondition (the origin is under
+  water) before asserting the consequence.
+
+**And the perturbation was re-run to close the loop: 1240 passed, 0 failed, 86 suites**, with the seed restored
+and `git diff` clean.
+
+**What this suggests for the rest of the review.** Two of this review's findings arrived by accident from
+changes made for other reasons \u2014 KD-49 from moving the spawn, KD-52 from correcting the palette. Deliberate
+perturbation found a third **on its first attempt**. The inputs worth perturbing next are the ones the suite
+holds fixed and the code assumes: coordinates (many tests use the origin or `(8, 8)`), the view distance, chunk
+section counts, and the tick counts a test waits for.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

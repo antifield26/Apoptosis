@@ -44,14 +44,6 @@ async fn a_fresh_world_spawns_the_player_on_land() {
          the player would start in open water"
     );
 
-    // And the search moved it rather than the default having been lucky, so a run that passes because (0, 0)
-    // happened to be dry cannot hide a search that never fires.
-    assert_ne!(
-        (sx, sz),
-        (0, 0),
-        "the default spawn at the origin is ocean at this seed, so a spawn still there means no search ran"
-    );
-
     // A joined player is placed at the spawn, and `set_default_spawn_position` is what the client is told.
     let id = ConnectionId(1);
     let (outbound, _receiver) = OutboundSender::pair(id, 8192);
@@ -65,4 +57,51 @@ async fn a_fresh_world_spawns_the_player_on_land() {
         })
         .expect("join queued");
     game.tick().expect("tick");
+}
+
+/// **The search itself**, with the one seed this test needs named explicitly.
+///
+/// The production-seed test above asserts the property — a fresh world starts a player on land — and that holds
+/// whatever the seed. This one asserts that the land search *runs*, which can only be shown at a seed whose
+/// origin is water, and it says which: **seed 0**, where the origin is ocean. The run's own log records the move:
+/// "the stored spawn is under water; moved to the nearest land from_x=0 from_z=0 to_x=-8 to_z=-8".
+///
+/// The two were one test, and its assertion carried the seed dependence in its message while the body used
+/// whatever the production seed happened to be. Changing the seed for an unrelated reason — a perturbation
+/// meant to find exactly this class of defect — failed it, having found no defect at all.
+#[tokio::test]
+async fn the_land_search_moves_a_spawn_that_is_under_water() {
+    /// The seed whose origin is ocean. Named here rather than inherited from production, because the test is
+    /// *about* that precondition.
+    const WATER_AT_ORIGIN_SEED: i64 = 0;
+
+    let dir = TempDir::new("p10-spawn-search");
+    let config = StorageConfig {
+        world_dir: dir.path().join("world"),
+        autosave_ticks: 0,
+    };
+    let storage = WorldService::open(&config).expect("world opens");
+    let (events, rx) = game_channel(256);
+    let game =
+        Game::with_seed_and_storage(storage, 4, rx, WATER_AT_ORIGIN_SEED).expect("game builds");
+
+    let generator = game
+        .terrain_generator()
+        .expect("a fresh world has a generator");
+    assert!(
+        generator.surface_height(0, 0) < OVERWORLD_SEA_LEVEL,
+        "this test needs a seed whose origin is under water, and {WATER_AT_ORIGIN_SEED} is supposed to be one"
+    );
+
+    let (sx, sy, sz) = game.spawn();
+    assert_ne!(
+        (sx, sz),
+        (0, 0),
+        "the origin is under water at this seed, so a spawn still there means the search never ran"
+    );
+    assert!(
+        generator.surface_height(sx, sz) >= OVERWORLD_SEA_LEVEL,
+        "the search moved the spawn to ({sx}, {sy}, {sz}), which is still under water"
+    );
+    let _ = events;
 }
