@@ -21,7 +21,11 @@ mc-protocol = { path = "../../crates/protocol" }
 md-5.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util"] }
+# `time` is required by `relay.rs` for the bounded session drain. It was missing here and the crate
+# still built inside the workspace, because feature unification let other members supply it -- so
+# `cargo build -p mc-capture-rig` alone failed while `cargo build --workspace` succeeded. A crate
+# must declare what it uses.
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]

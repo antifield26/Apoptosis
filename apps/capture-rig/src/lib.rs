@@ -325,7 +325,14 @@ pub enum TraceEvent {
 }
 
 /// How many body bytes a record keeps as a readable head.
-const HEAD_BYTES: usize = 24;
+///
+/// 64 rather than 24, because that is what makes the rig usable as a **reference-capture** tool: the small
+/// play-state packets that a client rejects are under this size, so their full body appears in the trace and
+/// can be replayed or compared byte for byte. Raising it cost nothing measurable and removed the need for a
+/// separate full-dump mode. (`set_default_spawn_position` was 37 bytes on the wire when this was raised,
+/// and
+/// the first 24 bytes were not enough to determine its field order.)
+const HEAD_BYTES: usize = 64;
 
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;

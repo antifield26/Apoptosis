@@ -194,6 +194,47 @@ data pack.
 probe. The fixture stands at 128 436 bytes over 28 registries; `tools/vanilla-probe/extract_synced_registries.py`
 is the committed extractor.
 
+### P10-03 (continued) — capturing from a real server instead of inferring from shape
+
+The recommended remedy, applied at the smallest useful scale. A vanilla **26.1.2 server** was stood up
+locally (`target/vanilla-capture`, flat world, loopback, JDK 25) and the real client was pointed through the
+P10-01 rig at **it** instead of at our server. The resulting trace is a reference conversation: 9 271 packets
+of what a 26.1.2 client and a 26.1.2 server actually say to each other.
+
+**KD-40 closed from captured bytes.** Our `set_default_spawn_position` sent 13 body bytes and a real client
+rejected it with `readerIndex(10) + length(4) exceeds writerIndex(13)`. The vanilla server's body is **37
+bytes**, and it decodes cleanly:
+
+```text
+61                                             id 97
+13 6d696e6563726166743a6f766572776f726c64     "minecraft:overworld"
+0000000000000fc4                               i64 4036 = packed BlockPos(0, -60, 0)
+00000000 00000000                              f32 yaw, f32 pitch
+```
+
+So 26.1.2 leads with the **dimension** and carries a **pitch**; our encoder had neither. Both readers are
+big-endian (`to_be_bytes`, matching Netty), so the field list was the only thing wrong — which is exactly the
+class of error inference produces and capturing settles. Verified by the client proceeding past it (the trace
+grew from 54 to 121 packets), and **pinned by a golden test holding the captured bytes**, so a revert fails a
+test rather than waiting for a client to object.
+
+**The next divergence, again one byte out.** The client now rejects
+`clientbound/minecraft:player_position` as "**1 bytes extra**". Same class, same remedy: the vanilla trace has
+that packet too, and it is already captured.
+
+**Two defects of my own, found on the way.**
+
+* `mc-capture-rig` used `tokio::time::timeout` without declaring tokio's `time` feature. It built inside the
+  workspace because feature unification let other members supply it, so `cargo build --workspace` succeeded
+  while `cargo build -p mc-capture-rig` alone failed. A crate must declare what it uses.
+* `HEAD_BYTES` was raised from 24 to 64, because that is what makes the rig usable as a *reference-capture*
+  tool: the small play-state packets a client rejects are under that size, and the first 24 bytes were not
+  enough to determine this packet's field order. Raising it removed the need for a separate dump mode.
+
+`enchantment` and `villager_trade` remain excluded from the synced-registry fixture, each with its reason in
+the probe. The same capture now offers a way to close them too: the vanilla server's `registry_data` packets
+can be replayed rather than re-encoded from JSON shape.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

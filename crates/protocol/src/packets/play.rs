@@ -1346,12 +1346,23 @@ impl Packet for SectionBlocksUpdate {
 /// Body: packed block position, `f32` spawn angle. The angle is what the client
 /// uses to orient a new player; it is sent for all game modes even though it
 /// only matters for adventure/spawn-facing behaviour.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SetDefaultSpawnPosition {
+    /// Dimension this spawn belongs to, e.g. `minecraft:overworld`.
+    ///
+    /// **26.1.2 leads with this**, and a `pitch` follows the yaw. Both were established by capturing the
+    /// packet from a vanilla 26.1.2 server rather than by inference (P10-03, KD-40): the body is 37 bytes —
+    /// `Identifier` (1 + 19) + `BlockPos` (8) + `f32` yaw (4) + `f32` pitch (4). Before that this packet sent
+    /// only `BlockPos + f32`, and a real client rejected it with
+    /// `readerIndex(10) + length(4) exceeds writerIndex(13)` — the payload was one field short, which is
+    /// precisely what shape-inferred encoding cannot notice.
+    pub dimension: String,
     /// Packed block position, see [`block_position`].
     pub position: i64,
     /// Spawn yaw in degrees.
-    pub angle: f32,
+    pub yaw: f32,
+    /// Spawn pitch in degrees.
+    pub pitch: f32,
 }
 
 impl Packet for SetDefaultSpawnPosition {
@@ -1359,21 +1370,30 @@ impl Packet for SetDefaultSpawnPosition {
 
     fn decode(payload: &[u8]) -> ServerResult<Self> {
         let mut reader = PacketReader::new(payload);
+        let dimension = reader.read_string(crate::MAX_IDENTIFIER_LEN)?;
         let position = reader.read_i64()?;
-        let angle = reader.read_f32()?;
+        let yaw = reader.read_f32()?;
+        let pitch = reader.read_f32()?;
         if !reader.is_empty() {
             return Err(ServerError::Protocol(format!(
                 "set_default_spawn_position has {} trailing bytes",
                 reader.remaining()
             )));
         }
-        Ok(Self { position, angle })
+        Ok(Self {
+            dimension,
+            position,
+            yaw,
+            pitch,
+        })
     }
 
     fn encode(&self) -> ServerResult<Vec<u8>> {
         let mut writer = PacketWriter::new();
+        writer.write_string(&self.dimension)?;
         writer.write_i64(self.position);
-        writer.write_f32(self.angle);
+        writer.write_f32(self.yaw);
+        writer.write_f32(self.pitch);
         Ok(writer.finish())
     }
 }
@@ -2433,6 +2453,51 @@ mod tests {
         }
     }
 
+    /// The exact payload a **vanilla 26.1.2 server** sends for `set_default_spawn_position`.
+    ///
+    /// Captured through the P10-01 rig (P10-03, KD-40). 36 payload bytes after the id:
+    ///
+    /// ```text
+    /// 13 6d696e6563726166743a6f766572776f726c64   "minecraft:overworld"
+    /// 0000000000000fc4                            i64 4036 = packed BlockPos(0, -60, 0)
+    /// 00000000 00000000                           f32 yaw, f32 pitch
+    /// ```
+    ///
+    /// Ours sent 12 bytes (`BlockPos` + one `f32`) and a real client rejected it with
+    /// `readerIndex(10) + length(4) exceeds writerIndex(13)`. Pinning the captured bytes is what stops that
+    /// returning: the shape was inferred once and never checked against anything real.
+    #[test]
+    fn the_captured_vanilla_payload_is_reproduced() {
+        let captured: [u8; 36] = [
+            0x13, b'm', b'i', b'n', b'e', b'c', b'r', b'a', b'f', b't', b':', b'o', b'v', b'e',
+            b'r', b'w', b'o', b'r', b'l', b'd', // Identifier "minecraft:overworld"
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0f, 0xc4, // packed BlockPos(0, -60, 0)
+            0x00, 0x00, 0x00, 0x00, // yaw
+            0x00, 0x00, 0x00, 0x00, // pitch
+        ];
+        let packet = SetDefaultSpawnPosition {
+            dimension: "minecraft:overworld".to_owned(),
+            position: block_position(0, -60, 0),
+            yaw: 0.0,
+            pitch: 0.0,
+        };
+        let encoded = packet.encode().expect("encodes");
+        assert_eq!(
+            encoded.len(),
+            captured.len(),
+            "the payload must be the length a real client accepted"
+        );
+        assert_eq!(
+            encoded, captured,
+            "the captured vanilla bytes must be reproduced exactly"
+        );
+        // And it must decode back to the same packet, not merely to the same length.
+        assert_eq!(
+            SetDefaultSpawnPosition::decode(&encoded).expect("decodes"),
+            packet
+        );
+    }
+
     #[test]
     fn join_game_round_trip() {
         let packet = sample_join_game();
@@ -3399,8 +3464,10 @@ mod tests {
         );
 
         let spawn = SetDefaultSpawnPosition {
-            position: block_position(0, 64, 0),
-            angle: 90.0,
+            dimension: "minecraft:overworld".to_owned(),
+            position: block_position(0, -60, 0),
+            yaw: 0.0,
+            pitch: 0.0,
         };
         assert_eq!(
             SetDefaultSpawnPosition::decode(&spawn.encode().expect("encodes")).expect("decodes"),

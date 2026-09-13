@@ -1512,8 +1512,13 @@ impl Game {
         self.send(
             id,
             &SetDefaultSpawnPosition {
+                // The dimension leads the packet since 26.1; a real client rejects a body without it
+                // (P10-03, KD-40, captured from a vanilla server). The server is overworld-only, so this is
+                // the same identifier `registry_data::OVERWORLD` names.
+                dimension: "minecraft:overworld".to_owned(),
                 position: block_position(sx, sy, sz),
-                angle: 0.0,
+                yaw: 0.0,
+                pitch: 0.0,
             },
             report,
         )?;
