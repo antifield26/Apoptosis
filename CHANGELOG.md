@@ -904,6 +904,55 @@ not this symptom, but a player spawning elsewhere would be handed the wrong cent
 **What this changes for the phase.** The claim that a real client is "live and rendering" was withdrawn as
 unproven; it is now **established**, by the owner seeing the world.
 
+### KD-51 \u2014 the black surface blocks are not our light data, established by eliminating six of my own errors
+
+The owner is in the world and reports **a small number of surface blocks dead black**. The engine and the wire
+were both checked against the invariant that decides it \u2014 **a cell with only air above it is open to the sky,
+and open to the sky means 15** \u2014 and **both pass**:
+
+* the **engine**, over a 9x9 of chunks of generated terrain, so chunk borders are included;
+* the **wire**, over 53 chunks a real session captured, reconstructing the light the way a client does: a set
+  bit takes the next array in order, a bit in `empty_*` is that layer's default, and neither mask means zero.
+
+So the black blocks do **not** come from the light we send. `light_update` is not a separate suspect either: it
+and `level_chunk_with_light` are written by the same `light_fields` and `write_light_data`, so its light values
+are the same code that the verified chunk packets use.
+
+**Six errors, all mine, all in the measuring rather than the measured.** They are listed because the shape
+repeats and each one cost real time:
+
+1. **a packet id labelled from memory** \u2014 I wrote "(id 12)" for `set_chunk_cache_center` and measured the trace
+   for it; 12 is `chunk_batch_start`. The real id is 94, the packets were always sent, and the "fix" this
+   produced sent them twice and had to be reverted (KD-50).
+2. **a body read from byte 0** \u2014 the rig's `head` includes the packet id, so `level_chunk_with_light`'s chunk x
+   decoded as 754 974 720, which is `0x2D` (its own id) followed by three zeros.
+3. **a mask read as bitmask words** \u2014 the masks are lists of set section **indices**, so nine indices looked
+   like one set bit against nine arrays and produced a confident mismatch report.
+4. **a light section indexed without its one-offset** \u2014 light section `i` holds world section `i - 1`, so
+   reading `offset / 16` looked up the section *below*: underground, where sky light genuinely is 0.
+5. **a block column read a section low** \u2014 the same offset applied to blocks, which printed a coherent-looking
+   tree sixteen levels below the one beside it.
+6. **a "uniformly lit" array filled with `0x0F` instead of `0xFF`** \u2014 this is the one that mattered. Every byte
+   had a low nibble of 15 and a **high nibble of 0**, so every cell at an odd index read as dark. It produced a
+   finding of **"2176 of 13568 surface cells dark"** that was entirely fictitious, and the tell was in the data
+   all along: exactly **half** of every affected chunk, always at odd `x`.
+
+**The pattern.** Errors 2\u20136 were all caught by printing the actual bytes and none by re-reasoning about them,
+and 1 was caught only because a later trace contradicted it. That is the same lesson as KD-44, KD-46, KD-49 and
+KD-50, now from the side of the measurer rather than the measured.
+
+**Two real defects were found on the way**, both recorded rather than folded in:
+
+* `connection.rs:542` sends `SetChunkCacheCenter { x: 0, z: 0 }` **hard-coded**; the test world's spawn happens
+  to be chunk (0, 0), so a player spawning elsewhere would be handed the wrong centre;
+* a capture session logged **`outbound queue full; the player will be disconnected`** repeatedly, and a
+  **tick of 3618 ms against a 50 ms budget** \u2014 the light work of KD-45 landing on one tick.
+
+**Where the black blocks must come from instead.** With the light values excluded, the remaining suspects are
+outside them: the **block-state ids** the chunk palette carries, which a client resolves against the registry we
+sent it and would render as the wrong block if the two disagreed; or client-side rendering of the sections
+themselves. Both are testable the same way \u2014 against what a real client does with what we send.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
