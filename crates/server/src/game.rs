@@ -161,8 +161,7 @@ use mc_protocol::packets::play::{
     HEIGHTMAP_WORLD_SURFACE, Heightmap, LevelChunkWithLight, LightUpdate, NETWORK_BIOME_MIN_BITS,
     PalettedContainer as WireContainer, PlayDisconnect, PlayIntent, PlayerPosition, Respawn,
     SetChunkCacheCenter, SetChunkCacheRadius, SetDefaultSpawnPosition, SetExperience, SetHealth,
-    SetHeldSlot, SetTime, SystemChat,
-    block_position, unpack_block_position,
+    SetHeldSlot, SetTime, SystemChat, block_position, unpack_block_position,
 };
 use mc_protocol::text::TextComponent;
 use mc_registry::Registries;
