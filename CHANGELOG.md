@@ -3019,6 +3019,44 @@ means placing a chest and putting something in it, which is one more console lin
 seventeen bytes, from a different session, with no connection to the one they were first read out of.
 
 
+### P10-09 (part 3) — both hypotheses answered, both by "no", and the reason they share
+
+The refined session ran the same way with two changes: contents in the chest, and a second drop.
+
+```text
+play 6   block_entity_data:  0     (still)
+play 99  set_entity_data:  431     (was 253)
+play 1   add_entity:       190     (was 143)
+minecraft:item entities:     0     (was 3)
+```
+
+**The hypothesis is disproved.** A chest with five diamonds in it produced **no `block_entity_data`**, so "vanilla
+sends it only when a block entity has contents worth syncing" is not the reason the packet was absent. That is
+worth exactly as much as a confirmation would have been, and it is what the entry said the test was for.
+
+**And the item summons produced nothing at all this time** -- zero entities of type 71, where the previous session
+had three. So the injection is **not reliable**, and the two results together point at one cause rather than two:
+**the commands place things at fixed coordinates while the client is somewhere else.** An entity outside the
+client's view is never named in an `add_entity`, gets no metadata, and a block entity outside it is never
+described. The three items in the previous session were probably mob drops near wherever the client actually was,
+which would also explain why they carried no metadata of their own -- drops that despawned before a later update.
+
+**So the injections need to happen where the player is, not at the origin.** The console has no position, but
+`execute at @a run ...` does, and there is a player in the session -- `@a` is the selector that makes both
+`setblock` and `summon` land in front of them. **That is the next change**, and it is one more line rather than a
+different approach.
+
+**What both sessions confirmed in passing, twice now**: the `disguised_chat` body they capture for the two `say`
+commands is
+
+```text
+08 00 03 62 79 65 05 08 00 06 53 65 72 76 65 72 00
+```
+
+**byte for byte the payload P10-10's codec was built from** -- seventeen bytes, from two sessions with no
+connection to the one they were first read out of.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

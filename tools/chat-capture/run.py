@@ -134,7 +134,14 @@ def main() -> int:
         # command that fails is captured as a log line rather than as a packet.
         for command in (
             'setblock 0 80 0 minecraft:chest',
+            # **Contents, because an empty chest has nothing to describe.** The previous session placed one and
+            # no `block_entity_data` came out; if that packet is sent only when a block entity has contents or
+            # state worth syncing, this line is what makes one appear.
+            'item replace block 0 80 0 container.0 with minecraft:diamond 5',
+            # Two drops at two heights, so a despawn before the client ever saw one is not the only possibility,
+            # and a shorter-lived one is not the only thing under test.
             'summon minecraft:item 0 81 0 {Item:{id:"minecraft:stone",count:3}}',
+            'summon minecraft:item 0 82 0 {Item:{id:"minecraft:diamond",count:7}}',
         ):
             print(f'  injection: {command}')
             server.stdin.write(command + chr(10))
