@@ -290,6 +290,17 @@ pub mod clientbound {
         pub const SET_TIME: i32 = 113;
         /// `minecraft:start_configuration`
         pub const START_CONFIGURATION: i32 = 118;
+        /// `minecraft:disguised_chat` — a server message attributed to a player.
+        ///
+        /// **What a 26.1.2 console `say` produces.** A capture of a real server showed two `say` commands
+        /// producing two `disguised_chat` and **zero** `system_chat`, so a server that answers chat with
+        /// `system_chat` alone diverges from the client's expectation. See P10-10.
+        pub const DISGUISED_CHAT: i32 = 33;
+        /// `minecraft:player_chat` — a player's own message, broadcast.
+        ///
+        /// Carries the sender's UUID, index and signature rather than a preformatted line, which is why it
+        /// is a different packet from the two above and not a variant of them.
+        pub const PLAYER_CHAT: i32 = 65;
         /// `minecraft:system_chat`
         pub const SYSTEM_CHAT: i32 = 121;
     }

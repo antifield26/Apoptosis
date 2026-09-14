@@ -2687,6 +2687,30 @@ which nothing is waiting on yet. **The gap is guarded either way** -- `MetadataP
 rather than producing a table that looks finished.
 
 
+### P10-10 (part 1) — three chat packets, and the server sends one of them
+
+`docs/protocol/packet-ids-775.tsv`, machine-extracted from the official 26.1.2 jar, names three clientbound chat
+packets. `ids.rs` had one:
+
+```text
+game clientbound  33  disguised_chat
+game clientbound  65  player_chat
+game clientbound 121  system_chat        <- already present
+```
+
+**The difference is not cosmetic.** A player's own message is `player_chat`, carrying the sender's UUID, index and
+signature rather than a preformatted line. A server message **attributed to a player** — which is what a 26.1.2
+console `say` produces — is `disguised_chat`. A system message is `system_chat`.
+
+**And the server currently answers everything with `system_chat`**, in six places including the handler for
+`PlayIntent::Chat`. The review already established the middle packet from a capture: two `say` commands on a real
+26.1.2 server produced **two `disguised_chat` and zero `system_chat`**. So this is a real-client divergence rather
+than a naming preference, and it is what P10-10 is for.
+
+**Both ids are now constants**, so `crates/protocol/tests/packet_ids.rs` — which checks every constant in this
+module against the jar-extracted table — verifies them without anything further being written for the purpose.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
