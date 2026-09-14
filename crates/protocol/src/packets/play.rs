@@ -917,6 +917,65 @@ impl AddEntity {
     }
 }
 
+/// `minecraft:remove_entities` — despawn entities by id.
+///
+/// # Layout, and how it was checked
+///
+/// A `VarInt` count followed by that many `VarInt` entity ids. **That is one byte of count plus one byte per id
+/// for a single removal**, and all **twelve** `remove_entities` bodies a real 26.1.2 server sent through the
+/// capture rig are exactly **two bytes**:
+///
+/// ```text
+/// 001788_s2c_play_77.bin: 01 0f   -> count 1, entity id 15
+/// 002890_s2c_play_77.bin: 01 4d   -> count 1, entity id 77
+/// 003812_s2c_play_77.bin: 01 36   -> count 1, entity id 54
+/// ```
+///
+/// The same arithmetic check `AddEntity` got, on a shorter packet: the widths the shape implies and the lengths a
+/// real server produced agree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoveEntities {
+    /// Entity ids to despawn.
+    pub entity_ids: Vec<i32>,
+}
+
+impl RemoveEntities {
+    /// Encode the body.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] when the count does not fit a `VarInt`, which needs more than two billion ids.
+    pub fn encode(&self, writer: &mut PacketWriter) -> ServerResult<()> {
+        let count = i32::try_from(self.entity_ids.len()).map_err(|_| {
+            ServerError::Protocol("remove_entities carries more ids than a VarInt count".to_owned())
+        })?;
+        writer.write_varint(count);
+        for id in &self.entity_ids {
+            writer.write_varint(*id);
+        }
+        Ok(())
+    }
+
+    /// Decode a body.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] when the count is negative, or claims more ids than the body holds. **A hostile
+    /// count is refused rather than reserved**: a body that says four billion ids and carries one must not make
+    /// the decoder allocate for four billion.
+    pub fn decode(reader: &mut PacketReader<'_>) -> ServerResult<Self> {
+        let count = reader.read_varint()?;
+        let count = usize::try_from(count).map_err(|_| {
+            ServerError::Protocol(format!("remove_entities count {count} is negative"))
+        })?;
+        let mut entity_ids = Vec::with_capacity(count.min(4096));
+        for _ in 0..count {
+            entity_ids.push(reader.read_varint()?);
+        }
+        Ok(Self { entity_ids })
+    }
+}
+
 /// One block entity inside a chunk.
 ///
 /// `BlockEntityInfo.LIST_STREAM_CODEC`: `packedXZ` and `y` are each a 16-bit
