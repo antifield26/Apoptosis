@@ -2491,6 +2491,35 @@ carries the wire type. **A probe has to walk those classes**, which is a heavier
 what they happen to contain, which is a fixture and a decoder agreeing because they came from one reading.
 
 
+### P10-07 (part 2) — the class walk works, and one of its three columns is a lambda name
+
+`tools/vanilla-probe/MetadataProbe.java` compiles and runs:
+
+```text
+types=157  slots=1256  unreadable=0
+```
+
+For every registered entity type it takes the type's class, forces it to initialise — which is what runs the
+`defineId` calls — and reads the static `EntityDataAccessor` fields by reflection, walking superclasses so an
+inherited slot is counted once. **157 types and 1256 slots with nothing unreadable** is the extraction working:
+the index column is right, because `accessor.id()` is the index the client uses.
+
+**The third column is not.** `accessor.serializer().getClass().getSimpleName()` prints
+
+```text
+EntityDataSerializer$$Lambda/0x00000000196fabb8
+```
+
+because the serializers are lambdas, so the class name says nothing at all. **What the wire carries is the
+serializer's registered id** — the `3` for a float and the `0` for a byte in the captured bodies — and that is
+what the column has to be.
+
+**A probe that emits a column of lambda names is worse than one that emits two columns**, because it looks like it
+answered the question. The fix is to ask the serializer registry for the id rather than the object for its class,
+and the capture is then what checks it: index 9 must come out a float and two different types must disagree about
+index 16, which is what made this task necessary.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
