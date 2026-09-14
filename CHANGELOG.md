@@ -1915,6 +1915,38 @@ compares label against `evidence:`. This one's fourth column is an experience va
 existing test stops at the fuel table rather than running on: **a comparison is only meaningful where the two
 sides are the same kind of thing**, which is the scope lesson from KD-77 in a different dress.
 
+### KD-81 \u2014 the sixty, read: eleven hold, two name a measurement nobody has taken
+
+Thirteen of the sixty doc lines that name a number are in `mc-entity`, the largest unread group. All thirteen
+were read, and **eleven hold by inspection** \u2014 each is arithmetic or a Vanilla fact checkable without a tool:
+
+| line | claim | check |
+|---|---|---|
+| `player.rs:994` | a merge "must not cost the player the other **40**" | the player inventory is 41 slots, so 40 remain \u2014 and the constant in the same crate says 41 |
+| `profile.rs:75` | "exactly as the vanilla login path does: **1..=16**" | Vanilla's username limit is 16 |
+| `stack.rs:239,297` | "the vanilla default limit of **64**" for `grow` and `merge` | `DEFAULT_MAX_STACK_SIZE` is 64 and both call through to it |
+| `stack.rs:602,845` | an empty table gives "the vanilla default of **64**" | `max_stack_size_for_name` falls back to that constant |
+| `item_entity.rs:278` | "a ceiling of 64 cannot create a stack larger than 64" | it clamps to `HARD_MAX_STACK_SIZE`, which is that ceiling |
+| `player.rs:1091` | "a count above **127**, which `ItemStack` cannot produce" | `new` refuses above 64, so 127 is unreachable and the bound says why |
+| `mob.rs:122` | "Vanilla's default `FOLLOW_RANGE` attribute (**16.0**)" | Vanilla's default follow range is 16.0 |
+| `stack.rs:78,591` | a doctest and a comment | both are arithmetic on 64 that comes out as written |
+
+**Two name a measurement rather than illustrate one**, and those are the next targets on this line:
+
+* **`stack.rs:645` \u2014 "Number of exception entries (always 165 for the 26.1.2 vanilla table)"**. The same shape as
+  KD-73: a count about Vanilla, in a comment beside a constant that encodes it, naming the exact version.
+  **Whether it was measured is a question with an answer, and it has not been asked.**
+* **`mob.rs:122` \u2014 the `16.0` follow range.** Stated as Vanilla's default without saying where from, which is the
+  weaker standard KD-70 recorded beside the cooking-time comment that *did* say where its numbers came from.
+
+**No defect in the thirteen**, which is the expected shape by now: a line that pairs a claim with a number it can
+be checked against is right far more often than not, and the finding on this line came from the one where the
+number had never been measured at all.
+
+**And a smaller repeat worth one line**: this entry's script was the second in two rounds to write a document by
+reading another document it had forgotten to create. Both failed loudly on their own anchor assertion rather than
+quietly writing nothing, which is the property that made them cheap to catch.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
