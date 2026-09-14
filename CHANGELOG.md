@@ -1886,6 +1886,35 @@ real product is therefore not a defect count but a way of telling three things a
 **measured and wrong**, and **not measured by me** \u2014 where the third has repeatedly meant *my instrument*, and
 collapsing it into the second is what produced KD-70 and then KD-73.
 
+### KD-80 \u2014 the second table in `furnace.rs` agrees with its code in every cell
+
+KD-76 was the fuel table's coal-block row, where the doc and the code disagreed and a test now compares them.
+`furnace.rs` documents **a second table** \u2014 seven smelting recipes \u2014 and that one is exact:
+
+| doc column | code | |
+|---|---|---|
+| 7 rows | `[(&str, &str, f32); 7]` and a `Vec::with_capacity(7)` | agrees, and the capacity says so too |
+| `iron_ore`, `deepslate_iron_ore`, `raw_iron` to `iron_ingot` | the same three, in the same order | agrees |
+| `sand` to `glass`, `cobblestone` to `stone` | same | agrees |
+| `porkchop`, `potato` | same | agrees |
+| `1` output each | `SmeltingRecipe::one` takes no count | agrees |
+| `200` ticks on every row | `SMELTING_COOK_TICKS = 200`, applied to every push | agrees |
+| `0.7` on the three iron rows | `EXPERIENCE_PER_IRON_SMELT = 0.7` | agrees |
+| `0.1`, `0.1`, `0.35`, `0.35` | the same four literals | agrees |
+| "verified shape, **approximate xp**" | the module doc calls the experience values "an **approximation** ... rather than the exact per-recipe figure" | agrees, and in the same words |
+
+**Nine cells, no disagreement**, in the file where the other table's label was wrong. That is worth recording
+rather than passing over: **the same author, the same file, the same convention, and one table is exact while the
+other carried a label claiming arithmetic that produced a different number** \u2014 which is what makes the fuel
+table's defect a mistake rather than a habit, and what makes the new consistency test worth having rather than
+worth distrusting.
+
+**And the two tables needed different checks.** The fuel table's fourth column is an evidence label, so the test
+compares label against `evidence:`. This one's fourth column is an experience value, so the comparison is against
+`EXPERIENCE_PER_IRON_SMELT` and four literals \u2014 a different assertion over a different shape. That is why the
+existing test stops at the fuel table rather than running on: **a comparison is only meaningful where the two
+sides are the same kind of thing**, which is the scope lesson from KD-77 in a different dress.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
