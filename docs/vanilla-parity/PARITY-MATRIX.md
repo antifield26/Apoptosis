@@ -225,6 +225,20 @@ the route out on record; and the stack-size table's rows, which have still never
 about something outside the file it sits in**, and it needs the same evidence as any other compatibility
 claim. Every defect found here was a number that had none, and every one of them passed a green test suite.
 
+## Two kinds of registry a client owns (P10-06)
+
+The rule above says a number sent to a client needs a jar extraction, a capture, or an assertion naming the
+registry. **Those are not interchangeable, and which one applies depends on who owns the registry:**
+
+| kind | examples | where the client gets it | the instrument that works |
+|—-|—-|—-|—-|
+| **datapack registry** | `worldgen/biome`, `dimension_type` | **we send it**, verbatim, in `registry_data` | read it back out of the payload we send (`crates/server/tests/registry_ids.rs`) |
+| **built-in registry** | block, item, **entity type**, menu | **compiled into the client jar** | jar extraction, with the extraction named in an assertion (`blocks.tsv`, `items.tsv`, `entity_types.tsv`) |
+
+**This was implicit until P10-06 and is written down now** because the two look identical from inside the server
+and are not: searching the config payload for `minecraft:entity_type` finds a hit, but it is a **tag** directory in
+the `update_tags` packet, and an assertion built on it would have compared our numbers with nothing at all.
+
 ## Removed rows (governance, 2026-09-12)
 
 Five rows from the pre-governance matrix were deleted rather than updated:

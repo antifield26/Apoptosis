@@ -2153,6 +2153,27 @@ reached this repository once already (KD-57).
 to clients (`game.rs:1060`, `game.rs:2631`, the latter naming P05-15). The table is the half that has to be right
 before the packets can be, and the next step is the registry lookups plus the encoder wiring.
 
+### P10-06 (part 2) — the entity type table, and the two kinds of registry a client owns
+
+The table is loaded and checked: `crates/registry/src/entities.rs` carries `EntityTypeRegistry` with
+`load`/`parse`/`id`/`name`/`names`, the parser refuses non-contiguous ids, and five tests pin what the jar says —
+`player` at **155**, `item` at **71**, and id 0 at **`minecraft:acacia_boat`**.
+
+**And extending `registry_ids.rs` to the entity types turned out to be the wrong instrument**, which is worth
+recording because it sharpens the rule this review produced. Searching the payload for `minecraft:entity_type`
+finds a hit followed by `minecraft:axolotl_always_hostiles` and `minecraft:can_equip_harness` — **tag names from
+the `update_tags` packet**. The `registry_data` packets carry the **datapack** registries; `entity_type` is a
+**built-in** registry, compiled into the client jar.
+
+| kind | examples | where the client gets it | how to check our numbers |
+|—-|—-|—-|—-|
+| **datapack registry** | biome, dimension type | **we send it** in `registry_data` | read it back out of the payload we send |
+| **built-in registry** | block, item, **entity type**, menu | **compiled into the client jar** | extract it from the jar, and name the extraction in an assertion |
+
+**This explains the fixtures and was implicit until now**: `blocks.tsv`, `items.tsv` and `entity_types.tsv` are jar
+extractions because the client owns those registries, while the biome ids came from the payload because we hand
+that registry over ourselves. **The same rule, applied with the instrument that matches who owns the number.**
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
