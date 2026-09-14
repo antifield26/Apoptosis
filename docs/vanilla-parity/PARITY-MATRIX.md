@@ -162,6 +162,28 @@ owns**, and it needs the same evidence as any other compatibility claim: a jar e
 assertion that names the registry. Both ids here that had none were wrong, and neither errored anywhere — one
 produced a world of sideways waterlogged logs and the other a world of red sand.
 
+## P00\u2013P09 review: what is covered and what is not (2026-09-13)
+
+The findings are in the table above. **This says where the review stopped**, because a review that reports only
+what it found reads as complete when it is not \u2014 which is the failure this whole exercise has been about.
+
+| clue | searched | read | left |
+|---|---|---|---|
+| (1) "first" taken for "default" | every `first_state_id` use in product code (12 lines) | all of them, plus `is_default` (KD-69) and the whole `blocks.rs` neighbourhood | **done** |
+| (2) fixture and expectation provenance | every file under `crates/test-support/fixtures` (10) | all ten, each classified as jar, capture, or hand-written (KD-57) | **done** |
+| (3) tests that cannot fail | every test in the workspace (1257) | the crude form is **absent**; the form that matters needs **perturbation**, and four were run (KD-60, KD-61, KD-62) | crude form done; perturbation is a **method**, not a finite sweep |
+| (4) prose that disagrees with code | 1052 doc lines making a falsifiable claim, 60 of them naming a number | the two highest-yield sub-lines are closed: **jar-measurable counts** (4 files: `recipe.rs` wrong, `advancement.rs` 8/8, `loot.rs` 3+3, `tag.rs` 2+2) and **doc tables versus code** (2 tables: fuel wrong, smelting exact) | **the long tail is not read**: roughly 992 claim lines name no number, and **of the 60 that do, about a quarter sit in the files the two sub-lines above cover** \u2014 the rest are unread |
+
+**What "not read" means here, concretely.** Nothing in the unread remainder is *suspected* \u2014 the two sub-lines that
+produced every clue-4 finding are the ones that name a value checkable from data, and the KD-73 lesson is that a
+claim is only worth checking when there is something independent to check it against. The unread lines are prose
+about control flow and invariants, which is the majority and has produced nothing.
+
+**And the honest qualification on clue 3.** Four perturbations were run and two found defects. There is no
+measure of how many inputs the suite holds fixed, so "perturbation complete" is not a state this review can
+claim; what it can claim is that the method is written down, was productive twice, and returns nothing on a third
+input \u2014 which is what a method with a hit rate looks like, not what a finished search looks like.
+
 ## Removed rows (governance, 2026-09-12)
 
 Five rows from the pre-governance matrix were deleted rather than updated:
