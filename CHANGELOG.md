@@ -1977,6 +1977,30 @@ says it came from the jar. **A doc saying where a number came from is not the sa
 checked**, which is the whole of what this review found on the jar-count line \u2014 and this is the last of the
 tables in this area without an independent source.
 
+### KD-83 \u2014 the stack-size probe compiles and stops one bootstrap short
+
+`tools/vanilla-probe/StacksToProbe.java` is written and compiles against the 26.1.2 jar. It fails at runtime:
+
+```text
+java.lang.NullPointerException: Components not bound yet
+```
+
+**In 26.x the maximum stack size is a data component**, not a constant on the item. `getDefaultMaxStackSize` reads
+it from the bound `DataComponents`, and `Bootstrap.bootStrap()` alone does not bind them \u2014 that needs the datapack
+load a dedicated server performs. **So the probe is one bootstrap step away rather than one idea away.**
+
+**That is a better state than KD-82 left it in.** The instrument that can settle the 165 now exists and is known
+to need one specific thing, which is the distinction this review has spent six rounds drawing between *not
+measured*, *measured wrong*, and *measured right* \u2014 and "written, compiles, needs a datapack load" is the first of
+those three with a route out of it.
+
+**What it will produce when it runs:**
+
+* **the exception count**, against the doc's 165;
+* **the per-item limits**, against `STACK_SIZE_1` and `STACK_SIZE_16` row for row \u2014 **the check this table has
+  never had**, and the one that matters more than the count, since `items.tsv` is trustworthy because `ItemProbe`
+  reproduced all 1506 of its rows while this table is trusted only because its doc says it came from the jar.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
