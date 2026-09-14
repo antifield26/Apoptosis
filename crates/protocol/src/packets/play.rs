@@ -2283,6 +2283,100 @@ impl Packet for SystemChat {
     }
 }
 
+/// `minecraft:disguised_chat` — a server message attributed to a player.
+///
+/// **What a 26.1.2 console `say` produces**, which a capture of a real server confirmed: two `say` commands produced
+/// two `disguised_chat` and **zero** `system_chat`. A server that answers chat with [`SystemChat`] alone therefore
+/// diverges from the client's expectation, which is what P10-10 exists to fix.
+///
+/// # Format, from a captured payload
+///
+/// ```text
+/// 08 00 03 62 79 65 | 05 | 08 00 06 53 65 72 76 65 72 | 00
+///    6 bytes          1        9 bytes                    1   = 17
+/// ```
+///
+/// * `08` is `TAG_String`, and **the network form omits the tag's name**, so `00 03` is the length and `62 79 65`
+///   is `"bye"`;
+/// * `05` is a `VarInt`: the **chat type**, a registry id, and the third place in this phase where a number is a
+///   claim about a registry the client owns;
+/// * `08 00 06` and `53 65 72 76 65 72` are the sender's name, `"Server"`;
+/// * `00` is `TAG_End` — an **absent** optional target name, written rather than omitted.
+///
+/// The last point cost a round. A decoder that reads the terminator without consuming it leaves one byte behind and
+/// fails its own trailing-byte check; one that treats an empty remainder as absence accepts a truncated packet.
+/// **Absence is written, so reading it has to consume it.**
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisguisedChat {
+    /// The message to display.
+    pub message: TextComponent,
+    /// Chat type registry id: how the client decorates and colours the line.
+    pub chat_type: i32,
+    /// Who the message is attributed to.
+    pub sender_name: TextComponent,
+    /// The target's name, for a message about someone.
+    pub target_name: Option<TextComponent>,
+}
+
+impl Packet for DisguisedChat {
+    const ID: i32 = clientbound::play::DISGUISED_CHAT;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut rest = payload;
+        let message = super::config::text_from_nbt(&Nbt::read_network(&mut rest)?)?;
+        let mut reader = PacketReader::new(rest);
+        let chat_type = reader.read_varint()?;
+        rest = reader.take_remaining();
+        let sender_name = super::config::text_from_nbt(&Nbt::read_network(&mut rest)?)?;
+
+        let target_name = if rest == [0x00] {
+            // Consumed, not merely recognised: leaving the terminator behind is what made the trailing-byte check
+            // fire on a payload that was correct.
+            rest = &rest[1..];
+            None
+        } else if rest.is_empty() {
+            return Err(ServerError::Protocol(
+                "disguised_chat ended before its target name field".to_owned(),
+            ));
+        } else {
+            Some(super::config::text_from_nbt(&Nbt::read_network(
+                &mut rest,
+            )?)?)
+        };
+
+        if !rest.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "disguised_chat has {} trailing bytes",
+                rest.len()
+            )));
+        }
+        Ok(Self {
+            message,
+            chat_type,
+            sender_name,
+            target_name,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        let mut bytes = Vec::new();
+        self.message.to_nbt().write_network(&mut bytes)?;
+        writer.write_bytes(&bytes);
+        writer.write_varint(self.chat_type);
+        let mut bytes = Vec::new();
+        self.sender_name.to_nbt().write_network(&mut bytes)?;
+        writer.write_bytes(&bytes);
+        let mut bytes = Vec::new();
+        match &self.target_name {
+            Some(name) => name.to_nbt().write_network(&mut bytes)?,
+            None => bytes.push(0x00),
+        }
+        writer.write_bytes(&bytes);
+        Ok(writer.finish())
+    }
+}
+
 /// Wire type id for [`MetadataValue::Byte`].
 pub const METADATA_TYPE_BYTE: i32 = 0;
 /// Wire type id for [`MetadataValue::VarInt`].

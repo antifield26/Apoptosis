@@ -2770,6 +2770,41 @@ document that describes the format is exactly the kind of thing this phase has s
 people's comments.
 
 
+### P10-10 (part 4) — the terminator bug, found by dumping the bytes, and the divergence the golden test then found
+
+The reverted packet is back, and the bug that caused the revert was one line:
+
+```text
+after the sender:     rest = [00] len 1
+comparing to [0x00]:  true
+is_empty:             false
+```
+
+`rest == [0x00]` was **true**, the branch was taken, and **the terminator was never consumed** — so the
+trailing-byte check found one byte on a payload that was correct. The other symptom, a 16-byte prefix decoding,
+was the older branch reading an empty remainder as "no target name". **Absence is written, so reading it has to
+consume it.**
+
+**A temporary diagnostic is what found it**, and it asserted nothing: it printed what `Nbt::read_network` leaves
+behind at each step, so a wrong expectation could not make it agree with itself. It is deleted now that it has
+done its job.
+
+### And the golden test immediately found a second, real divergence
+
+```
+ours:  10 08 00 04 't','e','x','t' 00 03 'b','y','e' 00   <- TAG_Compound { text: "bye" }
+real:  08 00 03 'b','y','e'                               <- a bare TAG_String
+```
+
+**A real 26.1.2 server sends a plain message as a bare string**; `TextComponent::to_nbt` always wraps. A client
+reads both as the same component, so this is a divergence in **what is sent** rather than in what is understood —
+and this project's standard for a wire artefact is byte-identical, so it is recorded as one.
+
+**The test asserts the divergence exists**, with a message telling whoever fixes the encoder to delete the test and
+its note together. **Asserting byte-equality would assert something the codec does not do, and deleting the
+assertion would hide the divergence**; neither is what a golden test is for.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
