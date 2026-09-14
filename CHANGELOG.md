@@ -1616,6 +1616,52 @@ correct. Its doc does **not** say where they came from, which is the weaker stan
 comment, and it is a gap rather than a defect: the numbers are right and nothing depends on the reader trusting
 them.
 
+### KD-73 \u2014 a constant, its comment and my own correction, all wrong together, against the jar
+
+`CookingRecipeKind::default_cooking_time` returned **100 for `campfire_cooking`**. The jar says **600**, and every
+one of its nine campfire recipes says so:
+
+```text
+minecraft:smelting:          cookingtime=200  x73
+minecraft:blasting:          cookingtime=100  x25
+minecraft:smoking:           cookingtime=100  x9
+minecraft:campfire_cooking:  cookingtime=600  x9
+```
+
+**A campfire is the slow method, not a fast one.** It cooks four items at once and takes thirty seconds over them,
+which is why 600 rather than 100 \u2014 and grouping it with blasting and smoking is the kind of plausible mistake
+that survives every test in the suite, because no test in the suite ever read a recipe.
+
+### Three artifacts, written from one understanding
+
+| | what it said | |
+|---|---|---|
+| `data/recipe.rs`'s constant | 100 | wrong |
+| `data/recipe.rs`'s comment | ambiguous enough to read as 100 | unhelpful |
+| **my KD-70 "fix" of that comment** | **"100 for all three of blasting, smoking and campfire cooking"** | **confidently wrong** |
+| `container/furnace.rs:82-84` | "100 for `blasting` and `smoking`, and **600 for `campfire_cooking`**" | **right all along** |
+
+**KD-70 read the constant, decided the ambiguous sentence was the error, and rewrote the sentence to match the
+constant.** That turned a sentence that could be read either way into one that states the wrong value outright \
+the worst of the three states that comment has been in, and the clearest demonstration yet of why **a comment is
+not evidence about the code beside it**.
+
+**And this is the review's subject in its purest form.** Two artifacts written from one understanding \u2014 a
+constant and its comment \u2014 agreeing with each other, while a third document **in the same workspace** and the
+jar's own data both said otherwise. Nothing compared them. The full suite is green either way: `cargo test` does
+not read `data/minecraft/recipe/*.json`.
+
+### The fix, and where the regression test belongs
+
+The constant returns 600 for `CampfireCooking`, the comment names the measurement instead of a recollection, and
+both now carry the four counts above.
+
+**A regression test asserting the four values would not have caught this**, and that is worth stating rather than
+papering over: a test written from the same belief asserts the same wrong number. The check that works is
+**differential** \u2014 read the jar's recipes and compare \u2014 which is what `crates/data/tests/vanilla_data.rs`
+already does for the pack, gated on `MC_VANILLA_DATA`. Adding the cooking times to it is the remaining work, and it
+is recorded here rather than left implied.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

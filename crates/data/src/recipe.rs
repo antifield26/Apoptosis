@@ -192,23 +192,31 @@ impl SmeltingKind {
 
     /// The default cooking time when a recipe omits `cookingtime`.
     ///
-    /// **From the jar's own data, verified by counting**: every recipe in the jar carries an explicit
-    /// `cookingtime`, and it is `200` for `smelting` and **`100` for all three of `blasting`, `smoking` and
-    /// `campfire_cooking`**. Half the time, for the three fast methods, is the whole of the difference.
+    /// **Measured from the jar's recipe data**, by counting every cooking recipe's own `cookingtime`:
     ///
-    /// The sentence here used to read "every `smoking` and `campfire_cooking` recipe carries `200`/`100`
-    /// respectively", which names 200 for smoking where the code and the jar both say 100 — a number in prose
-    /// that nothing compared with the constant beside it, which is KD-56's shape in one word.
+    /// ```text
+    /// minecraft:smelting:          cookingtime=200  x73
+    /// minecraft:blasting:          cookingtime=100  x25
+    /// minecraft:smoking:           cookingtime=100  x9
+    /// minecraft:campfire_cooking:  cookingtime=600  x9
+    /// ```
     ///
-    /// These defaults matter only for a pack that omits the field, which vanilla never does — so they are
+    /// **Campfire cooking is the slow one at 600 ticks**, not a fast one: a campfire cooks four items at once and
+    /// takes thirty seconds over them. Grouping it with blasting and smoking at 100 was wrong, and the doc was
+    /// once rewritten to agree with that wrong constant — see KD-73. `container/furnace.rs` says 600 and always
+    /// has.
+    ///
+    /// These defaults matter only for a pack that omits `cookingtime`, which vanilla never does — so they are
     /// recorded as *not exercised by vanilla* rather than presented as verified.
     #[must_use]
     pub const fn default_cooking_time(self) -> i32 {
         match self {
             Self::Smelting => 200,
-            // Blasting, smoking and campfire cooking all cook in 100 ticks in the
-            // jar's own data; only smelting is 200.
-            Self::Blasting | Self::Smoking | Self::CampfireCooking => 100,
+            // Blasting and smoking are the fast pair at half smelting's time.
+            Self::Blasting | Self::Smoking => 100,
+            // **And a campfire is the slow one.** It cooks four items at once and takes 600 ticks over them;
+            // grouping it with the fast pair was wrong, and the doc beside it was once rewritten to agree.
+            Self::CampfireCooking => 600,
         }
     }
 }
