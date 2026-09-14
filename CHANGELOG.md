@@ -2662,6 +2662,31 @@ client had loaded, or the session ended first — or the entity-building probe. 
 papered over**, which is what part 6 committed to.
 
 
+### P10-07 (part 8) — the capture that would answer it, and the mechanism that makes it possible
+
+Part 7 established that this capture has **no `minecraft:item` metadata body**: its 55 entities are slimes and one
+other type. The item's slots need a session in which a drop existed, and the way to get one is known rather than
+hoped for.
+
+**The mechanism.** `tools/surface-capture/run.py` boots the server with `subprocess.Popen` and the vanilla jar
+**reads console commands from stdin**, so a `summon` can be written to that pipe while the client is connected.
+That is the whole of what makes a drop appear in a capture: no gameplay, no player, one line.
+
+**Why the existing capture does not have one.** `tools/surface-capture/run.py` drives **our own** `mc-server.exe`
+-- it is the tool that checks our packets against a real client's reading of them. The vanilla bodies in
+`target/vanilla-capture/` came from the other route, which had no such injection step, so the server it talked to
+never dropped anything a client had loaded.
+
+**What the capture would give, in one session, checked three ways:** the `add_entity` body naming the drop's entity
+and its type; the `set_entity_data` body carrying its stack in the item slot; and, if it moves, a
+`set_entity_motion` body. **Three packet kinds naming the same entity, none derived from another** -- the same
+shape of evidence part 7 used to confirm the index-16 claim, applied to the one type P10-08 needs.
+
+**And the alternative remains open**: the entity-building probe for the full 157-type table, which is heavier and
+which nothing is waiting on yet. **The gap is guarded either way** -- `MetadataProbe` refuses its own bad output
+rather than producing a table that looks finished.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
