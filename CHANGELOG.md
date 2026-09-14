@@ -1616,7 +1616,7 @@ correct. Its doc does **not** say where they came from, which is the weaker stan
 comment, and it is a gap rather than a defect: the numbers are right and nothing depends on the reader trusting
 them.
 
-### KD-73 \u2014 a constant, its comment and my own correction, all wrong together, against the jar
+### KD-73 — a constant, its comment and my own correction, all wrong together, against the jar
 
 `CookingRecipeKind::default_cooking_time` returned **100 for `campfire_cooking`**. The jar says **600**, and every
 one of its nine campfire recipes says so:
@@ -1629,7 +1629,7 @@ minecraft:campfire_cooking:  cookingtime=600  x9
 ```
 
 **A campfire is the slow method, not a fast one.** It cooks four items at once and takes thirty seconds over them,
-which is why 600 rather than 100 \u2014 and grouping it with blasting and smoking is the kind of plausible mistake
+which is why 600 rather than 100 — and grouping it with blasting and smoking is the kind of plausible mistake
 that survives every test in the suite, because no test in the suite ever read a recipe.
 
 ### Three artifacts, written from one understanding
@@ -1646,8 +1646,8 @@ constant.** That turned a sentence that could be read either way into one that s
 the worst of the three states that comment has been in, and the clearest demonstration yet of why **a comment is
 not evidence about the code beside it**.
 
-**And this is the review's subject in its purest form.** Two artifacts written from one understanding \u2014 a
-constant and its comment \u2014 agreeing with each other, while a third document **in the same workspace** and the
+**And this is the review's subject in its purest form.** Two artifacts written from one understanding — a
+constant and its comment — agreeing with each other, while a third document **in the same workspace** and the
 jar's own data both said otherwise. Nothing compared them. The full suite is green either way: `cargo test` does
 not read `data/minecraft/recipe/*.json`.
 
@@ -1658,11 +1658,11 @@ both now carry the four counts above.
 
 **A regression test asserting the four values would not have caught this**, and that is worth stating rather than
 papering over: a test written from the same belief asserts the same wrong number. The check that works is
-**differential** \u2014 read the jar's recipes and compare \u2014 which is what `crates/data/tests/vanilla_data.rs`
+**differential** — read the jar's recipes and compare — which is what `crates/data/tests/vanilla_data.rs`
 already does for the pack, gated on `MC_VANILLA_DATA`. Adding the cooking times to it is the remaining work, and it
 is recorded here rather than left implied.
 
-### KD-74 \u2014 the same kind of claim, measured, is right eight times out of eight
+### KD-74 — the same kind of claim, measured, is right eight times out of eight
 
 KD-73 was a number in prose that nothing had compared with its source. `data/advancement.rs` makes **eight of the
 same kind of claim**, and every one matches the jar exactly:
@@ -1682,7 +1682,7 @@ same kind of claim**, and every one matches the jar exactly:
 walked** for every one of 1 617 advancements, and all nine buckets agree to the digit.
 
 **That is what makes KD-73 a finding rather than a genre.** The difference between the two files is **not the kind
-of claim** \u2014 both state counts about vanilla in a comment \u2014 it is **whether the number was measured**.
+of claim** — both state counts about vanilla in a comment — it is **whether the number was measured**.
 `advancement.rs`'s were. `recipe.rs`'s constant was 100 for a 600-tick recipe, and its comment had been rewritten
 to agree with it.
 
@@ -1690,26 +1690,26 @@ to agree with it.
 believing:
 
 * "15 of vanilla's 3 546 criteria state none" reads naturally as "no trigger", and the jar has **zero** criteria
-  without one \u2014 the count is of criteria with no **`conditions`**, which is exactly 15;
+  without one — the count is of criteria with no **`conditions`**, which is exactly 15;
 * the first depth measurement gave `1: 6, 2: 1611` because I keyed advancements by file path (`adventure/kill_a_mob`)
   while their `parent` fields are namespaced (`minecraft:adventure/root`), so no parent ever resolved. **The claim
   was right and my measurement was wrong twice**, which is the mistake this review has made more often than any
   other.
 
-### KD-75 \u2014 `loot.rs`'s counts hold at the scope they name, and one of them corrects a mistake of mine
+### KD-75 — `loot.rs`'s counts hold at the scope they name, and one of them corrects a mistake of mine
 
 Continuing the line that produced KD-73: **a comment stating a count about vanilla, measured against the jar.**
 
 | claim | measured | |
 |---|---|---|
-| "The **11** table `type`s" | **11** | verified \u2014 the eleven named types, no more and no fewer |
+| "The **11** table `type`s" | **11** | verified — the eleven named types, no more and no fewer |
 | "The **19** `function` types" | **19** distinct | verified |
-| "all **1 326** tables" | **1 326** | verified \u2014 see below |
-| "**1 383** literals and **76** `uniform` providers" | 1 399 and 85 | **not verified** \u2014 see below |
-| "**164** of vanilla's **1 392**" | 1 389 | **not verified** \u2014 see below |
+| "all **1 326** tables" | **1 326** | verified — see below |
+| "**1 383** literals and **76** `uniform` providers" | 1 399 and 85 | **not verified** — see below |
+| "**164** of vanilla's **1 392**" | 1 389 | **not verified** — see below |
 
 **The 1 326 is the interesting one, because it caught me.** My first count was **1 331**, and the difference is
-five files under `data/minecraft/datapacks/trade_rebalance/` \u2014 **a built-in data pack that overrides five chest
+five files under `data/minecraft/datapacks/trade_rebalance/` — **a built-in data pack that overrides five chest
 loot tables**. The comment counts the main pack, which is the right scope for a statement about vanilla's data,
 and my count included the override copies. **The claim was right and my measurement was wrong**, which is the
 twentieth time in this review and the fourth in the last three rounds.
@@ -1718,22 +1718,22 @@ twentieth time in this review and the fourth in the last three rounds.
 85 against 76 are **close**, and close is the signature of a scope difference rather than a wrong figure: my
 counting is textual, over `"rolls": <number>` and `"function"` occurrences at any depth, while the file's numbers
 were presumably taken from a structural walk of the main pack alone. **A number that is nearly right is not
-evidence of a defect, and reporting it as one would be the same error as KD-70** \u2014 where I read a constant,
+evidence of a defect, and reporting it as one would be the same error as KD-70** — where I read a constant,
 decided the prose was wrong, and made it confidently wrong.
 
 **So the row above says what was verified and what was not**, rather than collapsing the two: two counts and the
 table total hold exactly at the scope the comment names, and three need a structural parse of the main pack before
 anything can be said about them.
 
-### KD-76 \u2014 the fuel table's best-designed column, and the three ways a doc and its code come apart
+### KD-76 — the fuel table's best-designed column, and the three ways a doc and its code come apart
 
 `container/furnace.rs` is the best-designed artifact this review has read. Its fuel table carries **the evidence
 label inside the row**, and it says why:
 
 > The label is part of the **row** rather than a parallel table, so reordering or adding a row cannot silently
-> attach the wrong evidence to a fuel \u2014 the hazard a parallel `&[(&str, Evidence)]` would carry.
+> attach the wrong evidence to a fuel — the hazard a parallel `&[(&str, Evidence)]` would carry.
 
-That is the discipline this review has spent twenty rounds arguing for, already in use \u2014 and the thing that is
+That is the discipline this review has spent twenty rounds arguing for, already in use — and the thing that is
 wrong in it is a label:
 
 ```text
@@ -1742,11 +1742,11 @@ wrong in it is a label:
 
 **Nine coals are 14400. A coal block is 16000**, because it smelts 80 items where nine separate coals smelt 72,
 and the eleven-item gap is real Vanilla behaviour. The value is right and **the label claims a multiplication that
-produces a different number** \u2014 which matters more here than anywhere, because `Derived` is defined as a Vanilla
+produces a different number** — which matters more here than anywhere, because `Derived` is defined as a Vanilla
 figure this build is willing to assert, so a wrong label mis-states how much confidence the number is entitled to.
 The row now says `verified`, and the code's own `Evidence::Derived` was corrected with it.
 
-**`Derived`'s definition used the same wrong instance** \u2014 "a coal block is nine coal" was the reader's example of
+**`Derived`'s definition used the same wrong instance** — "a coal block is nine coal" was the reader's example of
 what the category means. An example that is wrong teaches the category wrongly, and this one would have been
 labelled `verified` by anyone who checked it. With the row corrected, **no row uses `Derived` at all**, which the
 definition now says rather than leaving a variant that exists for symmetry.
@@ -1760,15 +1760,15 @@ definition now says rather than leaving a variant that exists for symmetry.
 | **KD-76** | the doc table | the struct literal under it | the two disagreeing |
 
 **And the third was mine, inside the fix for the first.** I changed the table's `derived (9 x coal)` to `verified`
-and left `evidence: Evidence::Derived` in the row it describes \u2014 a fresh doc-versus-code disagreement created by
+and left `evidence: Evidence::Derived` in the row it describes — a fresh doc-versus-code disagreement created by
 the commit that was correcting one.
 
 **The common shape is that the two are edited as though they were one artifact and treated as though they were
 two.** Every gate was green each time, because no gate reads a doc table and compares it with the literal beneath
-it \u2014 which is the same reason the air-with-a-count invariant needed a test rather than a comment (KD-63), and why
+it — which is the same reason the air-with-a-count invariant needed a test rather than a comment (KD-63), and why
 this review's two real fixes came with `registry_ids.rs` and a pinning test rather than a sentence.
 
-### KD-77 \u2014 a test that compares the prose with the code, verified by putting the defect back
+### KD-77 — a test that compares the prose with the code, verified by putting the defect back
 
 KD-76 changed a doc table and left the struct literal beneath it, and **every gate stayed green**, because no
 gate reads a doc and compares it with the code. `crates/container/tests/fuel_table_consistency.rs` is that check:
@@ -1786,7 +1786,7 @@ This is KD-76: the two are edited as one artifact and treated as two.
 ```
 
 **A test written from the same belief would not have caught this**, which is why this one reads the source rather
-than holding a list \u2014 the same reason `registry_ids.rs` reads the registry the client is sent instead of a copy.
+than holding a list — the same reason `registry_ids.rs` reads the registry the client is sent instead of a copy.
 Both are the shape of check this review concluded it needed: **the two artifacts compared with each other, rather
 than each compared with a belief.**
 
@@ -1794,8 +1794,8 @@ than each compared with a belief.**
 
 | fault | what it looked like | |
 |---|---|---|
-| the parse ran into the second table | "the doc table has 15 rows and the code has 8" \u2014 `furnace.rs` documents a smelting table too, whose fourth column is an experience value | |
-| the forbidden phrase appears in the sentence forbidding it | the comment explaining KD-76 says the block "is not `derived (9 x coal)`", so a file-wide `contains` check fails **on the corrected code** \u2014 a self-inflicted false positive | |
+| the parse ran into the second table | "the doc table has 15 rows and the code has 8" — `furnace.rs` documents a smelting table too, whose fourth column is an experience value | |
+| the forbidden phrase appears in the sentence forbidding it | the comment explaining KD-76 says the block "is not `derived (9 x coal)`", so a file-wide `contains` check fails **on the corrected code** — a self-inflicted false positive | |
 | the item name kept its closing backtick | `"minecraft:coal\`"` against `"minecraft:coal"`, from stripping the opening backtick and not the closing one | |
 
 **Two of the three are the same mistake in different clothes**: a check that looks right and tests the wrong
@@ -1804,11 +1804,11 @@ asserted a property of the whole file where it belonged to a row. **A check is o
 this review has now made that mistake in the filter that found nothing (KD-59), in the guard that checked four
 gates of six (KD-68), in the sweep that reported done while leaving seven (KD-72), and twice here.
 
-### KD-78 \u2014 `tag.rs` holds where I could measure it, and my instrument was wrong where I could not
+### KD-78 — `tag.rs` holds where I could measure it, and my instrument was wrong where I could not
 
 | claim | my measurement | |
 |---|---|---|
-| "Vanilla has **758** tags" | **758** | exact \u2014 a plain file count |
+| "Vanilla has **758** tags" | **758** | exact — a plain file count |
 | "vanilla alone has **17**" tag directories | 16 in the main pack | **unverified** |
 | "Vanilla's deepest is **4**" (`block/supports_crimson_fungus`) | 2, by my walk | **unverified** |
 | "**103** spurious ... splitting at the first left **46**" | 163 and 384 | **unverified** |
@@ -1817,7 +1817,7 @@ gates of six (KD-68), in the sweep that reported done while leaving seven (KD-72
 three I could not reproduce all need a model of the format, and mine is wrong in a way I can name.
 
 `minecraft:block/supports_crimson_fungus` has one value, `#supports_warped_fungus`, and **a `#` reference is
-relative to the same registry** \u2014 the key is `minecraft:block/supports_warped_fungus`. I resolved it as
+relative to the same registry** — the key is `minecraft:block/supports_warped_fungus`. I resolved it as
 `minecraft:supports_warped_fungus`, which does not exist, so **every relative reference in the pack counted as
 missing** and my depth walk never followed one. That is the shape of the 384-against-46 gap exactly.
 
@@ -1830,16 +1830,16 @@ include it. KD-75 measured 1 331 where the comment's 1 326 was right, for that r
 **A count reproducible without understanding the format is evidence. A count that needs a model of the format is
 evidence only once the model is right.** The four files on this line have now produced:
 
-* `recipe.rs` \u2014 one claim, **wrong**, and the measurement needed no model (the jar states `cookingtime` as a field);
-* `advancement.rs` \u2014 eight claims, **all exact**, the hardest needing a parent-chain walk that was right on the third attempt;
-* `loot.rs` \u2014 three exact, three unverified, separated by a built-in data pack;
-* `tag.rs` \u2014 one exact, three unverified, separated by a format rule I had not modelled.
+* `recipe.rs` — one claim, **wrong**, and the measurement needed no model (the jar states `cookingtime` as a field);
+* `advancement.rs` — eight claims, **all exact**, the hardest needing a parent-chain walk that was right on the third attempt;
+* `loot.rs` — three exact, three unverified, separated by a built-in data pack;
+* `tag.rs` — one exact, three unverified, separated by a format rule I had not modelled.
 
 **Three of the four hold up, and the one that does not is the one where the number was never measured at all.**
 That is the distinction this line exists to draw, and it is worth more than another sweep: **"unverified by me"
 and "wrong" are different findings**, and collapsing them is the error that produced KD-70.
 
-### KD-79 \u2014 with the right model, `tag.rs`'s `46` comes out exactly, and the other two are conventions
+### KD-79 — with the right model, `tag.rs`'s `46` comes out exactly, and the other two are conventions
 
 KD-78 recorded three of `tag.rs`'s numbers as unverified because my instrument was wrong: I resolved
 `#supports_warped_fungus` as `minecraft:supports_warped_fungus` when **a `#` reference is relative to the same
@@ -1857,13 +1857,13 @@ With that one rule applied:
 **The 46 is the one that matters.** It is not a count of anything visible in a file listing: it is the number of
 tag references that do not resolve **once the registry-relative rule is applied**, and the comment states it
 alongside the 103 that the naive separator-split produces. I measured 384 with the rule missing and **46** with it
-\u2014 so the file's number is the correct-model answer and my first one was the broken-model answer, in exactly the
+— so the file's number is the correct-model answer and my first one was the broken-model answer, in exactly the
 shape the comment describes.
 
 **The other two differ by one each, and both differences are conventions rather than errors:**
 
 * **depth**: I count a tag with no tag-references as depth 1; the file's numbering makes that 0. Under its
-  convention the deepest is 4 and under mine it is 5 \u2014 and **both name `block/supports_crimson_fungus`**, which
+  convention the deepest is 4 and under mine it is 5 — and **both name `block/supports_crimson_fungus`**, which
   is the tag the comment calls the deepest. A self-consistent claim with a different origin is not a defect, and
   calling it one would be KD-70 all over again.
 * **directories**: 16 under `data/minecraft/tags/`, against a claimed 17. `worldgen` holds sub-registries
@@ -1876,20 +1876,20 @@ Four files, and the distinction that took three rounds to draw cleanly:
 
 | file | outcome |
 |---|---|
-| `recipe.rs` | **one claim, wrong** \u2014 and reproducible without any model of a format |
-| `advancement.rs` | **eight claims, all exact** \u2014 the hardest needed a parent-chain walk, right on the third attempt |
+| `recipe.rs` | **one claim, wrong** — and reproducible without any model of a format |
+| `advancement.rs` | **eight claims, all exact** — the hardest needed a parent-chain walk, right on the third attempt |
 | `loot.rs` | three exact, three separated by a built-in data pack |
 | `tag.rs` | two exact once the rule was right, two separated by conventions of numbering and scope |
 
 **Three of the four hold up, and the fourth failed where the number had never been measured at all.** The line's
 real product is therefore not a defect count but a way of telling three things apart: **measured and right**,
-**measured and wrong**, and **not measured by me** \u2014 where the third has repeatedly meant *my instrument*, and
+**measured and wrong**, and **not measured by me** — where the third has repeatedly meant *my instrument*, and
 collapsing it into the second is what produced KD-70 and then KD-73.
 
-### KD-80 \u2014 the second table in `furnace.rs` agrees with its code in every cell
+### KD-80 — the second table in `furnace.rs` agrees with its code in every cell
 
 KD-76 was the fuel table's coal-block row, where the doc and the code disagreed and a test now compares them.
-`furnace.rs` documents **a second table** \u2014 seven smelting recipes \u2014 and that one is exact:
+`furnace.rs` documents **a second table** — seven smelting recipes — and that one is exact:
 
 | doc column | code | |
 |---|---|---|
@@ -1905,24 +1905,24 @@ KD-76 was the fuel table's coal-block row, where the doc and the code disagreed 
 
 **Nine cells, no disagreement**, in the file where the other table's label was wrong. That is worth recording
 rather than passing over: **the same author, the same file, the same convention, and one table is exact while the
-other carried a label claiming arithmetic that produced a different number** \u2014 which is what makes the fuel
+other carried a label claiming arithmetic that produced a different number** — which is what makes the fuel
 table's defect a mistake rather than a habit, and what makes the new consistency test worth having rather than
 worth distrusting.
 
 **And the two tables needed different checks.** The fuel table's fourth column is an evidence label, so the test
 compares label against `evidence:`. This one's fourth column is an experience value, so the comparison is against
-`EXPERIENCE_PER_IRON_SMELT` and four literals \u2014 a different assertion over a different shape. That is why the
+`EXPERIENCE_PER_IRON_SMELT` and four literals — a different assertion over a different shape. That is why the
 existing test stops at the fuel table rather than running on: **a comparison is only meaningful where the two
 sides are the same kind of thing**, which is the scope lesson from KD-77 in a different dress.
 
-### KD-81 \u2014 the sixty, read: eleven hold, two name a measurement nobody has taken
+### KD-81 — the sixty, read: eleven hold, two name a measurement nobody has taken
 
 Thirteen of the sixty doc lines that name a number are in `mc-entity`, the largest unread group. All thirteen
-were read, and **eleven hold by inspection** \u2014 each is arithmetic or a Vanilla fact checkable without a tool:
+were read, and **eleven hold by inspection** — each is arithmetic or a Vanilla fact checkable without a tool:
 
 | line | claim | check |
 |---|---|---|
-| `player.rs:994` | a merge "must not cost the player the other **40**" | the player inventory is 41 slots, so 40 remain \u2014 and the constant in the same crate says 41 |
+| `player.rs:994` | a merge "must not cost the player the other **40**" | the player inventory is 41 slots, so 40 remain — and the constant in the same crate says 41 |
 | `profile.rs:75` | "exactly as the vanilla login path does: **1..=16**" | Vanilla's username limit is 16 |
 | `stack.rs:239,297` | "the vanilla default limit of **64**" for `grow` and `merge` | `DEFAULT_MAX_STACK_SIZE` is 64 and both call through to it |
 | `stack.rs:602,845` | an empty table gives "the vanilla default of **64**" | `max_stack_size_for_name` falls back to that constant |
@@ -1933,10 +1933,10 @@ were read, and **eleven hold by inspection** \u2014 each is arithmetic or a Vani
 
 **Two name a measurement rather than illustrate one**, and those are the next targets on this line:
 
-* **`stack.rs:645` \u2014 "Number of exception entries (always 165 for the 26.1.2 vanilla table)"**. The same shape as
+* **`stack.rs:645` — "Number of exception entries (always 165 for the 26.1.2 vanilla table)"**. The same shape as
   KD-73: a count about Vanilla, in a comment beside a constant that encodes it, naming the exact version.
   **Whether it was measured is a question with an answer, and it has not been asked.**
-* **`mob.rs:122` \u2014 the `16.0` follow range.** Stated as Vanilla's default without saying where from, which is the
+* **`mob.rs:122` — the `16.0` follow range.** Stated as Vanilla's default without saying where from, which is the
   weaker standard KD-70 recorded beside the cooking-time comment that *did* say where its numbers came from.
 
 **No defect in the thirteen**, which is the expected shape by now: a line that pairs a claim with a number it can
@@ -1947,7 +1947,7 @@ number had never been measured at all.
 reading another document it had forgotten to create. Both failed loudly on their own anchor assertion rather than
 quietly writing nothing, which is the property that made them cheap to catch.
 
-### KD-82 \u2014 the `165` is recorded as unverified, because both of my instruments were broken
+### KD-82 — the `165` is recorded as unverified, because both of my instruments were broken
 
 `StackSizeTable::len` carries this doc:
 
@@ -1961,7 +1961,7 @@ and the module doc one level up states where the table comes from: **"every `sta
 returned "not found" for both names; a PowerShell range extraction printed an empty start line and then counted
 **167 twice**, the same number for two different arrays, which is the signature of reading one range both times.
 
-**Neither number is evidence, and publishing either would be the KD-70 mistake** \u2014 reading a source, deciding
+**Neither number is evidence, and publishing either would be the KD-70 mistake** — reading a source, deciding
 the prose is wrong, and stating the result confidently.
 
 ### The method that would settle it
@@ -1974,10 +1974,10 @@ per-item limits** to compare against this table row for row.
 That second comparison is the one that matters, and it is the check this table has never had: `items.tsv` is
 trustworthy because `ItemProbe` reproduced all 1506 of its rows; the stack-size table is trusted because its doc
 says it came from the jar. **A doc saying where a number came from is not the same as the number having been
-checked**, which is the whole of what this review found on the jar-count line \u2014 and this is the last of the
+checked**, which is the whole of what this review found on the jar-count line — and this is the last of the
 tables in this area without an independent source.
 
-### KD-83 \u2014 the stack-size probe compiles and stops one bootstrap short
+### KD-83 — the stack-size probe compiles and stops one bootstrap short
 
 `tools/vanilla-probe/StacksToProbe.java` is written and compiles against the 26.1.2 jar. It fails at runtime:
 
@@ -1986,22 +1986,22 @@ java.lang.NullPointerException: Components not bound yet
 ```
 
 **In 26.x the maximum stack size is a data component**, not a constant on the item. `getDefaultMaxStackSize` reads
-it from the bound `DataComponents`, and `Bootstrap.bootStrap()` alone does not bind them \u2014 that needs the datapack
+it from the bound `DataComponents`, and `Bootstrap.bootStrap()` alone does not bind them — that needs the datapack
 load a dedicated server performs. **So the probe is one bootstrap step away rather than one idea away.**
 
 **That is a better state than KD-82 left it in.** The instrument that can settle the 165 now exists and is known
 to need one specific thing, which is the distinction this review has spent six rounds drawing between *not
-measured*, *measured wrong*, and *measured right* \u2014 and "written, compiles, needs a datapack load" is the first of
+measured*, *measured wrong*, and *measured right* — and "written, compiles, needs a datapack load" is the first of
 those three with a route out of it.
 
 **What it will produce when it runs:**
 
 * **the exception count**, against the doc's 165;
-* **the per-item limits**, against `STACK_SIZE_1` and `STACK_SIZE_16` row for row \u2014 **the check this table has
+* **the per-item limits**, against `STACK_SIZE_1` and `STACK_SIZE_16` row for row — **the check this table has
   never had**, and the one that matters more than the count, since `items.tsv` is trustworthy because `ItemProbe`
   reproduced all 1506 of its rows while this table is trusted only because its doc says it came from the jar.
 
-### KD-84 \u2014 the probe runs and reports 1506 unreadable, which is the better failure
+### KD-84 — the probe runs and reports 1506 unreadable, which is the better failure
 
 ```text
 items=1506
@@ -2009,12 +2009,12 @@ exceptions=0
 unreadable=1506
 ```
 
-**Every item's `MAX_STACK_SIZE` component came back null.** The items are registered \u2014 1506 of them, the count
-`ItemProbe` established \u2014 but **their default components are not built by `Bootstrap.bootStrap()`**. The first
+**Every item's `MAX_STACK_SIZE` component came back null.** The items are registered — 1506 of them, the count
+`ItemProbe` established — but **their default components are not built by `Bootstrap.bootStrap()`**. The first
 version died on that as `NullPointerException: Components not bound yet`; this one reports it as 1506 unreadable.
 
 **A probe that substituted 64 for a value it could not read would have printed `exceptions=0` and looked
-finished** \u2014 which is the shape of every defect this review found on the jar-count line: a number that agreed with
+finished** — which is the shape of every defect this review found on the jar-count line: a number that agreed with
 the belief beside it because nothing had measured it. **1506 unreadable is a fact about the instrument a reader can
 act on**; `exceptions=0` from the same run would have been a lie the summary told.
 
@@ -2024,14 +2024,14 @@ reach it, both recorded rather than guessed:
 
 * run the vanilla server far enough to initialise its registries and read them through `RegistryAccess`, using the
   launcher this workspace already has at `target/vanilla-26.1.2/`;
-* or find the initialiser that populates item components and call it after bootstrapping \u2014 which is what
+* or find the initialiser that populates item components and call it after bootstrapping — which is what
   `DataComponentInitializers` looked like on inspection, and was not confirmed.
 
 **The probe is committed as it stands**, because a tool that reports "1506 unreadable" is already more than this
 table has ever had: its rows have never been compared with anything, and there is now something that says so in a
 run rather than in a comment.
 
-### KD-85 \u2014 the probe's boundary is now in the data, per row, and names the missing step
+### KD-85 — the probe's boundary is now in the data, per row, and names the missing step
 
 ```text
 0 minecraft:air     ERROR:NullPointerException:Components_not_bound_yet
@@ -2043,7 +2043,7 @@ run rather than in a comment.
 exception's **class name**, which said `NullPointerException` and nothing a reader could act on; the second prints
 the **message**, and the message names the cause.
 
-**That is the difference between reporting a boundary and reporting a symptom** \u2014 the distinction this review
+**That is the difference between reporting a boundary and reporting a symptom** — the distinction this review
 keeps drawing. `unreadable=1506` was true and nearly useless;
 `ERROR:NullPointerException:Components_not_bound_yet` on every row says **which** bootstrap step is missing, and it
 lives in the artifact rather than beside it.
@@ -2051,7 +2051,7 @@ lives in the artifact rather than beside it.
 ### The runtime accessor does not help, which narrows the route to one
 
 `new ItemStack(item).getMaxStackSize()` fails the same way as `item.components().get(MAX_STACK_SIZE)`. So the
-route is **not** "use the API the game uses" \u2014 `getMaxStackSize` reads the bound components too. **The datapack and
+route is **not** "use the API the game uses" — `getMaxStackSize` reads the bound components too. **The datapack and
 registry load is the step**: KD-84 recorded that, and this round turns it from a reading of `javap` output into a
 demonstration.
 
@@ -2061,11 +2061,11 @@ The probe compiles, runs in one pass, and produces a 1506-row file whose every r
 unreadable. **The stack-size table has never been compared with anything**; it now has a tool that was pointed at
 it, got an answer, and wrote the answer down **including why the answer is not the one wanted**.
 
-**A tool that fails at a named step is where the next attempt starts.** The alternative \u2014 substituting 64 per
-item \u2014 would have produced a file that agreed with the table and a summary that agreed with the file, which is
+**A tool that fails at a named step is where the next attempt starts.** The alternative — substituting 64 per
+item — would have produced a file that agreed with the table and a summary that agreed with the file, which is
 precisely the failure mode this review exists to find.
 
-### KD-86 \u2014 `freeze()` was the right kind of guess and not the step
+### KD-86 — `freeze()` was the right kind of guess and not the step
 
 Scanning the jar's classes for the message found **exactly one** carrying `Components not bound yet`:
 `net/minecraft/core/Holder$Reference`. `MappedRegistry` exposes `freeze()`, `bindTags(...)` and
@@ -2076,21 +2076,21 @@ is recorded as such rather than left as an untried idea.
 
 **Asking the jar which class raises an error is a technique, not a one-off.** It took the condition from a string
 in a stack trace to a named class and a named set of candidate calls in one pass, with no guessing about what
-"bound" means in 26.x \u2014 the same move as `DefaultStateProbe` reading `defaultBlockState` off the bytecode.
+"bound" means in 26.x — the same move as `DefaultStateProbe` reading `defaultBlockState` off the bytecode.
 
 **Where the next attempt starts, named rather than gestured at:**
 
-* **`DataComponentInitializers`** \u2014 it mentions a binding entry point and has a `BakedEntry` type, which is what a
+* **`DataComponentInitializers`** — it mentions a binding entry point and has a `BakedEntry` type, which is what a
   component map looks like once built. If its `build(...)` populates item components, calling it after
   bootstrapping is the step.
-* **the full server bootstrap** \u2014 the datapack and registry load a dedicated server performs, reachable with the
+* **the full server bootstrap** — the datapack and registry load a dedicated server performs, reachable with the
   launcher already in this workspace at `target/vanilla-26.1.2/`.
 
 **The probe stays as it is**, because its current state is the useful one: it runs in one pass and every row of
 its output carries the exact reason it is unreadable. **`165` remains unverified, now with three attempts behind it
-rather than one belief** \u2014 which is what the coverage statement has to say, and now can.
+rather than one belief** — which is what the coverage statement has to say, and now can.
 
-### KD-87 \u2014 the remainder of the sixty holds, and I twice nearly reported a sentence I had read in halves
+### KD-87 — the remainder of the sixty holds, and I twice nearly reported a sentence I had read in halves
 
 The rest of the doc lines that name a number, in `data`, `protocol`, `redstone`, `server` and `worldgen`. **Every
 one holds**, and most need no tool: `f64`'s mantissa is 53 bits; a section is 16^3 = 4096 block states and 4^3 = 64
@@ -2104,28 +2104,28 @@ With the default five-block trunk the tree is 36 blocks: 5 logs, 21 leaves
 (5x5 minus four corners), 9 leaves (3x3) and 1 leaf tip.
 ```
 
-I read "5 logs, 21 leaves" and had 26 against a claimed 36 \u2014 **a defect, apparently, in the file that generates the
+I read "5 logs, 21 leaves" and had 26 against a claimed 36 — **a defect, apparently, in the file that generates the
 trees this review has already corrected twice**. The sentence continues past the line I stopped at: 5 + 21 + 9 + 1
-= 36, and every part checks \u2014 5x5 minus four corners is 21, 3x3 is 9, the tip is 1, and the trunk column is
+= 36, and every part checks — 5x5 minus four corners is 21, 3x3 is 9, the tip is 1, and the trunk column is
 skipped where the canopy passes over it so the leaves do not double-count the logs.
 
 **The second was the same mistake one level up**: three of the lines in this group are continuations of sentences
 whose first halves are a different grep hit, and **a claim read in halves is read wrong**. Both were caught by
-opening the file rather than by reasoning about the line \u2014 which is the only thing that has ever caught this
+opening the file rather than by reasoning about the line — which is the only thing that has ever caught this
 class, in this review or in the tooling it built.
 
 ### Why a round with no finding is worth recording
 
 **The rate matters more than the result.** The jar-count line now covers six files: `recipe.rs` wrong,
 `advancement.rs` 8 of 8, `loot.rs` 3 plus 3, `tag.rs` 2 plus 2, `furnace.rs` one label wrong, and this remainder
-clean. **The findings came from values that had never been measured, not from prose that was hard to read** \u2014 so
+clean. **The findings came from values that had never been measured, not from prose that was hard to read** — so
 a remainder of easy prose, checked anyway, is what makes "clean" a result rather than an assumption.
 
-### P10-06 (part 1) \u2014 the entity type table, and id 0 is a boat
+### P10-06 (part 1) — the entity type table, and id 0 is a boat
 
 `add_entity` carries an **entity type id** and the client resolves it against the registry this server sends it.
-That is the exact shape of the two defects this review already fixed \u2014 a block default taken to be a lowest id
-(KD-56), and `PLAINS_BIOME_ID = 0` where id 0 is `minecraft:badlands` (KD-65) \u2014 so the table is **extracted
+That is the exact shape of the two defects this review already fixed — a block default taken to be a lowest id
+(KD-56), and `PLAINS_BIOME_ID = 0` where id 0 is `minecraft:badlands` (KD-65) — so the table is **extracted
 rather than retyped**, in the pipeline `blocks.tsv` and `items.tsv` went through:
 
 ```text
@@ -2142,7 +2142,7 @@ tools/vanilla-probe/EntityTypeProbe.java  ->  crates/test-support/fixtures/regis
 155  minecraft:player
 ```
 
-**`entity_types=157`, and id 0 is a boat.** The registry is alphabetical, exactly as the biome registry is \u2014 which
+**`entity_types=157`, and id 0 is a boat.** The registry is alphabetical, exactly as the biome registry is — which
 is why the biome defect was invisible for so long: the assumption "the first entry is the ordinary one" is true
 often enough to survive, and wrong in both of these registries.
 
