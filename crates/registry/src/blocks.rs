@@ -145,9 +145,17 @@ pub struct BlockStateRef {
 }
 
 impl BlockStateRef {
-    /// Whether this state has no properties.
+    /// Whether this state carries no properties.
+    ///
+    /// **Not `is_default`.** That is what this was called, and it is a different question: `oak_log`'s default
+    /// state is `axis=y`, which has a property, so this returns `false` for the real default and the old name
+    /// said otherwise. It answered "has no properties" while being read as "is the default", which is the
+    /// assumption behind KD-56 \u2014 a block's default taken to be its lowest state id, wrong for 642 of 1168.
+    ///
+    /// `BlockStateRef` holds a name, its properties and an id, and no registry to compare against, so it
+    /// **cannot** answer whether it is a block's default. [`BlockRegistry::default_state`] can, given the name.
     #[must_use]
-    pub fn is_default(&self) -> bool {
+    pub fn has_no_properties(&self) -> bool {
         self.properties.is_empty()
     }
 }
