@@ -3163,6 +3163,33 @@ non-empty patch is an error with the reason in it, and a test asserts that `03 0
 on the entity model, and giving it one would invert the boundary for the sake of a two-field struct.
 
 
+### P10-08 (part 2) — the wiring written, reverted, and the three obstacles named
+
+The drop's stack was wired into `broadcast_entity_spawns`: after the `AddEntity`, a `set_entity_data` at **index
+8** with serializer type 7 carrying the item and its count, which is how a capture shows a real server doing it in
+two packets rather than one.
+
+**It is not committed, because it did not compile**, and the three things in the way are worth recording because
+two are ordinary and one is mine:
+
+1. **`SetEntityData` is not imported in `game.rs`** -- the same shape as `AddEntity`, `DisguisedChat` and
+   `BlockEntityData`, each of which needed the full path for its one use. That is a convention this file has, and
+   the fix is known.
+2. **`clippy::collapsible_if`** on the two nested `if let`s that check "is this an item" and "does it have an
+   id". The idiomatic answer in edition 2024 is a `let` chain, which is what the file's neighbours use.
+3. **And my collapse of those two `if`s into one left both closing braces**, so the file ended with an unmatched
+   `}` -- **a mechanical error in the edit, not in the design**, and the reason `game.rs` was reverted rather than
+   patched again with the context nearly gone.
+
+**What survives the revert**: `MetadataValue::ItemStack` and its byte-identical golden test, committed and green
+(part 1). **What is one round away**: eleven lines in `game.rs` with the shape already written down here, and the
+two import conventions each of this phase's packets has already established.
+
+**The lesson, and it is the same one the last four rounds have produced**: the edit that guesses at an anchor, or
+at a brace it did not recount, costs more than the edit that reads first -- and reverting to a green tree is
+cheaper than finishing a broken one with the context gone.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
