@@ -86,16 +86,16 @@ fn the_biome_id_this_server_sends_names_the_biome_it_claims() {
     );
 
     let index = usize::try_from(PLAINS_BIOME_ID).expect("a biome id fits in usize");
-    let named = prefix.get(index).unwrap_or_else(|| {
+    let at_id = prefix.get(index).unwrap_or_else(|| {
         panic!(
             "PLAINS_BIOME_ID is {index}, beyond the {} biomes the registry carries",
             prefix.len()
         )
     });
     assert_eq!(
-        named, "minecraft:plains",
-        "PLAINS_BIOME_ID is {index}, and the registry the client is sent gives that id to {named:?}. \
-         Every chunk would be painted as {named:?}: see KD-65."
+        at_id, "minecraft:plains",
+        "PLAINS_BIOME_ID is {index}, and the registry the client is sent gives that id to {at_id:?}. \
+         Every chunk would be painted as {at_id:?}: see KD-65."
     );
 }
 

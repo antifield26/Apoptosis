@@ -1538,6 +1538,20 @@ key in, which is impossible for a correct scanner; a byte-index version was repl
 first time. **A test that does not work is worse than no test**, which is why the second failure was diagnosed
 rather than committed.
 
+### KD-68 \u2014 my commit guard checked four gates out of six, and I committed over a failing clippy a third time
+
+The loop that runs the gates before committing recorded a boolean for the **four docs-audit scripts** and
+nothing else, so if ( -eq 0 -and ) was true while cargo clippy -D warnings had failed on a binding
+name. The commit went through, as it had twice before for different reasons.
+
+**The guard was wrong in exactly the way the review keeps finding**: it checked a subset and reported a whole. It
+now records **fmt, clippy, the test count and all four audits**, and the boolean is only true if every one of
+them is zero.
+
+The failure itself was trivial \u2014 
+amed too similar to another binding \u2014 and that is the point: a guard that
+lets a trivial failure through will let a real one through, and three commits in this session are evidence.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
