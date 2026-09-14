@@ -1533,6 +1533,13 @@ impl Game {
     /// `EntityTypeProbe` -- **not** the config payload, where `minecraft:entity_type` is a tag directory. A
     /// dropped stack is `minecraft:item`, which is id **71** and not id 0: the registry is alphabetical, so id 0
     /// is `minecraft:acacia_boat`. See P10-06.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::CorruptData`] when the entity type table has no `minecraft:item`, which a table that
+    /// loaded cannot happen to: the parser rejects a table with gaps.
+    ///
+    /// [`ServerError::Protocol`] when the packet cannot be framed, which for these field types means never.
     fn broadcast_entity_spawns(&mut self, report: &mut TickReport) -> ServerResult<()> {
         let pending = std::mem::take(&mut self.pending_entity_spawns);
         if pending.is_empty() {

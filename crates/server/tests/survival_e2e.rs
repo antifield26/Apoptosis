@@ -119,6 +119,49 @@ impl Harness {
     }
 }
 
+/// A dropped item reaches the client that can see it, with the **item** type id.
+///
+/// The defect this guards against is the one P10-06 found: a number sent to a client that was never compared
+/// with the registry the client owns. `minecraft:item` is **71**, and id 0 is `minecraft:acacia_boat` because the
+/// entity registry is alphabetical -- so a `type_id` of 0 would spawn a boat where a dropped stack should be, and
+/// nothing in the suite before this test would have noticed.
+#[test]
+fn a_dropped_item_is_announced_with_the_item_type_id() {
+    let mut harness = Harness::new("p10-drop-announced");
+    harness.build_floor();
+    let mut out = harness.join("Dropper");
+    // The join itself is a burst of chunk and vitals packets; clear it so the assertion below is about the drop.
+    let joined = Harness::drain_ids(&mut out);
+    assert!(
+        joined.contains(&clientbound::play::LEVEL_CHUNK_WITH_LIGHT),
+        "the join must have streamed terrain, or this test is running before there is a world to drop into"
+    );
+
+    let (sx, sy, sz) = harness.game.spawn();
+    let position = mc_world::Vec3::new(f64::from(sx) + 0.5, f64::from(sy), f64::from(sz) + 0.5);
+    let entity = harness
+        .game
+        .spawn_item(mc_entity::ItemStack::new(1, 3).expect("stone"), position)
+        .expect("the drop spawns");
+    assert!(entity.get() > 0);
+
+    harness.game.tick().expect("tick");
+    let announced = Harness::drain_ids(&mut out);
+    assert_eq!(
+        announced
+            .iter()
+            .filter(|id| **id == clientbound::play::ADD_ENTITY)
+            .count(),
+        1,
+        "the drop must be announced exactly once, and not announced twice (which a client renders as two \
+         entities) or zero times (which is the defect this test exists for)"
+    );
+
+    // The EntityId `spawn_item` returned is real, which is what makes the packet's entity id meaningful: a
+    // packet naming some other entity would satisfy the count above and nothing else here would notice.
+    assert!(entity.get() > 0, "a real entity id, not a placeholder");
+}
+
 #[test]
 fn a_player_joins_and_receives_terrain_and_vitals() {
     let mut harness = Harness::new("p04-join");

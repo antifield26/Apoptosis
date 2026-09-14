@@ -37,6 +37,9 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros", "signal"] }
 toml.workspace = true
 tracing.workspace = true
+# The UUID an entity is announced with; the type is shared with mc-entity and mc-protocol
+# rather than converted at each boundary.
+uuid.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
