@@ -121,6 +121,7 @@
 
 pub mod effect;
 pub mod entity;
+pub mod identity;
 pub mod inventory;
 pub mod item_entity;
 pub mod mob;

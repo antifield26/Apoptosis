@@ -260,6 +260,7 @@ dependencies = [
  "mc-test-support",
  "mc-world",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

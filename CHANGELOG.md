@@ -2321,6 +2321,37 @@ Both insertion points exist and the code's own comments name them. `spawn_item_o
 the Broadcast phase, the way `pending_light` already queues work, because it has no `TickReport` and
 `broadcast_chunk` needs one; and `sweep_entity_removals` sends `RemoveEntities` for the ids it already gathers.
 
+### P10-06 (part 8) — entity identity, derived rather than random
+
+`crates/entity/src/identity.rs` adds `entity_uuid(seed, id)`, the prerequisite part 7 identified: `AddEntity`
+carries a 16-byte UUID and the entity model had none.
+
+**Not `Uuid::new_v4()`**, for a reason the contract states: the same initial state and the same ordered inputs
+over the same tick count must produce the same normalized simulation state, and a random UUID per spawn breaks
+exactly that — two runs of one script would differ in a field a client sees and a trace records.
+
+**A plain counter would not do either.** "The first spawn is UUID 1" is deterministic but says nothing about
+*which run* a UUID belongs to, so two worlds at different seeds would share identities in any trace comparing
+them. Mixing the seed in costs one multiply.
+
+The derivation is SplitMix64's finaliser over `(seed, id)`, then version-4 and RFC 4122 variant bits, and five
+tests hold it in place:
+
+| test | what it prevents |
+|—-|—-|
+| same seed and id always give the same UUID | a replay that does not replay |
+| ten thousand ids in one world are all distinct | two entities sharing an identity |
+| the same id in two worlds gets two UUIDs | a trace agreeing across worlds that means nothing |
+| the result is a well-formed v4 UUID | sixteen bytes that merely happen to be the right length |
+| neither argument alone determines the result | a derivation that silently drops one input, which would still pass the first two tests |
+
+That last one is the one worth having: **a derivation that ignored the seed would pass both the stability test and
+the distinctness test**, and only an assertion that varies one argument at a time catches it.
+
+`uuid` becomes a dependency of `mc-entity` rather than the identity being reduced to sixteen bytes here and
+rebuilt in `mc-protocol`: it is the same type on both sides of the boundary, and the crate is already in the
+workspace tree and licence-checked through that dependency.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

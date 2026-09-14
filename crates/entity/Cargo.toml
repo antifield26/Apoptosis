@@ -18,6 +18,10 @@ mc-core = { path = "../core" }
 mc-world = { path = "../world" }
 mc-nbt = { path = "../nbt" }
 mc-registry = { path = "../registry" }
+# Entity identity is a uuid::Uuid on the wire, so the type is shared with mc-protocol rather than
+# reduced to sixteen bytes here and rebuilt there. Already in the workspace tree (and licence-checked)
+# through that crate.
+uuid.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
