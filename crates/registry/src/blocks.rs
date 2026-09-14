@@ -366,11 +366,17 @@ impl BlockRegistry {
         entries.into_iter().map(|(name, _)| name)
     }
 
-    /// Default (property-less) state id of a block.
+    /// The state Vanilla's `Block.defaultBlockState()` names.
     ///
-    /// For a block with properties this is its first state, matching Vanilla's
-    /// `defaultBlockState` only when the first property values are the defaults —
-    /// callers that need the true default must supply properties.
+    /// **Not a block's first state, and not necessarily property-less.** The two coincide only when the lowest
+    /// state id happens to be the default, which is true for 526 of 1168 blocks and false for the other 642:
+    /// `oak_log` registers `axis` as `x, y, z` and defaults to `y`, `oak_leaves` defaults to distance 7,
+    /// persistent false, waterlogged false. The table this reads is `block_defaults.tsv`, extracted from the
+    /// jar by `DefaultStateProbe`.
+    ///
+    /// This doc used to say the opposite \u2014 "for a block with properties this is its first state ... callers
+    /// that need the true default must supply properties" \u2014 which was accurate until KD-56 changed the body and
+    /// left the sentence behind, still telling readers to work around a defect that had been fixed.
     ///
     /// # Errors
     ///
