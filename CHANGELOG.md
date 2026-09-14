@@ -1552,6 +1552,41 @@ The failure itself was trivial \u2014
 amed too similar to another binding \u2014 and that is the point: a guard that
 lets a trivial failure through will let a real one through, and three commits in this session are evidence.
 
+### KD-69 \u2014 `is_default()` answered a different question from the one it was named for
+
+```rust
+/// Whether this state has no properties.
+pub fn is_default(&self) -> bool {
+    self.properties.is_empty()
+}
+```
+
+The name says **default**; the body answers **has no properties**; the doc matches the body. For `oak_log` the
+default is `axis=y`, which has a property, so this returns `false` for the real default and `true` for any
+stateless block.
+
+**It is called from nowhere** \u2014 not in product code, not in a test. That makes it a **trap rather than a
+defect**: a future caller reads `is_default()`, believes it, and rebuilds exactly the assumption behind KD-56,
+where a block's default was taken to be its lowest state id and every log lay on its side with water inside every
+leaf.
+
+**`BlockStateRef` cannot answer the question its name asks.** It holds a name, its properties and an id, and no
+registry to compare against. The fix is therefore a name for what it can determine, which is what its own doc
+already said.
+
+**Verified by the compiler**: renaming a `pub` method breaks every caller, and the workspace builds. There were
+none.
+
+**KD-56 and this are mirror images, which is what makes the pair worth stating.** There the doc claimed more than
+the code did \u2014 "the id of this block's first (**default**) state" \u2014 and the name was merely ambiguous. Here the
+doc is exact and the **name** claims more. Both were read as the same wrong thing, *this number is the default*,
+and one of the two ended up sending a client sideways logs with water inside them.
+
+**And a smaller repeat**: the commit that carried this fix has no CHANGELOG entry, because the inline script
+writing it died on a quoting error and **the commit guard only reads the gates**. A guard that checks what it can
+and reports a whole \u2014 the same shape as KD-68 one round earlier, and not fixable by a boolean: a shell heredoc is
+not a place to write a document.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
