@@ -2229,6 +2229,38 @@ denormal rather than a mistake anyone would notice.
 Every prefix of the captured body is short of some field, and **none of them may decode** — a lenient decoder
 that defaulted the missing fields would send a client an entity at the origin.
 
+### P10-06 (part 5) — where the wiring goes, and the captured evidence for `remove_entities`
+
+**Both halves of the remaining work already have a home**, and the server's own comments say so, which is the
+engineering contract's no-fake-completeness rule doing its job:
+
+```text
+game.rs:603  /// the batch it needs. **No `remove_entities` packet is encoded yet**: clients
+game.rs:1060 /// the `add_entity` packet that would make the drop visible to a client. A
+game.rs:2631 // `add_entity` packet that would show it are still P05-15; the
+```
+
+`spawn_item_owned` spawns into `self.entities` and sends nothing; `sweep_entity_removals` already runs in the
+Broadcast phase and already counts what it collected. So the wiring is **`spawn_item_owned` sends `AddEntity`**
+and **`sweep_entity_removals` sends `RemoveEntities`** for the ids it has.
+
+### And `remove_entities` has twelve real bodies to check against
+
+```text
+001788_s2c_play_77.bin: 01 0f   -> count 1, entity id 15
+002890_s2c_play_77.bin: 01 4d   -> count 1, entity id 77
+003812_s2c_play_77.bin: 01 36   -> count 1, entity id 54
+```
+
+**Every one is two bytes.** A VarInt count followed by that many VarInt entity ids is `1 + 1 = 2`, and that is
+what a real server sent twelve times — the same arithmetic check `add_entity` got, on a shorter packet.
+`set_entity_motion` has **2942** bodies in the same capture.
+
+### Left
+
+`RemoveEntities` and `SetEntityMotion` codecs, the two call sites above, and then a real client to confirm the
+drop is visible — which is P10-08's acceptance and P10-11's session.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
