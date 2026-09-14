@@ -707,3 +707,54 @@ fn a_players_chat_is_relayed_as_disguised_chat() {
          got {ids:?}"
     );
 }
+
+/// A drop that falls is announced as a relative move.
+///
+/// **The defect this exists for**: the server simulates gravity and swept collision for every entity, so its copy
+/// of a dropped item falls to the ground -- and until P10-08 nothing told the client. A client would draw the item
+/// hanging in the air where it was spawned, with nothing errored, nothing desynchronised in a way a test would
+/// notice, and the item simply in the wrong place on screen.
+///
+/// Spawned **eight blocks up** rather than on the floor: the drop test spawns where gravity has nowhere to take
+/// it, and this one needs a tick with something to say.
+#[test]
+fn a_drop_that_falls_is_announced_as_a_relative_move() {
+    let mut harness = Harness::new("p10-drop-moves");
+    harness.build_floor();
+    let mut out = harness.join("Dropper");
+    let joined = Harness::drain_ids(&mut out);
+    assert!(
+        joined.contains(&clientbound::play::LEVEL_CHUNK_WITH_LIGHT),
+        "the join must have streamed terrain, or there is no world to fall through"
+    );
+
+    let (sx, sy, sz) = harness.game.spawn();
+    let position = mc_world::Vec3::new(
+        f64::from(sx) + 0.5,
+        f64::from(sy) + 8.0,
+        f64::from(sz) + 0.5,
+    );
+    let entity = harness
+        .game
+        .spawn_item(mc_entity::ItemStack::new(1, 3).expect("stone"), position)
+        .expect("the drop spawns");
+    assert!(
+        entity.get() > 0,
+        "a real entity id, or the packet names nothing"
+    );
+
+    // One tick announces the spawn; the ones after it are where a move belongs.
+    let mut moved = false;
+    for _ in 0..8 {
+        harness.game.tick().expect("tick");
+        if Harness::drain_ids(&mut out).contains(&clientbound::play::MOVE_ENTITY_POS) {
+            moved = true;
+            break;
+        }
+    }
+    assert!(
+        moved,
+        "a falling drop must be announced as move_entity_pos within eight ticks, or a client draws it \
+         hanging where it was spawned while the server's copy reaches the ground"
+    );
+}
