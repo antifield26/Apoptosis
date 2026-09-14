@@ -2631,6 +2631,37 @@ output** (part 5), so the gap is guarded rather than forgotten: whoever writes t
 will tell them when it is still wrong.
 
 
+### P10-07 (part 7) — the cross-reference confirms the claim, from two packets that never met
+
+The capture's two packet kinds, asked about each other by entity id: `add_entity` names each entity's **type**,
+`set_entity_data` names each entity's **slots**, and neither was written from the other.
+
+```text
+entity 1   type 117   slots [(9, 3), (16, 1)]                 24 entities
+entity 8   type 117   slots [(9, 3), (15, 0), (16, 1)]         a third slot, sometimes
+entity 15  type 111   slots [(9, 3)]                          health only
+55 add_entity bodies · 45 set_entity_data bodies · 41 parsed · 1 unparsed
+```
+
+**The claim that made P10-07 necessary is confirmed.** Index 16 is a `VarInt` for type 117, and the body decoded
+in part 1 that carried index 16 as a **byte** belongs to a different type — **one slot, two wire types, two kinds
+of entity**, and the two packets agree on it without either being derived from the other.
+
+**Index 9 is a float in every body**, which is health, and **index 15 appears for some entities of type 117 and
+not others** — a slot sent when it has something to say rather than always. The codec's own doc already says slots
+may be sent in any order and a later packet may resend one; this is the first evidence of a slot simply absent.
+
+### What the capture cannot answer
+
+**There is no `minecraft:item` metadata body in it.** The 55 entities are slimes (117) and one other type (111);
+nothing in this capture is a dropped stack, so **the item's slots cannot come from here** and the pivot in part 6
+cannot be completed from this capture alone.
+
+**What that leaves**: a capture that contains a drop — the server this rig talked to never dropped an item a
+client had loaded, or the session ended first — or the entity-building probe. **Stated as a gap rather than
+papered over**, which is what part 6 committed to.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
