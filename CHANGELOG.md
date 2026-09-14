@@ -1696,6 +1696,35 @@ believing:
   was right and my measurement was wrong twice**, which is the mistake this review has made more often than any
   other.
 
+### KD-75 \u2014 `loot.rs`'s counts hold at the scope they name, and one of them corrects a mistake of mine
+
+Continuing the line that produced KD-73: **a comment stating a count about vanilla, measured against the jar.**
+
+| claim | measured | |
+|---|---|---|
+| "The **11** table `type`s" | **11** | verified \u2014 the eleven named types, no more and no fewer |
+| "The **19** `function` types" | **19** distinct | verified |
+| "all **1 326** tables" | **1 326** | verified \u2014 see below |
+| "**1 383** literals and **76** `uniform` providers" | 1 399 and 85 | **not verified** \u2014 see below |
+| "**164** of vanilla's **1 392**" | 1 389 | **not verified** \u2014 see below |
+
+**The 1 326 is the interesting one, because it caught me.** My first count was **1 331**, and the difference is
+five files under `data/minecraft/datapacks/trade_rebalance/` \u2014 **a built-in data pack that overrides five chest
+loot tables**. The comment counts the main pack, which is the right scope for a statement about vanilla's data,
+and my count included the override copies. **The claim was right and my measurement was wrong**, which is the
+twentieth time in this review and the fourth in the last three rounds.
+
+**And that is why three of the numbers are recorded as unverified rather than wrong.** 1 399 against 1 383 and
+85 against 76 are **close**, and close is the signature of a scope difference rather than a wrong figure: my
+counting is textual, over `"rolls": <number>` and `"function"` occurrences at any depth, while the file's numbers
+were presumably taken from a structural walk of the main pack alone. **A number that is nearly right is not
+evidence of a defect, and reporting it as one would be the same error as KD-70** \u2014 where I read a constant,
+decided the prose was wrong, and made it confidently wrong.
+
+**So the row above says what was verified and what was not**, rather than collapsing the two: two counts and the
+table total hold exactly at the scope the comment names, and three need a structural parse of the main pack before
+anything can be said about them.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
