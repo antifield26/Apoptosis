@@ -3465,6 +3465,37 @@ feedback messages answer as a 26.1.2 server does (**zero `SystemChat` sends rema
 rather than assumed, and each of the three has a regression test.
 
 
+### P10-08 (part 7) -- the call site is real work, and this is why
+
+Before writing it, the question worth asking is whether this server moves anything a client would need to hear
+about. It does, and the module docs say so in three places:
+
+```text
+game.rs:16            TickPhase::Entities -- per-entity timers, gravity + swept collision, landing/...
+game.rs:411           Dropped items do not use it: an item owns its own ...
+item_entity.rs:45     this module never moves a position ... the CALLER owns its position
+game.rs:105           player movement is resolved from the client's reported position
+```
+
+**So a dropped item falls on the server every tick, its position owned by `game.rs`, and no packet describes the
+movement.** `SetEntityMotion` and the three `move_entity_*` codecs all exist now, and **nothing sends one for an
+entity the server is authoritative for**.
+
+**Players are a different case and the difference is the point**: a player's position comes from the client, so a
+server that echoed it back would be a second, disagreeing source -- which `game.rs:105` says explicitly. **A drop
+is the opposite: the server decides where it is, and the client cannot know unless it is told.**
+
+**So the gap is not a missing packet, it is a missing signal**: a client would draw a dropped item hanging in the
+air, at the position it was spawned at, while the server's copy fell to the ground and settled. Nothing errors,
+nothing is desynchronised in a way a test would notice, and the item is simply in the wrong place on screen --
+**which is the class of defect this phase exists for, found this time by asking whether the call site had anything
+to call.**
+
+**What the call site needs** is a previous position per entity to diff against, and then the choice vanilla makes:
+`move_entity_pos_rot` for a small change and `teleport_entity` for a large one. **Neither the diff nor the
+threshold exists yet**, which is why this is a round of work and not a line.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
