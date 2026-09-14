@@ -2711,6 +2711,34 @@ than a naming preference, and it is what P10-10 is for.
 module against the jar-extracted table — verifies them without anything further being written for the purpose.
 
 
+### P10-10 (part 2) — the captured `disguised_chat`, decoded field by field
+
+The review kept one real `disguised_chat` payload from a 26.1.2 server, as the verification for
+`nbt_literal_text.hex`. Read against the packet's documented shape it yields the whole format:
+
+```text
+08 00 03 62 79 65  05  08 00 06 53 65 72 76 65 72  00
+```
+
+* `08` — `TAG_String`, and **the network form omits the tag's name**, so the next two bytes are the length
+* `00 03`, then `62 79 65` — length 3, `"bye"` — the message
+* `05` — a `VarInt` — the **chat type**, a registry id
+* `08 00 06`, then `53 65 72 76 65 72` — `TAG_String`, length 6, `"Server"` — the sender name
+* `00` — the optional target name, absent
+
+**So the packet is `{ message, chat_type, sender_name, target_name? }`**, and every field is accounted for with
+nothing left over: sixteen bytes in, four fields out.
+
+**Three things this settles that the id table could not.** The message and the sender name are **network NBT**,
+not length-prefixed strings, which is the same form `nbt_literal_text.hex` records — so the codec for this packet
+is the NBT writer and not `write_string`. The chat type is a **registry id** (`5` here), which makes it the third
+place in this phase where a number is a claim about a registry the client owns, after the biome id and the entity
+type id. And the target name is genuinely optional, sent as a single `0x00` rather than an absent field.
+
+**What is left to write**: the packet struct and its codec, which needs the project's network-NBT writer rather
+than a new one, and then the routing in the six places that currently answer everything with `system_chat`.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
