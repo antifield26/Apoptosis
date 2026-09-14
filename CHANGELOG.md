@@ -2392,6 +2392,57 @@ what it could not find and then did something regardless: the escapes that came 
 and not the practice, and now this. **A patch that cannot find its anchors has to stop, not continue**, which is
 what the next script in this round did.
 
+### P10-06 (part 11) — `Packet` impls, so `to_raw` works and the codec is the one the wire uses
+
+`AddEntity` and `RemoveEntities` gain `impl Packet`. The body-level `encode(&self, writer)` is renamed
+**`encode_into`** and the trait method calls it, so **the codec the golden tests exercise is the codec the wire
+uses — one implementation, not two that agree today**.
+
+`decode` refuses **trailing bytes**, as `BlockUpdate` and its neighbours do: a decoder that ignored them would
+accept a longer packet as a shorter one and silently drop a field a future version added.
+
+**And the rename broke both golden tests**, which the commit guard caught: they called `.encode(&mut writer)`,
+which is now `Packet::encode(&self)` with a different signature.
+
+### P10-06 (part 12) — a dropped item is announced to the clients that can see it
+
+`Game` gains `pending_entity_spawns`; `spawn_item_owned` queues; `broadcast_entity_spawns` drains it in the
+Broadcast phase. Queued rather than sent where it spawns because `spawn_item` has no `TickReport` and
+`broadcast_chunk` needs one — the deferral `pending_light` already performs.
+
+The type id comes from `self.registries.entities`, the table extracted from the jar, so a dropped stack is
+`minecraft:item` = **71** and not 0, which is `minecraft:acacia_boat`.
+
+Three details that are choices rather than consequences:
+
+* **an entity reaped in the same tick is skipped**, because "an identity for something that is not there is not
+  something to send";
+* **`report.entities_spawned` counts what actually reached a player**, because "a spawn broadcast to nobody — an
+  item dropped where no player is watching — is a different event from one nobody sent";
+* **`wire_angle` is a named function** rather than an inline cast, with the 1/256 resolution and the NaN
+  behaviour written down, because building a spawn packet may carry a wrong angle but may not panic.
+
+### P10-06 (part 13) — the test, and four rounds spent on a convenience
+
+`a_dropped_item_is_announced_with_the_item_type_id` joins, **asserts terrain streamed first** ("or this test is
+running before there is a world to drop into"), drops a stack at the player, and asserts `ADD_ENTITY` appears
+**exactly once** — "not twice, which a client renders as two entities, and not zero times, which is the defect
+this test exists for".
+
+**The test is the point; the detour is the lesson.** Wanting a `Game::entity_uuid` accessor for one assertion cost
+four rounds: inserted before `pub fn spawn_item(`, it landed **between that function's doc and its body**, merging
+two doc runs and leaving `spawn_item` undocumented while `entity_uuid` acquired its text — **the third time this
+session that "insert before `pub fn X`" was not "insert before X"**, after `ChunkBlockEntity` and `AddEntity`.
+PowerShell then ate the backticks in the new `# Errors` section, producing a fence outside the brackets, and one
+"fix" took the error count from two to four.
+
+**It was reverted in the end**, because the assertion did not need it. The disposition is the finding: **a
+convenience that needs three insertion repairs to land is not a convenience**, and that was visible two rounds
+before it was acted on.
+
+**And the record itself fell four rounds behind**, which is what this entry exists to close. Deferring the record
+to keep context for code is a trade until the record stops describing the code, and then it is not a trade.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
