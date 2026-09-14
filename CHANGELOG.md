@@ -2607,6 +2607,30 @@ That is a different kind of probe and it has not been written. **The capture sta
 cannot reproduce `FLOAT = 3` or explain index 16 is not the table.
 
 
+### P10-07 (part 6) — a pivot worth stating rather than drifting into
+
+The full per-type extraction needs a probe that **builds an entity and asks it**, because `defineId` assigns indices
+on a builder during the instance method `defineSynchedData`. That needs a level, which needs a server. It is
+writable, it is not written, and it has now been the next step for three rounds.
+
+**Meanwhile it blocks P10-08**, whose whole point is a dropped stack reaching the client, and the index that
+matters there is **one type's**: `minecraft:item`.
+
+**So the work splits, and the split is the point:**
+
+* **What this server sends, it can know.** `minecraft:item`'s slots are readable from the 45 captured
+  `set_entity_data` bodies, cross-referenced by entity id against the `add_entity` bodies that named them — the
+  same capture, two packets, which is a check rather than a reading.
+* **What it does not send yet stays unextracted, and says so.** The 157-type table is written down as a **known
+  gap** in the parity matrix, not approximated from eight inherited slots. The engineering contract is explicit
+  that unsupported behaviour must be tracked and documented rather than implied away, and a table of 157 types
+  built from one inherited set would be exactly the implied-away kind.
+
+**Why this is not the probe failing and being abandoned.** The probe stays in the tree **refusing its own bad
+output** (part 5), so the gap is guarded rather than forgotten: whoever writes the real extraction has a tool that
+will tell them when it is still wrong.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
