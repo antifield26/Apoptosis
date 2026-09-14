@@ -1441,17 +1441,21 @@ impl Game {
         self.broadcast_entity_spawns(report)?;
         self.stream_all(report)?;
         self.send_world_time(report, tick)?;
-        self.sweep_entity_removals(report);
+        self.sweep_entity_removals(report)?;
         self.unload_distant_chunks();
         Ok(())
     }
 
     /// Take every entity flagged for removal out of the store, recording the batch
     /// on the report.
-    fn sweep_entity_removals(&mut self, report: &mut TickReport) {
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] when the batch cannot be framed, which for a list of ids means never.
+    fn sweep_entity_removals(&mut self, report: &mut TickReport) -> ServerResult<()> {
         let removed = self.entities.sweep_removed();
         if removed.is_empty() {
-            return;
+            return Ok(());
         }
         // A player's own entity going away means the connection is gone; drop the
         // mapping so `entity_id_of` cannot hand out a dead id.
@@ -1459,10 +1463,17 @@ impl Game {
         self.entity_ids.retain(|_, id| !dead.contains(id));
         debug!(count = removed.len(), "entities swept");
         report.removed_entities += removed.len();
-        // No `remove_entities` packet yet: clients are told nothing, so a despawned
-        // item would linger on screen. P05-15 owns entity spawn/despawn packets,
-        // which is why the batch is carried on the report instead.
+        // **Broadcast to every ready session**, not to the players who were tracking each entity. The sweep has
+        // already taken them out of the store, so their positions are gone and `broadcast_chunk` has nothing to
+        // aim at; per-player entity visibility is not something this build has. A client ignores a
+        // `remove_entities` for an id it does not hold, so sending it everywhere is correct rather than
+        // approximate -- and cheaper than tracking who was told what, which is worth building when there is
+        // something to gain from it and there is not yet.
+        let ids: Vec<i32> = removed.iter().map(|id| id.get()).collect();
+        let packet = mc_protocol::packets::play::RemoveEntities { entity_ids: ids }.to_raw()?;
+        self.broadcast_all(&packet, report);
         report.removed_ids = removed;
+        Ok(())
     }
 
     /// Broadcast this tick's block changes to the players who have the chunk.

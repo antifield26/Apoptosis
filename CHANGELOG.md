@@ -2443,6 +2443,23 @@ before it was acted on.
 **And the record itself fell four rounds behind**, which is what this entry exists to close. Deferring the record
 to keep context for code is a trade until the record stops describing the code, and then it is not a trade.
 
+### P10-06 (part 14) — a despawned entity is announced too, and the reason it goes to everyone
+
+`sweep_entity_removals` now encodes `RemoveEntities` for the batch it already collected and broadcasts it. The
+code's own comment said the opposite until this commit — "No `remove_entities` packet yet: clients are told
+nothing, so a despawned item would linger on screen" — which is the kind of note this project leaves where the
+work is not, and it is now the work.
+
+**Broadcast to every ready session, not to the players who were tracking each entity**, and that is a decision
+rather than a shortcut: **the sweep has already taken the entities out of the store, so their positions are gone
+and `broadcast_chunk` has nothing to aim at**, and per-player entity visibility is not something this build has.
+**A client ignores a `remove_entities` for an id it does not hold**, so sending it everywhere is correct rather
+than approximate — and cheaper than tracking who was told what, which is worth building when there is something
+to gain from it and there is not yet.
+
+The signature becomes `ServerResult<()>`: framing can fail, and a function that swallowed that to keep its old
+shape would be hiding the one thing it now does.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
