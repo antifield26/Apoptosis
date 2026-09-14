@@ -42,10 +42,12 @@
 )]
 
 mod blocks;
+pub mod entities;
 mod items;
 pub mod light;
 
 pub use blocks::{BlockRegistry, BlockStateRef};
+pub use entities::EntityTypeRegistry;
 pub use items::ItemRegistry;
 pub use light::LightTable;
 
