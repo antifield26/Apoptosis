@@ -32,6 +32,7 @@
 use crate::player::Vec3;
 use mc_core::error::{ServerError, ServerResult};
 use std::collections::BTreeMap;
+use uuid::Uuid;
 
 /// Wire identity of a live entity.
 ///
@@ -300,16 +301,51 @@ pub const MAX_VELOCITY: f64 = 10.0;
 pub struct EntityStore {
     next_id: i32,
     entities: BTreeMap<EntityId, Entity>,
+    /// The world seed entity identities are derived from. See [`EntityStore::uuid`].
+    seed: i64,
 }
 
 impl EntityStore {
-    /// An empty store. Ids start at 1.
+    /// An empty store. Ids start at 1, and identities are derived from seed `0`.
     #[must_use]
     pub fn new() -> Self {
         Self {
             next_id: 1,
             entities: BTreeMap::new(),
+            seed: 0,
         }
+    }
+
+    /// An empty store whose entity identities belong to the given world seed.
+    #[must_use]
+    pub fn with_seed(seed: i64) -> Self {
+        Self {
+            next_id: 1,
+            entities: BTreeMap::new(),
+            seed,
+        }
+    }
+
+    /// The world seed this store derives identities from.
+    #[must_use]
+    pub const fn seed(&self) -> i64 {
+        self.seed
+    }
+
+    /// The UUID of a live entity, derived from the store's seed and the entity's id.
+    ///
+    /// Returns `None` for an id that is not live, so a caller cannot label a packet with the identity of an
+    /// entity that no longer exists.
+    ///
+    /// **Derived, not stored**, and not random: the engineering contract requires that the same initial state and
+    /// the same ordered inputs over the same tick count produce the same normalized state, and a random UUID per
+    /// spawn would differ between two runs of one script in a field a client sees. See
+    /// [`crate::identity::entity_uuid`] for why the seed is mixed in rather than a bare counter.
+    #[must_use]
+    pub fn uuid(&self, id: EntityId) -> Option<Uuid> {
+        self.entities
+            .contains_key(&id)
+            .then(|| crate::identity::entity_uuid(self.seed, id.get()))
     }
 
     /// Number of live entities.
@@ -529,6 +565,67 @@ mod tests {
         let mut sorted = ids.clone();
         sorted.sort_unstable();
         assert_eq!(ids, sorted, "iteration order must be ascending id");
+    }
+
+    #[test]
+    fn a_live_entity_has_the_identity_its_store_derives() {
+        // The wrapper, not the derivation: `entity_uuid` has five tests of its own, and none of them would notice a
+        // store that passed the wrong seed through or answered for an entity that is not live.
+        let mut store = EntityStore::with_seed(42);
+        let id = store
+            .spawn(
+                EntityBody::Item(crate::item_entity::ItemEntity::new(
+                    crate::ItemStack::new(1, 1).expect("stone"),
+                    None,
+                )),
+                Vec3::new(0.5, 64.0, 0.5),
+            )
+            .expect("spawns");
+
+        assert_eq!(store.seed(), 42);
+        assert_eq!(
+            store.uuid(id),
+            Some(crate::identity::entity_uuid(42, id.get())),
+            "the store and the derivation disagree about the same entity"
+        );
+
+        // Two stores at one seed agree, and two at different seeds do not: the property the trace comparison rests
+        // on, asserted at the call site rather than only in the derivation.
+        let mut same = EntityStore::with_seed(42);
+        let same_id = same
+            .spawn(
+                EntityBody::Item(crate::item_entity::ItemEntity::new(
+                    crate::ItemStack::new(1, 1).expect("stone"),
+                    None,
+                )),
+                Vec3::new(0.5, 64.0, 0.5),
+            )
+            .expect("spawns");
+        assert_eq!(store.uuid(id), same.uuid(same_id));
+
+        let mut other = EntityStore::with_seed(43);
+        let other_id = other
+            .spawn(
+                EntityBody::Item(crate::item_entity::ItemEntity::new(
+                    crate::ItemStack::new(1, 1).expect("stone"),
+                    None,
+                )),
+                Vec3::new(0.5, 64.0, 0.5),
+            )
+            .expect("spawns");
+        assert_ne!(
+            store.uuid(id),
+            other.uuid(other_id),
+            "two worlds share an entity identity"
+        );
+    }
+
+    #[test]
+    fn an_entity_that_is_not_live_has_no_identity() {
+        // A caller labelling a packet must not be handed the identity of something that no longer exists; `None` is
+        // the answer that makes the caller handle it.
+        let store = EntityStore::new();
+        assert_eq!(store.uuid(EntityId::new(1).expect("positive")), None);
     }
 
     #[test]

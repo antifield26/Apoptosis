@@ -2352,6 +2352,29 @@ the distinctness test**, and only an assertion that varies one argument at a tim
 rebuilt in `mc-protocol`: it is the same type on both sides of the boundary, and the crate is already in the
 workspace tree and licence-checked through that dependency.
 
+### P10-06 (part 9) — identity on the store, so `Entity` does not change
+
+`EntityStore` gains a `seed`, a `with_seed`, a `seed()` accessor and `uuid(id)`, which derives an entity's
+identity from the seed and the id and returns `None` for an id that is not live.
+
+**Not a field on `Entity`.** `Entity` is the simulation body — position, velocity, yaw, pitch, on_ground — and a
+`uuid` field would make identity part of that body and touch **every** construction site, including the tests that
+build an entity to check collision or physics. Identity is a function of the store's seed and the entity's id, so
+it belongs on the store: **nothing that constructs an `Entity` has to know**.
+
+`new()` keeps seed `0`, the same value a world with no configured seed uses, so a store built without one still
+produces stable identities rather than inventing entropy. The derivation is total in it.
+
+### And the wrapper has its own tests
+
+`entity_uuid` has five, and **none of them would notice a store that passed the wrong seed through or answered for
+an entity that is not live**. So `a_live_entity_has_the_identity_its_store_derives` checks the call site: the
+store agrees with the derivation, two stores at one seed agree, two at different seeds do not, and
+`an_entity_that_is_not_live_has_no_identity` asks for an id that was never spawned and gets `None`.
+
+**A test of a derivation is not a test of its call site** — the distinction this project has now met from both
+directions.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
