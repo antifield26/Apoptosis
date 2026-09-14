@@ -2001,6 +2001,36 @@ those three with a route out of it.
   never had**, and the one that matters more than the count, since `items.tsv` is trustworthy because `ItemProbe`
   reproduced all 1506 of its rows while this table is trusted only because its doc says it came from the jar.
 
+### KD-84 \u2014 the probe runs and reports 1506 unreadable, which is the better failure
+
+```text
+items=1506
+exceptions=0
+unreadable=1506
+```
+
+**Every item's `MAX_STACK_SIZE` component came back null.** The items are registered \u2014 1506 of them, the count
+`ItemProbe` established \u2014 but **their default components are not built by `Bootstrap.bootStrap()`**. The first
+version died on that as `NullPointerException: Components not bound yet`; this one reports it as 1506 unreadable.
+
+**A probe that substituted 64 for a value it could not read would have printed `exceptions=0` and looked
+finished** \u2014 which is the shape of every defect this review found on the jar-count line: a number that agreed with
+the belief beside it because nothing had measured it. **1506 unreadable is a fact about the instrument a reader can
+act on**; `exceptions=0` from the same run would have been a lie the summary told.
+
+**The route out, narrowed to one step.** The components are built by the **datapack and registry load** a dedicated
+server performs, which is more than `SharedConstants.tryDetectVersion()` plus `Bootstrap.bootStrap()`. Two ways to
+reach it, both recorded rather than guessed:
+
+* run the vanilla server far enough to initialise its registries and read them through `RegistryAccess`, using the
+  launcher this workspace already has at `target/vanilla-26.1.2/`;
+* or find the initialiser that populates item components and call it after bootstrapping \u2014 which is what
+  `DataComponentInitializers` looked like on inspection, and was not confirmed.
+
+**The probe is committed as it stands**, because a tool that reports "1506 unreadable" is already more than this
+table has ever had: its rows have never been compared with anything, and there is now something that says so in a
+run rather than in a comment.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

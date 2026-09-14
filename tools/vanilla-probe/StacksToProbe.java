@@ -3,6 +3,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import net.minecraft.SharedConstants;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.Bootstrap;
 import net.minecraft.world.item.Item;
@@ -13,24 +14,21 @@ import net.minecraft.world.item.Item;
  * <h2>What this is for</h2>
  *
  * {@code crates/entity/src/stack.rs} states its table comes from "every {@code stacksTo} call site in the game",
- * and {@code StackSizeTable::len} carries
+ * and {@code StackSizeTable::len} carries "always 165 for the 26.1.2 vanilla table". Two attempts to count that by
+ * reading the source both used a broken instrument (KD-82), so this probe is the instrument the claim needs: the
+ * count to compare against 165, and the per-item limits to compare against the table row for row.
  *
- * <pre>{@code
- * /// Number of exception entries (always 165 for the 26.1.2 vanilla table).
- * }</pre>
+ * <h2>Why it reads a component rather than a constant</h2>
  *
- * <p>Two attempts to count that by reading the source both used a broken instrument — a regex that found neither
- * array, and a range extraction that returned the same number for two different arrays. <b>This probe is the
- * instrument the claim needs</b>: the count to compare against 165, and the per-item limits to compare against
- * the table row for row.
- *
- * <p>It is the same kind of check that made {@code items.tsv} trustworthy — {@code ItemProbe} reproduced all
- * 1506 of its rows — and the stack-size table is the last of these tables without one. <b>A doc saying where a
- * number came from is not the same as the number having been checked.</b>
+ * In 26.x the maximum stack size is <b>item data</b>, not a constant: {@code getDefaultMaxStackSize()} reads it
+ * from the bound {@code DataComponents}, and the first version of this probe died with
+ * {@code NullPointerException: Components not bound yet} (KD-83). This version reads the component directly and,
+ * where an item does not carry one, <b>says so in the output rather than guessing 64</b> — a probe that reports
+ * what it could not measure is worth more than one that substitutes a default and looks complete.
  *
  * <h2>Output</h2>
  *
- * One TSV of {@code <item id> <name> <max stack size>}, LF endings.
+ * One TSV of {@code <item id> <name> <max stack size or ABSENT>}, LF endings, plus a summary on stdout.
  *
  * <p>Local research tool (not part of the product crates).
  */
@@ -42,22 +40,37 @@ public final class StacksToProbe {
 
         int items = 0;
         int exceptions = 0;
+        int absent = 0;
         try (PrintWriter writer = new PrintWriter(
                 Files.newBufferedWriter(out.resolve("stack_sizes.tsv"), StandardCharsets.UTF_8))) {
             writer.print("# Vanilla 26.1.2 maximum stack size per item.\n");
-            writer.print("# Format: <item id> <name> <max stack size>\n");
+            writer.print("# Format: <item id> <name> <max stack size or ABSENT>\n");
             for (Item item : BuiltInRegistries.ITEM) {
                 int id = BuiltInRegistries.ITEM.getId(item);
                 String name = BuiltInRegistries.ITEM.getKey(item).toString();
-                int max = item.getDefaultMaxStackSize();
-                writer.print(id + " " + name + " " + max + "\n");
-                items++;
-                if (max != 64) {
-                    exceptions++;
+                String value;
+                try {
+                    Integer max = item.components().get(DataComponents.MAX_STACK_SIZE);
+                    if (max == null) {
+                        value = "ABSENT";
+                        absent++;
+                    } else {
+                        value = Integer.toString(max);
+                        if (max != 64) {
+                            exceptions++;
+                        }
+                    }
+                } catch (Throwable failure) {
+                    // Reported rather than swallowed: an item this probe cannot read is a fact about the probe.
+                    value = "ERROR:" + failure.getClass().getSimpleName();
+                    absent++;
                 }
+                writer.print(id + " " + name + " " + value + "\n");
+                items++;
             }
         }
         System.out.println("items=" + items);
         System.out.println("exceptions=" + exceptions);
+        System.out.println("unreadable=" + absent);
     }
 }
