@@ -2174,6 +2174,27 @@ the `update_tags` packet**. The `registry_data` packets carry the **datapack** r
 extractions because the client owns those registries, while the biome ids came from the payload because we hand
 that registry over ourselves. **The same rule, applied with the instrument that matches who owns the number.**
 
+### P10-06 (part 3) — the entity packet ids, from the table the jar produced
+
+dd_entity is **1**, 
+emove_entities is **77**, set_entity_motion is **101**, and all three come from
+docs/protocol/packet-ids-775.tsv — the table machine-extracted from the official 26.1.2 server jar, which
+ids.rs already names as the source every constant is checked against.
+
+### And the capture agrees with the table this round extracted
+
+	arget/vanilla-capture/bodies-lit/ holds **55 dd_entity bodies from a real 26.1.2 server**. Read as a VarInt
+entity id, a 16-byte UUID and then the entity type id:
+
+`	ext
+sample 1:  entity id 78, uuid, type id 117  ->  entity_types.tsv says 117 = minecraft:slime
+sample 2:  entity id 59, uuid, type id 117  ->  the same, two different slimes
+`
+
+**That is one agreeing reading, not a proof**, and it is worth saying which: the offset is an inference from the
+packet's documented shape. The proof is the encoder plus a golden test against these bytes, which is the next step
+and the route light_update already took.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

@@ -223,6 +223,14 @@ pub mod clientbound {
 
     /// Play state packets (subset modelled by this server).
     pub mod play {
+        /// `minecraft:add_entity` — spawn an entity, carrying its registry type id.
+        ///
+        /// **The type id is a claim about the client's own registry.** `entity_type` is a *built-in* registry
+        /// compiled into the client jar, not one this server sends, so the ids come from
+        /// `crates/test-support/fixtures/registry/entity_types.tsv` (extracted by `EntityTypeProbe`) and **not**
+        /// from the config payload — where `minecraft:entity_type` is a tag directory in `update_tags` rather
+        /// than a registry. See P10-06.
+        pub const ADD_ENTITY: i32 = 1;
         /// `minecraft:block_update` (single block change)
         pub const BLOCK_UPDATE: i32 = 8;
         /// `minecraft:chunk_batch_finished`
@@ -260,12 +268,16 @@ pub mod clientbound {
         pub const SECTION_BLOCKS_UPDATE: i32 = 84;
         /// `minecraft:set_chunk_cache_center`
         pub const SET_CHUNK_CACHE_CENTER: i32 = 94;
+        /// `minecraft:remove_entities` — despawn one or more entities by id.
+        pub const REMOVE_ENTITIES: i32 = 77;
         /// `minecraft:set_chunk_cache_radius`
         pub const SET_CHUNK_CACHE_RADIUS: i32 = 95;
         /// `minecraft:set_default_spawn_position`
         pub const SET_DEFAULT_SPAWN_POSITION: i32 = 97;
         /// `minecraft:set_entity_data` (metadata, e.g. health/air)
         pub const SET_ENTITY_DATA: i32 = 99;
+        /// `minecraft:set_entity_motion` — set an entity's velocity.
+        pub const SET_ENTITY_MOTION: i32 = 101;
         /// `minecraft:set_experience`
         pub const SET_EXPERIENCE: i32 = 103;
         /// `minecraft:set_health`
