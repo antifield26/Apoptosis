@@ -3375,6 +3375,35 @@ this round had left. **The work is right and it is written down here**; what it 
 reading those assertions, not one that ends by rewriting them.
 
 
+### P10-10 (part 12) -- the source and the suite moved together, and the guard caught each layer in turn
+
+The six system-message sites now answer as a 26.1.2 server does: **zero `SystemChat` sends remain, six
+`DisguisedChat` sends take their place**, each attributed to `"Server"`. A capture settled that a console message
+gets `disguised_chat` and **zero** `system_chat`, so the placeholder's packet was not merely a placeholder -- it was
+the wrong packet, sent for every welcome, death, command reply and function line in the server.
+
+**The previous round changed the source alone and the guard refused 31 tests. That was the right refusal and the
+wrong order.** The tests assert a `SYSTEM_CHAT` arrives, which is the belief the placeholder was written from, so
+both halves have to move in one edit.
+
+**And the guard caught each layer separately, which is what a written-down guard is for:**
+
+| layer | the guard's reading | what it was |
+|---|---|---|
+| tests | **31 failed** | 17 assertions and 4 decode sites across five files |
+| tests | **1 failed** | **the chat test this phase added two rounds ago** |
+| clippy | **3 unused imports** | in the three files the source edit touched |
+| -- | **`every gate passed`** | 1283 passed, 0 failed, 94 suites |
+
+**The middle row is the round's finding.** A bulk substitution cannot tell **a requirement from a prohibition**:
+the test asserted `contains(DISGUISED_CHAT)` *and* `!contains(SYSTEM_CHAT)`, the two lines differ by one `!`, and
+rewriting both left it asserting that the packet arrives **and** that it does not. The line is restored, and it now
+says beside it why it keeps the old constant.
+
+**That is a smaller version of the same lesson the phase keeps meeting**: a mechanical edit produces a codebase
+that agrees with itself in the wrong direction, and only something that reads the result can tell.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
