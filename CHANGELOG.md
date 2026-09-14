@@ -2853,6 +2853,33 @@ knows this" and "the server can say this" is where both of those sat**, and in n
 a hard one -- only an unnamed one.
 
 
+### P10-10 (part 7) — chat goes to everyone, attributed to its sender
+
+The placeholder is gone. `PlayIntent::Chat` no longer answers the sender with "Chat relay is not implemented
+yet."; it broadcasts a `DisguisedChat` to every ready session, with the message and the sender's name.
+
+**Three sites, and the middle one is the point:**
+
+1. `Session` gains `name`, documented as **the difference between "the server knows this" and "the server can say
+   this"** — the value arrives once, in the login handshake, and the join log could print it while nothing else
+   could reach it;
+2. the join site fills it from `profile.name`, which was already in hand for the log line;
+3. the handler broadcasts instead of replying.
+
+**Two divergences are declared in the code rather than passed off as parity.** Vanilla sends `player_chat` (65)
+for a player's own message, carrying the sender's UUID, chat index and signature, and this build has no chat
+signing; and `chat_type` 0 is **not yet verified** against the `chat_type` registry the client is sent, which is
+the same class of claim this phase has twice found wrong elsewhere. Both are named where they sit.
+
+**And the round cost three attempts because two anchors were copied from a locate script's output**, which prints
+with four spaces of its own — and the second attempt **wrote anyway and left the workspace uncompilable**, which is
+the "locate and report, then act regardless" failure this session has now met three times. The third used the
+indentation `Select-String` reports, which is the file's own, and worked first time.
+
+**What is still open on this task**: system and feedback messages should route to the acting client rather than
+broadcast, there are five more `SystemChat` sites to triage, and a real client has not yet seen any of it.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
