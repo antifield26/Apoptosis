@@ -3432,6 +3432,39 @@ assert the id the six sites send is that one. **`chat_type` is a name, and the s
 payload gives that name**, which is the same shape as every other fix this phase has made.
 
 
+### P10-10 (part 14) -- `chat_type` classified before it was checked, and P10-10 closes
+
+The last unverified number in this phase was the `chat_type` the six message sites send, and the round's work was
+to **classify the registry before choosing the instrument**:
+
+* a capture of a real server sending `5` says only that the number is not free;
+* `game.rs:431` already describes the registry order as **"ending at `minecraft:chat_type`"**, which puts it **in
+  the `registry_data` payload this server sends**;
+* so it is a **datapack registry**, and **the payload is the instrument -- not a jar**.
+
+**Reaching for a jar because "it is a registry id" would have been the rule applied by habit rather than by
+ownership**, which is the same distinction the phase's rule is built on and the first time it has had to be applied
+to a registry nobody had classified yet.
+
+**And the answer is uncomfortable in the right way.** `minecraft:chat` is at index **0** -- the literal the sites
+already sent was **correct** -- and **nothing before this round could have contradicted it**. That is exactly the
+state `PLAINS_BIOME_ID = 0` and "a block's default state is its lowest id" were in before they turned out to be
+wrong for every chunk and 642 blocks respectively. **A number being right is not the same as a number being
+checked**, and the difference is only visible on the day it stops being right.
+
+`CHAT_TYPE_CHAT` now sits beside `PLAINS_BIOME_ID`, for the same reason and with the same kind of check:
+`the_chat_type_this_server_sends_is_the_one_named_chat` resolves it out of the payload the client is given, in
+`registry_ids.rs`, where the biome id is resolved the same way.
+
+**Three mechanical obstacles, each named by a tool rather than by reading**: the crate path in two files that were
+already inside the crate, `u32` where the packet field is `i32`, and `clippy::cast_possible_truncation` on the
+index -- **which became a checked conversion, so it refuses rather than truncating silently**.
+
+**P10-10 is complete**: a player's chat is broadcast as `disguised_chat` attributed to its sender, system and
+feedback messages answer as a 26.1.2 server does (**zero `SystemChat` sends remain**), `chat_type` is resolved
+rather than assumed, and each of the three has a regression test.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
