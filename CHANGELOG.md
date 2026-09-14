@@ -2375,6 +2375,23 @@ store agrees with the derivation, two stores at one seed agree, two at different
 **A test of a derivation is not a test of its call site** — the distinction this project has now met from both
 directions.
 
+### P10-06 (part 10) — the link between the entity table and the server
+
+`Registries` gains `entities`, loaded in `load(dir)` beside the block, item and light tables. **Nothing in the
+server held the entity type table**, so the `minecraft:item` id an `AddEntity` needs could not reach the packet:
+the table was extracted, tested and unreachable.
+
+### And the failed half of this is worth more than the successful one
+
+The first attempt guessed that the light table was loaded as `let light = LightTable::load(...)` — a standalone
+statement. It is an **inline field initialiser** inside `Ok(Self { ... })`. The script reported two missing
+anchors and **wrote the struct field anyway**, leaving the workspace failing to compile for one round.
+
+**Locate-and-report is only half the discipline**, and this is the second time this session that a script said
+what it could not find and then did something regardless: the escapes that came back because KD-72 fixed the file
+and not the practice, and now this. **A patch that cannot find its anchors has to stop, not continue**, which is
+what the next script in this round did.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

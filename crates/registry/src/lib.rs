@@ -71,10 +71,15 @@ pub struct Registries {
     pub items: ItemRegistry,
     /// Per-state light properties, consumed by the light engine in `mc-world`.
     pub light: LightTable,
+    /// Entity types, for the registry id `add_entity` carries.
+    ///
+    /// **A built-in registry**, compiled into the client jar rather than sent by this server, so its ids come
+    /// from `entity_types.tsv` and not from the config payload. See P10-06.
+    pub entities: EntityTypeRegistry,
 }
 
 impl Registries {
-    /// Load both tables from `dir`.
+    /// Load every registry table from `dir`.
     ///
     /// # Errors
     ///
@@ -88,6 +93,10 @@ impl Registries {
         Ok(Self {
             items: ItemRegistry::load(&dir.join("items.tsv"))?,
             light: LightTable::load(&dir.join("block_light.tsv"), state_count)?,
+            // Cheap and total: two columns, ids contiguous from zero, and the parser refuses anything else.
+            // Loaded eagerly so a malformed table is a startup failure rather than a surprise on the first
+            // dropped item.
+            entities: EntityTypeRegistry::load(&dir.join("entity_types.tsv"))?,
             blocks,
         })
     }
