@@ -1204,7 +1204,50 @@ impl Game {
                 Ok(())
             }
             TickPhase::Entities => {
+                // **Positions before the phase, compared after it.** The position update lives in a per-entity
+                // helper that has no `report`, so the signal has to be raised here, on the boundary.
+                let before: Vec<_> = self
+                    .entities
+                    .ids()
+                    .filter_map(|id| self.entities.get(id).map(|e| (id, e.position)))
+                    .collect();
                 self.phase_entities(report);
+                for (id, was) in before {
+                    let Some(now) = self.entities.get(id).map(|entity| entity.position) else {
+                        // Removed during the phase; its removal is announced where removals are swept.
+                        continue;
+                    };
+                    // Deltas are 1/4096 of a block, which is what the packet carries. A movement too small for
+                    // that is one no client could be told about, so **the comparison is between the values that
+                    // would go on the wire rather than between the floats** -- which is both the honest test and
+                    // the one clippy does not have to distrust. A movement too *large* for `i16` is clamped:
+                    // vanilla teleports instead, and until that exists the client catches up on its next chunk.
+                    // A let, not a const: an item declares itself from the start of its scope, so one written after
+                    // statements reads as though it came later than it does (clippy::items_after_statements).
+                    let scale = 4096.0;
+                    let clamp = |value: f64| {
+                        let scaled = (value * scale).round();
+                        i16::try_from(scaled.clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i64)
+                            .unwrap_or(i16::MAX)
+                    };
+                    let (dx, dy, dz) = (
+                        clamp(now.x - was.x),
+                        clamp(now.y - was.y),
+                        clamp(now.z - was.z),
+                    );
+                    if dx == 0 && dy == 0 && dz == 0 {
+                        continue;
+                    }
+                    let packet = mc_protocol::packets::play::MoveEntityPos {
+                        entity_id: id.get(),
+                        dx,
+                        dy,
+                        dz,
+                        on_ground: self.entities.get(id).is_some_and(|entity| entity.on_ground),
+                    }
+                    .to_raw()?;
+                    self.broadcast_chunk(chunk_of(now.x, now.z), &packet, report);
+                }
                 Ok(())
             }
             TickPhase::Players => self.phase_players(report),
