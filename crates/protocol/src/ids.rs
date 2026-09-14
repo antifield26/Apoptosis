@@ -115,6 +115,14 @@ pub mod serverbound {
         pub const CHAT_COMMAND_SIGNED: i32 = 8;
         /// `minecraft:chat`
         pub const CHAT: i32 = 9;
+        /// `minecraft:client_tick_end` — a client closing its own tick.
+        ///
+        /// **Not an intent**, and the reason is worth stating: a server that does not wait on a client's tick
+        /// may drop this, which is why it went unmodelled for so long -- nothing failed. What it did do was
+        /// log `unmodelled play packet` **about fourteen times a second per player**, found in a real client's
+        /// session (P10-11) and by nothing the suite runs. The id is named here so that fixing the log is
+        /// written against a name rather than a literal 13.
+        pub const CLIENT_TICK_END: i32 = 13;
         /// `minecraft:client_command` (respawn, stats, …)
         pub const CLIENT_COMMAND: i32 = 12;
         /// `minecraft:client_information`
