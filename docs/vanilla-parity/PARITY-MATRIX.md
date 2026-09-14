@@ -174,6 +174,23 @@ what it found reads as complete when it is not \u2014 which is the failure this 
 | (3) tests that cannot fail | every test in the workspace (1257) | the crude form is **absent**; the form that matters needs **perturbation**, and four were run (KD-60, KD-61, KD-62) | crude form done; perturbation is a **method**, not a finite sweep |
 | (4) prose that disagrees with code | 1052 doc lines making a falsifiable claim, 60 of them naming a number | the two highest-yield sub-lines are closed: **jar-measurable counts** (4 files: `recipe.rs` wrong, `advancement.rs` 8/8, `loot.rs` 3+3, `tag.rs` 2+2) and **doc tables versus code** (2 tables: fuel wrong, smelting exact) | **the long tail is not read**: roughly 992 claim lines name no number, and **of the 60 that do, about a quarter sit in the files the two sub-lines above cover** \u2014 the rest are unread |
 
+**One item on this line was chased and left open, on purpose.** `StackSizeTable::len` carries "always 165 for
+the 26.1.2 vanilla table", and the module doc says the table comes from "every `stacksTo` call site in the game".
+Five rounds produced `tools/vanilla-probe/StacksToProbe.java` \u2014 which compiles, runs, and reports **1506 items,
+1506 unreadable, with `ERROR:NullPointerException:Components_not_bound_yet` on every row** \u2014 and four attempts at
+the bootstrap step that would bind item components: `getDefaultMaxStackSize`, `item.components()`,
+`new ItemStack(item).getMaxStackSize()`, and `MappedRegistry.freeze()`, the last directed by scanning the jar for
+the class carrying the error message.
+
+**None of them bound the components**, and the chase stopped there. **`165` is unverified**, with the attempts on
+record rather than a belief in its place, and the probe is committed in the state where it states its own limit
+instead of substituting 64 and looking finished. What would settle it is the datapack and registry load a
+dedicated server performs, reachable with the launcher already at `target/vanilla-26.1.2/`.
+
+**This is recorded as a stopped side quest rather than an open one**, because it is not one of the four clues: it
+is a tool for checking one of sixty doc lines, and keeping it alive because it had been alive for a while is the
+shape of the problem this review exists to find.
+
 **What "not read" means here, concretely.** Nothing in the unread remainder is *suspected* \u2014 the two sub-lines that
 produced every clue-4 finding are the ones that name a value checkable from data, and the KD-73 lesson is that a
 claim is only worth checking when there is something independent to check it against. The unread lines are prose
