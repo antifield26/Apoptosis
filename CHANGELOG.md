@@ -3340,6 +3340,41 @@ every gate passed
 eighth time in this session -- which is the same lesson one layer out: **a document is not written through a shell
 command either**, and the reason this entry exists at all is that a commit went through without it.
 
+### P10-10 (part 11) — the six sites were changed, the guard refused, and the refusal is the round
+
+All six system-message sites share one shape, so they were changed by three indentation-independent substitutions
+rather than six hand-written edits: the `&SystemChat` constructor for `DisguisedChat`, `content:` for
+`message:`, and `overlay: false` for the three fields the other packet has. The build passed and **zero
+SystemChat sends remained**.
+
+Then the guard refused:
+
+`	ext
+—- tests: 1252 passed, 31 failed, 30 ignored, 94 suites
+REFUSING to pass:
+  - cargo clippy -D warnings
+  - cargo test
+  - 31 failing tests
+`
+
+**Five hand-typed guards would have let that through**, which is what the file is for. It was written two rounds ago
+because the fourth miss of the session came from a condition left out of a command that is retyped every time.
+
+**And what the 31 failures are is the phase's own subject.** They assert that a `SYSTEM_CHAT` arrives — the packet
+the placeholder used, and the belief the tests were written from. A capture says a 26.1.2 server answers a console
+message with `disguised_chat` and **zero** `system_chat`, so **the tests encode the same understanding as the code
+they were checking**, and changing the code alone leaves both halves disagreeing.
+
+**This is the failure mode the P00-P09 review was built around, met from the other side**: not a test that agrees
+with a wrong implementation, but a suite that agrees with it so thoroughly that correcting the implementation reads
+as 31 regressions. **A reviewer looking for tests that cannot fail would have found nothing here** — the tests fail
+very well; they fail on the right answer.
+
+**The change was reverted, not the tests**, because updating 31 assertions is not an edit to make with the context
+this round had left. **The work is right and it is written down here**; what it needs is a round that starts by
+reading those assertions, not one that ends by rewriting them.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
