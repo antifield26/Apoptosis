@@ -2103,9 +2103,10 @@ impl Game {
                     .sessions
                     .get(&id)
                     .map_or_else(|| "Player".to_owned(), |session| session.name.clone());
-                // `chat_type` 0 is **not yet verified** against the `chat_type` registry the client is sent: it
-                // decides how the line is decorated, and this project's rule is that a number sent to a client
-                // is a claim about a registry it owns. That check is outstanding.
+                // `chat_type` is resolved, not assumed: `CHAT_TYPE_CHAT` is read out of the
+                // `minecraft:chat_type` registry this server sends in `registry_data` (the entry named
+                // `minecraft:chat`), pinned by `the_chat_type_this_server_sends_is_the_one_named_chat`.
+                // A real 26.1.2 capture answers a console `say` with this same packet and chat type.
                 let packet = mc_protocol::packets::play::DisguisedChat {
                     message: TextComponent::literal(&message),
                     chat_type: CHAT_TYPE_CHAT,
@@ -2146,9 +2147,15 @@ impl Game {
                 // exist yet), and saying so beats a silent success.
                 debug!(id = %id, window_id, "container close (only the player menu exists)");
             }
+            // A real client closes each of its own ticks with `client_tick_end`
+            // (911 captured bodies, all empty). The server's tick is its own
+            // clock, so there is nothing to act on -- it is modelled so per-tick
+            // arrival is silent instead of two debug lines a tick per player.
+            // The three arms beside it are silent for their own reasons.
             PlayIntent::Swing { .. }
             | PlayIntent::AcceptTeleportation { .. }
-            | PlayIntent::UseItem { .. } => {}
+            | PlayIntent::UseItem { .. }
+            | PlayIntent::ClientTickEnd => {}
         }
         Ok(())
     }

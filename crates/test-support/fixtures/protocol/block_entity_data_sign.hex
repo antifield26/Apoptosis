@@ -1,0 +1,11 @@
+# minecraft:block_entity_data (clientbound play 6) as a real 26.1.2 server sent it.
+# Source: target/be-capture/bodies/024271_s2c_play_6.bin, captured from a vanilla 26.1.2
+# dedicated server through the rig, by tools/chat-capture/be_experiment.py -- the experiment
+# that settled P10-09: the packet rides the block entity client-visible NBT the client needs
+# for rendering. This body is the SECOND sign packet of the experiment: the text edit. The
+# first (021961, not committed) was the placement itself, whose NBT held empty messages --
+# so a sign is synced on placement (the client renders its text) while a chest placed and
+# filled the same way stayed silent, because a chest carries no rendering NBT.
+# What this body is: 197 bytes. The capture directory is not tracked, so the
+# bytes are copied here with their provenance rather than referenced.
+ff ff 6e 3f ff e7 f0 48 07 0a 0a 00 09 62 61 63 6b 5f 74 65 78 74 01 00 10 68 61 73 5f 67 6c 6f 77 69 6e 67 5f 74 65 78 74 00 08 00 05 63 6f 6c 6f 72 00 05 62 6c 61 63 6b 09 00 08 6d 65 73 73 61 67 65 73 08 00 00 00 04 00 00 00 00 00 00 00 00 00 01 00 08 69 73 5f 77 61 78 65 64 00 0a 00 0a 66 72 6f 6e 74 5f 74 65 78 74 01 00 10 68 61 73 5f 67 6c 6f 77 69 6e 67 5f 74 65 78 74 00 08 00 05 63 6f 6c 6f 72 00 05 62 6c 61 63 6b 09 00 08 6d 65 73 73 61 67 65 73 08 00 00 00 04 00 17 22 68 65 6c 6c 6f 20 66 72 6f 6d 20 74 68 65 20 72 65 76 69 65 77 22 00 02 22 22 00 02 22 22 00 02 22 22 00 00

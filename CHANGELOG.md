@@ -3432,6 +3432,60 @@ assert the id the six sites send is that one. **`chat_type` is a name, and the s
 payload gives that name**, which is the same shape as every other fix this phase has made.
 
 
+### Cross-audit round 3 (clues one and two, and three stale rows)
+
+**Clue one** walked every send site P10 introduced, asking the state-name-to-input question: is the first
+value correct, or merely first? The `add_entity` type id is resolved (`registries.entities.id(ITEM)`), not
+typed; the entity table carries the probe's count (157), the alphabetical anchor, a round trip and refusals
+(`crates/registry/src/entities.rs`); `chat_type` and `dimension_type` were settled in earlier rounds; the
+item stack's metadata row was already verified three ways. What the walk found instead was **drift pointing
+backwards**: three places written before the last two P10 commits landed still described the older tree --
+the matrix rows for system routing ("gap") and relative movement ("unwired"), and a `game.rs` comment
+claiming `chat_type` was unverified. All three are corrected in this commit, and the move row's test name
+was verified against the tree (it is
+`a_drop_that_falls_is_announced_as_a_relative_move`).
+
+**Clue two** was re-derived against every captured body this time: the 55 captured `add_entity` bodies
+resolve as 52 \u00d7 type 117 (slime), 2 \u00d7 111 (sheep), 1 \u00d7 30 (cow) -- **all to registry rows**, and sheep
+and cow were natural spawns rather than the experiment's summons, so the jar-extraction fixture is now
+cross-checked against server behavior for types nobody drove.
+
+**One scanner claim was refuted**: `scan_vacuous_tests` flagged
+`the_whole_pipeline_runs_against_the_real_pack` as naming no way to fail, but its stage helpers carry the
+assertions (758 tags, 1 202 structures, 256 terrain columns, a gold-block marker surviving a reopen) -- the
+instrument read the test's body and not its callees, which is the same shape lesson as the handover's fifth
+instrument. `every_tag_type_round_trips_on_disk` **was** a real finding, and it now opens with an
+independent byte-shape anchor (root compound id, two-byte name prefix), verified by perturbation.
+### P10-09 (cross-audit round) -- the trigger condition was a knowledge gap, and the gap is closed
+
+Three sessions had captured **zero** `block_entity_data` packets after placing and filling a chest at the
+player, which is what made the packet's trigger condition the phase's one unresolved question. The right
+experiment did not need a player interaction at all -- it needed block entities whose client-visible NBT
+changes on its own. `tools/chat-capture/be_experiment.py` drove a vanilla 26.1.2 server with console-only
+injections at the player's position and captured **4** real packets:
+
+* **sign placement** -- a sign's placement sync carries its (empty) text NBT, because the client renders it;
+* **sign text edit** (`data merge block ... front_text`) -- the merged line is in the payload;
+* **campfire item change** (`item replace block ... container.0`) -- the packet carries `Items`;
+* **spawner placed with SpawnData** -- the packet carries `MaxNearbyEntities`/`SpawnData`.
+
+and the control group stayed silent: **a chest placed at the player, and the same chest filled with five
+diamonds, produce nothing**, and `block_event` (7) was silent across the whole session. So the rule is:
+**the packet rides the block entity's client-visible NBT -- what the client needs to render --** and not
+placement-by-existence and not container contents, which ride the container-menu channel. The task had been
+worded "on placement and change"; the capture corrects the plan, and TASK-INDEX says so now.
+
+**Three goldens land with it**, over committed hex fixtures copied from the capture: the sign body (both
+text faces, the merged line in there), the campfire body (type **33**, Items), and the spawner body (type
+**9**, SpawnData). Each test was falsified before it was trusted -- perturbing a fixture's type byte made the
+test fail, and restoring it made the suite green again. The block entity **type ids are the captured
+values**; a full block-entity-type table is a jar extraction that stays open beside the metadata tables.
+
+The second finding of the round closed in the same commit: a real client's per-tick `client_tick_end`
+(serverbound play 13, **911 captured bodies, every one empty**) was being logged as unmodelled twice a tick.
+It is now a decoded, deliberately unacted `PlayIntent::ClientTickEnd` -- modelled so a real client's traffic
+is silent, with a decode test over the captured shape and the refusal of a non-empty payload.
+
 ### P10-10 (part 14) -- `chat_type` classified before it was checked, and P10-10 closes
 
 The last unverified number in this phase was the `chat_type` the six message sites send, and the round's work was

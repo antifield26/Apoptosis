@@ -181,6 +181,29 @@ mod tests {
 
     #[test]
     fn every_tag_type_round_trips_on_disk() {
+        // The byte-shape anchor first: a round trip through the same crate's
+        // reader cannot catch a writer and reader that mis-encode the *frame*
+        // identically, so the encoded shape is asserted against what the
+        // format says it must be -- root compound id (0x0A) then a two-byte
+        // big-endian name length. The scanner that flagged this test as
+        // "naming no way to fail" was right about the shape, and this is the
+        // independent way for it.
+        let mut bytes = Vec::new();
+        write_named("", &sample(), &mut bytes).expect("encodes");
+        assert_eq!(
+            bytes[..3],
+            [0x0A, 0x00, 0x00],
+            "disk root: compound id, then the empty name's two-byte prefix"
+        );
+        // And the same shape with a named root, whose prefix is its length.
+        let mut named = Vec::new();
+        write_named("Data", &sample(), &mut named).expect("encodes");
+        assert_eq!(
+            named[..3],
+            [0x0A, 0x00, 0x04],
+            "the two-byte prefix names the root: \"Data\" is 4 bytes"
+        );
+
         round_trip_disk("", &sample());
         round_trip_disk("Data", &sample());
         round_trip_disk("n\u{00E9}me", &sample());

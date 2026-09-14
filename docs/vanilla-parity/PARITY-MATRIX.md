@@ -256,12 +256,12 @@ depends on who owns the registry.**
 | `add_entity` / `remove_entities` / `set_entity_motion` | codecs, checked against real bytes | **full** | **55 / 12 / 2942** captured bodies; every one is a length the field widths imply. `crates/protocol/tests/{add_entity,remove_entities,set_entity_motion}_golden.rs` |
 | Entity identity | stable across a replay | **full** | `entity_uuid(seed, id)`, derived rather than random, because a UUID per spawn breaks "same inputs, same state". Five tests, one of which varies an argument alone \— a derivation that ignored the seed passes the other four |
 | A drop is visible (P10-06, P10-08) | spawn, contents, removal | **full** | `add_entity` then `set_entity_data` **index 8, serializer 7**; `a_dropped_item_is_announced_with_the_item_type_id` asserts exactly one `ADD_ENTITY`; the item-stack value is **byte-identical** to captured stacks, whose counts and ids match the commands that made them and `items.tsv` besides |
-| Relative movement (P10-08) | the three move packets | **codecs full, unwired** | layout measured across **11,713** bodies; `crates/protocol/tests/move_entity_golden.rs`. **No call site sends one yet** |
+| Relative movement (P10-08) | the three move packets | **wired** | layout measured across **11,713** bodies; `crates/protocol/tests/move_entity_golden.rs`. The call site landed after this row was written (`79bd9b0`): every tick whose 1/4096-scaled delta is non-zero broadcasts `MoveEntityPos` from the Entities phase (game.rs), and `a_drop_that_falls_is_announced_as_a_relative_move` pins it |
 | Chat relay (P10-10) | a player's message reaches everyone, attributed | **partial** | `DisguisedChat` byte-identical to a captured payload (three independent sessions), broadcast wired, `a_players_chat_is_relayed_as_disguised_chat`. **Not asserted: that every client received it** \— the harness joins one connection, and the test says so |
-| System and feedback routing (P10-10) | system messages to the acting client | **gap** | Six `SystemChat` sites still answer everything with `system_chat`, which a capture shows is **not** what a 26.1.2 server answers a `say` with |
-| `chat_type` (P10-10) | the decoration registry id | **unverified** | Hard-coded `0` with the reason in the code: the check is outstanding, and it is the same class of claim this phase found wrong twice |
-| Block entities to the client (P10-09) | contents on placement and change | **packet only** | The constant and codec exist (id **6**, `packet_ids.rs`). **Its trigger condition is unresolved** \— three sessions, and a chest placed *at the player* and *filled* still produced none |
-| Per-type metadata tables (P10-07) | the index tables the client uses | **gap** | `MetadataProbe` walks the classes and **refuses its own output**: 8 distinct indices across 157 types is one inherited set repeated. The fully extracted table needs a probe that builds an entity, which is not written |
+| System and feedback routing (P10-10) | system messages to the acting client | **closed** | A capture settled that a 26.1.2 server answers a console `say` with `disguised_chat` and **zero** `system_chat`; all seven send sites now answer that way, each attributed, **zero `SystemChat` sends remain** — proven by the suite, which refused the source-only change with 31 failures until the assertions moved with it |
+| `chat_type` (P10-10) | the decoration registry id | **full (datapack instrument)** | `minecraft:chat_type` is a registry this server sends, so the id was resolved **out of our own payload** (the entry named `minecraft:chat`), not out of a jar — `CHAT_TYPE_CHAT` with `the_chat_type_this_server_sends_is_the_one_named_chat` in `registry_ids.rs`. A real capture carrying `5` only proved the number is not free; the payload is what settled it |
+| Block entities to the client (P10-09) | when does a real server name a block entity to the client? | **trigger settled by capture** | Three sessions of a silent chest were the wrong experiment; the right one (tools/chat-capture/be_experiment.py) captured **4** real packets: sign placement, sign text edit, campfire item change, spawner with SpawnData \— and **zero** for a chest placed and filled the same way, with `block_event` (7) also silent. The rule: the packet rides the block entity's client-visible NBT \(what the client needs for rendering\), not placement-by-itself and not container contents \(the menu channel's job\). Goldens: block_entity_data_golden.rs over three committed fixtures |
+| Per-type metadata tables (P10-07) | the index tables the client uses | **gap, with two analysed paths** | `MetadataProbe` walks the classes and **refuses its own output**: 8 distinct indices across 157 types is one inherited set repeated, because `defineId` runs in the **instance** method `defineSynchedData`, not a static initialiser. Two paths out, both named: (a) a probe that builds each entity to ask it \u2014 which needs a `Level`; (b) a **summon-capture session** \u2014 `execute at @a run summon <type>` for all 157 types through the rig, which yields the table from the server's own sends. Path (b) is preferred and has a decode prerequisite: `MetadataValue::decode` currently refuses the serializer types mob metadata uses (boolean, varlong, string, \u2026), so the table extraction needs those variants first \u2014 "adding one is a new variant plus its `type_id` arm". What is already settled and not to be re-derived: a dropped item's stack is index **8**, serializer **7**, verified three ways (injections, captured bytes, `items.tsv`) |
 | Real-client acceptance (P10-11) | a real client in a real world | **exercised \— rendering unverified** | A real 26.1.2 client joined through the rig, uploaded **8 chunk-section buffers**, and its log carried only the three offline-auth errors. **What it drew is not verified** \— see below |
 | `client_tick_end` (P10-11) | a client's per-tick packet | **named, not modelled** | A real client sends serverbound play **13** every tick; this server called it `unmodelled` ~**14 times a second**. Found in one session's log and by nothing the suite runs, **because the suite drives our client, which sends what this server expects** |
 
@@ -353,6 +353,41 @@ list is now long enough to be a finding in its own right:
 **An audit that trusts its tools reports the tools' shape rather than the code's.** The answer is not to stop using
 them — the biome id would have been caught three phases earlier by any of these — but to read what they return
 before believing what they say, **which is the same rule this phase applies to the numbers it sends.**
+
+
+## P10 cross-audit -- third pass (2026-09-14)
+
+Clue one (state-name-to-input: *is the first value correct, or merely first?*)
+walked every send site P10 introduced:
+
+* `add_entity`'s type id is **resolved, not typed**: `registries.entities.id(ITEM)`, with the registry table
+  carrying the probe's count (157), the alphabetical anchor (id 0 is a boat), a name/id round trip and the
+  refusal of gapped tables (`crates/registry/src/entities.rs`).
+* `chat_type` is resolved out of the payload (last round); `dimension_type` and biome were settled earlier.
+* the item stack in metadata (index 8, serializer 7) was already verified three ways; nothing new superseded it.
+* what the walk found instead: **two stale matrix rows and a stale code comment** — the review was written
+  before the last two P10 commits landed, so "system routing: gap" and "move: unwired" described a tree that
+  had already moved. Both are fixed here; the stale `game.rs` comment claiming `chat_type` was unverified is
+  rewritten, which is the same doc-rot class the P00–P09 review caught, this time pointing backwards.
+
+Clue two (fixture provenance) had already been half-done by the committed tests — the slime fixture pins
+`type_id == 117` against `entity_types.tsv` — and this round **re-derived it against all 55 captured
+`add_entity` bodies**: 52 are type 117 (slime), 2 are type 111 (`minecraft:sheep`), 1 is type 30
+(`minecraft:cow`), and **all three resolve to registry rows**. Sheep and cow were *natural spawns* near the
+world's spawn, not summoned, which makes the cross-check cover more than the experiment drove.
+
+And the perturbation sweep over the round's own new tests:
+
+* the three `block_entity_data` goldens — a fixture's type byte perturbed `09→08` fails the spawner test;
+* the strengthened `every_tag_type_round_trips_on_disk` — its new byte-shape anchor (`0x0A 00 00`) perturbed
+  to `0x0A 0x00 0x01` fails it. Both restored and green.
+
+One scanner claim was **refuted this round**: `scan_vacuous_tests` flagged
+`the_whole_pipeline_runs_against_the_real_pack` as "naming no way to fail", but the pipeline's
+stage helpers carry the assertions (758 tags, 1 202 structures, 256 terrain columns, the gold-block marker
+surviving a reopen) — the test's own body delegates to them. The instrument read the test's body and not its
+callees. `every_tag_type_round_trips_on_disk` was a real finding, fixed by an independent byte-shape anchor
+(root compound id, two-byte name prefix) that the perturbation round then verified.
 
 
 ## Removed rows (governance, 2026-09-12)

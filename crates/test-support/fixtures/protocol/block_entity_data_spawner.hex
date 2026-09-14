@@ -1,0 +1,8 @@
+# `minecraft:block_entity_data` (clientbound play 6) as a real 26.1.2 server sent it.
+# Source: target/be-capture/bodies/031418_s2c_play_6.bin, captured from a vanilla 26.1.2 dedicated server through the
+# rig, by tools/chat-capture/be_experiment.py -- the experiment that settled P10-09's trigger
+# condition: the packet rides a change to the block entity's client-visible NBT
+# (a spawner placed with its data), while chest placement and chest container fills stayed silent.
+# What this body is: 176 bytes. The capture directory is not tracked, so the
+# bytes are copied here with their provenance rather than referenced.
+ff ff 6e 3f ff e7 f0 48 09 0a 02 00 11 4d 61 78 4e 65 61 72 62 79 45 6e 74 69 74 69 65 73 00 06 02 00 13 52 65 71 75 69 72 65 64 50 6c 61 79 65 72 52 61 6e 67 65 00 10 02 00 0a 53 70 61 77 6e 43 6f 75 6e 74 00 04 0a 00 09 53 70 61 77 6e 44 61 74 61 0a 00 06 65 6e 74 69 74 79 08 00 02 69 64 00 0d 6d 69 6e 65 63 72 61 66 74 3a 70 69 67 00 00 02 00 0d 4d 61 78 53 70 61 77 6e 44 65 6c 61 79 03 20 02 00 0a 53 70 61 77 6e 52 61 6e 67 65 00 04 02 00 05 44 65 6c 61 79 00 14 02 00 0d 4d 69 6e 53 70 61 77 6e 44 65 6c 61 79 00 c8 00

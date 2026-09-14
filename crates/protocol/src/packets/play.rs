@@ -3188,6 +3188,10 @@ pub enum PlayIntent {
         /// 4 throw, 5 quick-craft, 6 pickup-all.
         click_type: i32,
     },
+    /// A real client's own end-of-tick marker (serverbound play 13; 911
+    /// captured bodies, every one empty). The server's tick is its own clock,
+    /// so this is decoded and deliberately unacted.
+    ClientTickEnd,
 }
 
 impl PlayIntent {
@@ -3308,6 +3312,18 @@ impl PlayIntent {
                 button: reader.read_i8()?,
                 click_type: reader.read_varint()?,
             }),
+            // A real client sends this at the end of each of its own ticks
+            // (911 captured bodies, every one empty). The server's tick is its
+            // own clock, so the intent is deliberately unacted -- modelled so
+            // the per-tick arrival is silent instead of a debug flood.
+            serverbound::play::CLIENT_TICK_END => {
+                if !reader.is_empty() {
+                    return Err(ServerError::Protocol(
+                        "client_tick_end must be empty".to_owned(),
+                    ));
+                }
+                Some(Self::ClientTickEnd)
+            }
             _ => None,
         };
         Ok(intent)
@@ -3732,6 +3748,26 @@ mod tests {
         );
         assert!(
             PlayIntent::decode(crate::ids::serverbound::play::MOVE_PLAYER_POS, &[0x00]).is_err()
+        );
+    }
+
+    #[test]
+    // The real shape, from 911 captured bodies of a real 26.1.2 client (the
+    // chat-capture and vanilla-capture sessions): every one was empty.
+    fn a_real_clients_tick_end_is_empty_and_recognized() {
+        assert!(
+            matches!(
+                PlayIntent::decode(crate::ids::serverbound::play::CLIENT_TICK_END, &[])
+                    .expect("decodes")
+                    .expect("recognized"),
+                PlayIntent::ClientTickEnd
+            ),
+            "the captured shape is an empty payload"
+        );
+        // A payload that is not what the captures carry is a protocol error,
+        // not a silent truncation.
+        assert!(
+            PlayIntent::decode(crate::ids::serverbound::play::CLIENT_TICK_END, &[0x00]).is_err()
         );
     }
 
