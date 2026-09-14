@@ -322,6 +322,39 @@ shape it was looking for.**
 line that looked most like a defect was the one that was already covered.
 
 
+### The cross-audit, second pass — clue four, and the tool that reads it
+
+Clue four is **a doc comment that disagrees with its code**, and the instrument is `tools/review/scan_doc_equalities.py`,
+which reports lines in product code that claim two things are equal. It produced **172 lines**, nine of them in files
+P10 touched.
+
+**The first one read is not a claim at all:**
+
+`	ext
+game.rs:1281
+/// them: an empty tick list and a missing scheduler look identical from the
+/// outside, so the absence is stated rather than stubbed with a placeholder
+`
+
+That is prose using the word identical about two absences, in a function whose doc is *about* being a documented
+no-op — **a good comment, matched by a pattern that could not tell it from an equality.**
+
+**This is the fifth time in this phase that an instrument's shape has been the thing under examination**, and the
+list is now long enough to be a finding in its own right:
+
+| instrument | what it reported | what was actually true |
+|—-|—-|—-|
+| the metadata cross-reference | no metadata for four item entities | its width table could not read the one serializer an item must use |
+| `MetadataProbe` | `unreadable=0` across 1256 rows | it was reading eight inherited slots, and now refuses its own output |
+| the coordinate injections | nothing in view | it was looking at the origin while the client was elsewhere |
+| `identifiers_after` in a grep | `dimension_type` unchecked | the check exists, reached by another call shape |
+| `scan_doc_equalities` | 172 equality claims | at least the first is a sentence containing the word |
+
+**An audit that trusts its tools reports the tools' shape rather than the code's.** The answer is not to stop using
+them — the biome id would have been caught three phases earlier by any of these — but to read what they return
+before believing what they say, **which is the same rule this phase applies to the numbers it sends.**
+
+
 ## Removed rows (governance, 2026-09-12)
 
 Five rows from the pre-governance matrix were deleted rather than updated:
