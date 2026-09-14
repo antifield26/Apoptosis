@@ -192,7 +192,7 @@ fn a_player_joins_and_receives_terrain_and_vitals() {
         "the join must sync the spawn point"
     );
     assert!(
-        ids.contains(&clientbound::play::SYSTEM_CHAT),
+        ids.contains(&clientbound::play::DISGUISED_CHAT),
         "the join must greet the player"
     );
 
@@ -662,11 +662,11 @@ async fn breaking_a_block_sends_a_light_update() {
     );
 }
 
-/// A player's chat is relayed as `disguised_chat`, and not as the placeholder's `system_chat`.
+/// A player's chat is relayed as `disguised_chat`, and not as the placeholder's `disguised_chat`.
 ///
 /// **The second assertion is the one with a defect behind it.** Until P10-10 the handler answered the sender with
 /// "Chat relay is not implemented yet." inside a `SystemChat`, and a capture of a real 26.1.2 server established
-/// that a `say` produces `disguised_chat` and **zero** `system_chat`. So a message that arrives as `system_chat` is
+/// that a `say` produces `disguised_chat` and **zero** `disguised_chat`. So a message that arrives as `disguised_chat` is
 /// the placeholder still being sent, and this fails on it.
 ///
 /// **What this does not assert, and why**: that *every* client received it. `Harness::new` builds its own `Game`,
@@ -698,6 +698,10 @@ fn a_players_chat_is_relayed_as_disguised_chat() {
         "a player's chat must be relayed as disguised_chat: got {ids:?}"
     );
     assert!(
+        // **SYSTEM_CHAT deliberately stays here.** The line above requires the relayed packet; this one
+        // forbids the placeholder's, and a bulk substitution cannot tell a requirement from a
+        // prohibition -- the two differ by one !, and rewriting both left this test asserting that the
+        // packet arrives and that it does not.
         !ids.contains(&clientbound::play::SYSTEM_CHAT),
         "system_chat is the placeholder's packet, and a real server answers a say with disguised_chat instead: \
          got {ids:?}"

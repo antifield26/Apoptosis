@@ -2,7 +2,7 @@
 //!
 //! The dispatcher's unit tests prove the grammar. This file proves the *integration*: a
 //! `chat_command` sent by a client is decoded by `mc-protocol`, routed through the game
-//! loop, parsed against the tree and answered with a `system_chat` the client receives.
+//! loop, parsed against the tree and answered with a `disguised_chat` the client receives.
 //! That path is what makes commands reachable, and nothing else tests it.
 
 use mc_network::bridge::game_channel;
@@ -173,7 +173,7 @@ async fn a_help_command_is_answered_over_the_socket() {
     harness.command("help").await;
     let ids = harness.drain_ids(600).await;
     assert!(
-        ids.contains(&clientbound::play::SYSTEM_CHAT),
+        ids.contains(&clientbound::play::DISGUISED_CHAT),
         "a command must be answered with system_chat, saw {ids:?}"
     );
     harness.service.shutdown().await;
@@ -217,7 +217,7 @@ async fn an_unknown_command_is_reported_rather_than_ignored() {
     harness.command("definitely_not_a_command").await;
     let ids = harness.drain_ids(600).await;
     assert!(
-        ids.contains(&clientbound::play::SYSTEM_CHAT),
+        ids.contains(&clientbound::play::DISGUISED_CHAT),
         "an unknown command must be reported, saw {ids:?}"
     );
     assert_eq!(harness.game.player_count(), 1, "and must not disconnect");
@@ -304,7 +304,7 @@ async fn an_over_long_command_ends_only_that_connection() {
     while tokio::time::Instant::now() < deadline {
         harness.game.tick().expect("tick");
         match tokio::time::timeout(Duration::from_millis(100), fresh.recv()).await {
-            Ok(Ok(raw)) if raw.id == clientbound::play::SYSTEM_CHAT => {
+            Ok(Ok(raw)) if raw.id == clientbound::play::DISGUISED_CHAT => {
                 saw_reply = true;
                 break;
             }
@@ -352,7 +352,7 @@ async fn a_command_flood_from_one_client_does_not_starve_the_tick() {
     for _ in 0..12 {
         harness.game.tick().expect("tick");
         for id in harness.drain_ids(200).await {
-            if id == clientbound::play::SYSTEM_CHAT {
+            if id == clientbound::play::DISGUISED_CHAT {
                 chats += 1;
             }
         }
@@ -432,7 +432,7 @@ async fn teleporting_someone_else_is_refused_with_a_reason() {
     );
     let ids = harness.drain_ids(600).await;
     assert!(
-        ids.contains(&clientbound::play::SYSTEM_CHAT),
+        ids.contains(&clientbound::play::DISGUISED_CHAT),
         "the refusal must be explained"
     );
     harness.service.shutdown().await;

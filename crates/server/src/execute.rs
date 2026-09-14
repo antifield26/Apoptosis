@@ -45,7 +45,6 @@ use mc_command::execute::{Condition, ExecuteChain, Modifier, align, resolve_coor
 use mc_command::selector::{EntityFacts, Selector};
 use mc_command::source::{CommandSource, SourcePosition};
 use mc_core::error::ServerResult;
-use mc_protocol::packets::play::SystemChat;
 use mc_protocol::text::TextComponent;
 
 use crate::commands::CommandResult;
@@ -301,9 +300,11 @@ impl Game {
     ) -> ServerResult<()> {
         self.send(
             id,
-            &SystemChat {
-                content: TextComponent::literal(text),
-                overlay: false,
+            &mc_protocol::packets::play::DisguisedChat {
+                message: TextComponent::literal(text),
+                chat_type: 0,
+                sender_name: TextComponent::literal("Server"),
+                target_name: None,
             },
             report,
         )

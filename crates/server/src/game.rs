@@ -161,7 +161,7 @@ use mc_protocol::packets::play::{
     GameEvent, HEIGHTMAP_WORLD_SURFACE, Heightmap, LevelChunkWithLight, LightUpdate,
     NETWORK_BIOME_MIN_BITS, PalettedContainer as WireContainer, PlayDisconnect, PlayIntent,
     PlayerPosition, Respawn, SetDefaultSpawnPosition, SetExperience, SetHealth, SetHeldSlot,
-    SetTime, SystemChat, block_position, unpack_block_position,
+    SetTime, block_position, unpack_block_position,
 };
 use mc_protocol::text::TextComponent;
 use mc_registry::Registries;
@@ -1922,9 +1922,11 @@ impl Game {
         }
         self.send(
             id,
-            &SystemChat {
-                content: TextComponent::literal("Welcome to the Rust Minecraft server."),
-                overlay: false,
+            &mc_protocol::packets::play::DisguisedChat {
+                message: TextComponent::literal("Welcome to the Rust Minecraft server."),
+                chat_type: 0,
+                sender_name: TextComponent::literal("Server"),
+                target_name: None,
             },
             report,
         )?;
@@ -3061,9 +3063,11 @@ impl Game {
         if outcome.died {
             let _ = self.send(
                 id,
-                &SystemChat {
-                    content: TextComponent::literal("You died! Use the respawn button."),
-                    overlay: false,
+                &mc_protocol::packets::play::DisguisedChat {
+                    message: TextComponent::literal("You died! Use the respawn button."),
+                    chat_type: 0,
+                    sender_name: TextComponent::literal("Server"),
+                    target_name: None,
                 },
                 &mut local,
             );
@@ -3679,9 +3683,11 @@ impl Game {
         if self
             .send(
                 id,
-                &SystemChat {
-                    content: TextComponent::literal(text),
-                    overlay: false,
+                &mc_protocol::packets::play::DisguisedChat {
+                    message: TextComponent::literal(text),
+                    chat_type: 0,
+                    sender_name: TextComponent::literal("Server"),
+                    target_name: None,
                 },
                 &mut local,
             )

@@ -35,7 +35,7 @@
 
 use mc_command::source::{CommandSource, SourceKind};
 use mc_core::error::ServerResult;
-use mc_protocol::packets::play::{SetTime, SystemChat};
+use mc_protocol::packets::play::SetTime;
 use mc_protocol::text::TextComponent;
 use tracing::{debug, info, warn};
 
@@ -178,9 +178,11 @@ impl Game {
         if let Some(text) = feedback {
             self.send(
                 id,
-                &SystemChat {
-                    content: TextComponent::literal(text),
-                    overlay: false,
+                &mc_protocol::packets::play::DisguisedChat {
+                    message: TextComponent::literal(text),
+                    chat_type: 0,
+                    sender_name: TextComponent::literal("Server"),
+                    target_name: None,
                 },
                 report,
             )?;
@@ -315,9 +317,11 @@ impl Game {
         for target in ids {
             self.send(
                 target,
-                &SystemChat {
-                    content: TextComponent::literal(line.clone()),
-                    overlay: false,
+                &mc_protocol::packets::play::DisguisedChat {
+                    message: TextComponent::literal(line.clone()),
+                    chat_type: 0,
+                    sender_name: TextComponent::literal("Server"),
+                    target_name: None,
                 },
                 report,
             )?;

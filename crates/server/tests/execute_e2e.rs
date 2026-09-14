@@ -9,7 +9,7 @@
 //! The first version of this file asserted only that the client survived and the command was
 //! answered — which is true whether or not the mechanism works. Verified by disabling
 //! `positioned` and inverting `unless`: **both tests still passed.** So every test here that
-//! makes a claim about behaviour decodes the `system_chat` reply and asserts on its text. That is
+//! makes a claim about behaviour decodes the `disguised_chat` reply and asserts on its text. That is
 //! the difference between "something happened" and "the right thing happened", and it is the
 //! fourth time in this project that distinction has had to be forced.
 
@@ -85,7 +85,7 @@ impl Harness {
             .expect("command sent");
     }
 
-    /// Run a command and return every `system_chat` line it produced.
+    /// Run a command and return every `disguised_chat` line it produced.
     ///
     /// This is the whole point of the harness: the *text* is the evidence.
     async fn run(&mut self, text: &str) -> Vec<String> {
@@ -94,7 +94,7 @@ impl Harness {
         let deadline = tokio::time::Instant::now() + Duration::from_millis(900);
         while tokio::time::Instant::now() < deadline {
             match tokio::time::timeout(Duration::from_millis(80), self.client.recv()).await {
-                Ok(Ok(raw)) if raw.id == clientbound::play::SYSTEM_CHAT => {
+                Ok(Ok(raw)) if raw.id == clientbound::play::DISGUISED_CHAT => {
                     match SystemChat::decode(&raw.payload) {
                         Ok(chat) => lines.push(chat.content.as_plain().to_owned()),
                         Err(error) => panic!("a system_chat must decode: {error}"),

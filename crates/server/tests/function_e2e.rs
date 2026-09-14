@@ -84,7 +84,7 @@ impl Harness {
         }
     }
 
-    /// Run a command and return every `system_chat` line it produced.
+    /// Run a command and return every `disguised_chat` line it produced.
     async fn run(&mut self, text: &str) -> Vec<String> {
         let bytes = text.as_bytes();
         let mut payload = varint(i32::try_from(bytes.len()).expect("fits"));
@@ -98,7 +98,7 @@ impl Harness {
         let deadline = tokio::time::Instant::now() + Duration::from_millis(900);
         while tokio::time::Instant::now() < deadline {
             match tokio::time::timeout(Duration::from_millis(80), self.client.recv()).await {
-                Ok(Ok(raw)) if raw.id == clientbound::play::SYSTEM_CHAT => {
+                Ok(Ok(raw)) if raw.id == clientbound::play::DISGUISED_CHAT => {
                     match SystemChat::decode(&raw.payload) {
                         Ok(chat) => lines.push(chat.content.as_plain().to_owned()),
                         Err(error) => panic!("a system_chat must decode: {error}"),
