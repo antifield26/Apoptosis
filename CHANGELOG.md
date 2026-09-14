@@ -2805,6 +2805,36 @@ its note together. **Asserting byte-equality would assert something the codec do
 assertion would hide the divergence**; neither is what a golden test is for.
 
 
+### P10-10 (part 5) — the placeholder found, the divergence named, and the accessor that is missing
+
+The chat handler is an honest placeholder, which is the contract's no-fake-completeness rule working:
+
+```rust
+PlayIntent::Chat { message, .. } => {
+    info!(id = %id, %message, "player chat (relay lands in P07)");
+    self.send(id, &SystemChat {
+        content: TextComponent::literal("Chat relay is not implemented yet."), overlay: false,
+    }, report)?;
+}
+```
+
+**It logs the message and tells the sender nothing is implemented**, which is what P10-10 replaces: the message
+goes to **everyone**, attributed to its sender, and the sender is not told a placeholder.
+
+**The divergence this build has to declare.** Vanilla sends `player_chat` (65) for a player's own message, and
+that packet carries the sender's UUID, chat index and signature. **This build has no chat signing.** What it can
+honestly send is `disguised_chat` — the same message attributed to a name — and that difference belongs in the
+code and the record rather than being passed off as parity. It is the same shape as the bare-string divergence in
+part 4: a real gap, named.
+
+**And the obstacle is concrete.** A locate script looked for a way to get a connection's player name and found
+none, so it stopped without writing — **which is the discipline the last several rounds settled on**, after one
+guessed anchor left the workspace uncompilable for a round. The names exist somewhere: the join log prints
+`name=RealClient`, so the value is available at login and is not reachable from the intent handler through any
+accessor this search found. **Finding it is the first step of the next attempt**, and it is a small question with
+a definite answer rather than a design problem.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
