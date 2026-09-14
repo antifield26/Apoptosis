@@ -132,16 +132,16 @@ def main() -> int:
         #
         # Explicit coordinates rather than `~`: the console has no position of its own to be relative to, and a
         # command that fails is captured as a log line rather than as a packet.
+        # **Where the player is, not where the origin is.** Two sessions placed a chest and two drops at fixed
+        # coordinates and captured no `block_entity_data` and no item metadata; the client was elsewhere, and
+        # anything outside a client's view is never named to it. The console has no position, but `execute at @a`
+        # does, so every command lands two blocks above the player's head -- inside their view by construction
+        # rather than by hope.
         for command in (
-            'setblock 0 80 0 minecraft:chest',
-            # **Contents, because an empty chest has nothing to describe.** The previous session placed one and
-            # no `block_entity_data` came out; if that packet is sent only when a block entity has contents or
-            # state worth syncing, this line is what makes one appear.
-            'item replace block 0 80 0 container.0 with minecraft:diamond 5',
-            # Two drops at two heights, so a despawn before the client ever saw one is not the only possibility,
-            # and a shorter-lived one is not the only thing under test.
-            'summon minecraft:item 0 81 0 {Item:{id:"minecraft:stone",count:3}}',
-            'summon minecraft:item 0 82 0 {Item:{id:"minecraft:diamond",count:7}}',
+            'execute at @a run setblock ~ ~2 ~ minecraft:chest',
+            'execute at @a run item replace block ~ ~2 ~ container.0 with minecraft:diamond 5',
+            'execute at @a run summon minecraft:item ~ ~3 ~ {Item:{id:"minecraft:stone",count:3}}',
+            'execute at @a run summon minecraft:item ~ ~4 ~ {Item:{id:"minecraft:diamond",count:7}}',
         ):
             print(f'  injection: {command}')
             server.stdin.write(command + chr(10))

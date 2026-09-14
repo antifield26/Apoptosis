@@ -3057,6 +3057,36 @@ commands is
 connection to the one they were first read out of.
 
 
+### P10-09 (part 4) — the coordinate hypothesis disproved, and a reading of my own that cannot be trusted
+
+The third session put every injection at the player's position, and the results are unambiguous:
+
+```text
+play 6   block_entity_data:  0     (still, with the chest at the player and five diamonds in it)
+play 1   add_entity:       168
+play 99  set_entity_data:  379
+minecraft:item entities:     4     -> [119, 411, 443, 445]
+of which carry metadata:     0 / 4
+```
+
+**The chest is disproved twice over.** Not the origin, not emptiness, not distance: a chest placed **at the player**
+and **filled** produced no `block_entity_data` at all. So the packet's condition is something none of the three
+sessions varied, and the honest state is that **this capture cannot say what it is**.
+
+**And the four item entities are the finding that matters, because the reading is mine and it is broken.** The
+parser used to cross-reference the two packet kinds knows the serializer widths for types 0, 1, 2, 3 and 10. **An
+item stack is type 7**, which it does not know, so it **throws, skips that entity, and reports it as having no
+metadata** — and the four entities it skipped are **exactly the four that would carry a stack**.
+
+**So "0 of 4" is a measurement of the instrument, not of the server.** It is the same failure this phase keeps
+finding, this time in the script that was doing the finding: *a tool that answers looks like it answered*, and
+"no metadata" is a plausible answer for an item entity until one notices that the one serializer an item
+necessarily uses is the one the reader cannot read.
+
+**What it would take to settle it**: five more lines in the width table. That is the next step, and it is worth
+naming that the previous three entries treated this number as a fact about vanilla.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
