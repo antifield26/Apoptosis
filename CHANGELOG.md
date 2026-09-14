@@ -1505,6 +1505,39 @@ other compatibility claim** \u2014 a jar extraction, a capture, or an assertion 
 that had none were both wrong, in ways that produced a world of sideways waterlogged logs and then a world of red
 sand, neither of which errored anywhere.
 
+### KD-67 \u2014 the regression test KD-65 was fixed without, and proof that it has teeth
+
+**KD-65 was fixed with no test.** `PLAINS_BIOME_ID` went from 0 to 40 and nothing stopped it, or the next
+constant like it, from going back. `crates/server/tests/registry_ids.rs` now reads the registry blob the client
+is sent and holds the constant against it:
+
+* the biome registry's identifiers come out **alphabetical**, ending where the next registry breaks the order, so
+  the **longest strictly-increasing prefix** is the registry itself. That is self-validating: if the payload ever
+  stops carrying them that way the prefix collapses and the test says which of the two happened rather than
+  asserting against a number it invented.
+* `PLAINS_BIOME_ID`'s index into that prefix must name `minecraft:plains`.
+* and `dimension_type_id 0` must name `minecraft:overworld`, which the code already asserted in
+  `registry_data/mod.rs:311` \u2014 the one id in the sweep that had a check and was right.
+
+**Verified by perturbation, because a test that has never failed is not a test.** Setting the constant back to
+the value KD-65 shipped fails it with
+
+```text
+PLAINS_BIOME_ID is 0, and the registry the client is sent gives that id to "minecraft:badlands".
+Every chunk would be painted as badlands
+```
+
+\u2014 which is the defect and the symptom in one sentence, and the constant is back at 40.
+
+**Two things this round got wrong, both worth the line.** The test first went through `captured_payload()`, whose
+payloads concatenate to 41 097 bytes containing `minecraft:` and **not** the biome registry's key \u2014 so it is not
+the uncompressed registry bytes, whatever the reason; the test now reads the committed blob directly through
+`CARGO_MANIFEST_DIR` and **says so**, rather than quietly reading a file and letting a reader assume it went
+through the server. And the identifier scan found **nothing at all** in a file the same test had just located a
+key in, which is impossible for a correct scanner; a byte-index version was replaced by `str::find` and worked
+first time. **A test that does not work is worse than no test**, which is why the second failure was diagnosed
+rather than committed.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

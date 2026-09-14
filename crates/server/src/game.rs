@@ -433,7 +433,9 @@ const ENTITY_GRAVITY: f64 = 0.04;
 /// **Per-column biomes are still not modelled.** `Biome::index()` is this crate's own six-biome slot, a
 /// different numbering from the client's registry, so sending it would be a new defect rather than a fix. Every
 /// cell is plains, as the comment always claimed, and now that is what the number means.
-const PLAINS_BIOME_ID: u32 = 40;
+/// Public so a test can hold it against the registry it claims to index \u2014 see
+/// `crates/server/tests/registry_ids.rs`.
+pub const PLAINS_BIOME_ID: u32 = 40;
 
 /// One connected player's server-side state.
 /// One connected player's simulation state.
