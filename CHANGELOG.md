@@ -2261,6 +2261,36 @@ what a real server sent twelve times — the same arithmetic check `add_entity` 
 `RemoveEntities` and `SetEntityMotion` codecs, the two call sites above, and then a real client to confirm the
 drop is visible — which is P10-08's acceptance and P10-11's session.
 
+### P10-06 (part 6) — set_entity_motion, and the endianness I got wrong by hand
+
+`SetEntityMotion` is in `play.rs` with `encode`/`decode` plus `velocity()` and `from_velocity`, and
+`crates/protocol/tests/set_entity_motion_golden.rs` checks it against bodies a real server sent.
+
+**All 2942 `set_entity_motion` bodies in the capture are exactly seven bytes**, and `1 + 3 * 2 = 7` is what a
+`VarInt` id plus three `i16` velocities comes to. `add_entity` had 55 bodies for a 52-byte layout; this has 2942
+for a 7-byte one, so "the lengths agree" is not a coincidence that survived a single sample.
+
+### My hand-computed expectations were little-endian
+
+I read `49 f9` as `0xf949` (-1719) and wrote that into the test. **The decoder reads `0x49F9` (18937) and is
+right**: this protocol writes multi-byte integers **big-endian**, as every other codec in the repository already
+does. The failure was mine, and it is the specific kind this work keeps meeting — a value produced from a
+remembered convention rather than from the code beside it.
+
+**And the assertion that caught it is the one worth having.** The test asserts the lengths *and* that the decoded
+velocities are plausible: **2.37, 3.99 and -0.64 blocks per tick**, all within what an entity walks at. With only
+the length check this would have gone in green carrying a comment claiming numbers the code did not produce,
+which is the shape of the cooking-time defect.
+
+### A caller error is refused rather than wrapped
+
+`from_velocity` rejects a component beyond what an `i16` at 1/8000 carries, plus NaN and infinity. A silent wrap
+would send a client an entity moving the other way at speed.
+
+### And the codec's doc now states the endianness
+
+Because that is what I got wrong, and a reader should not have to derive it from a sample.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
