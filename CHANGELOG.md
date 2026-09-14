@@ -2835,6 +2835,24 @@ accessor this search found. **Finding it is the first step of the next attempt**
 a definite answer rather than a design problem.
 
 
+### P10-10 (part 6) — the name exists at login and the session does not keep it
+
+The search for a player-name accessor, widened to every file under `crates`, found every `name:` this repository
+has -- block entries, item entries, structure ids, op-file rows, registry members -- and **none of them is a
+player's**. `Session` holds `player: Player`, and `Player` carries no name.
+
+**The join log prints one anyway**, which is the useful part of the finding: `name=RealClient` comes from the
+login handshake, is used for that line and for the profile, and **is not retained where the intent handler can
+reach it**. So P10-10's routing needs the session to keep it -- a field, a line at join, a lookup in the handler --
+and that is a small, definite change rather than a design question.
+
+**This is a shape worth naming**, because the phase has now met it twice in two rounds: a value that exists at one
+moment and is not carried to where it is needed. The metadata index was the same story one layer down, where the
+index is assigned during `defineSynchedData` and is not readable afterwards. **The difference between "the server
+knows this" and "the server can say this" is where both of those sat**, and in neither case was the missing piece
+a hard one -- only an unnamed one.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
