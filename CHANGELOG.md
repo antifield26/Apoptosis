@@ -2547,6 +2547,40 @@ byte in one body and a VarInt in another, which is the claim that one slot means
 entity types. The table has to be asked that question directly, and the answer has to be that two types disagree.
 
 
+### P10-07 (part 4) — the probe's output is invalid, and it reported success
+
+Asking the table the question that made the task necessary gave an answer that cannot be true:
+
+```text
+rows: 1256   distinct indices: 8   types with a slot at 16: 0   mixed indices: 0 of 8
+```
+
+**Eight distinct indices across 1256 rows**, and those eight are `acacia_boat`'s `0..7` — the shared slots of
+`Entity` and `Mob`. Every entity type is being reported with the same inherited handful and none of its own.
+
+**The cause is where `defineId` runs.** Metadata is defined in each class's **`defineSynchedData`**, an *instance*
+method called on a live entity, not in a static initialiser. My probe forces the class to initialise and reads
+**static** `EntityDataAccessor` fields, so it sees exactly the accessors declared at the base of the hierarchy and
+nothing a type declares for itself. `Class.forName(..., true, ...)` did what it was asked; it was asked the wrong
+thing.
+
+**And it printed `unreadable=0`.** Every step succeeded, 1256 rows came out, and the result is worthless —
+**which is the failure mode this entry named one round earlier about a lambda in a column**: a probe that answers
+looks like it answered. The count of distinct indices is what caught it, and it is the check that should have been
+in the probe rather than in a reader's head: **1256 slots over 157 types is about eight each, which is the shape
+of one inherited set repeated, not of 157 different tables.**
+
+### What the extraction actually requires
+
+The index is assigned by `defineId` **sequentially on a builder**, so it is only knowable by *running*
+`defineSynchedData` — which needs an entity instance, which needs a level. That is a heavier probe than this one
+and a different kind: not "read a field" but "build an entity and ask it".
+
+**The capture remains the check on whatever comes out**: it decodes `type 3` as a float and `type 0` as a byte,
+and it shows index 16 carrying a byte in one body and a VarInt in another. **A table that cannot reproduce
+`FLOAT = 3` or explain index 16 is not the table.**
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
