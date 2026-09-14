@@ -2090,6 +2090,37 @@ in a stack trace to a named class and a named set of candidate calls in one pass
 its output carries the exact reason it is unreadable. **`165` remains unverified, now with three attempts behind it
 rather than one belief** \u2014 which is what the coverage statement has to say, and now can.
 
+### KD-87 \u2014 the remainder of the sixty holds, and I twice nearly reported a sentence I had read in halves
+
+The rest of the doc lines that name a number, in `data`, `protocol`, `redstone`, `server` and `worldgen`. **Every
+one holds**, and most need no tool: `f64`'s mantissa is 53 bits; a section is 16^3 = 4096 block states and 4^3 = 64
+biomes; Vanilla's default view distance is 10; a redstone level of 15 is the only one in a table with
+`powered=true|false`; the 24-bit and 53-bit draws match the RNG's documented widths.
+
+### The near-miss that matters
+
+```text
+With the default five-block trunk the tree is 36 blocks: 5 logs, 21 leaves
+(5x5 minus four corners), 9 leaves (3x3) and 1 leaf tip.
+```
+
+I read "5 logs, 21 leaves" and had 26 against a claimed 36 \u2014 **a defect, apparently, in the file that generates the
+trees this review has already corrected twice**. The sentence continues past the line I stopped at: 5 + 21 + 9 + 1
+= 36, and every part checks \u2014 5x5 minus four corners is 21, 3x3 is 9, the tip is 1, and the trunk column is
+skipped where the canopy passes over it so the leaves do not double-count the logs.
+
+**The second was the same mistake one level up**: three of the lines in this group are continuations of sentences
+whose first halves are a different grep hit, and **a claim read in halves is read wrong**. Both were caught by
+opening the file rather than by reasoning about the line \u2014 which is the only thing that has ever caught this
+class, in this review or in the tooling it built.
+
+### Why a round with no finding is worth recording
+
+**The rate matters more than the result.** The jar-count line now covers six files: `recipe.rs` wrong,
+`advancement.rs` 8 of 8, `loot.rs` 3 plus 3, `tag.rs` 2 plus 2, `furnace.rs` one label wrong, and this remainder
+clean. **The findings came from values that had never been measured, not from prose that was hard to read** \u2014 so
+a remainder of easy prose, checked anyway, is what makes "clean" a result rather than an assumption.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
