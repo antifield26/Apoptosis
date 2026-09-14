@@ -38,6 +38,11 @@ public final class StacksToProbe {
         Path out = Path.of(args.length > 0 ? args[0] : ".");
         SharedConstants.tryDetectVersion();
         Bootstrap.bootStrap();
+        // **The step three rounds of this were missing.** Scanning the jar for the message found exactly
+        // one class carrying it, `Holder$Reference`, and `MappedRegistry.freeze()` is what binds the holder
+        // values \u2014 `Bootstrap.bootStrap()` registers these registries without freezing them, so the item
+        // components do not exist until this call.
+        BuiltInRegistries.ITEM.freeze();
 
         int items = 0;
         int exceptions = 0;

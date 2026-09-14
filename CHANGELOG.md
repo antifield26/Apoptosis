@@ -2065,6 +2065,31 @@ it, got an answer, and wrote the answer down **including why the answer is not t
 item \u2014 would have produced a file that agreed with the table and a summary that agreed with the file, which is
 precisely the failure mode this review exists to find.
 
+### KD-86 \u2014 `freeze()` was the right kind of guess and not the step
+
+Scanning the jar's classes for the message found **exactly one** carrying `Components not bound yet`:
+`net/minecraft/core/Holder$Reference`. `MappedRegistry` exposes `freeze()`, `bindTags(...)` and
+`bindAllTagsToEmpty()`, so the probe now calls `BuiltInRegistries.ITEM.freeze()` after bootstrapping.
+
+**It still reports 1506 unreadable, with the same message.** `freeze()` is not the step, and the negative result
+is recorded as such rather than left as an untried idea.
+
+**Asking the jar which class raises an error is a technique, not a one-off.** It took the condition from a string
+in a stack trace to a named class and a named set of candidate calls in one pass, with no guessing about what
+"bound" means in 26.x \u2014 the same move as `DefaultStateProbe` reading `defaultBlockState` off the bytecode.
+
+**Where the next attempt starts, named rather than gestured at:**
+
+* **`DataComponentInitializers`** \u2014 it mentions a binding entry point and has a `BakedEntry` type, which is what a
+  component map looks like once built. If its `build(...)` populates item components, calling it after
+  bootstrapping is the step.
+* **the full server bootstrap** \u2014 the datapack and registry load a dedicated server performs, reachable with the
+  launcher already in this workspace at `target/vanilla-26.1.2/`.
+
+**The probe stays as it is**, because its current state is the useful one: it runs in one pass and every row of
+its output carries the exact reason it is unreadable. **`165` remains unverified, now with three attempts behind it
+rather than one belief** \u2014 which is what the coverage statement has to say, and now can.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
