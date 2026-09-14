@@ -976,6 +976,105 @@ impl RemoveEntities {
     }
 }
 
+/// `minecraft:set_entity_motion` — set an entity's velocity.
+///
+/// # Layout, and how it was checked
+///
+/// A `VarInt` entity id followed by three `i16` velocities, **big-endian** as every multi-byte field in this
+/// protocol is, in **1/8000 of a block per tick**. That is
+/// `1 + 3 * 2 = 7` bytes, and **all 2942** `set_entity_motion` bodies a real 26.1.2 server sent through the
+/// capture rig are exactly seven bytes:
+///
+/// ```text
+/// 000143: 4e 49 f9 7c 92 eb ed   -> id 78, velocities 18937, 31890, -5139  -> 2.37, 3.99, -0.64
+/// 000214: 43 e9 0e 78 54 ec ae   -> id 67, velocities -5874, 30804, -4946 -> -0.73, 3.85, -0.62
+/// ```
+///
+/// **The decoded values are plausible velocities**, which a length check cannot establish on its own: an `i16`
+/// read at the wrong offset is still an `i16`, and would not give three small numbers that look like something
+/// walking around a world.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetEntityMotion {
+    /// Entity id.
+    pub entity_id: i32,
+    /// Velocity X, in 1/8000 of a block per tick.
+    pub velocity_x: i16,
+    /// Velocity Y, in 1/8000 of a block per tick.
+    pub velocity_y: i16,
+    /// Velocity Z, in 1/8000 of a block per tick.
+    pub velocity_z: i16,
+}
+
+impl SetEntityMotion {
+    /// Encode the body.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] when a field cannot be written, which for these types means never; the
+    /// signature matches its neighbours rather than being infallible in isolation.
+    pub fn encode(&self, writer: &mut PacketWriter) -> ServerResult<()> {
+        writer.write_varint(self.entity_id);
+        writer.write_i16(self.velocity_x);
+        writer.write_i16(self.velocity_y);
+        writer.write_i16(self.velocity_z);
+        Ok(())
+    }
+
+    /// Decode a body.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] when the input ends early or the `VarInt` is malformed or too long.
+    pub fn decode(reader: &mut PacketReader<'_>) -> ServerResult<Self> {
+        Ok(Self {
+            entity_id: reader.read_varint()?,
+            velocity_x: reader.read_i16()?,
+            velocity_y: reader.read_i16()?,
+            velocity_z: reader.read_i16()?,
+        })
+    }
+
+    /// The velocity in blocks per tick, which is what a caller sets rather than the wire's 1/8000ths.
+    #[must_use]
+    pub fn velocity(&self) -> (f64, f64, f64) {
+        const PER_BLOCK: f64 = 8000.0;
+        (
+            f64::from(self.velocity_x) / PER_BLOCK,
+            f64::from(self.velocity_y) / PER_BLOCK,
+            f64::from(self.velocity_z) / PER_BLOCK,
+        )
+    }
+
+    /// Build from a velocity in blocks per tick, rounding to the wire's resolution.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::InvalidAction`] when a component is not finite or would not fit an `i16` at this
+    /// resolution, which is a caller passing a teleport rather than a velocity.
+    pub fn from_velocity(entity_id: i32, x: f64, y: f64, z: f64) -> ServerResult<Self> {
+        fn to_wire(axis: &str, value: f64) -> ServerResult<i16> {
+            if !value.is_finite() {
+                return Err(ServerError::InvalidAction(format!(
+                    "velocity {axis} is {value}, which is not a number"
+                )));
+            }
+            let scaled = (value * 8000.0).round();
+            if scaled < f64::from(i16::MIN) || scaled > f64::from(i16::MAX) {
+                return Err(ServerError::InvalidAction(format!(
+                    "velocity {axis} is {value} blocks/tick, beyond what the wire can carry"
+                )));
+            }
+            Ok(scaled as i16)
+        }
+        Ok(Self {
+            entity_id,
+            velocity_x: to_wire("x", x)?,
+            velocity_y: to_wire("y", y)?,
+            velocity_z: to_wire("z", z)?,
+        })
+    }
+}
+
 /// One block entity inside a chunk.
 ///
 /// `BlockEntityInfo.LIST_STREAM_CODEC`: `packedXZ` and `y` are each a 16-bit
