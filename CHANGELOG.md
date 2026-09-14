@@ -3246,6 +3246,43 @@ measures before it writes rather than after.
 longer an open question; the shapes are the three above.
 
 
+### P10-08 (parts 5 and 6) — the three move codecs, and the assertion that assumed instead of looking
+
+**The layouts were measured before they were written.** The capture holds **11,713** bodies for these three ids,
+and every length is one of two values differing by **exactly one byte** -- the `VarInt` entity id gaining a byte
+past 127:
+
+```text
+53  move_entity_pos      8 (2499) / 9 (2994)      1 + 6 + 1
+54  move_entity_pos_rot 10 (4249) / 11 (1774)     1 + 6 + 2 + 1
+56  move_entity_rot      4 (189) / 5 (8)          1 + 2 + 1
+```
+
+**The widths account for every byte of every sample**, and the pair of lengths is explained rather than tolerated:
+`16` is id 22 and `9b 03` is id 411 -- **and 411 is one of the item entities the metadata cross-reference found in
+part 1**, so the same capture confirms the same entity from two directions.
+
+`MoveEntityPos`, `MoveEntityPosRot` and `MoveEntityRot` are in `play.rs`, and their three ids are checked against
+the jar-extracted table by `packet_ids.rs` without a line written for the purpose.
+
+### And the golden test was withdrawn, then restored with its assertions read
+
+The first version asserted that the ground flag was set. **All three samples end in `00`.** That is a value assumed
+rather than looked at, in a file whose whole purpose is to look -- and two attempts to correct the single line
+failed, one on PowerShell's backtick handling and one on an anchor `cargo fmt` had reflowed, so the file was
+**withdrawn rather than left failing the suite**.
+
+It is back, and **every expectation carries its arithmetic**:
+
+```text
+0x16 = 22     0xffea = -22     0x02af = 687     0xfe67 = -409     0x45 = 69     0x00 = not on the ground
+```
+
+**And the big-endian reading is cited to the place it was got wrong before** -- the entity-motion codec, where a
+hand-computed expectation was little-endian and the decoder was right. A test that records where its own kind of
+mistake has happened is worth more than one that only holds a value.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
