@@ -2377,6 +2377,63 @@ impl Packet for DisguisedChat {
     }
 }
 
+/// `minecraft:block_entity_data` — the contents of a block entity.
+///
+/// Sent when a block entity is placed and when its contents change, so a client can render a chest's items or a
+/// sign's text as soon as it exists rather than when the chunk is next re-sent.
+///
+/// # Shape, from two precedents rather than from a guess
+///
+/// `BlockUpdate` carries its position as a **packed `i64`** and reads it with `read_i64`; [`ChunkBlockEntity`]
+/// carries a **block entity type registry id** and a **network NBT payload**. This packet is those three fields,
+/// and the trait machinery is the same.
+///
+/// **The type id is a registry claim of the kind this phase has twice found wrong elsewhere.** A block entity
+/// type is a **built-in** registry compiled into the client jar, so its ids come from a jar extraction and not
+/// from the config payload.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlockEntityData {
+    /// Packed block position, as `BlockUpdate` carries it.
+    pub position: i64,
+    /// Block entity type registry id.
+    pub type_id: i32,
+    /// The block entity's payload, as network NBT.
+    pub data: Nbt,
+}
+
+impl Packet for BlockEntityData {
+    const ID: i32 = clientbound::play::BLOCK_ENTITY_DATA;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let position = reader.read_i64()?;
+        let type_id = reader.read_varint()?;
+        let mut rest = reader.take_remaining();
+        let data = Nbt::read_network(&mut rest)?;
+        if !rest.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "block_entity_data has {} trailing bytes",
+                rest.len()
+            )));
+        }
+        Ok(Self {
+            position,
+            type_id,
+            data,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_i64(self.position);
+        writer.write_varint(self.type_id);
+        let mut bytes = Vec::new();
+        self.data.write_network(&mut bytes)?;
+        writer.write_bytes(&bytes);
+        Ok(writer.finish())
+    }
+}
+
 /// Wire type id for [`MetadataValue::Byte`].
 pub const METADATA_TYPE_BYTE: i32 = 0;
 /// Wire type id for [`MetadataValue::VarInt`].

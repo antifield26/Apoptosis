@@ -231,6 +231,13 @@ pub mod clientbound {
         /// from the config payload — where `minecraft:entity_type` is a tag directory in `update_tags` rather
         /// than a registry. See P10-06.
         pub const ADD_ENTITY: i32 = 1;
+        /// `minecraft:block_entity_data` — the contents of a block entity, on placement and on
+        /// change.
+        ///
+        /// **The type id it carries is a built-in registry claim**: block entity types are compiled into the
+        /// client jar, so their ids come from a jar extraction and not from the config payload — see
+        /// P10-06 for why those two instruments are not interchangeable.
+        pub const BLOCK_ENTITY_DATA: i32 = 6;
         /// `minecraft:block_update` (single block change)
         pub const BLOCK_UPDATE: i32 = 8;
         /// `minecraft:chunk_batch_finished`
