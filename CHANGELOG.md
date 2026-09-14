@@ -1768,6 +1768,42 @@ two.** Every gate was green each time, because no gate reads a doc table and com
 it \u2014 which is the same reason the air-with-a-count invariant needed a test rather than a comment (KD-63), and why
 this review's two real fixes came with `registry_ids.rs` and a pinning test rather than a sentence.
 
+### KD-77 \u2014 a test that compares the prose with the code, verified by putting the defect back
+
+KD-76 changed a doc table and left the struct literal beneath it, and **every gate stayed green**, because no
+gate reads a doc and compares it with the code. `crates/container/tests/fuel_table_consistency.rs` is that check:
+
+* it parses the **Markdown table out of the doc comment** with `include_str!` and the **rows out of the code**, and
+  asserts the fuels and their evidence labels agree in order;
+* and it asserts no **table row** calls the coal block a derivation of nine coal.
+
+**Verified by perturbation**, which is the only way to know: setting `evidence: Evidence::Derived` back on the
+coal block row fails it with
+
+```text
+minecraft:coal_block: the doc says "verified" and the row says "derived".
+This is KD-76: the two are edited as one artifact and treated as two.
+```
+
+**A test written from the same belief would not have caught this**, which is why this one reads the source rather
+than holding a list \u2014 the same reason `registry_ids.rs` reads the registry the client is sent instead of a copy.
+Both are the shape of check this review concluded it needed: **the two artifacts compared with each other, rather
+than each compared with a belief.**
+
+### Three faults in the test before it worked, all of them mine
+
+| fault | what it looked like | |
+|---|---|---|
+| the parse ran into the second table | "the doc table has 15 rows and the code has 8" \u2014 `furnace.rs` documents a smelting table too, whose fourth column is an experience value | |
+| the forbidden phrase appears in the sentence forbidding it | the comment explaining KD-76 says the block "is not `derived (9 x coal)`", so a file-wide `contains` check fails **on the corrected code** \u2014 a self-inflicted false positive | |
+| the item name kept its closing backtick | `"minecraft:coal\`"` against `"minecraft:coal"`, from stripping the opening backtick and not the closing one | |
+
+**Two of the three are the same mistake in different clothes**: a check that looks right and tests the wrong
+thing. The first asserted a property of the whole file where the property belonged to a table; the second
+asserted a property of the whole file where it belonged to a row. **A check is only as good as its scope**, and
+this review has now made that mistake in the filter that found nothing (KD-59), in the guard that checked four
+gates of six (KD-68), in the sweep that reported done while leaving seven (KD-72), and twice here.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
