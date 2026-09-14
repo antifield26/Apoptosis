@@ -1804,6 +1804,41 @@ asserted a property of the whole file where it belonged to a row. **A check is o
 this review has now made that mistake in the filter that found nothing (KD-59), in the guard that checked four
 gates of six (KD-68), in the sweep that reported done while leaving seven (KD-72), and twice here.
 
+### KD-78 \u2014 `tag.rs` holds where I could measure it, and my instrument was wrong where I could not
+
+| claim | my measurement | |
+|---|---|---|
+| "Vanilla has **758** tags" | **758** | exact \u2014 a plain file count |
+| "vanilla alone has **17**" tag directories | 16 in the main pack | **unverified** |
+| "Vanilla's deepest is **4**" (`block/supports_crimson_fungus`) | 2, by my walk | **unverified** |
+| "**103** spurious ... splitting at the first left **46**" | 163 and 384 | **unverified** |
+
+**The one exact match is the one that needs no interpretation**: counting `data/minecraft/tags/**/*.json`. The
+three I could not reproduce all need a model of the format, and mine is wrong in a way I can name.
+
+`minecraft:block/supports_crimson_fungus` has one value, `#supports_warped_fungus`, and **a `#` reference is
+relative to the same registry** \u2014 the key is `minecraft:block/supports_warped_fungus`. I resolved it as
+`minecraft:supports_warped_fungus`, which does not exist, so **every relative reference in the pack counted as
+missing** and my depth walk never followed one. That is the shape of the 384-against-46 gap exactly.
+
+And 16 directories against a claimed 17 is **the same scope question the loot tables raised**:
+`data/minecraft/datapacks/trade_rebalance/` carries a second copy of some registries, and "vanilla" may or may not
+include it. KD-75 measured 1 331 where the comment's 1 326 was right, for that reason.
+
+### The rule this adds
+
+**A count reproducible without understanding the format is evidence. A count that needs a model of the format is
+evidence only once the model is right.** The four files on this line have now produced:
+
+* `recipe.rs` \u2014 one claim, **wrong**, and the measurement needed no model (the jar states `cookingtime` as a field);
+* `advancement.rs` \u2014 eight claims, **all exact**, the hardest needing a parent-chain walk that was right on the third attempt;
+* `loot.rs` \u2014 three exact, three unverified, separated by a built-in data pack;
+* `tag.rs` \u2014 one exact, three unverified, separated by a format rule I had not modelled.
+
+**Three of the four hold up, and the one that does not is the one where the number was never measured at all.**
+That is the distinction this line exists to draw, and it is worth more than another sweep: **"unverified by me"
+and "wrong" are different findings**, and collapsing them is the error that produced KD-70.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
