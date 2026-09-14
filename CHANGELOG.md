@@ -3135,6 +3135,34 @@ through a table that was itself checked against the jar**.
 **That closes P10-07's question for the type P10-08 needs**: a dropped stack is set_entity_data, **index 8**,
 **serializer 7**, and its payload is count-then-item-id-then-components.
 
+### P10-08 (part 1) — the item stack's metadata value, byte-identical to the capture
+
+`MetadataValue` gains `ItemStack { count, item_id }`, with `METADATA_TYPE_ITEM_STACK = 7`, an encoder and a
+decoder. The payload came off the wire rather than from the serializer table alone:
+
+```text
+07 | 83 07 | 00 | 00
+count  item  added=0  removed=0
+```
+
+**Two fields, cross-verified twice over.** The injected commands were `{id:"minecraft:stone",count:3}` and
+`{id:"minecraft:diamond",count:7}`; the captured stacks read **count 3, item 1** and **count 7, item 899**; and
+`items.tsv` -- the table verified row for row against `ItemProbe` -- gives item 1 as `minecraft:stone` and item 899
+as `minecraft:diamond`. **The commands, the captured bytes and the registry table all agree**, and none of the
+three was derived from another.
+
+**And the encoder is byte-identical to the server**, unlike `disguised_chat`'s: the component patch is written as
+the two zeroes the capture carries, so `decode` followed by `encode` reproduces a real server's bytes exactly. The
+golden test asserts that, and it is the stronger of the two kinds this phase has produced.
+
+**Components are declared unmodelled, and the decoder refuses rather than discards.** A stack that carries
+components would be sent as though it carried none -- **a different item than the caller asked for** -- so a
+non-empty patch is an error with the reason in it, and a test asserts that `03 01 01 00` is refused.
+
+**Two plain fields rather than `mc_entity::ItemStack`**: the protocol crate is the lower layer and does not depend
+on the entity model, and giving it one would invert the boundary for the sake of a two-field struct.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
