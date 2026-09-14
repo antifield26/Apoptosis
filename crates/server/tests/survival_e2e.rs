@@ -661,3 +661,45 @@ async fn breaking_a_block_sends_a_light_update() {
         "breaking a block must relight its chunk and tell the client; got {ids:?}"
     );
 }
+
+/// A player's chat is relayed as `disguised_chat`, and not as the placeholder's `system_chat`.
+///
+/// **The second assertion is the one with a defect behind it.** Until P10-10 the handler answered the sender with
+/// "Chat relay is not implemented yet." inside a `SystemChat`, and a capture of a real 26.1.2 server established
+/// that a `say` produces `disguised_chat` and **zero** `system_chat`. So a message that arrives as `system_chat` is
+/// the placeholder still being sent, and this fails on it.
+///
+/// **What this does not assert, and why**: that *every* client received it. `Harness::new` builds its own `Game`,
+/// so two harnesses are two servers and a broadcast inside one is invisible to the other; the property needs two
+/// connections in one game, which the harness cannot yet express.
+#[test]
+fn a_players_chat_is_relayed_as_disguised_chat() {
+    let mut harness = Harness::new("p10-chat-relay");
+    harness.build_floor();
+    let mut out = harness.join("Alice");
+    // Clear the join burst so the assertions below are about the chat and nothing else.
+    let joined = Harness::drain_ids(&mut out);
+    assert!(
+        joined.contains(&clientbound::play::LEVEL_CHUNK_WITH_LIGHT),
+        "the join must have streamed terrain, or this test is running before there is a world to talk in"
+    );
+
+    harness.intent(PlayIntent::Chat {
+        message: "hello from Alice".to_owned(),
+        timestamp_millis: 0,
+        salt: 0,
+        signed: false,
+        last_seen_count: 0,
+    });
+
+    let ids = Harness::drain_ids(&mut out);
+    assert!(
+        ids.contains(&clientbound::play::DISGUISED_CHAT),
+        "a player's chat must be relayed as disguised_chat: got {ids:?}"
+    );
+    assert!(
+        !ids.contains(&clientbound::play::SYSTEM_CHAT),
+        "system_chat is the placeholder's packet, and a real server answers a say with disguised_chat instead: \
+         got {ids:?}"
+    );
+}
