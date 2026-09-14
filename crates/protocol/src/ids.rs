@@ -283,6 +283,12 @@ pub mod clientbound {
         pub const SET_DEFAULT_SPAWN_POSITION: i32 = 97;
         /// `minecraft:set_entity_data` (metadata, e.g. health/air)
         pub const SET_ENTITY_DATA: i32 = 99;
+        /// `minecraft:move_entity_pos` — a relative move, deltas only.
+        pub const MOVE_ENTITY_POS: i32 = 53;
+        /// `minecraft:move_entity_pos_rot` — a relative move with rotation.
+        pub const MOVE_ENTITY_POS_ROT: i32 = 54;
+        /// `minecraft:move_entity_rot` — rotation only.
+        pub const MOVE_ENTITY_ROT: i32 = 56;
         /// `minecraft:set_entity_motion` — set an entity's velocity.
         pub const SET_ENTITY_MOTION: i32 = 101;
         /// `minecraft:set_experience`

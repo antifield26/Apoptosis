@@ -2434,6 +2434,162 @@ impl Packet for BlockEntityData {
     }
 }
 
+/// The three relative-move packets, whose layouts a capture settled.
+///
+/// A real 26.1.2 server sent **11,713** bodies for these three ids and every one is a length the field widths
+/// imply, with the two values per packet differing by exactly the one byte a `VarInt` id gains past 127:
+///
+/// ```text
+/// 53  move_entity_pos      id, dx, dy, dz (i16), on_ground                 = 8 / 9
+/// 54  move_entity_pos_rot  id, dx, dy, dz (i16), yaw, pitch (i8), on_ground = 10 / 11
+/// 56  move_entity_rot      id, yaw, pitch (i8), on_ground                  = 4 / 5
+/// ```
+///
+/// **Deltas, not positions**: vanilla sends these for small movements and `teleport_entity` for large ones, so the
+/// units are 1/4096 of a block per axis and the caller decides which packet a movement deserves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MoveEntityPos {
+    /// Entity id.
+    pub entity_id: i32,
+    /// X delta, in 1/4096 of a block.
+    pub dx: i16,
+    /// Y delta, in 1/4096 of a block.
+    pub dy: i16,
+    /// Z delta, in 1/4096 of a block.
+    pub dz: i16,
+    /// Whether the entity is resting on solid ground.
+    pub on_ground: bool,
+}
+
+/// A relative move with rotation; see [`MoveEntityPos`] for the layout's provenance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MoveEntityPosRot {
+    /// Entity id.
+    pub entity_id: i32,
+    /// X delta, in 1/4096 of a block.
+    pub dx: i16,
+    /// Y delta, in 1/4096 of a block.
+    pub dy: i16,
+    /// Z delta, in 1/4096 of a block.
+    pub dz: i16,
+    /// Yaw, in 1/256 of a degree.
+    pub yaw: i8,
+    /// Pitch, in 1/256 of a degree.
+    pub pitch: i8,
+    /// Whether the entity is resting on solid ground.
+    pub on_ground: bool,
+}
+
+/// Rotation only; see [`MoveEntityPos`] for the layout's provenance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MoveEntityRot {
+    /// Entity id.
+    pub entity_id: i32,
+    /// Yaw, in 1/256 of a degree.
+    pub yaw: i8,
+    /// Pitch, in 1/256 of a degree.
+    pub pitch: i8,
+    /// Whether the entity is resting on solid ground.
+    pub on_ground: bool,
+}
+
+impl Packet for MoveEntityPos {
+    const ID: i32 = clientbound::play::MOVE_ENTITY_POS;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let packet = Self {
+            entity_id: reader.read_varint()?,
+            dx: reader.read_i16()?,
+            dy: reader.read_i16()?,
+            dz: reader.read_i16()?,
+            on_ground: reader.read_bool()?,
+        };
+        require_exhausted(&reader, "move_entity_pos")?;
+        Ok(packet)
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.entity_id);
+        writer.write_i16(self.dx);
+        writer.write_i16(self.dy);
+        writer.write_i16(self.dz);
+        writer.write_bool(self.on_ground);
+        Ok(writer.finish())
+    }
+}
+
+impl Packet for MoveEntityPosRot {
+    const ID: i32 = clientbound::play::MOVE_ENTITY_POS_ROT;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let packet = Self {
+            entity_id: reader.read_varint()?,
+            dx: reader.read_i16()?,
+            dy: reader.read_i16()?,
+            dz: reader.read_i16()?,
+            yaw: reader.read_i8()?,
+            pitch: reader.read_i8()?,
+            on_ground: reader.read_bool()?,
+        };
+        require_exhausted(&reader, "move_entity_pos_rot")?;
+        Ok(packet)
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.entity_id);
+        writer.write_i16(self.dx);
+        writer.write_i16(self.dy);
+        writer.write_i16(self.dz);
+        writer.write_i8(self.yaw);
+        writer.write_i8(self.pitch);
+        writer.write_bool(self.on_ground);
+        Ok(writer.finish())
+    }
+}
+
+impl Packet for MoveEntityRot {
+    const ID: i32 = clientbound::play::MOVE_ENTITY_ROT;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let packet = Self {
+            entity_id: reader.read_varint()?,
+            yaw: reader.read_i8()?,
+            pitch: reader.read_i8()?,
+            on_ground: reader.read_bool()?,
+        };
+        require_exhausted(&reader, "move_entity_rot")?;
+        Ok(packet)
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.entity_id);
+        writer.write_i8(self.yaw);
+        writer.write_i8(self.pitch);
+        writer.write_bool(self.on_ground);
+        Ok(writer.finish())
+    }
+}
+
+/// Refuse a body with bytes left over, naming the packet.
+///
+/// Shared by the three above because a decoder that ignores a tail would accept a longer packet as a shorter one
+/// -- which is how a field a future version added goes missing without anything reporting it.
+fn require_exhausted(reader: &PacketReader<'_>, packet: &str) -> ServerResult<()> {
+    if reader.is_empty() {
+        return Ok(());
+    }
+    Err(ServerError::Protocol(format!(
+        "{packet} has {} trailing bytes",
+        reader.remaining()
+    )))
+}
+
 /// Wire type id for [`MetadataValue::Byte`].
 pub const METADATA_TYPE_BYTE: i32 = 0;
 /// Wire type id for [`MetadataValue::VarInt`].
