@@ -3496,6 +3496,35 @@ to call.**
 threshold exists yet**, which is why this is a round of work and not a line.
 
 
+### P10-08 (part 8) -- where the signal has to go, and a correction to the correction
+
+The previous entry said the call site was "a round of work rather than a line". Reading the site says something
+more useful than either: **the position update and the broadcast live a phase apart.**
+
+```text
+1206:  TickPhase::Entities => {
+1356:      {
+1357:          let Some(entity) = self.entities.get_mut(id) else {
+1358:              return false;
+1359:          };
+1360:          entity.position = to_entity(applied);
+```
+
+**Line 1360 is inside a per-entity helper that returns `bool`** -- the movement and collision solver for one
+entity -- so it has no `report` and nothing to broadcast with, **and the `Entities` phase that calls it is where the
+entity list is walked.** A patch at 1360 would be a patch in the wrong place, and the first correction ("it is one
+assignment") was as hasty as the estimate it corrected.
+
+**So the shape is neither**: capture each entity's position **before** the phase runs, compare **after**, and emit
+for the ones that moved. That is a diff across a phase boundary, which is **why the previous entry was right that
+the diff does not exist yet** and **wrong about how much stands between here and it** -- the positions are in one
+place, the loop in another, and the work is to hold the first across the second.
+
+**And the two sizes are worth separating, because the phase has now confused them twice.** A small change in the
+right place and a large change in the wrong one look identical from a distance, and the difference only appears
+when someone reads the twenty lines around the anchor.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
