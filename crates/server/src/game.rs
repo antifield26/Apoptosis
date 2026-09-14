@@ -437,10 +437,16 @@ const ENTITY_GRAVITY: f64 = 0.04;
 /// `crates/server/tests/registry_ids.rs`.
 pub const PLAINS_BIOME_ID: u32 = 40;
 
-/// The `chat_type` registry id a plain message uses.
+/// The `chat_type` **wire** value a plain message uses: **0**, proven by a real
+/// client (the acceptance session rendered the welcome on screen with this
+/// value). An open question is recorded beside it: a vanilla server's console
+/// `say` went out as **5**, while the alphabetical `chat_type` registry both
+/// servers send puts `minecraft:chat` first -- so vanilla's id-for-name mapping
+/// does not match a plain positional read of the payload, and nobody has
+/// explained the difference yet. Our 0 is what the real client accepted.
 ///
 /// **Resolved from the payload this server sends**, because `minecraft:chat_type` is one of the registries in it
-/// -- `game.rs` describes the registry order as "ending at `minecraft:chat_type`". So a jar extraction would be the
+/// -- the registry order is "ending at `minecraft:chat_type`". So a jar extraction would be the
 /// wrong instrument here: **the rule is that a number sent to a client is a claim about a registry the client
 /// owns, and which instrument settles it depends on who owns the registry**, not on the kind of number it is.
 ///

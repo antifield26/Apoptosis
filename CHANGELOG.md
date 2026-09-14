@@ -3482,6 +3482,30 @@ What the finding is worth beyond the fix: **the divergence had been written down
 other assertion in the repo pinned the shape our own encoder produced -- the client was the only instrument
 that read the wire as it must be read.** The acceptance method found in one session what a fully green
 matrix could not, which is exactly why real-client acceptance is the phase's exit gate.
+### Acceptance round -- the owner played, and the report maps the boundary
+
+The owner played on the live server (visual-check session, real client, fresh world). Results, mapped to
+the plan:
+
+* **Colours correct** (grass green, water blue) -- the biome-id fix (KD-65) confirmed by eyes.
+* **Chat works** -- a player message reached the screen; the relay and the bare-string component fix held
+  under the real client. One open question rides on this: a vanilla server's console `say` went out with
+  `chat_type` **5** against a registry whose order matches ours (chat first), and nobody has explained
+  vanilla's id-for-name mapping yet -- our 0 is what the real client accepted and rendered.
+* **Partial dead-black surface patches** -- an open P10-04/05 finding: some chunks' surface renders
+  unlit. The in-process reproduction (light_shaft_repro) proves the engine recomputes a dug shaft to
+  sky-lit 15 and the section carries data, so the suspect is the mask/array wire encoding or the
+  initial-stream border case; a vanilla `level_chunk_with_light` capture for comparison sits in
+  `target/vanilla-capture/bodies-lit/`. Open, with evidence collected.
+* **Survival digging has no progress animation and no drops** -- the server breaks the block on the first
+  dig packet (there is no mining-time model, so the client never shows cracks) and **drops are P11-04**
+  (loot tables are loaded but not yet wired to breaks). Both are the designed P11 boundary, now confirmed
+  by a real client rather than by the matrix alone.
+* **Missing systems the owner listed** (water physics, player damage, visible entities/structures) --
+  exactly the P11+ roadmap: spawning/drops/combat in P11, containers in P12, redstone in P13.
+
+The acceptance also caught the two real-client decode bugs fixed earlier in this round (the bare-string
+component form and the 1-based chat_type wire id) -- both found only because a real client read the wire.
 ### P10-09 (cross-audit round) -- the trigger condition was a knowledge gap, and the gap is closed
 
 Three sessions had captured **zero** `block_entity_data` packets after placing and filling a chest at the

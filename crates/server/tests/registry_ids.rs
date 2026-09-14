@@ -110,12 +110,16 @@ fn the_dimension_type_id_this_server_sends_is_the_overworld() {
     );
 }
 
-/// The chat type the six message sites send is the one the payload names `minecraft:chat`.
+/// The chat type the message sites send is the one the payload names `minecraft:chat`.
 ///
 /// **The same shape as the biome-id check above**, and for the same reason: `chat_type` decides how a client
-/// decorates a line, the server sent a literal `0` for it, and nothing anywhere could contradict that. It is a
-/// **datapack registry** — one this server sends — so the instrument is the payload rather than the jar, and a
-/// capture of a real server sending `5` says only that the number is not free.
+/// decorates a line, and it is a **datapack registry** — one this server sends — so the instrument is the
+/// payload rather than the jar.
+///
+/// **An open question rides on this row**: a real 26.1.2 client rendered our welcome with `chat_type` **0**
+/// (the acceptance session), while a vanilla server's console `say` went out as **5** against a registry whose
+/// payload order is identical to ours (chat first, say fifth). A positional read cannot explain vanilla's 5;
+/// the mapping between vanilla's chat types and their wire ids is unresolved and owned by nobody yet.
 #[test]
 fn the_chat_type_this_server_sends_is_the_one_named_chat() {
     let names = identifiers_after(&payload(), "minecraft:chat_type");
@@ -127,11 +131,17 @@ fn the_chat_type_this_server_sends_is_the_one_named_chat() {
         .iter()
         .position(|name| name == "minecraft:chat")
         .unwrap_or_else(|| panic!("no `minecraft:chat` among the chat types: {names:?}"));
-    // A checked conversion rather than s: clippy is right that the cast can truncate, and refusing beats
+    // A checked conversion rather than s: clippy is right that the cast can truncate, and refusing beats
     // wrapping silently. It cannot fail for a registry this size, which is the point of saying so here.
     let at = i32::try_from(at).expect("a registry index fits in an i32");
+    // The value the real client accepted and rendered (acceptance session):
+    // payload index 0, wire 0.
     assert_eq!(
         at, CHAT_TYPE_CHAT,
-        "the payload gives `minecraft:chat` the id {at}, and the server sends {CHAT_TYPE_CHAT}. Registered: {names:?}"
+        "the payload gives `minecraft:chat` the index {at}, and the server sends {CHAT_TYPE_CHAT}. Registered: {names:?}"
+    );
+    assert_eq!(
+        at, 0,
+        "the resolution is not vacuous: `minecraft:chat` must sit at payload index 0 to match the wire value"
     );
 }
