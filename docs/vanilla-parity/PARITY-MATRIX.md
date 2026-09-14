@@ -239,6 +239,41 @@ registry. **Those are not interchangeable, and which one applies depends on who 
 and are not: searching the config payload for `minecraft:entity_type` finds a hit, but it is a **tag** directory in
 the `update_tags` packet, and an assertion built on it would have compared our numbers with nothing at all.
 
+## Phase 10 review (2026-09-14)
+
+**Client compatibility and rendering.** The phase's own rule, established three times over and worth stating once
+here: **a number sent to a client is a claim about a registry the client owns, and which instrument settles it
+depends on who owns the registry.**
+
+| registry | who owns it | the instrument that works | where it is used |
+|---|---|---|---|
+| **datapack** — biome, dimension type | **we send it**, verbatim, in `registry_data` | read it back out of the payload we send | `crates/server/tests/registry_ids.rs` |
+| **built-in** — block, item, entity type, block entity type, menu | **compiled into the client jar** | jar extraction, with the extraction named in an assertion | `blocks.tsv`, `items.tsv`, `entity_types.tsv` |
+
+| Item | Requirement | Status | Evidence |
+|---|---|---|---|
+| Entity type ids (P10-06) | the id `add_entity` carries is the one the client's registry gives | **full** | `EntityTypeProbe` -> `entity_types.tsv`, **157 rows**, `minecraft:item` = **71**, `player` = **155**, id 0 = `acacia_boat`. **Alphabetical, like the biome registry** \— the assumption "the first entry is the ordinary one" is wrong in both |
+| `add_entity` / `remove_entities` / `set_entity_motion` | codecs, checked against real bytes | **full** | **55 / 12 / 2942** captured bodies; every one is a length the field widths imply. `crates/protocol/tests/{add_entity,remove_entities,set_entity_motion}_golden.rs` |
+| Entity identity | stable across a replay | **full** | `entity_uuid(seed, id)`, derived rather than random, because a UUID per spawn breaks "same inputs, same state". Five tests, one of which varies an argument alone \— a derivation that ignored the seed passes the other four |
+| A drop is visible (P10-06, P10-08) | spawn, contents, removal | **full** | `add_entity` then `set_entity_data` **index 8, serializer 7**; `a_dropped_item_is_announced_with_the_item_type_id` asserts exactly one `ADD_ENTITY`; the item-stack value is **byte-identical** to captured stacks, whose counts and ids match the commands that made them and `items.tsv` besides |
+| Relative movement (P10-08) | the three move packets | **codecs full, unwired** | layout measured across **11,713** bodies; `crates/protocol/tests/move_entity_golden.rs`. **No call site sends one yet** |
+| Chat relay (P10-10) | a player's message reaches everyone, attributed | **partial** | `DisguisedChat` byte-identical to a captured payload (three independent sessions), broadcast wired, `a_players_chat_is_relayed_as_disguised_chat`. **Not asserted: that every client received it** \— the harness joins one connection, and the test says so |
+| System and feedback routing (P10-10) | system messages to the acting client | **gap** | Six `SystemChat` sites still answer everything with `system_chat`, which a capture shows is **not** what a 26.1.2 server answers a `say` with |
+| `chat_type` (P10-10) | the decoration registry id | **unverified** | Hard-coded `0` with the reason in the code: the check is outstanding, and it is the same class of claim this phase found wrong twice |
+| Block entities to the client (P10-09) | contents on placement and change | **packet only** | The constant and codec exist (id **6**, `packet_ids.rs`). **Its trigger condition is unresolved** \— three sessions, and a chest placed *at the player* and *filled* still produced none |
+| Per-type metadata tables (P10-07) | the index tables the client uses | **gap** | `MetadataProbe` walks the classes and **refuses its own output**: 8 distinct indices across 157 types is one inherited set repeated. The fully extracted table needs a probe that builds an entity, which is not written |
+| Real-client acceptance (P10-11) | a real client in a real world | **exercised \— rendering unverified** | A real 26.1.2 client joined through the rig, uploaded **8 chunk-section buffers**, and its log carried only the three offline-auth errors. **What it drew is not verified** \— see below |
+| `client_tick_end` (P10-11) | a client's per-tick packet | **named, not modelled** | A real client sends serverbound play **13** every tick; this server called it `unmodelled` ~**14 times a second**. Found in one session's log and by nothing the suite runs, **because the suite drives our client, which sends what this server expects** |
+
+**What a real client said that no test could.** The `client_tick_end` line is the phase's clearest demonstration of
+its own thesis from the other side: every other finding here came from comparing our numbers with the client's
+registry, and this one came from **watching what a client actually sends** \— which is a different question from
+what it accepts. **The suite cannot ask it**, because its client is ours.
+
+**Left open, stated rather than implied**: the metadata extraction for the types this server does not yet send;
+`block_entity_data`'s trigger; the move call site; system-message routing and `chat_type`; and **a real client's
+rendering**, which is the one item on this list that no amount of server-side evidence can settle.
+
 ## Removed rows (governance, 2026-09-12)
 
 Five rows from the pre-governance matrix were deleted rather than updated:
