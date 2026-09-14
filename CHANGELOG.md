@@ -2948,6 +2948,39 @@ than left for a reader to infer from a single-connection harness -- **an asserti
 suggests is the thing this phase keeps finding**, so this one states its span.
 
 
+### P10-09 (part 1) — `block_entity_data`, and the capture gap it shares with P10-07
+
+`docs/protocol/packet-ids-775.tsv`, machine-extracted from the official jar, gives the id:
+
+```text
+game clientbound 6 block_entity_data
+```
+
+and `ids.rs` had no constant for it, so nothing in this server could send one. It has one now, and
+`crates/protocol/tests/packet_ids.rs` -- which checks **every** constant in that module against the table --
+verifies it without a line written for the purpose.
+
+**The packet's shape came from two precedents already in the tree rather than from a guess.** `BlockUpdate`
+carries its position as a **packed `i64`** and reads it with `read_i64`; `ChunkBlockEntity` carries a **block
+entity type registry id** and a **network NBT payload**. `BlockEntityData` is those three fields, and the same
+trait machinery frames it.
+
+**And its type id is the third registry claim in this phase**, after the biome id and the entity type id. A block
+entity type is a **built-in** registry compiled into the client jar, so its ids come from a jar extraction and not
+from the config payload -- the distinction P10-06 established, applied to a third registry.
+
+### The gap this shares with P10-07
+
+**There are no `block_entity_data` bodies in the capture** -- zero files for clientbound play 6 -- and there are no
+`minecraft:item` metadata bodies either. So neither packet can be checked against real bytes today, and both
+checks are waiting on **one** thing: a capture of a session in which a block entity existed and an item was
+dropped.
+
+**The mechanism for producing it is already known and does not need gameplay**: the vanilla server reads console
+commands from stdin, so `setblock` and `summon` written to that pipe while a client is connected are enough. One
+session, one line each, and both gaps close together.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
