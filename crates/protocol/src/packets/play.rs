@@ -2441,6 +2441,12 @@ pub const METADATA_TYPE_VARINT: i32 = 1;
 /// Wire type id for [`MetadataValue::Float`].
 pub const METADATA_TYPE_FLOAT: i32 = 3;
 
+/// Wire type id for [`MetadataValue::ItemStack`].
+///
+/// Read off the wire rather than from the serializer table alone: a captured `set_entity_data` for a dropped item
+/// carries `08 07` -- index 8, this type -- followed by the stack.
+pub const METADATA_TYPE_ITEM_STACK: i32 = 7;
+
 /// Terminator that ends a metadata entry list.
 pub const METADATA_TERMINATOR: u8 = 0xFF;
 
@@ -2461,6 +2467,18 @@ pub enum MetadataValue {
     VarInt(i32),
     /// Type id [`METADATA_TYPE_FLOAT`].
     Float(f32),
+    /// Type id [`METADATA_TYPE_ITEM_STACK`]: an item and a count.
+    ///
+    /// **Data components are not modelled.** The wire carries a patch of added and removed components after the
+    /// item id, and a captured stack with none sends `00 00`; this variant writes that empty patch, so a stack
+    /// that carries components would be sent as though it carried none. Named here rather than discovered by a
+    /// caller, and the reason the fields are the two this build can be honest about.
+    ItemStack {
+        /// How many items the stack holds.
+        count: i32,
+        /// Item registry id.
+        item_id: i32,
+    },
 }
 
 impl MetadataValue {
@@ -2471,6 +2489,7 @@ impl MetadataValue {
             Self::Byte(_) => METADATA_TYPE_BYTE,
             Self::VarInt(_) => METADATA_TYPE_VARINT,
             Self::Float(_) => METADATA_TYPE_FLOAT,
+            Self::ItemStack { .. } => METADATA_TYPE_ITEM_STACK,
         }
     }
 
@@ -2480,6 +2499,14 @@ impl MetadataValue {
             Self::Byte(value) => writer.write_u8(value),
             Self::VarInt(value) => writer.write_varint(value),
             Self::Float(value) => writer.write_f32(value),
+            Self::ItemStack { count, item_id } => {
+                // The component patch: nothing added, nothing removed. A captured stack with no components sends
+                // exactly these two bytes, and a dropped item is a stack with no components.
+                writer.write_varint(count);
+                writer.write_varint(item_id);
+                writer.write_varint(0);
+                writer.write_varint(0);
+            }
         }
     }
 
@@ -2493,6 +2520,21 @@ impl MetadataValue {
             METADATA_TYPE_BYTE => Ok(Self::Byte(reader.read_u8()?)),
             METADATA_TYPE_VARINT => Ok(Self::VarInt(reader.read_varint()?)),
             METADATA_TYPE_FLOAT => Ok(Self::Float(reader.read_f32()?)),
+            METADATA_TYPE_ITEM_STACK => {
+                let count = reader.read_varint()?;
+                let item_id = reader.read_varint()?;
+                // The patch this build does not model. Refusing a non-empty one is the alternative to silently
+                // discarding it, and nothing in this capture carries one.
+                let added = reader.read_varint()?;
+                let removed = reader.read_varint()?;
+                if added != 0 || removed != 0 {
+                    return Err(ServerError::Protocol(format!(
+                        "item stack carries {added} added and {removed} removed data components, which this build \
+ does not model"
+                    )));
+                }
+                Ok(Self::ItemStack { count, item_id })
+            }
             other => Err(ServerError::Protocol(format!(
                 "unmodelled entity metadata type id {other}"
             ))),
