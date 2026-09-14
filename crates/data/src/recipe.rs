@@ -192,11 +192,16 @@ impl SmeltingKind {
 
     /// The default cooking time when a recipe omits `cookingtime`.
     ///
-    /// **From the jar's own data, verified by counting**: every `blasting` recipe
-    /// carries `cookingtime: 100`, every `smoking` and `campfire_cooking` recipe
-    /// carries `200`/`100` respectively. These defaults matter only for a pack that
-    /// omits the field, which vanilla never does — so they are recorded as
-    /// *not exercised by vanilla* rather than presented as verified.
+    /// **From the jar's own data, verified by counting**: every recipe in the jar carries an explicit
+    /// `cookingtime`, and it is `200` for `smelting` and **`100` for all three of `blasting`, `smoking` and
+    /// `campfire_cooking`**. Half the time, for the three fast methods, is the whole of the difference.
+    ///
+    /// The sentence here used to read "every `smoking` and `campfire_cooking` recipe carries `200`/`100`
+    /// respectively", which names 200 for smoking where the code and the jar both say 100 — a number in prose
+    /// that nothing compared with the constant beside it, which is KD-56's shape in one word.
+    ///
+    /// These defaults matter only for a pack that omits the field, which vanilla never does — so they are
+    /// recorded as *not exercised by vanilla* rather than presented as verified.
     #[must_use]
     pub const fn default_cooking_time(self) -> i32 {
         match self {

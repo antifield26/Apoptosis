@@ -1587,6 +1587,35 @@ writing it died on a quoting error and **the commit guard only reads the gates**
 and reports a whole \u2014 the same shape as KD-68 one round earlier, and not fixable by a boolean: a shell heredoc is
 not a place to write a document.
 
+### KD-70 \u2014 the standard this review has been arguing for, already in use, with one word wrong
+
+Searching for the KD-69 class \u2014 a name or doc about a numeric default \u2014 turns up eight functions. Two of them
+make numeric claims about vanilla, and one of those is the best-written comment this review has read:
+
+```rust
+/// **From the jar's own data, verified by counting**: every `blasting` recipe carries `cookingtime: 100` ...
+/// These defaults matter only for a pack that omits the field, which vanilla never does \u2014 so they are
+/// recorded as *not exercised by vanilla* rather than presented as verified.
+```
+
+**It says where the numbers came from, and it states its own limit.** That is precisely the evidence discipline
+KD-56 and KD-65 were missing, already in use here \u2014 which is worth recording, because four rounds of this review
+have been arguing for a standard the codebase already meets in places.
+
+**And one word of it is wrong.** The sentence read "every `smoking` and `campfire_cooking` recipe carries
+`200`/`100` respectively", which names **200 for smoking** where the constant and the jar both say **100**.
+Vanilla cooks blasting, smoking and campfire cooking in half the time it cooks smelting; the code is right and the
+sentence was not.
+
+**A number in prose that nothing compares with the code beside it** \u2014 KD-56's shape in one word, inside a comment
+that gets the hard part right. The fix is the sentence.
+
+**The other numeric claim checks out.** `ContainerKind::default_slots` gives 41 for a player (36 + 4 armour + 1
+offhand), 10 for crafting (a table's nine plus its result) and 3 for a furnace (input, fuel, output) \u2014 all three
+correct. Its doc does **not** say where they came from, which is the weaker standard next to the cooking-time
+comment, and it is a gap rather than a defect: the numbers are right and nothing depends on the reader trusting
+them.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
