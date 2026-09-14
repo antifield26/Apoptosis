@@ -108,9 +108,9 @@ pub const EXPERIENCE_PER_IRON_SMELT: f32 = 0.7;
 /// - **verified** â€?the value is stated directly in Mojang's own item data / the
 ///   `fuelValues`-equivalent table this build checked against, i.e. the figure is
 ///   the documented Vanilla one.
-/// - **derived** \u2014 arithmetic on a verified figure. **No row in this table uses it**: it is kept for the
+/// - **derived** — arithmetic on a verified figure. **No row in this table uses it**: it is kept for the
 ///   rows the P07-03 loader brings with their own item data. It used to be illustrated with "a coal block is
-///   nine coal", which is not arithmetic \u2014 nine coals are 14400 and a block is 16000, because a block
+///   nine coal", which is not arithmetic — nine coals are 14400 and a block is 16000, because a block
 ///   smelts 80 items where nine separate coals smelt 72. An example that is wrong teaches the category
 ///   wrongly, and this one would have been labelled `verified` by anyone who checked it.
 /// - **approximation** â€?a plausible figure this build chose; do not treat it as
