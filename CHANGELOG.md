@@ -3190,6 +3190,34 @@ at a brace it did not recount, costs more than the edit that reads first -- and 
 cheaper than finishing a broken one with the context gone.
 
 
+### P10-08 (part 3) — the wiring landed, and the brace count moved into the script
+
+A drop is now announced in **two packets**, as a capture shows a real server doing it: `add_entity` names the
+entity, then `set_entity_data` at **index 8** with serializer type 7 carries the item and its count. Before this,
+an item entity reached a client with no metadata at all -- one it draws as an empty-looking drop.
+
+**Three obstacles, all answered in one edit rather than one per attempt:**
+
+* `SetEntityData` needs its full path, as `AddEntity`, `DisguisedChat` and `BlockEntityData` each did;
+* `clippy::collapsible_if` wants a `let` chain, so the chain was written **first** rather than the nesting being
+  collapsed afterwards;
+* **and the braces were counted by the script that wrote them**:
+
+```text
+braces added: 3 open, 3 close
+balanced: True
+```
+
+**That last line is the round.** The previous attempt collapsed two `if`s into one and left both closing braces, so
+the file ended with an unmatched `}` and `game.rs` was reverted. **Counting in the producer is the same move as
+`MetadataProbe` refusing its own bad output**: the check belongs in the tool, not in a reader's head, and this
+session has now learned that twice in two different files.
+
+**And the existing drop test did not have to change.** It filters on `ADD_ENTITY`, so the additional
+`set_entity_data` passes through it unremarked -- **an assertion written narrowly enough to survive a change beside
+it**, which is the opposite of the assertions this phase has spent its time finding.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
