@@ -1592,6 +1592,28 @@ impl Game {
             if self.broadcast_chunk(chunk_of(position.x, position.z), &packet, report) > 0 {
                 report.entities_spawned += 1;
             }
+            // **The stack, as a second packet**, which is how a capture shows a real server doing it: a drop is
+            // announced by `add_entity` and then given its contents by `set_entity_data` at index 8 with
+            // serializer type 7. An item entity with no metadata is one a client draws as an empty-looking drop.
+            //
+            // The chain rather than nested `if`s: two conditions, one body, and `clippy::collapsible_if` is right
+            // that the flat form says it better.
+            if let mc_entity::EntityBody::Item(item) = &entity.body
+                && let Some(item_id) = item.item_id()
+            {
+                let contents = mc_protocol::packets::play::SetEntityData {
+                    entity_id: id.get(),
+                    entries: vec![(
+                        8,
+                        mc_protocol::packets::play::MetadataValue::ItemStack {
+                            count: item.count(),
+                            item_id,
+                        },
+                    )],
+                }
+                .to_raw()?;
+                self.broadcast_all(&contents, report);
+            }
         }
         Ok(())
     }
