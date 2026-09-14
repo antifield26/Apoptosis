@@ -1947,6 +1947,36 @@ number had never been measured at all.
 reading another document it had forgotten to create. Both failed loudly on their own anchor assertion rather than
 quietly writing nothing, which is the property that made them cheap to catch.
 
+### KD-82 \u2014 the `165` is recorded as unverified, because both of my instruments were broken
+
+`StackSizeTable::len` carries this doc:
+
+```rust
+/// Number of exception entries (always 165 for the 26.1.2 vanilla table).
+```
+
+and the module doc one level up states where the table comes from: **"every `stacksTo` call site in the game"**.
+
+**Two attempts to count it, both with a broken instrument.** A regular expression over the two constant arrays
+returned "not found" for both names; a PowerShell range extraction printed an empty start line and then counted
+**167 twice**, the same number for two different arrays, which is the signature of reading one range both times.
+
+**Neither number is evidence, and publishing either would be the KD-70 mistake** \u2014 reading a source, deciding
+the prose is wrong, and stating the result confidently.
+
+### The method that would settle it
+
+The module doc makes a **bytecode-level** claim, which is the kind `DefaultStateProbe` settled for
+`defaultBlockState` and `ItemProbe` for the item table. A probe that walks `Item.Properties` construction and
+counts `stacksTo(n)` calls with `n != 64` would give **the exception count** to compare against 165, and **the
+per-item limits** to compare against this table row for row.
+
+That second comparison is the one that matters, and it is the check this table has never had: `items.tsv` is
+trustworthy because `ItemProbe` reproduced all 1506 of its rows; the stack-size table is trusted because its doc
+says it came from the jar. **A doc saying where a number came from is not the same as the number having been
+checked**, which is the whole of what this review found on the jar-count line \u2014 and this is the last of the
+tables in this area without an independent source.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
