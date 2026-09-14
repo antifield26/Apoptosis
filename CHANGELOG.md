@@ -2927,6 +2927,27 @@ was not committed** -- that is precisely the vacuous test this phase exists to f
 by the hand that has spent thirty rounds looking for them.
 
 
+### P10-10 (part 9) — the relay test, and the property it deliberately does not assert
+
+```rust
+let ids = Harness::drain_ids(&mut out);
+assert!(ids.contains(&clientbound::play::DISGUISED_CHAT), ...);
+assert!(!ids.contains(&clientbound::play::SYSTEM_CHAT), ...);
+```
+
+**The second assertion is the one with a defect behind it.** Until part 7 the handler answered the sender with
+"Chat relay is not implemented yet." inside a `SystemChat`, and a capture of a real 26.1.2 server established that
+a `say` produces `disguised_chat` and **zero** `system_chat`. So a message arriving as `system_chat` is the
+placeholder still being sent, and this test fails on it -- **which is the minimum a regression test has to clear:
+it fails before the change and passes after.**
+
+**And the test says what it does not cover.** "Every client received it" is the property the task names, and it
+needs **two connections in one `Game`**; `Harness::new` builds its own, so two harnesses are two servers and a
+broadcast inside one is invisible to the other. That limit is written into the test's own documentation rather
+than left for a reader to infer from a single-connection harness -- **an assertion that covers less than its name
+suggests is the thing this phase keeps finding**, so this one states its span.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
