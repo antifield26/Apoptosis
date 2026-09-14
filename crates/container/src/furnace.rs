@@ -108,7 +108,11 @@ pub const EXPERIENCE_PER_IRON_SMELT: f32 = 0.7;
 /// - **verified** â€?the value is stated directly in Mojang's own item data / the
 ///   `fuelValues`-equivalent table this build checked against, i.e. the figure is
 ///   the documented Vanilla one.
-/// - **derived** â€?arithmetic on a verified figure (a coal block is nine coal).
+/// - **derived** \u2014 arithmetic on a verified figure. **No row in this table uses it**: it is kept for the
+///   rows the P07-03 loader brings with their own item data. It used to be illustrated with "a coal block is
+///   nine coal", which is not arithmetic \u2014 nine coals are 14400 and a block is 16000, because a block
+///   smelts 80 items where nine separate coals smelt 72. An example that is wrong teaches the category
+///   wrongly, and this one would have been labelled `verified` by anyone who checked it.
 /// - **approximation** â€?a plausible figure this build chose; do not treat it as
 ///   Vanilla.
 ///
@@ -165,12 +169,17 @@ impl Evidence {
 /// |---|---|---|---|
 /// | `minecraft:coal` | 1600 | 80 | verified |
 /// | `minecraft:charcoal` | 1600 | 80 | verified |
-/// | `minecraft:coal_block` | 16000 | 800 | derived (9 x coal) |
+/// | `minecraft:coal_block` | 16000 | 800 | verified |
 /// | `minecraft:blaze_rod` | 2400 | 120 | verified |
 /// | `minecraft:oak_planks` | 300 | 15 | verified |
 /// | `minecraft:stick` | 100 | 5 | verified |
 /// | `minecraft:lava_bucket` | 20000 | 1000 | verified |
 /// | `minecraft:dried_kelp_block` | 4000 | 200 | verified |
+///
+/// **A coal block is 16000 and is not `derived (9 x coal)`.** Nine coals are 14400; a block is 16000, because
+/// it smelts 80 items where nine separate coals smelt 72. The row carried the derivation instead of the
+/// measurement, which is a label claiming a multiplication that produces a different number: the shape of
+/// KD-70 and KD-73, in the one table whose whole purpose is to say where each number came from.
 ///
 /// The label is part of the **row** rather than a parallel table, so reordering or
 /// adding a row cannot silently attach the wrong evidence to a fuel — the hazard a
@@ -204,7 +213,7 @@ pub const FUEL_BURST_TICKS: &[FuelValue] = &[
     FuelValue {
         item: "minecraft:coal_block",
         ticks: 16000,
-        evidence: Evidence::Derived,
+        evidence: Evidence::Verified,
     },
     FuelValue {
         item: "minecraft:blaze_rod",

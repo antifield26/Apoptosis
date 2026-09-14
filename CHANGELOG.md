@@ -1725,6 +1725,49 @@ decided the prose was wrong, and made it confidently wrong.
 table total hold exactly at the scope the comment names, and three need a structural parse of the main pack before
 anything can be said about them.
 
+### KD-76 \u2014 the fuel table's best-designed column, and the three ways a doc and its code come apart
+
+`container/furnace.rs` is the best-designed artifact this review has read. Its fuel table carries **the evidence
+label inside the row**, and it says why:
+
+> The label is part of the **row** rather than a parallel table, so reordering or adding a row cannot silently
+> attach the wrong evidence to a fuel \u2014 the hazard a parallel `&[(&str, Evidence)]` would carry.
+
+That is the discipline this review has spent twenty rounds arguing for, already in use \u2014 and the thing that is
+wrong in it is a label:
+
+```text
+| `minecraft:coal_block` | 16000 | 800 | derived (9 x coal) |
+```
+
+**Nine coals are 14400. A coal block is 16000**, because it smelts 80 items where nine separate coals smelt 72,
+and the eleven-item gap is real Vanilla behaviour. The value is right and **the label claims a multiplication that
+produces a different number** \u2014 which matters more here than anywhere, because `Derived` is defined as a Vanilla
+figure this build is willing to assert, so a wrong label mis-states how much confidence the number is entitled to.
+The row now says `verified`, and the code's own `Evidence::Derived` was corrected with it.
+
+**`Derived`'s definition used the same wrong instance** \u2014 "a coal block is nine coal" was the reader's example of
+what the category means. An example that is wrong teaches the category wrongly, and this one would have been
+labelled `verified` by anyone who checked it. With the row corrected, **no row uses `Derived` at all**, which the
+definition now says rather than leaving a variant that exists for symmetry.
+
+### The three ways a doc and a doc's code come apart, all inside four rounds
+
+| | what was changed | what was left | result |
+|---|---|---|---|
+| **KD-70** | the prose, to match a constant | the constant | **confidently wrong prose** |
+| **KD-71** | the body (KD-56) | the doc describing the old body | a reader told to work around a fixed defect |
+| **KD-76** | the doc table | the struct literal under it | the two disagreeing |
+
+**And the third was mine, inside the fix for the first.** I changed the table's `derived (9 x coal)` to `verified`
+and left `evidence: Evidence::Derived` in the row it describes \u2014 a fresh doc-versus-code disagreement created by
+the commit that was correcting one.
+
+**The common shape is that the two are edited as though they were one artifact and treated as though they were
+two.** Every gate was green each time, because no gate reads a doc table and compares it with the literal beneath
+it \u2014 which is the same reason the air-with-a-count invariant needed a test rather than a comment (KD-63), and why
+this review's two real fixes came with `registry_ids.rs` and a pinning test rather than a sentence.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
