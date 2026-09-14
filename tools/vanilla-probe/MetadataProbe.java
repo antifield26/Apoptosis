@@ -9,6 +9,8 @@ import java.util.List;
 import net.minecraft.SharedConstants;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.syncher.EntityDataAccessor;
+import net.minecraft.network.syncher.EntityDataSerializer;
+import net.minecraft.network.syncher.EntityDataSerializers;
 import net.minecraft.server.Bootstrap;
 import net.minecraft.world.entity.EntityType;
 
@@ -78,6 +80,34 @@ public final class MetadataProbe {
         System.out.println("unreadable=" + skipped);
     }
 
+    /**
+     * The wire id and name of a serializer, e.g. {@code 3 (FLOAT)}.
+     *
+     * Found by **identity** against the named constants of {@code EntityDataSerializers}, whose declaration order
+     * is the wire order: the capture decodes {@code type 3} as a float and {@code type 0} as a byte, which is
+     * {@code FLOAT} and {@code BYTE}. Comparing objects rather than class names also survives two serializers
+     * sharing an implementation class, which is exactly what made the first version of this column useless.
+     */
+    private static String serializerId(EntityDataSerializer<?> serializer) {
+        int index = 0;
+        for (Field field : EntityDataSerializers.class.getDeclaredFields()) {
+            if (!Modifier.isStatic(field.getModifiers())
+                    || !EntityDataSerializer.class.isAssignableFrom(field.getType())) {
+                continue;
+            }
+            try {
+                field.setAccessible(true);
+                if (field.get(null) == serializer) {
+                    return index + " (" + field.getName() + ")";
+                }
+            } catch (Throwable ignored) {
+                // A field this cannot read is counted rather than skipped silently; see the caller.
+            }
+            index++;
+        }
+        return "UNKNOWN";
+    }
+
     /** Every static {@code EntityDataAccessor} in this class and its superclasses, as `index<TAB>serializer`. */
     private static int collect(Class<?> clazz, List<String> rows) throws Exception {
         int found = 0;
@@ -94,7 +124,7 @@ public final class MetadataProbe {
                 if (!(value instanceof EntityDataAccessor<?> accessor)) {
                     continue;
                 }
-                rows.add(accessor.id() + "\t" + accessor.serializer().getClass().getSimpleName());
+                rows.add(accessor.id() + "\t" + serializerId(accessor.serializer()));
                 found++;
             }
         }

@@ -2520,6 +2520,33 @@ and the capture is then what checks it: index 9 must come out a float and two di
 index 16, which is what made this task necessary.
 
 
+### P10-07 (part 3) — the serializer column, and it agrees with the capture
+
+`MetadataProbe` now writes the wire id and the name:
+
+```text
+minecraft:acacia_boat  0  0 (BYTE)
+                       1  1 (INT)
+                       2  6 (OPTIONAL_COMPONENT)
+                       3  10 (BOOLEAN)
+                       6  21 (POSE)
+types=157  slots=1256  unreadable=0
+```
+
+`EntityDataSerializers` holds the serializers as **named public static fields in id order**, so the column is
+found by **identity** against those constants rather than by asking an object for its class — which is what made
+the first version print `EntityDataSerializer$$Lambda/0x...`.
+
+**And the ids agree with the capture**: `type 3` decoded a float and `type 0` a byte in the 45 real
+`set_entity_data` bodies, and this table says `FLOAT` is 3 and `BYTE` is 0. **Two extractions from different
+directions meeting on the same numbers** is the shape of evidence this phase has been asking for, and it is the
+first time the metadata work has had it.
+
+**What is not yet checked** is the slot that made the task necessary: the capture shows **index 16** carrying a
+byte in one body and a VarInt in another, which is the claim that one slot means different things on different
+entity types. The table has to be asked that question directly, and the answer has to be that two types disagree.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
