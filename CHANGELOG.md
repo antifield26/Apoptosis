@@ -2031,6 +2031,40 @@ reach it, both recorded rather than guessed:
 table has ever had: its rows have never been compared with anything, and there is now something that says so in a
 run rather than in a comment.
 
+### KD-85 \u2014 the probe's boundary is now in the data, per row, and names the missing step
+
+```text
+0 minecraft:air     ERROR:NullPointerException:Components_not_bound_yet
+1 minecraft:stone   ERROR:NullPointerException:Components_not_bound_yet
+2 minecraft:granite ERROR:NullPointerException:Components_not_bound_yet
+```
+
+**The same condition as the first version's crash, now written per row.** My first `catch` kept only the
+exception's **class name**, which said `NullPointerException` and nothing a reader could act on; the second prints
+the **message**, and the message names the cause.
+
+**That is the difference between reporting a boundary and reporting a symptom** \u2014 the distinction this review
+keeps drawing. `unreadable=1506` was true and nearly useless;
+`ERROR:NullPointerException:Components_not_bound_yet` on every row says **which** bootstrap step is missing, and it
+lives in the artifact rather than beside it.
+
+### The runtime accessor does not help, which narrows the route to one
+
+`new ItemStack(item).getMaxStackSize()` fails the same way as `item.components().get(MAX_STACK_SIZE)`. So the
+route is **not** "use the API the game uses" \u2014 `getMaxStackSize` reads the bound components too. **The datapack and
+registry load is the step**: KD-84 recorded that, and this round turns it from a reading of `javap` output into a
+demonstration.
+
+### Why this is a commit rather than a shrug
+
+The probe compiles, runs in one pass, and produces a 1506-row file whose every row carries the reason it is
+unreadable. **The stack-size table has never been compared with anything**; it now has a tool that was pointed at
+it, got an answer, and wrote the answer down **including why the answer is not the one wanted**.
+
+**A tool that fails at a named step is where the next attempt starts.** The alternative \u2014 substituting 64 per
+item \u2014 would have produced a file that agreed with the table and a summary that agreed with the file, which is
+precisely the failure mode this review exists to find.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

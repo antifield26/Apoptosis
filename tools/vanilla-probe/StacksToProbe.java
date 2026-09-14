@@ -7,6 +7,7 @@ import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.Bootstrap;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
 
 /**
  * Dumps every item's maximum stack size, because the stack-size table has never had an independent source.
@@ -50,7 +51,7 @@ public final class StacksToProbe {
                 String name = BuiltInRegistries.ITEM.getKey(item).toString();
                 String value;
                 try {
-                    Integer max = item.components().get(DataComponents.MAX_STACK_SIZE);
+                    Integer max = new ItemStack(item).getMaxStackSize();
                     if (max == null) {
                         value = "ABSENT";
                         absent++;
@@ -62,7 +63,7 @@ public final class StacksToProbe {
                     }
                 } catch (Throwable failure) {
                     // Reported rather than swallowed: an item this probe cannot read is a fact about the probe.
-                    value = "ERROR:" + failure.getClass().getSimpleName();
+                    value = "ERROR:" + failure.getClass().getSimpleName() + ":" + String.valueOf(failure.getMessage()).replace(" ", "_");
                     absent++;
                 }
                 writer.print(id + " " + name + " " + value + "\n");
