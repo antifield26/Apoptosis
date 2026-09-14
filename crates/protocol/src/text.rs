@@ -32,13 +32,18 @@ impl TextComponent {
         }
     }
 
-    /// Render as a network-NBT text component (`{ text: "..." }`).
+    /// Render as a network-NBT text component.
+    ///
+    /// **A plain literal is a bare `TAG_String`** — what a real 26.1.2 server sends
+    /// (`08 00 03 'b','y','e'` for "bye"); the compound `{ text: "…" }` form this
+    /// function used to write is rejected by a real client's component decoder,
+    /// which kicked a joined real client with a `DecoderException` on
+    /// `disguised_chat` (found in acceptance, P10-11). The byte-identity note in
+    /// `disguised_chat_golden.rs` documents the same gap and must be updated with
+    /// this fix.
     #[must_use]
     pub fn to_nbt(&self) -> Nbt {
-        Nbt::Compound(vec![(
-            "text".to_owned(),
-            Nbt::String(self.as_plain().to_owned()),
-        )])
+        Nbt::String(self.as_plain().to_owned())
     }
 
     /// Render as a JSON component (`{"text":"..."}`) for login disconnects and
@@ -62,12 +67,13 @@ mod tests {
     }
 
     #[test]
-    fn nbt_shape_is_literal_text() {
-        let nbt = TextComponent::literal("bye").to_nbt();
-        let crate::nbt::Nbt::Compound(entries) = nbt else {
-            panic!("expected compound");
-        };
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].0, "text");
+    fn nbt_shape_is_a_bare_string_like_a_real_server_sends() {
+        // The accepted shape on this protocol: a real 26.1.2 server sends a plain
+        // message as a bare TAG_String, and a real client rejects the compound
+        // {text: ...} form (acceptance finding, P10-11).
+        assert_eq!(
+            TextComponent::literal("bye").to_nbt(),
+            crate::nbt::Nbt::String("bye".to_owned())
+        );
     }
 }

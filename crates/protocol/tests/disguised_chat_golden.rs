@@ -7,20 +7,15 @@
 //!
 //! **Seventeen bytes in, four fields out**, every byte accounted for.
 //!
-//! # A divergence this test found and records rather than hides
+//! # The divergence this test found, and its fix
 //!
-//! The decode is exact; the **encode is not byte-identical**. A real server sends a plain message as a bare
-//! `TAG_String`, where `TextComponent::to_nbt` writes `TAG_Compound { text: ... }`:
-//!
-//! ```text
-//! ours:  10 08 00 04 't','e','x','t' 00 03 'b','y','e' 00
-//! real:  08 00 03 'b','y','e'
-//! ```
-//!
-//! A client reads both as the same component, so this is a divergence in **what is sent** rather than in what is
-//! understood — and this project's standard for a wire artefact is byte-identical, so it is written down here. The
-//! test asserts the divergence **exists**, so that fixing the encoder has to fail this test and remove the note
-//! rather than quietly leaving a stale comment behind.
+//! The decode was always exact; the **encode used not to be byte-identical**. A real server sends a plain
+//! message as a bare `TAG_String` (`08 00 03 'b','y','e'`), while `TextComponent::to_nbt` wrote
+//! `TAG_Compound { text: ... }` (`10 08 00 04 't','e','x','t' 00 ...`). A client reads both as the same component
+//! in *older* protocols, but the 26.1.2 client's component decoder **rejects the compound form on the wire**:
+//! a real client that joined, received our `disguised_chat` welcome, and failed with
+//! `DecoderException: Failed to decode packet 'clientbound/minecraft:disguised_chat'` — which is how the
+//! encoder finally got fixed to the bare-string form, after the divergence had been asserted here first.
 
 use mc_protocol::packets::Packet;
 use mc_protocol::packets::play::DisguisedChat;
@@ -64,21 +59,14 @@ fn every_prefix_of_the_captured_body_is_refused() {
 }
 
 #[test]
-fn the_encoder_writes_a_compound_where_the_server_wrote_a_bare_string() {
-    // **Asserting the divergence, not accepting it.** If the encoder is ever made byte-identical, this fails and
-    // the note above has to go with it -- which is the outcome the assertion is for.
+fn the_encoder_is_now_byte_identical_to_the_server() {
+    // The divergence the earlier version of this suite documented has been fixed:
+    // a plain literal encodes as a bare TAG_String, exactly what the server sent,
+    // so a re-encode of the captured packet is byte-identical.
     let packet = DisguisedChat::decode(&CAPTURED).expect("decodes");
     let ours = packet.encode().expect("encodes");
-    assert_ne!(
-        ours, CAPTURED,
-        "the encoder is now byte-identical to the server: delete this test and the note it documents"
-    );
     assert_eq!(
-        ours.first().copied(),
-        Some(0x0A),
-        "ours opens a TAG_Compound where the server sent a bare string"
+        ours, CAPTURED,
+        "the encoder must stay byte-identical to the server's shape"
     );
-    let again = DisguisedChat::decode(&ours).expect("our own form decodes");
-    assert_eq!(again.chat_type, packet.chat_type);
-    assert_eq!(again.target_name, packet.target_name);
 }

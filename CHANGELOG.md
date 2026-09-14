@@ -3456,6 +3456,32 @@ assertions (758 tags, 1 202 structures, 256 terrain columns, a gold-block marker
 instrument read the test's body and not its callees, which is the same shape lesson as the handover's fifth
 instrument. `every_tag_type_round_trips_on_disk` **was** a real finding, and it now opens with an
 independent byte-shape anchor (root compound id, two-byte name prefix), verified by perturbation.
+### Acceptance finding -- the real client kicked our disguised_chat, and the encoder is fixed
+
+The acceptance session (tools/visual-check/run.py) found what the whole suite could not: a real 26.1.2
+client **joined**, and was kicked **2 seconds later** with `DecoderException: Failed to decode packet
+'clientbound/minecraft:disguised_chat'`. The server never saw it as a decode failure -- its log shows
+`outbound queue full` three times, a 2 401 ms tick (the join burst), and the player swept. The client died
+first decoding our welcome message; the queue backpressure was the symptom.
+
+**The root cause was already documented in the repository, asserted but unfixed.** `disguised_chat_golden.rs`
+recorded a byte divergence between our encoder and a real capture: a real server sends a plain message as a
+**bare TAG_String** (08 00 03 62 79 65 = "bye"), while `TextComponent::to_nbt` wrote a **TAG_Compound
+{text: ...}** (0a 08 00 04 74 65 78 74 ...). An older client accepted both forms, so the divergence had been
+asserted and carried -- but the 26.1.2 client's component decoder **rejects the compound form on the wire**,
+and the first disguised_chat a client sees is our welcome message.
+
+**The fix**: a plain literal now encodes as the bare TAG_String the real server sends. Three tests moved with
+it, each of which had asserted the old shape: the disguised_chat golden's encoder-divergence test (whose body
+said "if the encoder is ever made byte-identical, this fails and the note has to go with it") failed exactly
+as designed and is now the_encoder_is_now_byte_identical_to_the_server; the network-NBT text fixture was
+re-cut from the real-server capture (6 bytes) with the stale shape's history in its header; and the
+text.rs unit test now asserts the bare string.
+
+What the finding is worth beyond the fix: **the divergence had been written down and asserted, and every
+other assertion in the repo pinned the shape our own encoder produced -- the client was the only instrument
+that read the wire as it must be read.** The acceptance method found in one session what a fully green
+matrix could not, which is exactly why real-client acceptance is the phase's exit gate.
 ### P10-09 (cross-audit round) -- the trigger condition was a knowledge gap, and the gap is closed
 
 Three sessions had captured **zero** `block_entity_data` packets after placing and filling a chest at the

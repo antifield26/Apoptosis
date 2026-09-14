@@ -1,19 +1,9 @@
-# Golden bytes: network NBT for the text component {"text":"bye"}.
+# Golden bytes: network NBT for a plain text component, as a real 26.1.2 server sends it.
 #
-# **Checked against real network NBT**, which it had never been. A vanilla 26.1.2 server, told to `say bye` on
-# its console with a client connected, sends:
-#
-#   08 00 03 62 79 65  05 08 00 06 53 65 72 76 65 72  00
-#   ^TAG_String ^len3 "bye" ...
-#
-# -- the same encoding this file uses for its string entry: tag type `08`, a two-byte name length, UTF-8
-# payload. Vanilla wrote the **bare-string** form of the component and this fixture writes the **compound**
-# form; both are valid, and the encoding they share is what the test exercises.
-# 0A                compound
-#   08 0004 "text"  string entry named text
-#   0003 "bye"      string payload
-# 00                end
-0A
-08 00 04 74 65 78 74
-00 03 62 79 65
-00
+# **Updated by acceptance (P10-11)**: the previous bytes were the compound form
+# (0a 08 00 04 74 65 78 74 00 03 62 79 65 00), asserted as golden because the fixture and the
+# encoder came from one reading. A real client joined, received our disguised_chat carrying
+# that compound, and was kicked with a DecoderException -- the real-server capture (a console
+# say) turned out to be a bare TAG_String, which the encoder now writes.
+# What this body is: 6 bytes = TAG_String, empty root name, "bye".
+08 00 03 62 79 65
