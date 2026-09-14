@@ -3525,6 +3525,34 @@ right place and a large change in the wrong one look identical from a distance, 
 when someone reads the twenty lines around the anchor.
 
 
+### P10-08 (part 9) -- the movement is announced, and P10-08 closes
+
+The call site landed on the phase boundary the previous entry found: positions are taken **before** the `Entities`
+phase and compared **after** it, because the position update lives in a per-entity helper with no `report`. The
+signal goes out with `MoveEntityPos`, per chunk, to whoever can see the entity.
+
+**And `clippy` was pointing at a test that asked the wrong question.** `float_cmp` fired on
+`now.x == was.x && now.y == was.y && now.z == was.z`, and it is right twice over: **the honest test is not whether
+the position changed but whether the change is one a client could be told about.** Vanilla's deltas are 1/4096 of a
+block, so a movement smaller than that is one no packet can carry and no client could see. **Comparing the scaled
+integers is therefore both the better logic and the one the lint does not have to distrust** -- and three lints in
+a row each turned out to be mechanical once read rather than guessed:
+
+| lint | what it was |
+|---|---|
+| `float_cmp` | a comparison asking whether anything changed rather than whether anything visible did |
+| `cast_possible_truncation` | `as i16` after a clamp that already proves the range, now a checked conversion |
+| `items_after_statements` | a `const` written after statements, where a `let` says the same thing |
+
+**One revert along the way**, because a green tree is worth more than a nearly-finished edit -- the design was on
+disk in the script and the guards, and the second attempt took one call.
+
+**P10-08 is complete.** All three of the task's requirements are met: a drop is **spawned** and announced with the
+entity type id the client's registry gives (P10-06), it **carries its stack** at `set_entity_data` index 8 with
+serializer 7, byte-identical to a captured server's output, and it now **moves visibly** because the server says so
+rather than leaving the client to draw it where it was spawned.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
