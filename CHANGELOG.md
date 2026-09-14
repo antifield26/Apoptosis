@@ -3283,6 +3283,32 @@ hand-computed expectation was little-endian and the decoder was right. A test th
 mistake has happened is worth more than one that only holds a value.
 
 
+### P10-11 (part 1) — a real client sends a packet this server does not model, fourteen times a second
+
+The visual-check session's own server log, from a real 26.1.2 client in the world:
+
+```text
+DEBUG mc_server::game: unmodelled play packet id=conn#1 packet_id=13
+```
+
+**Repeating about fourteen times a second**, which is what a per-tick packet looks like from a client whose ticks
+coalesce under load. `ids.rs` models **`CLIENT_COMMAND = 12`** and **`CLIENT_INFORMATION = 14`** -- **and 13 sits
+between them, never modelled**, so every one of those packets is logged, dropped, and counted as a surprise.
+
+**`serverbound` play 13 is `client_tick_end`**, the packet a client sends to close its own tick. A server that
+ignores it behaves correctly -- nothing depends on it in a server that is not waiting for a client's tick -- and
+**the defect is the log rather than the simulation**: fourteen lines a second per player is a stream nobody can
+read past, and the log is the phase's primary evidence channel.
+
+**This is the first thing in P10 that a real client said and no test could have.** The suite drives our own codec
+client, which sends what this server expects; a real client sends what *it* expects to send, and the difference
+took one session's log to find.
+
+**It is recorded rather than fixed here** because the fix is a modelling decision -- whether `client_tick_end`
+joins the intents, or whether an unmodelled packet at a known-tolerable id is logged at trace instead of debug --
+and both are defensible. What is not defensible is fourteen debug lines a second.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
