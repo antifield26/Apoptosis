@@ -2880,6 +2880,53 @@ indentation `Select-String` reports, which is the file's own, and worked first t
 broadcast, there are five more `SystemChat` sites to triage, and a real client has not yet seen any of it.
 
 
+### P10-10 (part 8) — the test that is owed, and the shape of harness that would carry it
+
+P10-10's change has **no test**: the broadcast landed and nothing asserts that a chat message reaches anyone. That
+is the gap this entry records rather than papers over, and the first attempt to close it found why it is not a
+one-liner.
+
+**The intent's shape is known**, taken from a test that already sends one:
+
+```rust
+PlayIntent::Chat {
+    message: <the test builds one per tick, naming the tick and the client index>,
+    timestamp_millis: 0,
+    salt: 0,
+    signed: false,
+    last_seen_count: 0,
+}
+```
+
+**And the audit script caught this entry, for the wrong reason.** check_gate_totals read the two brace
+placeholders in a quoted line as numbers restating a total, and named the placeholder itself as the count so it fired
+on a code sample rather than on a count. The quote is now prose instead of code, and **the script's false positive
+is recorded here rather than fixed in passing**: a checker that mistakes a placeholder for a number is a defect in
+the checker, and this project's rule is that a tool defect gets written down and not worked around silently. **And it did so a second time on the sentence describing the first**: the note quoted the checker's own
+message, which contains the placeholder, so the checker fired on the description of its false positive. **The note
+now describes it without reproducing it**, which is the only way to write down a checker that reads a placeholder
+as a number without becoming one.
+
+**And the harness cannot express the property.** `Harness::new` builds its own `Game`, so two harnesses are **two
+independent servers**: a broadcast inside one is invisible to the other, and the assertion "every client saw it"
+needs **two connections in one game**. The existing harness joins once.
+
+**So the test needs one of two things, and both are small:**
+
+* a harness that can join a second player into the same `Game`, which is what `harness.join` would become with a
+  connection id rather than a constant; or
+* an assertion of the weaker property that is still not vacuous -- that the **sender** receives a `DISGUISED_CHAT`
+  and not a `SYSTEM_CHAT`, which distinguishes the packet the placeholder used from the one the broadcast sends.
+
+**The second is worth having on its own**: the placeholder sent `system_chat`, the fix sends `disguised_chat`, and a
+capture of a real 26.1.2 server established that `say` produces the second and not the first. **A test that would
+have failed before the change and passes after is the minimum**, and that one clears it.
+
+**A first attempt at this entry wrote `assert!(true, ...)` as a placeholder for the parts not yet known, and it
+was not committed** -- that is precisely the vacuous test this phase exists to find, and it would have been written
+by the hand that has spent thirty rounds looking for them.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
