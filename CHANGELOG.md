@@ -2121,6 +2121,38 @@ class, in this review or in the tooling it built.
 clean. **The findings came from values that had never been measured, not from prose that was hard to read** \u2014 so
 a remainder of easy prose, checked anyway, is what makes "clean" a result rather than an assumption.
 
+### P10-06 (part 1) \u2014 the entity type table, and id 0 is a boat
+
+`add_entity` carries an **entity type id** and the client resolves it against the registry this server sends it.
+That is the exact shape of the two defects this review already fixed \u2014 a block default taken to be a lowest id
+(KD-56), and `PLAINS_BIOME_ID = 0` where id 0 is `minecraft:badlands` (KD-65) \u2014 so the table is **extracted
+rather than retyped**, in the pipeline `blocks.tsv` and `items.tsv` went through:
+
+```text
+tools/vanilla-probe/EntityTypeProbe.java  ->  crates/test-support/fixtures/registry/entity_types.tsv
+```
+
+**And the numbers are not the ones anyone would guess:**
+
+```text
+0    minecraft:acacia_boat
+30   minecraft:cow
+71   minecraft:item          <- the drop this phase has to make visible
+150  minecraft:zombie
+155  minecraft:player
+```
+
+**`entity_types=157`, and id 0 is a boat.** The registry is alphabetical, exactly as the biome registry is \u2014 which
+is why the biome defect was invisible for so long: the assumption "the first entry is the ordinary one" is true
+often enough to survive, and wrong in both of these registries.
+
+**The fixture is 159 lines** (two header lines and 157 rows), **LF only**, checked for CRLF because a CRLF table
+reached this repository once already (KD-57).
+
+**What this does not yet do.** Nothing sends `add_entity` yet: the server's own comments say the drop is invisible
+to clients (`game.rs:1060`, `game.rs:2631`, the latter naming P05-15). The table is the half that has to be right
+before the packets can be, and the next step is the registry lookups plus the encoder wiring.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
