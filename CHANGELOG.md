@@ -3087,6 +3087,54 @@ necessarily uses is the one the reader cannot read.
 naming that the previous three entries treated this number as a fact about vanilla.
 
 
+### P10-07 (part 9) — the item's slot, read off the bytes my own parser had been skipping
+
+Four item entities, and the raw bodies:
+
+```text
+entity 119: 77    | 08 07 | 01 a9 08 00 00 | ff
+entity 411: 9b 03 | 08 07 | 01 a4 08 00 00 | ff
+entity 443: bb 03 | 08 07 | 03 01 00 00    | ff
+entity 445: bd 03 | 08 07 | 07 83 07 00 00 | ff
+```
+
+`VarInt` entity id, then one entry: **index 8**, **serializer type 7**, the stack, and the `0xff` terminator.
+
+**So a dropped item's stack is at index 8 with serializer 7**, and the entities carried metadata all along. The
+previous entry's "0 of 4" was the width table's answer, exactly as it said: the one serializer an item must use is
+type 7, and the reader knew 0, 1, 2, 3 and 10.
+
+**And the values confirm it is the stack rather than merely looking like one.** Entity 445 reads count `07` --
+**seven** -- and the injection that created it was `summon ... {Item:{id:"minecraft:diamond",count:7}}`. A field
+whose value matches the command that made it, in a packet captured from a real server, is about as direct as this
+kind of evidence gets. Entity 443 reads `03 01`, entity 119 `01 a9 08`.
+
+**The item ids are `a9 08` (1065), `a4 08` (1060), `01` (1) and `83 07` (899)**, and whether those are stone and
+diamond is a question for `items.tsv` -- the table P10-06 verified row for row against `ItemProbe`. **That check is
+outstanding**, and it is the one that would turn "this looks like an item stack" into "this is a stone stack and a
+diamond stack, and here are their registry ids".
+
+
+
+### And the values match the commands that made them, item for item
+
+items.tsv -- the table P10-06 verified row for row against ItemProbe -- resolves all four:
+
+`	ext
+   1  minecraft:stone          <- summoned as stone, count 3
+ 899  minecraft:diamond        <- summoned as diamond, count 7
+1060  minecraft:tropical_fish
+1065  minecraft:glow_ink_sac
+`
+
+**Entity 443 reads count 3, item 1**, and the command was summon ... {Item:{id:"minecraft:stone",count:3}}.
+**Entity 445 reads count 7, item 899**, and the command was {Item:{id:"minecraft:diamond",count:7}}. Two
+packets, two fields each, both matching the injections that produced them -- **and the registry ids resolving
+through a table that was itself checked against the jar**.
+
+**That closes P10-07's question for the type P10-08 needs**: a dropped stack is set_entity_data, **index 8**,
+**serializer 7**, and its payload is count-then-item-id-then-components.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
