@@ -2727,7 +2727,7 @@ The review kept one real `disguised_chat` payload from a 26.1.2 server, as the v
 * `00` — the optional target name, absent
 
 **So the packet is `{ message, chat_type, sender_name, target_name? }`**, and every field is accounted for with
-nothing left over: sixteen bytes in, four fields out.
+nothing left over: seventeen bytes in, four fields out.
 
 **Three things this settles that the id table could not.** The message and the sender name are **network NBT**,
 not length-prefixed strings, which is the same form `nbt_literal_text.hex` records — so the codec for this packet
@@ -2737,6 +2737,37 @@ type id. And the target name is genuinely optional, sent as a single `0x00` rath
 
 **What is left to write**: the packet struct and its codec, which needs the project's network-NBT writer rather
 than a new one, and then the routing in the six places that currently answer everything with `system_chat`.
+
+
+### P10-10 (part 3) — written, reverted, and what is worth keeping from it
+
+`DisguisedChat` was implemented against the captured payload and **reverted in the same round**, because its
+handling of the optional target name had a bug that one fix did not resolve:
+
+```text
+with the trailing 0x00:  Protocol("disguised_chat has 1 trailing bytes")
+without it:              a 16-byte prefix decoded
+```
+
+Two symptoms of one mistake — absence was being treated as "nothing left" rather than as a written `TAG_End` — and
+after the branch was rewritten to say exactly that, the second went away and the first did not. **The packet was
+removed rather than left failing the suite**, which is the choice the project's rules make for a half-finished
+codec: an implementation that does not reproduce the bytes it was built from is not one, and a red suite hides
+every later failure behind it.
+
+**What is kept from the round, and it is most of the work:**
+
+* **the format, field by field**, from a real payload — network-NBT message, `VarInt` chat type, network-NBT sender
+  name, and a written `TAG_End` for an absent target;
+* **both packet ids**, `disguised_chat` = 33 and `player_chat` = 65, now constants that `packet_ids.rs` checks
+  against the jar table without anything further written for the purpose;
+* **the template**, which is `SystemChat`: it already pairs `TextComponent` with the project's network-NBT reader
+  and writer, so the next attempt needs no new machinery.
+
+**And one of my own numbers was wrong, in the record.** The entry above said the payload is "sixteen bytes in";
+counting the fields gives **seventeen**. That is corrected here, in the same commit, because a wrong count in the
+document that describes the format is exactly the kind of thing this phase has spent its time finding in other
+people's comments.
 
 
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
