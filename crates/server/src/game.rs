@@ -437,6 +437,17 @@ const ENTITY_GRAVITY: f64 = 0.04;
 /// `crates/server/tests/registry_ids.rs`.
 pub const PLAINS_BIOME_ID: u32 = 40;
 
+/// The `chat_type` registry id a plain message uses.
+///
+/// **Resolved from the payload this server sends**, because `minecraft:chat_type` is one of the registries in it
+/// -- `game.rs` describes the registry order as "ending at `minecraft:chat_type`". So a jar extraction would be the
+/// wrong instrument here: **the rule is that a number sent to a client is a claim about a registry the client
+/// owns, and which instrument settles it depends on who owns the registry**, not on the kind of number it is.
+///
+/// `crates/server/tests/registry_ids.rs` resolves it the way it resolves [`PLAINS_BIOME_ID`], which is the check
+/// that keeps this from being another unverified constant.
+pub const CHAT_TYPE_CHAT: i32 = 0;
+
 /// One connected player's server-side state.
 /// One connected player's simulation state.
 ///
@@ -1924,7 +1935,7 @@ impl Game {
             id,
             &mc_protocol::packets::play::DisguisedChat {
                 message: TextComponent::literal("Welcome to the Rust Minecraft server."),
-                chat_type: 0,
+                chat_type: CHAT_TYPE_CHAT,
                 sender_name: TextComponent::literal("Server"),
                 target_name: None,
             },
@@ -2054,7 +2065,7 @@ impl Game {
                 // is a claim about a registry it owns. That check is outstanding.
                 let packet = mc_protocol::packets::play::DisguisedChat {
                     message: TextComponent::literal(&message),
-                    chat_type: 0,
+                    chat_type: CHAT_TYPE_CHAT,
                     sender_name: TextComponent::literal(&name),
                     target_name: None,
                 }
@@ -3065,7 +3076,7 @@ impl Game {
                 id,
                 &mc_protocol::packets::play::DisguisedChat {
                     message: TextComponent::literal("You died! Use the respawn button."),
-                    chat_type: 0,
+                    chat_type: CHAT_TYPE_CHAT,
                     sender_name: TextComponent::literal("Server"),
                     target_name: None,
                 },
@@ -3685,7 +3696,7 @@ impl Game {
                 id,
                 &mc_protocol::packets::play::DisguisedChat {
                     message: TextComponent::literal(text),
-                    chat_type: 0,
+                    chat_type: CHAT_TYPE_CHAT,
                     sender_name: TextComponent::literal("Server"),
                     target_name: None,
                 },

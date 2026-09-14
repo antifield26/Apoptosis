@@ -13,7 +13,7 @@
 //! checking them were both wrong and the three with something checking them are all right. This is the check for
 //! the biome id, and it reads the exact bytes the client is given rather than a copy of them.
 
-use mc_server::game::PLAINS_BIOME_ID;
+use mc_server::game::{CHAT_TYPE_CHAT, PLAINS_BIOME_ID};
 
 /// The registry blob the config phase sends, uncompressed.
 ///
@@ -107,5 +107,31 @@ fn the_dimension_type_id_this_server_sends_is_the_overworld() {
         names.first().map(String::as_str),
         Some("minecraft:overworld"),
         "join_game sends dimension_type_id 0, so entry 0 of the registry must be the overworld: {names:?}"
+    );
+}
+
+/// The chat type the six message sites send is the one the payload names `minecraft:chat`.
+///
+/// **The same shape as the biome-id check above**, and for the same reason: `chat_type` decides how a client
+/// decorates a line, the server sent a literal `0` for it, and nothing anywhere could contradict that. It is a
+/// **datapack registry** — one this server sends — so the instrument is the payload rather than the jar, and a
+/// capture of a real server sending `5` says only that the number is not free.
+#[test]
+fn the_chat_type_this_server_sends_is_the_one_named_chat() {
+    let names = identifiers_after(&payload(), "minecraft:chat_type");
+    assert!(
+        !names.is_empty(),
+        "the payload carries no chat_type identifiers, so this test is checking nothing"
+    );
+    let at = names
+        .iter()
+        .position(|name| name == "minecraft:chat")
+        .unwrap_or_else(|| panic!("no `minecraft:chat` among the chat types: {names:?}"));
+    // A checked conversion rather than s: clippy is right that the cast can truncate, and refusing beats
+    // wrapping silently. It cannot fail for a registry this size, which is the point of saying so here.
+    let at = i32::try_from(at).expect("a registry index fits in an i32");
+    assert_eq!(
+        at, CHAT_TYPE_CHAT,
+        "the payload gives `minecraft:chat` the id {at}, and the server sends {CHAT_TYPE_CHAT}. Registered: {names:?}"
     );
 }

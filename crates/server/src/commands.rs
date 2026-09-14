@@ -180,7 +180,7 @@ impl Game {
                 id,
                 &mc_protocol::packets::play::DisguisedChat {
                     message: TextComponent::literal(text),
-                    chat_type: 0,
+                    chat_type: crate::game::CHAT_TYPE_CHAT,
                     sender_name: TextComponent::literal("Server"),
                     target_name: None,
                 },
@@ -319,7 +319,7 @@ impl Game {
                 target,
                 &mc_protocol::packets::play::DisguisedChat {
                     message: TextComponent::literal(line.clone()),
-                    chat_type: 0,
+                    chat_type: crate::game::CHAT_TYPE_CHAT,
                     sender_name: TextComponent::literal("Server"),
                     target_name: None,
                 },
