@@ -124,6 +124,23 @@ def main() -> int:
         for text in ('hello from the review', 'bye'):
             print(f'saying {text!r} on the console')
             server.stdin.write(f'say {text}\n')
+        server.stdin.flush()
+        # **P10-07 and P10-09 need a session in which a block entity existed and an item was dropped**, and
+        # neither has one: the capture has zero bodies for `block_entity_data` and no `minecraft:item` metadata.
+        # The server reads console commands from stdin, so the whole of what is missing is two lines -- no
+        # gameplay, no player, nothing to play through.
+        #
+        # Explicit coordinates rather than `~`: the console has no position of its own to be relative to, and a
+        # command that fails is captured as a log line rather than as a packet.
+        for command in (
+            'setblock 0 80 0 minecraft:chest',
+            'summon minecraft:item 0 81 0 {Item:{id:"minecraft:stone",count:3}}',
+        ):
+            print(f'  injection: {command}')
+            server.stdin.write(command + chr(10))
+            server.stdin.flush()
+            time.sleep(3)
+
             server.stdin.flush()
             time.sleep(2)
         time.sleep(5)

@@ -2981,6 +2981,44 @@ commands from stdin, so `setblock` and `summon` written to that pipe while a cli
 session, one line each, and both gaps close together.
 
 
+### P10-09 (part 2) — the injection session: one of the three questions answered, and two answered "nothing"
+
+`tools/chat-capture/run.py` now injects two console commands after its chat lines, and the session ran:
+
+```text
+injection: setblock 0 80 0 minecraft:chest
+injection: summon minecraft:item 0 81 0 {Item:{id:"minecraft:stone",count:3}}
+
+play 1   add_entity:        143   (was 55)
+play 99  set_entity_data:   253   (was 45)
+play 77  remove_entities:    36
+play 101 set_entity_motion: 2445
+play 6   block_entity_data:   0
+```
+
+**The `summon` worked.** Cross-referencing the two packet kinds by entity id finds **3 entities of type 71**
+('minecraft:item') among 134 named, so a dropped stack existed and the client was told about it.
+
+**And the item entities carry no metadata at all: 0 of 3.** That is the answer to P10-07's question for this
+type, and it is "nothing was sent" rather than "here are the slots" -- which narrows the problem instead of
+closing it. Either the drop's stack never went out as `set_entity_data` in this session, or it did not survive
+long enough in view, and **the capture cannot tell those apart**.
+
+**The `setblock` produced no `block_entity_data` either.** The likeliest reading is that an **empty** chest has
+nothing to describe: vanilla sends that packet when a block entity has contents or state worth syncing, and a
+chest created by a command and never opened has none. **That is a hypothesis and is recorded as one**; testing it
+means placing a chest and putting something in it, which is one more console line.
+
+**What the session did confirm beyond its purpose**: the 17-byte `disguised_chat` body it captured is
+
+```text
+08 00 03 62 79 65 05 08 00 06 53 65 72 76 65 72 00
+```
+
+**byte for byte the payload P10-10's codec was built from and the golden test asserts against** -- the same
+seventeen bytes, from a different session, with no connection to the one they were first read out of.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
