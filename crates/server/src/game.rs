@@ -465,6 +465,12 @@ pub(crate) struct Session {
     /// write the file. A stale comment here once claimed no storage was read;
     /// `ops_e2e` proves the join path reads it (P08-08 review).
     pub(crate) permission: mc_command::PermissionLevel,
+    /// The name this player joined with.
+    ///
+    /// Kept because the value arrives once, in the login handshake, and chat needs it afterwards: the join
+    /// log could print it and nothing else could reach it. **"The server knows this" and "the server can say
+    /// this" are different states**, and this field is the difference.
+    pub(crate) name: String,
     /// The container window this player has open.
     ///
     /// Every player always has the player-inventory menu (`window 0`) open; other
@@ -1833,6 +1839,7 @@ impl Game {
                 // what `Uuid`'s `Display` produces — the conversion is a real one, since the
                 // in-memory id is a `Uuid`.
                 permission: self.operators.level_for(&profile.id.to_string()),
+                name: profile.name.clone(),
                 menu,
                 ready: false,
             },
@@ -2009,15 +2016,26 @@ impl Game {
                 self.apply_client_command(id, action, report)?;
             }
             PlayIntent::Chat { message, .. } => {
-                info!(id = %id, %message, "player chat (relay lands in P07)");
-                self.send(
-                    id,
-                    &SystemChat {
-                        content: TextComponent::literal("Chat relay is not implemented yet."),
-                        overlay: false,
-                    },
-                    report,
-                )?;
+                info!(id = %id, %message, "player chat");
+                // **To everyone, attributed to its sender.** Vanilla sends `player_chat` (65) for a
+                // player's own message, which carries the sender's UUID, chat index and signature; this build
+                // has no chat signing, so `disguised_chat` -- the same message attributed to a name -- is what
+                // it can honestly send. Recorded as a divergence rather than passed off as parity.
+                let name = self
+                    .sessions
+                    .get(&id)
+                    .map_or_else(|| "Player".to_owned(), |session| session.name.clone());
+                // `chat_type` 0 is **not yet verified** against the `chat_type` registry the client is sent: it
+                // decides how the line is decorated, and this project's rule is that a number sent to a client
+                // is a claim about a registry it owns. That check is outstanding.
+                let packet = mc_protocol::packets::play::DisguisedChat {
+                    message: TextComponent::literal(&message),
+                    chat_type: 0,
+                    sender_name: TextComponent::literal(&name),
+                    target_name: None,
+                }
+                .to_raw()?;
+                self.broadcast_all(&packet, report);
             }
             PlayIntent::ChatCommand { command } => {
                 // The dispatcher validates the name, the permission and the arguments
