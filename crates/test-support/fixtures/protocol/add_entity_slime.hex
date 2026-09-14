@@ -1,0 +1,12 @@
+# `minecraft:add_entity` (clientbound play 1) as a real 26.1.2 server sent it.
+#
+# Source: `target/vanilla-capture/bodies-lit/000139_s2c_play_1.bin`, captured from a vanilla 26.1.2 dedicated
+# server through the rig in `tools/surface-capture/`. The capture directory is not tracked, so the bytes are
+# copied here with their provenance rather than referenced.
+#
+# It is 52 bytes, which is the sum of the field widths the packet's shape implies:
+#   VarInt entity id (1) + UUID (16) + VarInt type id (1) + 3 x f64 (24) + 3 x i8 (3) + VarInt data (1) + 3 x i16 (6)
+# The entity is a slime: the type id is 0x75 = 117, and `entity_types.tsv` says 117 = minecraft:slime.
+#
+# Format: lowercase hex, whitespace ignored.
+4e 24 28 91 34 98 3d 4d d0 88 a1 e8 61 9b 33 e3 5e 75 40 48 08 08 da 00 61 90 c0 4d c0 9d 41 f6 27 90 40 34 cf 2b c5 81 db 83 01 f3 79 58 a0 45 00 6d 6d 00

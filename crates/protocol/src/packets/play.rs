@@ -822,6 +822,101 @@ pub struct ChunkSection {
     pub biomes: PalettedContainer,
 }
 
+/// `minecraft:add_entity` — spawn an entity, carrying its registry type id.
+///
+/// # The type id is a claim about a registry the client owns
+///
+/// `entity_type` is a **built-in** registry, compiled into the client jar, not a datapack registry this server
+/// sends. So the id comes from `crates/test-support/fixtures/registry/entity_types.tsv` — extracted from the jar
+/// by `tools/vanilla-probe/EntityTypeProbe.java` — and **not** from the config payload, where
+/// `minecraft:entity_type` is a tag directory in `update_tags`. See P10-06 for why the two are not
+/// interchangeable.
+///
+/// # Layout, and how it was checked
+///
+/// A `VarInt` entity id, a 16-byte UUID, a `VarInt` type id, three `f64` coordinates, three `i8` angles (in 1/256 of
+/// a degree), a `VarInt` data field and three `i16` velocities (in 1/8000 of a block per tick). **Those widths sum
+/// to 52 bytes**, and the first `add_entity` body a real 26.1.2 server sent through the capture rig is exactly
+/// 52 bytes: `crates/test-support/fixtures/protocol/add_entity_slime.hex`, whose type id is 117, which the table
+/// names `minecraft:slime`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AddEntity {
+    /// Entity id, unique within the connection.
+    pub entity_id: i32,
+    /// The entity's UUID.
+    pub uuid: uuid::Uuid,
+    /// Entity **type** registry id, from the client's built-in registry.
+    pub type_id: i32,
+    /// X coordinate.
+    pub x: f64,
+    /// Y coordinate.
+    pub y: f64,
+    /// Z coordinate.
+    pub z: f64,
+    /// Pitch, in 1/256 of a degree.
+    pub pitch: i8,
+    /// Yaw, in 1/256 of a degree.
+    pub yaw: i8,
+    /// Head yaw, in 1/256 of a degree.
+    pub head_yaw: i8,
+    /// Object data: the variant fields of a non-living entity, `0` for a living one.
+    pub data: i32,
+    /// Velocity X, in 1/8000 of a block per tick.
+    pub velocity_x: i16,
+    /// Velocity Y, in 1/8000 of a block per tick.
+    pub velocity_y: i16,
+    /// Velocity Z, in 1/8000 of a block per tick.
+    pub velocity_z: i16,
+}
+
+impl AddEntity {
+    /// Encode the body.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] when a field cannot be written, which for these types means never; the
+    /// signature matches its neighbours rather than being infallible in isolation.
+    pub fn encode(&self, writer: &mut PacketWriter) -> ServerResult<()> {
+        writer.write_varint(self.entity_id);
+        writer.write_uuid(&self.uuid);
+        writer.write_varint(self.type_id);
+        writer.write_f64(self.x);
+        writer.write_f64(self.y);
+        writer.write_f64(self.z);
+        writer.write_i8(self.pitch);
+        writer.write_i8(self.yaw);
+        writer.write_i8(self.head_yaw);
+        writer.write_varint(self.data);
+        writer.write_i16(self.velocity_x);
+        writer.write_i16(self.velocity_y);
+        writer.write_i16(self.velocity_z);
+        Ok(())
+    }
+
+    /// Decode a body.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] when the input ends early or a `VarInt` is malformed or too long.
+    pub fn decode(reader: &mut PacketReader<'_>) -> ServerResult<Self> {
+        Ok(Self {
+            entity_id: reader.read_varint()?,
+            uuid: reader.read_uuid()?,
+            type_id: reader.read_varint()?,
+            x: reader.read_f64()?,
+            y: reader.read_f64()?,
+            z: reader.read_f64()?,
+            pitch: reader.read_i8()?,
+            yaw: reader.read_i8()?,
+            head_yaw: reader.read_i8()?,
+            data: reader.read_varint()?,
+            velocity_x: reader.read_i16()?,
+            velocity_y: reader.read_i16()?,
+            velocity_z: reader.read_i16()?,
+        })
+    }
+}
+
 /// One block entity inside a chunk.
 ///
 /// `BlockEntityInfo.LIST_STREAM_CODEC`: `packedXZ` and `y` are each a 16-bit

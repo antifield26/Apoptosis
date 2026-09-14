@@ -2195,6 +2195,40 @@ sample 2:  entity id 59, uuid, type id 117  ->  the same, two different slimes
 packet's documented shape. The proof is the encoder plus a golden test against these bytes, which is the next step
 and the route light_update already took.
 
+### P10-06 (part 4) — add_entity, and a real server's bytes it decodes
+
+AddEntity is in crates/protocol/src/packets/play.rs with encode and decode, and
+crates/protocol/tests/add_entity_golden.rs checks it against a body **a real 26.1.2 dedicated server sent**,
+committed as crates/test-support/fixtures/protocol/add_entity_slime.hex with its provenance in the header.
+
+### The claim that does not depend on my reading of the format
+
+A golden test through our own decoder proves the layout round-trips, and if the fixture and the decoder came from
+one reading then comparing them only confirms that reading. So the first assertion is arithmetic on somebody
+else's output:
+
+`	ext
+1 (VarInt id) + 16 (UUID) + 1 (VarInt type) + 3*8 (f64) + 3*1 (i8) + 1 (VarInt data) + 3*2 (i16) = 52
+`
+
+and the captured body **is** 52 bytes.
+
+### What the decode says
+
+`	ext
+entity id 78, type id 117 = minecraft:slime, coordinates inside the world height
+`
+
+**The type id agrees with the table P10-06 extracted from the jar**, which is the cross-check that matters here:
+a jar extraction, a real capture, and our decoder all naming the same entity. The coordinates are asserted to be
+finite and within the world height, because a decoder that read the doubles at the wrong offset would produce a
+denormal rather than a mistake anyone would notice.
+
+### And a truncated body is refused rather than padded
+
+Every prefix of the captured body is short of some field, and **none of them may decode** — a lenient decoder
+that defaulted the missing fields would send a client an entity at the origin.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
