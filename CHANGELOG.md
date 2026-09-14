@@ -3309,6 +3309,37 @@ joins the intents, or whether an unmodelled packet at a known-tolerable id is lo
 and both are defensible. What is not defensible is fourteen debug lines a second.
 
 
+### P10-11 (part 2) — the gates became a file, because the guard was the thing that kept failing
+
+Five times this session a commit went out over a gate that had not actually passed, and the fourth's cause is why
+`tools/gates/run.py` now exists: **the gate list lived in a shell command typed fresh each time**, so every run was
+a chance to leave something out. That run left out the one condition that mattered --
+
+```text
+tests=0 failed=0 suites=0     <- cargo test produced no results at all
+```
+
+-- and the guard passed it, because "zero failed suites" is satisfied by **zero suites**. The cause was ordinary: a
+running server binary holds the file on Windows, so `cargo test` could not relink and printed an error instead of a
+result.
+
+**A check written in a command is a check that is rewritten every time** -- the same shape as the guards this phase
+spent its time finding in people's heads, this time in the hand that was doing the finding.
+
+The script refuses any non-zero gate or audit, **any test run that produced no results**, and any failing test. Its
+first use found its own defect: `subprocess` decoded a gate's output as GBK, the reader thread raised, and a passing
+run exited 1 -- **so the one thing meant to be reliable failed on its own output handling**, and the encoding is now
+named rather than defaulted.
+
+```text
+--- tests: 1283 passed, 0 failed, 30 ignored, 94 suites
+every gate passed
+```
+
+**And the record for this round needed three attempts to write**, the first two dying on a shell heredoc -- the
+eighth time in this session -- which is the same lesson one layer out: **a document is not written through a shell
+command either**, and the reason this entry exists at all is that a commit went through without it.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
