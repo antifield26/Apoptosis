@@ -1662,6 +1662,40 @@ papering over: a test written from the same belief asserts the same wrong number
 already does for the pack, gated on `MC_VANILLA_DATA`. Adding the cooking times to it is the remaining work, and it
 is recorded here rather than left implied.
 
+### KD-74 \u2014 the same kind of claim, measured, is right eight times out of eight
+
+KD-73 was a number in prose that nothing had compared with its source. `data/advancement.rs` makes **eight of the
+same kind of claim**, and every one matches the jar exactly:
+
+| claim | measured from the jar |
+|---|---|
+| "all **125** display blocks" | 125 |
+| "all **1 514** reward blocks" | 1 514 |
+| "`recipes` (on **1 491**)" | 1 491 |
+| "**1 492** of vanilla's **1 617** have none" | 1 617 files, 125 with a display, so 1 492 |
+| "**15** of vanilla's **3 546** criteria state none" | 3 546 criteria, 15 with no `conditions` |
+| "The **54** trigger strings" | 54 distinct |
+| "Vanilla's deepest chain is **9**" | the histogram below |
+| "`1: 6, 2: 1531, 3: 48, 4: 13, 5: 8, 6: 5, 7: 3, 8: 2, 9: 1`" | identical, all nine buckets |
+
+**Eight for eight, and the histogram is the strongest of them**: it is not a field counted but a **parent chain
+walked** for every one of 1 617 advancements, and all nine buckets agree to the digit.
+
+**That is what makes KD-73 a finding rather than a genre.** The difference between the two files is **not the kind
+of claim** \u2014 both state counts about vanilla in a comment \u2014 it is **whether the number was measured**.
+`advancement.rs`'s were. `recipe.rs`'s constant was 100 for a 600-tick recipe, and its comment had been rewritten
+to agree with it.
+
+**Two of my own readings were wrong before the check was right**, and both were caught by looking rather than by
+believing:
+
+* "15 of vanilla's 3 546 criteria state none" reads naturally as "no trigger", and the jar has **zero** criteria
+  without one \u2014 the count is of criteria with no **`conditions`**, which is exactly 15;
+* the first depth measurement gave `1: 6, 2: 1611` because I keyed advancements by file path (`adventure/kill_a_mob`)
+  while their `parent` fields are namespaced (`minecraft:adventure/root`), so no parent ever resolved. **The claim
+  was right and my measurement was wrong twice**, which is the mistake this review has made more often than any
+  other.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
