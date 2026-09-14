@@ -181,7 +181,7 @@ impl ItemStack {
 
     /// Whether this stack is within the limits [`ItemStack::new`] enforces **on `item_id` and `count`**.
     ///
-    /// **Not the whole guarantee.** The type promises a third thing \u2014 `item_id == 0` implies `count == 0` \u2014
+    /// **Not the whole guarantee.** The type promises a third thing — `item_id == 0` implies `count == 0` —
     /// and this does not check it. Nothing can build a stack that violates it: every path into an `ItemStack`,
     /// the decode path in `crates/entity/src/player.rs` included, goes through [`ItemStack::new`], which returns
     /// [`ItemStack::EMPTY`] whenever the id is air. Checking it here would add a branch that cannot be taken.

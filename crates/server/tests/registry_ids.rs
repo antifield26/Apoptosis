@@ -19,7 +19,7 @@ use mc_server::game::PLAINS_BIOME_ID;
 ///
 /// **Read from the fixture rather than through `captured_payload()`.** That accessor parses the same blob into
 /// packets whose payloads, concatenated, come to 41 097 bytes containing `minecraft:` and **not** the biome
-/// registry's key \u2014 so it is not the uncompressed registry bytes, whatever the reason. Rather than detour
+/// registry's key — so it is not the uncompressed registry bytes, whatever the reason. Rather than detour
 /// through that, this says plainly where its bytes come from: the same committed blob the packet builder embeds,
 /// which makes it the source of the copy rather than a copy of a copy.
 ///
