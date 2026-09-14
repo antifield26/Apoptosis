@@ -3404,6 +3404,34 @@ says beside it why it keeps the old constant.
 that agrees with itself in the wrong direction, and only something that reads the result can tell.
 
 
+### P10-10 (part 13) -- `chat_type` is a registry we own, so the instrument was never a jar
+
+The six sites send `chat_type: 0`, marked in the code as **not yet verified**. Two things about that claim are now
+settled, and the second is the interesting one.
+
+**First: a real server sent `5`.** The captured `disguised_chat` bodies carry `05` in the chat-type position, so
+the number is not free -- it names something, and `0` may name something else.
+
+**Second, and this is what changes the work: `minecraft:chat_type` is a registry this server sends.** `game.rs`
+already says so, describing the registry order as "ending at `minecraft:chat_type`, the next registry", which puts
+it **in the `registry_data` payload alongside the biome registry** -- and that makes it a **datapack registry**, the
+kind the phase's rule says to check by **reading it back out of our own payload**.
+
+**So a jar extraction would have been the wrong instrument**, and reaching for one because "it is a registry id"
+would have been the rule applied by habit rather than by ownership. The right check is the one
+`crates/server/tests/registry_ids.rs` already performs for biomes.
+
+**And the reason `0` was never checked is now concrete**: the fixture directory holds `blocks.tsv`,
+`block_defaults.tsv`, `block_light.tsv`, `entity_types.tsv` and `items.tsv` -- **and no `chat_types.tsv`**. The
+server sends the registry and cannot resolve a single id in it, so there was nothing to check `0` against and
+nothing that would have noticed.
+
+**What the check needs**: to read the sent payload's `minecraft:chat_type` entries, find the one named
+`minecraft:chat` -- the type a plain message uses, as opposed to `say_command`, `msg_command` and the rest -- and
+assert the id the six sites send is that one. **`chat_type` is a name, and the server should send the id its own
+payload gives that name**, which is the same shape as every other fix this phase has made.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
