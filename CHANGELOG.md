@@ -2581,6 +2581,32 @@ and it shows index 16 carrying a byte in one body and a VarInt in another. **A t
 `FLOAT = 3` or explain index 16 is not the table.**
 
 
+### P10-07 (part 5) — the check moved out of a reader's head and into the probe
+
+```text
+types=157  slots=1256  unreadable=0  distinct_indices=8
+REFUSING: 8 distinct metadata indices across 157 types is below the 78 a real set of per-type tables produces.
+java rc=1
+```
+
+The extraction is still wrong — it reads only the inherited statics, for the reason part 4 gives — and **the probe
+now says so itself and exits non-zero** instead of producing a table that looks finished.
+
+**That is the whole of this round's work, and it is the generalisable half of the last one.** The wrong output was
+caught by counting distinct indices after the fact; **nothing in the tool would have caught it**, and the same
+table would have been committed by any run that did not have somebody counting. A guard inside the producer costs
+four lines and removes the dependence on a reader noticing.
+
+**The threshold is a ratio rather than a constant** — `8 * types / 16`, so 78 here — because "how many metadata
+indices exist" is not a number this project knows and does not need to: what it knows is that **157 types sharing
+8 indices is one inherited set repeated**, and that any real answer is an order of magnitude larger.
+
+**What remains is the extraction itself**: `defineId` assigns indices on a builder during the instance method
+`defineSynchedData`, so the table can only come from **building an entity and asking it**, which needs a level.
+That is a different kind of probe and it has not been written. **The capture stays the check on it**: a table that
+cannot reproduce `FLOAT = 3` or explain index 16 is not the table.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:

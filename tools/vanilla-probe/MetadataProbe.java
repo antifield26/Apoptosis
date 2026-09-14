@@ -5,7 +5,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import net.minecraft.SharedConstants;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.syncher.EntityDataAccessor;
@@ -51,6 +53,7 @@ public final class MetadataProbe {
         int types = 0;
         int slots = 0;
         int skipped = 0;
+        Set<String> indices = new HashSet<>();
         try (PrintWriter writer = new PrintWriter(
                 Files.newBufferedWriter(out.resolve("entity_metadata.tsv"), StandardCharsets.UTF_8))) {
             writer.print("# Vanilla 26.1.2 entity metadata slots, read from the classes.\n");
@@ -70,6 +73,10 @@ public final class MetadataProbe {
                     skipped++;
                 }
                 for (String row : rows) {
+                    int tab = row.indexOf('\t');
+                    if (tab > 0) {
+                        indices.add(row.substring(0, tab));
+                    }
                     writer.print(name + "\t" + row + "\n");
                 }
                 types++;
@@ -78,6 +85,20 @@ public final class MetadataProbe {
         System.out.println("types=" + types);
         System.out.println("slots=" + slots);
         System.out.println("unreadable=" + skipped);
+        System.out.println("distinct_indices=" + indices.size());
+
+        // **The check that caught the previous version, moved out of a reader's head and into the tool.** Every
+        // entity type declaring the same eight inherited slots produces a table that looks complete and is not;
+        // `acacia_boat`'s eight appeared under all 157 types, and the only thing that noticed was a human
+        // counting the distinct values afterwards.
+        int minimum = 8 * types / 16;
+        if (indices.size() < minimum) {
+            System.err.println(
+                    "REFUSING: " + indices.size() + " distinct metadata indices across " + types
+                            + " types is below the " + minimum + " a real set of per-type tables produces. This is"
+                            + " the shape of one inherited set repeated, not of per-type metadata; see P10-07.");
+            System.exit(1);
+        }
     }
 
     /**
