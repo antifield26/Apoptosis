@@ -99,7 +99,7 @@ fn add_entity_round_trips_through_our_own_codec() {
         velocity_z: 250,
     };
     let mut writer = PacketWriter::new();
-    entity.encode(&mut writer).expect("encodes");
+    entity.encode_into(&mut writer).expect("encodes");
     let out = writer.finish();
     let mut reader = PacketReader::new(&out);
     assert_eq!(AddEntity::decode(&mut reader).expect("decodes"), entity);

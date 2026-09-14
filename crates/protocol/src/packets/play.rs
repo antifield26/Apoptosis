@@ -876,7 +876,13 @@ impl AddEntity {
     ///
     /// [`ServerError::Protocol`] when a field cannot be written, which for these types means never; the
     /// signature matches its neighbours rather than being infallible in isolation.
-    pub fn encode(&self, writer: &mut PacketWriter) -> ServerResult<()> {
+    /// Write the body into an existing writer, for the [`Packet`] impl and for tests that frame it
+    /// themselves.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] when a field cannot be written, which for these types means never.
+    pub fn encode_into(&self, writer: &mut PacketWriter) -> ServerResult<()> {
         writer.write_varint(self.entity_id);
         writer.write_uuid(&self.uuid);
         writer.write_varint(self.type_id);
@@ -939,13 +945,46 @@ pub struct RemoveEntities {
     pub entity_ids: Vec<i32>,
 }
 
+impl Packet for AddEntity {
+    const ID: i32 = crate::ids::clientbound::play::ADD_ENTITY;
+
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] when the body is malformed or has trailing bytes.
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let decoded = Self::decode(&mut reader)?;
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "add_entity has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(decoded)
+    }
+
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] when the body cannot be encoded, which for these field types means never.
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        self.encode_into(&mut writer)?;
+        Ok(writer.finish())
+    }
+}
+
 impl RemoveEntities {
     /// Encode the body.
     ///
     /// # Errors
     ///
     /// [`ServerError::Protocol`] when the count does not fit a `VarInt`, which needs more than two billion ids.
-    pub fn encode(&self, writer: &mut PacketWriter) -> ServerResult<()> {
+    /// Write the body into an existing writer, for the [`Packet`] impl.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] when the count does not fit a `VarInt`.
+    pub fn encode_into(&self, writer: &mut PacketWriter) -> ServerResult<()> {
         let count = i32::try_from(self.entity_ids.len()).map_err(|_| {
             ServerError::Protocol("remove_entities carries more ids than a VarInt count".to_owned())
         })?;
@@ -1072,6 +1111,34 @@ impl SetEntityMotion {
             velocity_y: to_wire("y", y)?,
             velocity_z: to_wire("z", z)?,
         })
+    }
+}
+
+impl Packet for RemoveEntities {
+    const ID: i32 = crate::ids::clientbound::play::REMOVE_ENTITIES;
+
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] when the body is malformed or has trailing bytes.
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let decoded = Self::decode(&mut reader)?;
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "remove_entities has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(decoded)
+    }
+
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] when the id count does not fit a `VarInt`.
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        self.encode_into(&mut writer)?;
+        Ok(writer.finish())
     }
 }
 

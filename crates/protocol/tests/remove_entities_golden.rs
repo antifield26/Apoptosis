@@ -67,7 +67,7 @@ fn remove_entities_round_trips_through_our_own_codec() {
             entity_ids: ids.clone(),
         };
         let mut writer = PacketWriter::new();
-        packet.encode(&mut writer).expect("encodes");
+        packet.encode_into(&mut writer).expect("encodes");
         let out = writer.finish();
         let mut reader = PacketReader::new(&out);
         assert_eq!(
