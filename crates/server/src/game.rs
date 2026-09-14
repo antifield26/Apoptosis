@@ -597,6 +597,12 @@ pub struct TickReport {
     pub block_entities_changed: usize,
     /// Entities swept out of the store by the Broadcast phase this tick.
     pub removed_entities: usize,
+    /// Entities announced to at least one player this tick.
+    ///
+    /// Counted rather than assumed: a spawn broadcast to nobody -- an item dropped where no player is
+    /// watching -- is a different event from one nobody sent, and a tick report that cannot tell them
+    /// apart is the kind of silence this phase has been removing.
+    pub entities_spawned: usize,
     /// Ids swept this tick, ascending.
     ///
     /// Carried so tests can name what disappeared and so the P05 packet work has
@@ -641,6 +647,12 @@ pub struct Game {
     /// kilobytes; a burst of block changes would otherwise stall the tick. Nothing is dropped — a chunk stays
     /// here until it is sent — so a burst is delayed rather than lost.
     pending_light: BTreeSet<ChunkPos>,
+    /// Items dropped this tick, queued for the Broadcast phase to announce.
+    ///
+    /// Queued rather than sent where they spawn because `spawn_item` has no `TickReport` and
+    /// `broadcast_chunk` needs one -- the same deferral `pending_light` performs. Until this existed a
+    /// dropped item was real on the server and invisible to every client.
+    pending_entity_spawns: Vec<EntityId>,
     /// This tick's counters, shared by every phase while it runs.
     report: TickReport,
     tick: u64,
@@ -888,6 +900,7 @@ impl Game {
             scheduler: Scheduler::new(),
             pending_intents: Vec::new(),
             pending_light: BTreeSet::new(),
+            pending_entity_spawns: Vec::new(),
             report: TickReport::default(),
             tick: 0,
             overflowed: Vec::new(),
@@ -1081,10 +1094,13 @@ impl Game {
                 "refusing to spawn an item entity for an empty stack".to_owned(),
             ));
         }
-        self.entities.spawn(
+        let id = self.entities.spawn(
             EntityBody::Item(ItemEntity::new(stack, owner)),
             to_entity(position),
-        )
+        )?;
+        // Announced in the Broadcast phase; see the field's docs for why not here.
+        self.pending_entity_spawns.push(id);
+        Ok(id)
     }
 
     /// Give the owned world handle back (shutdown, or handing it to a save worker).
@@ -1422,6 +1438,7 @@ impl Game {
     fn phase_broadcast(&mut self, report: &mut TickReport, tick: Tick) -> ServerResult<()> {
         self.broadcast_block_changes(report)?;
         self.broadcast_light_updates(report)?;
+        self.broadcast_entity_spawns(report)?;
         self.stream_all(report)?;
         self.send_world_time(report, tick)?;
         self.sweep_entity_removals(report);
@@ -1506,6 +1523,51 @@ impl Game {
                 self.send(id, &update, report)?;
             }
             report.light_updates += 1;
+        }
+        Ok(())
+    }
+
+    /// Announce this tick's dropped items to the players who can see them.
+    ///
+    /// The type id comes from `self.registries.entities`, which is the table extracted from the jar by
+    /// `EntityTypeProbe` -- **not** the config payload, where `minecraft:entity_type` is a tag directory. A
+    /// dropped stack is `minecraft:item`, which is id **71** and not id 0: the registry is alphabetical, so id 0
+    /// is `minecraft:acacia_boat`. See P10-06.
+    fn broadcast_entity_spawns(&mut self, report: &mut TickReport) -> ServerResult<()> {
+        let pending = std::mem::take(&mut self.pending_entity_spawns);
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let item = self.registries.entities.id(mc_registry::entities::ITEM)?;
+        for id in pending {
+            // The entity can be gone already -- reaped, or removed by a command in the same tick -- and an
+            // identity for something that is not there is not something to send. Skipping is the honest answer
+            // rather than a packet describing nothing.
+            let (Some(entity), Some(uuid)) = (self.entities.get(id), self.entities.uuid(id)) else {
+                continue;
+            };
+            let position = entity.position;
+            let (yaw, pitch) = (entity.yaw, entity.pitch);
+            let packet = mc_protocol::packets::play::AddEntity {
+                entity_id: id.get(),
+                uuid,
+                type_id: item,
+                x: position.x,
+                y: position.y,
+                z: position.z,
+                pitch: wire_angle(pitch),
+                yaw: wire_angle(yaw),
+                head_yaw: wire_angle(yaw),
+                // A dropped stack has no variant fields.
+                data: 0,
+                velocity_x: 0,
+                velocity_y: 0,
+                velocity_z: 0,
+            }
+            .to_raw()?;
+            if self.broadcast_chunk(chunk_of(position.x, position.z), &packet, report) > 0 {
+                report.entities_spawned += 1;
+            }
         }
         Ok(())
     }
@@ -3899,5 +3961,25 @@ pub fn face_offset(face: i32) -> (i32, i32, i32) {
         // 1 is +Y; anything unknown defaults to the top face rather than refusing
         // the action, matching how the client sends 0..5 only.
         _ => (0, 1, 0),
+    }
+}
+
+/// Degrees to the wire's 1/256 of a degree, signed.
+///
+/// The truncation is the wire's resolution rather than an accident: the client reads a byte and multiplies by
+/// 360/256, so anything finer would be lost anyway. A NaN or an infinity -- which a caller should not produce --
+/// becomes 0 rather than saturating, because building a spawn packet is allowed to carry a wrong angle but is not
+/// allowed to panic.
+fn wire_angle(degrees: f32) -> i8 {
+    if !degrees.is_finite() {
+        return 0;
+    }
+    let steps = (degrees * 256.0 / 360.0).round();
+    if steps <= f32::from(i8::MIN) {
+        i8::MIN
+    } else if steps >= f32::from(i8::MAX) {
+        i8::MAX
+    } else {
+        steps as i8
     }
 }
