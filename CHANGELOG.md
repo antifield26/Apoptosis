@@ -2291,6 +2291,36 @@ would send a client an entity moving the other way at speed.
 
 Because that is what I got wrong, and a reader should not have to derive it from a sample.
 
+### P10-06 (part 7) — the wiring's prerequisite: the entity model has no UUID
+
+Sending `AddEntity` needs an entity id **and a 16-byte UUID**. The entity store has the first and not the second:
+a search for `uuid` in `crates/entity/src/entity.rs` returns nothing, and `spawn` allocates only
+`EntityId(self.next_id)`. So this is a **prerequisite rather than a codec gap** — the sort of thing wiring finds
+and unit tests do not.
+
+### And it is a design decision, not a line of code
+
+`Uuid::new_v4()` is the obvious implementation and is wrong here for a stated reason: the engineering contract
+requires that **the same initial state and the same ordered inputs over the same tick count produce the same
+normalized simulation state**, and a random UUID per spawn breaks exactly that. The UUID must be **derived from
+stable inputs**, and the two candidates are:
+
+* **from the world seed and the entity id** — deterministic by construction, and entity ids are already allocated
+  sequentially;
+* **from a counter seeded by the world seed** — the same property stated explicitly, which is what Vanilla's
+  offline-mode player UUID does for the case that matters most here.
+
+**Neither is chosen yet**, deliberately. It changes a core type in `mc-entity`, it interacts with
+`crates/server/tests/entity_lifecycle.rs`'s determinism test — the one test in the repository with an explicit
+anti-vacuity sentinel — and it is the identity a client keeps for an entity across packets. That deserves its own
+round and its own evidence rather than an edit appended to a codec.
+
+### Where the wiring stands
+
+Both insertion points exist and the code's own comments name them. `spawn_item_owned` queues an `AddEntity` for
+the Broadcast phase, the way `pending_light` already queues work, because it has no `TickReport` and
+`broadcast_chunk` needs one; and `sweep_entity_removals` sends `RemoveEntities` for the ids it already gathers.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
