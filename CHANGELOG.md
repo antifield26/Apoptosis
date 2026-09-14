@@ -1839,6 +1839,53 @@ evidence only once the model is right.** The four files on this line have now pr
 That is the distinction this line exists to draw, and it is worth more than another sweep: **"unverified by me"
 and "wrong" are different findings**, and collapsing them is the error that produced KD-70.
 
+### KD-79 \u2014 with the right model, `tag.rs`'s `46` comes out exactly, and the other two are conventions
+
+KD-78 recorded three of `tag.rs`'s numbers as unverified because my instrument was wrong: I resolved
+`#supports_warped_fungus` as `minecraft:supports_warped_fungus` when **a `#` reference is relative to the same
+registry**, so every relative reference in the pack counted as missing.
+
+With that one rule applied:
+
+| claim | measured | |
+|---|---|---|
+| "Vanilla has **758** tags" | **758** | exact |
+| "splitting at the first left **46**" | **46 unresolved** | **exact** |
+| "Vanilla's deepest is **4**" | 5 by my numbering | a **convention**, not a defect |
+| "vanilla alone has **17**" directories | 16 | a **scope**, not a defect |
+
+**The 46 is the one that matters.** It is not a count of anything visible in a file listing: it is the number of
+tag references that do not resolve **once the registry-relative rule is applied**, and the comment states it
+alongside the 103 that the naive separator-split produces. I measured 384 with the rule missing and **46** with it
+\u2014 so the file's number is the correct-model answer and my first one was the broken-model answer, in exactly the
+shape the comment describes.
+
+**The other two differ by one each, and both differences are conventions rather than errors:**
+
+* **depth**: I count a tag with no tag-references as depth 1; the file's numbering makes that 0. Under its
+  convention the deepest is 4 and under mine it is 5 \u2014 and **both name `block/supports_crimson_fungus`**, which
+  is the tag the comment calls the deepest. A self-consistent claim with a different origin is not a defect, and
+  calling it one would be KD-70 all over again.
+* **directories**: 16 under `data/minecraft/tags/`, against a claimed 17. `worldgen` holds sub-registries
+  (`worldgen/biome`, `worldgen/structure`, ...) that a directory count can reasonably split, which is the same
+  class of question as the built-in `trade_rebalance` pack in KD-75.
+
+### What this line has now established
+
+Four files, and the distinction that took three rounds to draw cleanly:
+
+| file | outcome |
+|---|---|
+| `recipe.rs` | **one claim, wrong** \u2014 and reproducible without any model of a format |
+| `advancement.rs` | **eight claims, all exact** \u2014 the hardest needed a parent-chain walk, right on the third attempt |
+| `loot.rs` | three exact, three separated by a built-in data pack |
+| `tag.rs` | two exact once the rule was right, two separated by conventions of numbering and scope |
+
+**Three of the four hold up, and the fourth failed where the number had never been measured at all.** The line's
+real product is therefore not a defect count but a way of telling three things apart: **measured and right**,
+**measured and wrong**, and **not measured by me** \u2014 where the third has repeatedly meant *my instrument*, and
+collapsing it into the second is what produced KD-70 and then KD-73.
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
