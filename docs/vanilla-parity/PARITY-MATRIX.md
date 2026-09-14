@@ -274,6 +274,54 @@ what it accepts. **The suite cannot ask it**, because its client is ours.
 `block_entity_data`'s trigger; the move call site; system-message routing and `chat_type`; and **a real client's
 rendering**, which is the one item on this list that no amount of server-side evidence can settle.
 
+## P10 cross-audit -- first pass (2026-09-14)
+
+The five scanners under `tools/review/` were run against everything P10 has delivered. Four found nothing P10
+introduced, one produced a candidate, and **the candidate was refuted in the same round** -- which is the outcome
+worth writing down, because the refutation is more informative than the suspicion was.
+
+### The candidate, and why it was wrong
+
+`scan_registry_ids` prints what follows each registry key in the payload this server sends:
+
+```text
+"minecraft:dimension_type" at offset 4717
+  0  minecraft:overworld   <-- entry 0, which join_game sends
+  1  minecraft:overworld_caves
+  2  minecraft:the_end
+```
+
+`sender/game.rs` sends `dimension_type_id: 0`, entry 0 is `minecraft:overworld`, and **a search of
+`registry_ids.rs` for `identifiers_after` found only the `chat_type` call** -- so this looked like the next
+unchecked number, and exactly the shape of `PLAINS_BIOME_ID = 0`.
+
+**It is checked.** `registry_ids.rs:103` holds `the_dimension_type_id_this_server_sends_is_the_overworld`, and
+`e2e_login_play.rs:104` carries the sentence *"Entry 0 is the contract, not the count: `join_game` references
+`dimension_type`"* -- two checks, one of them older than this phase.
+
+**And the search that missed them is the lesson.** `identifiers_after` is how the **chat type** check reaches the
+payload; the dimension check reaches it another way, so a grep for one call shape reported an absence that was not
+there. **That is the fourth time in this phase that a measurement of a measurement has been wrong** -- the metadata
+cross-reference that reported "no metadata" for the one serializer it could not read, the probe that reported
+`unreadable=0` while reading eight inherited slots, and the coordinate hypothesis that three sessions were spent
+eliminating. **The pattern is consistent enough to name: when a tool reports an absence, the first question is what
+shape it was looking for.**
+
+### What the scanners found besides
+
+* **`scan_vacuous_tests`: two tests whose bodies name no way to fail** -- `every_tag_type_round_trips_on_disk`
+  (`crates/nbt/src/write.rs`) and `the_whole_pipeline_runs_against_the_real_pack` (`scenario_vanilla.rs`). **Both
+  predate P10**, and the second is named for the strongest property in the repository, so both are worth a look --
+  recorded rather than fixed, because neither is this phase's.
+* **`scan_doc_claims`: 1073 falsifiable claims in product-code docs**, 230 using "only", 149 "never". **A
+  population, not a defect** -- which is why the audit reads them rather than counting them.
+* **`scan_identifier_literals`: 910 literal identifiers across 13 crates.**
+* **`scan_doc_equalities`** wrote its claims to `target/equality_claims.txt`.
+
+**The scanner output is not the audit** -- each line is a place to look, and this pass is the argument: the one
+line that looked most like a defect was the one that was already covered.
+
+
 ## Removed rows (governance, 2026-09-12)
 
 Five rows from the pre-governance matrix were deleted rather than updated:
