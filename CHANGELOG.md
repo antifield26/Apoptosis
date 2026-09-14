@@ -2460,6 +2460,37 @@ to gain from it and there is not yet.
 The signature becomes `ServerResult<()>`: framing can fail, and a function that swallowed that to keep its old
 shape would be hiding the one thing it now does.
 
+### P10-07 (part 1) — forty-five metadata bodies, and what they say about why this task exists
+
+45 `set_entity_data` bodies in `target/vanilla-capture/bodies-lit/`, **every one 11 bytes**:
+
+```text
+000064: 4f | 09 03 | 41 a0 00 00 | 10 00 | 7f | ff
+000140: 4e | 09 03 | 40 80 00 00 | 10 01 | 02 | ff
+        id   idx typ  value         idx typ  value  terminator
+        1  +  2   +     4       +    2   +  1  +  1  =  11
+```
+
+`index 9, type 3` is a **float**, reading 20.0 in one body and 4.0 in the other — full health, and a slime's — so
+index 9 is health. **Index 16 carries type 0 (a byte) in one body and type 1 (a VarInt) in the other**, which is
+the whole reason P10-07 exists: **one slot means different things, with different widths, on different entity
+types.** A codec that assumed a fixed layout per index would read one of those two bodies wrong.
+
+**Why this is evidence rather than a reading.** The field widths the format implies — `VarInt` id, then per entry
+a `u8` index and a `VarInt` type and the value, then `u8 0xff` — **sum to 11 bytes for a two-entry body**, and all
+45 captured bodies are exactly 11. The same arithmetic check `add_entity`, `remove_entities` and
+`set_entity_motion` each got.
+
+**Where the index tables come from, and why this one is different.** Vanilla defines them with
+`SynchedEntityData.defineId(...)` calls in each entity class, so there is **no registry to dump**: the tables are
+in the bytecode of `net.minecraft.world.entity.*`, one `defineId` per field, each with a serializer class that
+carries the wire type. **A probe has to walk those classes**, which is a heavier extraction than
+`EntityTypeProbe` was — the pattern is the same, the surface is not.
+
+**The alternative is the failure this phase keeps meeting**: reading those two captured bodies and writing down
+what they happen to contain, which is a fixture and a decoder agreeing because they came from one reading.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
