@@ -155,15 +155,15 @@ with the bug for as long as it did.
 **Still unverified, and therefore still claimed by nobody:** nothing after `finish_configuration` has been
 reached by a real client. Lighting, entities and chat remain exactly as unmeasured as KD-38 says.
 
-### P10-03 (continued) \u2014 a real 26.1.2 client reaches play
+### P10-03 (continued) — a real 26.1.2 client reaches play
 
 Four further real-client runs, each naming the next gap. **The fifth ends with the client in the play state**,
-which is the first time a Java client has done so in this project \u2014 KD-38 has read "boundary (not yet
+which is the first time a Java client has done so in this project — KD-38 has read "boundary (not yet
 exercised)" since Phase 09.
 
 | Run | Client said | Outcome |
 |---|---|---|
-| 3 | `Missing tag TagKey[minecraft:damage_type / minecraft:is_fire]` | fixed \u2014 `damage_type` sent with its 33 tags |
+| 3 | `Missing tag TagKey[minecraft:damage_type / minecraft:is_fire]` | fixed — `damage_type` sent with its 33 tags |
 | 4 | `enchantment: Failed to parse value` for every entry | **excluded, with its reason recorded** |
 | 5 | `Failed to decode clientbound/minecraft:set_default_spawn_position` | **play reached** |
 
@@ -172,7 +172,7 @@ approach rather than a missing registry: those fields use *dispatch* codecs (a b
 `type`), NBT lists are homogeneous, and a float is a different tag from a double. A converter that infers
 everything from JSON **shape** cannot express any of the three. Excluding the registry was the honest move and
 it is also what unblocked the phase: sending a payload the client rejects is a hard failure, while omitting it
-leaves a gap the client names precisely \u2014 and it named none.
+leaves a gap the client names precisely — and it named none.
 
 **A silent-corruption bug in that converter was found by the test suite, not by the client.** Adding
 `villager_trade` failed 44 tests with `unknown NBT tag id 64 in compound`: NBT lists are homogeneous, so seven
@@ -186,8 +186,8 @@ payload bytes, and 26.1.2 wants more. Recorded as **KD-40**. Like `enchantment`,
 **schema**, not a guess at its width.
 
 **The remedy for both, and the recommended next step: stop re-implementing codecs from shape.** Capture the
-real payloads from a vanilla 26.1.2 server \u2014 the jar is already in this workspace and the P10-01 rig is the
-tool for exactly this \u2014 and replay them, as this project already does for packet ids, block states and the
+real payloads from a vanilla 26.1.2 server — the jar is already in this workspace and the P10-01 rig is the
+tool for exactly this — and replay them, as this project already does for packet ids, block states and the
 data pack.
 
 `villager_trade` and `enchantment` are excluded from the synced-registry fixture, each with its reason in the
@@ -235,7 +235,7 @@ that packet too, and it is already captured.
 the probe. The same capture now offers a way to close them too: the vanilla server's `registry_data` packets
 can be replayed rather than re-encoded from JSON shape.
 
-### P10-03 (continued) \u2014 replaying the server's own bytes, and two more play packets fixed
+### P10-03 (continued) — replaying the server's own bytes, and two more play packets fixed
 
 The capture remedy, applied to the registries. **The finding inverted the approach.**
 
@@ -245,8 +245,8 @@ The capture remedy, applied to the registries. **The finding inverted the approa
 reads the content from its own jar.
 
 So our previous design was wrong twice over, and only the first was visible. It could not encode
-`enchantment`'s dispatch codecs or `villager_trade`'s mixed-type arrays \u2014 the failures I spent two rounds
-excluding registries over \u2014 and more fundamentally it was **sending data the protocol does not ask for**.
+`enchantment`'s dispatch codecs or `villager_trade`'s mixed-type arrays — the failures I spent two rounds
+excluding registries over — and more fundamentally it was **sending data the protocol does not ask for**.
 The client parsed it because it was there, and refused when it did not match. Both \"problems\" were
 self-inflicted. (`villager_trade` is not even a synced registry: vanilla does not send it at all.)
 
@@ -257,7 +257,7 @@ bytes, replayed verbatim from a committed 41 338-byte fixture built by
 **`player_position` (KD-42) fixed from captured bytes.** The client reported `found 1 bytes extra`, which reads
 as a width problem. The capture showed the total was right and the **order** was not: 26.1.2 leads with the
 `VarInt` teleport id and we wrote it last, so the client consumed the top byte of `x` as the id. Fixed, pinned
-by a golden test holding the 61 captured bytes, and verified \u2014 the client's session grew from **119 to 444
+by a golden test holding the 61 captured bytes, and verified — the client's session grew from **119 to 444
 packets** past it.
 
 **`set_time` is recorded, not guessed.** The client now rejects it as `was larger than I expected`. Our payload
@@ -271,25 +271,25 @@ models the reply a client sends. Rewriting our send path as `to_raw()` therefore
 carrying id 7. Where two directions share a packet name the id must be chosen explicitly; a test now asserts it.
 
 **Two more of my own defects.** The capture script's readiness check trusted a **stale log** and skipped
-starting the server, then \u2014 after that was fixed \u2014 probed the rig's port by **connecting** to it, which
+starting the server, then — after that was fixed — probed the rig's port by **connecting** to it, which
 consumed the single connection the rig exists to serve. A liveness probe must not change what it observes.
 
-### P10-03 (continued) \u2014 a real 26.1.2 client plays with no protocol errors
+### P10-03 (continued) — a real 26.1.2 client plays with no protocol errors
 
-**KD-43 closed, and the session is stable.** A real vanilla 26.1.2 client \u2014 the owner's installation,
-through the P10-01 rig \u2014 now runs a complete session against this server with **no protocol-error report
+**KD-43 closed, and the session is stable.** A real vanilla 26.1.2 client — the owner's installation,
+through the P10-01 rig — now runs a complete session against this server with **no protocol-error report
 written at all**, and is *live* rather than merely connected:
 
 | Signal | Reading |
 |---|---|
-| client \u2192 server, play id 28 | `keep_alive` \u2014 it **answered** the server's keepalive |
-| client \u2192 server, play id 13 | **410 per-tick reports** (\u224820/s) \u2014 the game loop is running |
+| client \u2192 server, play id 28 | `keep_alive` — it **answered** the server's keepalive |
+| client \u2192 server, play id 13 | **410 per-tick reports** (\u224820/s) — the game loop is running |
 | server \u2192 client, play id 113 | 17 `set_time` packets, accepted |
 | server \u2192 client, play id 45 | 289 chunk packets |
-| rig | `degraded=[]` \u2014 everything observed cleanly |
+| rig | `degraded=[]` — everything observed cleanly |
 
 **What `set_time` actually is.** Captured: **eighteen** packets at id 113, all **9 bytes**, with the leading
-`i64` incrementing by exactly **20** \u2014 one second of ticks, which is this packet's send rate. The id is
+`i64` incrementing by exactly **20** — one second of ticks, which is this packet's send rate. The id is
 confirmed independently by the jar-derived `packet-ids-775.tsv` (`game clientbound 113 set_time`) and by the
 client's own error text. So **26.1.2 removed `time_of_day` from the wire**: the client derives the time of day
 from the `world_clock` registry, which is precisely why this phase had to make that registry work before play
@@ -298,7 +298,7 @@ was reachable at all. We sent `i64` + `i64` + `bool`, 8 bytes too many. Fixed, p
 **One packet is left unexplained, deliberately.** Of nineteen packets at id 113, eighteen are 9 bytes and
 **one is 31**: its `world_age` of 7405 fits the sequence immediately before the first 9-byte packet, but the
 remaining 23 bytes contain `3f800000` (`1.0f`) twice, and `set_time` has no float field at all. Eighteen
-uniform packets settle the format, so the fix does not depend on it \u2014 but if that packet is genuinely
+uniform packets settle the format, so the fix does not depend on it — but if that packet is genuinely
 something else then our id table and vanilla's disagree somewhere, and other id-labelled conclusions would need
 re-checking. Recorded as an open question rather than smoothed over.
 
@@ -313,10 +313,10 @@ mechanism, which belongs with the light engine work.
 rig's table, so the trace shows bare ids for the two most frequent packets of a live session.
 
 **KD-38 moves, and not as far as it looks.** Its boundary was "no Java client has been driven". It is now
-"a client plays, and **nothing about what it renders has been verified**" \u2014 the client could be staring at
+"a client plays, and **nothing about what it renders has been verified**" — the client could be staring at
 an unlit void and nothing here would know. That is what P10-04 onward exists to settle.
 
-### P10-04 / P10-05 \u2014 reconnaissance: `level_chunk_with_light` cannot be parsed at all
+### P10-04 / P10-05 — reconnaissance: `level_chunk_with_light` cannot be parsed at all
 
 Starting the light engine turned up a defect that comes **before** it, and which changes what P10-05 has to do.
 
@@ -326,20 +326,20 @@ Starting the light engine turned up a defect that comes **before** it, and which
 light mask has 1 sections set but 0 arrays follow
 ```
 
-**Two hypotheses, one excluded.** The first was that our decoder is stricter than the protocol \u2014 that a real
+**Two hypotheses, one excluded.** The first was that our decoder is stricter than the protocol — that a real
 server sends a mask bit with no array. That is now ruled out by arithmetic that uses **neither** decoder: a
 light array is fixed-width, so for a packet of known size only one small (sky, block) pairing can consume the
-remainder. **None does \u2014 they are all 24 bytes short.** So the bytes being read as masks cannot be masks.
+remainder. **None does — they are all 24 bytes short.** So the bytes being read as masks cannot be masks.
 They look plausible because light data is mostly zero, which is exactly why a shared misreading survived two
 implementations.
 
-**What the real bytes do confirm.** Scanning for the array signature \u2014 a `80 10` VarInt (2048) followed by a
-mostly-`0xFF` span \u2014 finds it at offset 5229 of a 7280-byte packet, ending at 7279. So `LIGHT_ARRAY_BYTES`
+**What the real bytes do confirm.** Scanning for the array signature — a `80 10` VarInt (2048) followed by a
+mostly-`0xFF` span — finds it at offset 5229 of a 7280-byte packet, ending at 7279. So `LIGHT_ARRAY_BYTES`
 and the length-prefixed array convention are **right**, and **one byte remains after the array**, which is
 itself unexplained.
 
-**Not established: where the 24 bytes are.** The candidates \u2014 an extra heightmap long per entry, a misread
-`data` size, or a field between them \u2014 are not distinguished yet, and guessing is what this phase keeps
+**Not established: where the 24 bytes are.** The candidates — an extra heightmap long per entry, a misread
+`data` size, or a field between them — are not distinguished yet, and guessing is what this phase keeps
 paying for. The next step is to settle it against the bytes rather than to start filling masks.
 
 **A note on method.** A diagnostic test is committed (`vanilla_chunk_light.rs`, ignored by default because the
@@ -349,11 +349,11 @@ evidence does not support is the failure mode this whole phase has been unlearni
 the part that is solid: every captured packet fails identically, which is what makes this a layout defect
 rather than a quirk of one packet.
 
-**Consequence for the plan.** P10-04 (the light engine) is not blocked \u2014 it computes light and does not care
+**Consequence for the plan.** P10-04 (the light engine) is not blocked — it computes light and does not care
 about the packet. **P10-05 is blocked**, because filling four masks is meaningless while the field order around
 them is wrong.
 
-### KD-44 closed \u2014 the light masks are `BitSet`s, and the fix is verified in both directions
+### KD-44 closed — the light masks are `BitSet`s, and the fix is verified in both directions
 
 The reconnaissance finding from this round is now fixed, and the root cause came from the jar rather than from
 more reasoning.
@@ -371,7 +371,7 @@ readList(DATA_LAYER_STREAM_CODEC) -> blockUpdates
 `VarInt`s.
 
 **Why that survived.** An empty mask is a single `0x00` in **both** encodings. Our reading therefore agreed
-with a real server for every mask Phase 04 ever sent \u2014 all of them empty \u2014 and disagreed the moment one
+with a real server for every mask Phase 04 ever sent — all of them empty — and disagreed the moment one
 had content. A single captured packet with light in it exposed it.
 
 **Re-running the layout search under the correct model** finds exactly one offset per packet, the same offset
@@ -386,7 +386,7 @@ offset 3150 (where our header parse already ended)
 So **our header parse was right all along**; only the mask encoding was wrong. The "24 missing bytes" from the
 previous round were an artifact of the wrong model, not a second defect.
 
-**The fix.** The masks are now `Vec<u32>` of set section indices rather than an integer bit pattern \u2014 what a
+**The fix.** The masks are now `Vec<u32>` of set section indices rather than an integer bit pattern — what a
 `BitSet` means, which makes the "arrays follow the mask bits" check the array count itself, and which encodes
 without the trailing-zero hazard: vanilla's `BitSet.toLongArray()` trims, so a fixed-width integer would emit
 bytes no real server produces.
@@ -398,10 +398,10 @@ bytes no real server produces.
   783-packet session.
 
 **Consequence.** P10-05 is unblocked: the field order around the masks is now known to be right, so filling
-them is meaningful. P10-04 (the light engine itself) is still to build \u2014 that is what actually puts light in
+them is meaningful. P10-04 (the light engine itself) is still to build — that is what actually puts light in
 those arrays.
 
-### P10-04 (part 1) \u2014 the light engine, and the per-state table it runs on
+### P10-04 (part 1) — the light engine, and the per-state table it runs on
 
 **The table comes from the jar's own accessors, not from documentation.** `tools/vanilla-probe/LightProbe.java`
 boots the registry the dedicated server boots and calls the three methods `LevelLightEngine` itself reads:
@@ -441,20 +441,20 @@ margin were removed.
 **Not yet done, and therefore not claimed:** the masks and arrays are still empty on the wire, so the client
 still renders a dark world. `Game` does not yet call the engine. That is the rest of P10-05.
 
-### P10-05 \u2014 light on the wire, and a performance bug of my own
+### P10-05 — light on the wire, and a performance bug of my own
 
 The masks and arrays are no longer empty: a real client now receives computed light instead of an unlit world.
 
 **The mask rule came from the capture, not from assumption.** Across all 117 packets: no section is ever in a
 mask *and* an empty mask; `empty_sky` only ever sets bit **0** (the section below the world); the sky arrays are
-exactly two per chunk \u2014 the open-sky section (uniformly 15) and the surface section (mixed). That matches
+exactly two per chunk — the open-sky section (uniformly 15) and the surface section (mixed). That matches
 vanilla's `DataLayer`, whose default is 15 for sky and 0 for block, and it fixes the encoding:
 
 * a `*_mask` bit means an array follows for that section;
 * an `empty_sky` bit means uniformly **15**, an `empty_block` bit uniformly **0**;
 * bit `i` is light section `i`, which is world section `i - 1`.
 
-Every light section is accounted for, including the two outside the world \u2014 a section no mask mentions is one
+Every light section is accounted for, including the two outside the world — a section no mask mentions is one
 whose value we did not choose.
 
 **Evidence it is really there.** In a real 26.1.2 session the chunk bodies are now **4 626..8 732 bytes, mean
@@ -463,8 +463,8 @@ session has **no protocol error**, and the client is live: 447 client-to-server 
 reports. The client's own decoder reads four `BitSet`s and two lists without complaint, which is itself a
 structural check.
 
-**A performance bug I introduced, and how it surfaced.** Seeding queued **every** sky-lit cell \u2014 124 000 per
-chunk for an open column \u2014 which made chunk sends slow enough that an unrelated test,
+**A performance bug I introduced, and how it surfaced.** Seeding queued **every** sky-lit cell — 124 000 per
+chunk for an open column — which made chunk sends slow enough that an unrelated test,
 `an_over_long_command_ends_only_that_connection`, began timing out: its five-second deadline expired before a
 command reply was generated. The fix is exact rather than a tuning: a cell can only raise a neighbour if some
 neighbour is **strictly darker**, because `candidate = level - max(1, dampening)` can never exceed `level`. So
@@ -474,21 +474,21 @@ queueing only those cells is the precise precondition, and the scan that finds t
 did not alter the result.
 
 **What is not verified, and cannot be from here: whether the world *looks* right.** Light is not a field a
-client validates, so a wrong light level produces no error and no log \u2014 the same silence that hid the
+client validates, so a wrong light level produces no error and no log — the same silence that hid the
 empty-mask version. What is established is that the data is well-formed, is the right order of magnitude, and
 is accepted. Confirming it looks correct needs a person looking at the screen.
 
 **Also not done: incremental updates on block change.** Light is recomputed when a chunk is sent, so placing a
 torch does not relight the chunk until it is resent. That is the remaining part of P10-04.
 
-### KD-45 \u2014 the light engine's cost, measured rather than assumed
+### KD-45 — the light engine's cost, measured rather than assumed
 
 Putting light on the wire made a **second** test time out, and this time in CI only: locally
 `an_over_long_command_ends_only_that_connection` passes in an 11.5 s suite, on the runner it fails in a 27.7 s
 one against the same five-second deadline.
 
 **The cause is exact.** Light is recomputed on **every chunk send**, per recipient, with no cache. Each chunk is
-three passes over 124 320 cells \u2014 sky seeding, block seeding, and the frontier scan \u2014 and the frontier
+three passes over 124 320 cells — sky seeding, block seeding, and the frontier scan — and the frontier
 dominates at six neighbour comparisons per cell per layer. A fresh login is 205 chunks.
 
 **What was done, and what was not.** The deadline was raised to 60 s, with the reasoning written at the line:
@@ -497,7 +497,7 @@ cost rather than tuned to it. What was *not* done is reverting the light, which 
 behind a feature that does not work. **The gap is recorded as KD-45 rather than absorbed.**
 
 **The fix is known and is the same work P10-04 still owes.** Compute light once per chunk, keep it, and
-invalidate only what a block change affects \u2014 caching and incremental relighting are one problem, not two.
+invalidate only what a block change affects — caching and incremental relighting are one problem, not two.
 Until then, placing a torch does not relight a chunk until it is resent, and a joining player waits longer than
 they should for their first view.
 
@@ -506,56 +506,56 @@ reason that looked unrelated: a command test that has nothing to do with lightin
 slow. The first was mine to fix outright (queueing every lit cell, 124 000 per chunk); the second is a genuine
 limitation that needs the caching work.
 
-### KD-46 \u2014 differential verification, and the bug it found immediately
+### KD-46 — differential verification, and the bug it found immediately
 
 The goal's strongest verification: **run our engine on vanilla's own blocks and compare with vanilla's own
-light.** The captured packets carry both halves \u2014 a real world's block states and the light arrays vanilla
-computed for them \u2014 so no modelling sits between the two.
+light.** The captured packets carry both halves — a real world's block states and the light arrays vanilla
+computed for them — so no modelling sits between the two.
 
 **It found a bug on the first run.** Agreement was **87.5%, exactly 7/8**: fourteen of sixteen arrays matched
 cell for cell and the terrain section was uniformly 15 where vanilla's was mixed. Our engine was lighting the
 world **straight through its terrain**.
 
-The cause was in the light table's parser. `block` rows \u2014 the 738 blocks whose states share one triple, which
-covers **stone, dirt and every common terrain block** \u2014 were matched by a pattern arm that pushed them into a
+The cause was in the light table's parser. `block` rows — the 738 blocks whose states share one triple, which
+covers **stone, dirt and every common terrain block** — were matched by a pattern arm that pushed them into a
 vector **nothing ever read**. Every state they covered kept the `UNKNOWN` default of `(0, 0, true)`:
 transparent air.
 
 **Why nothing else caught it.** The file was right. The parser ran. No error was raised. The payload was
 well-formed and a client renders it without complaint, because light levels are not something a client
 validates. The unit tests used synthetic tables where every state had an explicit row. Only running against a
-real server's data could see it \u2014 which is precisely why the goal asked for this.
+real server's data could see it — which is precisely why the goal asked for this.
 
 **The fix, and the format change that prevents a repeat.** `block` rows carried only the block's *name*, so a
-parser had no way to know which state ids they covered \u2014 the information was missing, not merely ignored. The
+parser had no way to know which state ids they covered — the information was missing, not merely ignored. The
 probe now emits the range it already knew: `block <name> <first state id> <count> <emission> <dampening>
 <propagates>`. A row that cannot be applied is now impossible to write.
 
-**After the fix the agreement is 100.0000%** \u2014 65 536 of 65 536 cells, worst difference **0**, across eight
+**After the fix the agreement is 100.0000%** — 65 536 of 65 536 cells, worst difference **0**, across eight
 chunks. The test asserts exact equality rather than a threshold, because that is what the evidence shows.
 
 **What it does not cover, asserted rather than implied.** Vanilla sent **no block-light arrays at all** for this
 capture, because a superflat world has no light sources, so block light is **not verified against a real
-server** \u2014 only against synthetic unit tests, which is the kind of evidence that just missed this bug. The
+server** — only against synthetic unit tests, which is the kind of evidence that just missed this bug. The
 test asserts that gap explicitly so a reader cannot take 100% as covering both layers. Verifying block light
 needs a capture of a world with light sources in it.
 
-### KD-47 \u2014 block light verified against a real server, and the margin quantified
+### KD-47 — block light verified against a real server, and the margin quantified
 
 The first capture could not test block light at all: a superflat world has no light sources, so vanilla sent no
 block-light arrays and the test asserted `block_total == 0` to keep that gap visible. A **second capture** fixes
 that, and the method is worth recording because it needs no GUI: the dedicated server reads commands from
-**stdin**, so eight glowstone blocks were placed through the server console \u2014 after `forceload add`, because
+**stdin**, so eight glowstone blocks were placed through the server console — after `forceload add`, because
 `setblock` on a fresh server answers **"That position is not loaded"** and no player has been near spawn to load
 it.
 
-**Block light agrees on 40 939 of 40 960 cells** \u2014 99.95%, worst difference 3, with every disagreement
+**Block light agrees on 40 939 of 40 960 cells** — 99.95%, worst difference 3, with every disagreement
 confined to the two chunks adjacent to the glowstone. The chunk containing it matches exactly.
 
 **The cause is a design approximation, not a bug**, and the test now names it at the assertion.
 `compute_chunk_light` reads a **one-block margin** in x and z, which lets light enter a chunk across its border
-but not travel several blocks outside it first. Being exact would need a margin of **15** \u2014 light loses at
-least one level per block, so nothing further can matter \u2014 which enlarges the work region from 18x18x384 to
+but not travel several blocks outside it first. Being exact would need a margin of **15** — light loses at
+least one level per block, so nothing further can matter — which enlarges the work region from 18x18x384 to
 46x46x384, **6.5x the work per chunk**. Against an engine that already recomputes everything on every send
 (KD-45), that is the wrong trade for 0.05% of cells.
 
@@ -566,15 +566,15 @@ margin. Caching, incremental relighting and this all become one piece of work.
 **A second false negative, also mine, also found by the comparison.** The first run with light sources showed
 block light at 3455/4096 for a chunk *next to* the glowstone while ours read 0. The engine was right and the
 **test** was wrong: it approximated the margin by replicating the chunk's own edge column, which is exactly
-right for uniform terrain and exactly wrong for a source in the next chunk along \u2014 replicating the edge
+right for uniform terrain and exactly wrong for a source in the next chunk along — replicating the edge
 replicates the absence of the source. The capture holds 117 chunks, so the margin no longer has to be
 approximated at all: they are stitched into one world and the answer comes from real neighbouring blocks. That
-change also made the **sky** verification stronger \u2014 262 144 of 262 144 cells, worst difference 0, across 32
+change also made the **sky** verification stronger — 262 144 of 262 144 cells, worst difference 0, across 32
 chunks with light crossing borders through real blocks rather than through an assumption.
 
-### KD-45 (part 1) \u2014 chunk light is cached and invalidated on change
+### KD-45 (part 1) — chunk light is cached and invalidated on change
 
-Light was recomputed on **every** `level_chunk_with_light` the server built \u2014 every chunk, for every recipient,
+Light was recomputed on **every** `level_chunk_with_light` the server built — every chunk, for every recipient,
 on every send. That cost is what started timing out an unrelated command test in CI.
 
 It is now computed once per chunk and kept in `World`, keyed by the same `ChunkPos` as the chunk itself. The
@@ -582,24 +582,24 @@ cache lives in `World` rather than in `Chunk` because `Chunk` is built in persis
 so a field there means touching every struct literal, while `World` already owns the chunks and has one
 constructor.
 
-**Invalidation drops the changed chunk and the neighbours whose margin reads it** \u2014 the chunks across
+**Invalidation drops the changed chunk and the neighbours whose margin reads it** — the chunks across
 whichever border the block sits within one block of, since the margin is one block. Six tests pin this,
 including the case that catches an over-eager implementation: an **interior** change must leave the neighbours
 alone, or the invalidation is simply "drop everything" wearing a condition.
 
 **What it is not, said plainly.** This is **invalidation, not incremental relighting**. Vanilla relights only
 the region a change can reach; this drops the whole chunk and recomputes it when next needed. It is correct and
-it is cheaper than what it replaced by the ratio of how often a chunk is *sent* to how often it *changes* \u2014 but
+it is cheaper than what it replaced by the ratio of how often a chunk is *sent* to how often it *changes* — but
 a torch placed in a large lit chunk still costs a full recompute.
 
 **It also does not help a first join**, which must compute each chunk once whatever the cache does. The honest
 numbers: the command suite went **11.5 s \u2192 9.17 s** in debug, and runs in **3.46 s in release**. So a
-substantial part of the CI failure was a **debug-build cost rather than a production one** \u2014 which is worth
+substantial part of the CI failure was a **debug-build cost rather than a production one** — which is worth
 knowing before treating it as an alarm, and is not a reason to leave it.
 
 The remaining cost is the first computation: three passes over 124 320 cells, with the frontier scan dominating
 at six neighbour comparisons per cell per layer. **The next step is to skip that scan for sections that are
-uniformly lit** \u2014 most sections in an open world are, and for those the scan reads 4 096 cells to conclude
+uniformly lit** — most sections in an open world are, and for those the scan reads 4 096 cells to conclude
 nothing can spread, where a section-level check would settle it far more cheaply.
 
 **One design detail worth recording.** `vanilla_chunk_packet` takes `&self`, so it **cannot fill** the cache; the
@@ -607,11 +607,11 @@ pre-warm happens in `send_chunk`, which has `&mut self` and runs before the borr
 builder reads the cache and falls back to computing without keeping the result, so a caller that forgets to
 pre-warm gets a **correct packet at the old cost rather than a wrong one**.
 
-### KD-45 (part 2) \u2014 the cost was where I was not looking
+### KD-45 (part 2) — the cost was where I was not looking
 
 The remaining cost of computing light per chunk looked like the frontier scan, which does six neighbour
 comparisons per cell per layer. It was not. **`World::get_block_loaded` builds a `ChunkPos` and walks a
-`BTreeMap` on every call**, and the light engine calls it **per cell** \u2014 124 320 of them, twice, once for the
+`BTreeMap` on every call**, and the light engine calls it **per cell** — 124 320 of them, twice, once for the
 sky seeding pass and once for the block pass. That is about a **quarter of a million map lookups per chunk**,
 against array arithmetic worth a few milliseconds.
 
@@ -624,11 +624,11 @@ memoised too, since an unloaded neighbour along an edge is asked about as often 
 | Build | none | cached | cached + cursor |
 |---|---|---|---|
 | debug | 11.5 s | 9.17 s | **6.59 s** |
-| release | \u2014 | 3.46 s | **3.20 s** |
+| release | — | 3.46 s | **3.20 s** |
 
 **The release column is the honest one, and it undercuts the story I was telling.** The cursor removed a
 quarter of a million lookups per chunk and bought **7% in release**, where the compiler and the cache were
-already hiding them. So the remaining cost is the **inherent array work** \u2014 three passes over 124 320 cells \u2014
+already hiding them. So the remaining cost is the **inherent array work** — three passes over 124 320 cells —
 and KD-45's severity in production is much lower than the CI failure suggested. It was a debug-build cost that
 happened to break a deadline.
 
@@ -641,7 +641,7 @@ happened to break a deadline.
   world are uniformly lit, and for those the frontier scan reads 4 096 cells to conclude that nothing can
   spread.
 
-**A note on the shape of this.** Two rounds of performance work have both been corrected by measurement \u2014 the
+**A note on the shape of this.** Two rounds of performance work have both been corrected by measurement — the
 first by a test failing for an unrelated reason, this one by the release column disagreeing with the debug
 column. The instinct to optimise the thing that looks expensive has been wrong twice; the release number is
 what a player experiences.
@@ -672,30 +672,30 @@ The differential results stand behind it: sky light matches a real server on eve
 If the world looks wrong anyway, the fault is somewhere the comparison does not reach — which is worth knowing
 either way.
 
-### KD-48 \u2014 `light_update`, the packet P10-05 named and did not have
+### KD-48 — `light_update`, the packet P10-05 named and did not have
 
 A placed block changed the block and **not the light**. The client kept rendering the old light until that
-chunk happened to be re-sent, so a torch did nothing visible \u2014 the limitation recorded under KD-45, now
+chunk happened to be re-sent, so a torch did nothing visible — the limitation recorded under KD-45, now
 closed.
 
 P10-05 lists "encode `light_update` for changes" and it was the one named item with no implementation, only a
 doc comment referring to it.
 
 **The coordinate encoding is the trap, and `javap` settled it.** The packet carries the **same light data** as
-the tail of `level_chunk_with_light` \u2014 the same four `BitSet` masks, the same two array lists, written by the
+the tail of `level_chunk_with_light` — the same four `BitSet` masks, the same two array lists, written by the
 same `ClientboundLightUpdatePacketData`. It is natural to assume the packets are shaped alike. They are not:
 `light_update` writes its two chunk coordinates as **`VarInt`**, the chunk packet as **`i32`**. Reading them the
 other way consumes two extra bytes each and misparses everything after. A test asserts both encodings side by
 side so the difference lives in the test rather than only in a comment.
 
 **The shared half is shared.** `write_light_data` and `read_light_data` are one implementation used by both
-packets. The last time a format in this phase was implemented twice \u2014 once in Rust, once in a script \u2014 the
+packets. The last time a format in this phase was implemented twice — once in Rust, once in a script — the
 two agreed with each other and were both wrong. The coordinate encoding is deliberately **not** shared: it is
 the one thing that differs, and a helper parameterised by "which packet is this" is how that gets lost.
 
 **The wiring is bounded on purpose.** Recomputing one chunk is three passes over 124 320 cells and the packet
-is kilobytes, so work is **queued on block change and spent at four chunks a tick**. Nothing is dropped \u2014 a
-chunk stays queued until sent \u2014 so a burst is delayed rather than lost; a dropped update would leave the
+is kilobytes, so work is **queued on block change and spent at four chunks a tick**. Nothing is dropped — a
+chunk stays queued until sent — so a burst is delayed rather than lost; a dropped update would leave the
 client showing stale light until that chunk was re-sent, which is the silent-wrong this phase keeps finding.
 The changed chunk's **neighbours** are queued too, since the light they were read for has changed as well.
 
@@ -706,55 +706,55 @@ counter was added to the tick report anyway, because a light update that stops b
 Five gates green: 1234 passed / 0 failed / 24 ignored across 81 suites, fmt, clippy -D warnings, aarch64 and
 cargo deny clean.
 
-### KD-49 \u2014 the `light_update` trigger is not what I guessed, and that tempers the last round
+### KD-49 — the `light_update` trigger is not what I guessed, and that tempers the last round
 
 Two captures placed four glowstone blocks beside a **connected** player and looked for `light_update`. Neither
 produced one: **zero id-48 packets in 19 000 captured packets**, with `level_chunk_with_light` staying at
 exactly the initial 117.
 
 **The guess, and why it was wrong.** `javap -c` on `SetBlockCommand` showed `replace` mode passing
-`iconst_2` \u2014 `UPDATE_CLIENTS` alone, without `UPDATE_NEIGHBORS` \u2014 and `updateNeighboursOnBlockSet` being
+`iconst_2` — `UPDATE_CLIENTS` alone, without `UPDATE_NEIGHBORS` — and `updateNeighboursOnBlockSet` being
 called **only on the `DESTROY` path**. Neighbour notification is what tells the light engine a block appeared,
 so that looked like the answer. Re-running with `destroy` produced **no packet either**. The trigger for this
 packet is therefore **not established**, and it is not being invented.
 
 **What this does to the previous round's claim.** I wrote that wiring `light_update` closed the "a torch does
 nothing" limitation. What is actually true is narrower: the packet is **sent** and **well-formed**, and it has
-been accepted only by our own `TestClient` \u2014 because nothing the server does autonomously changes a block
+been accepted only by our own `TestClient` — because nothing the server does autonomously changes a block
 while a real client is connected. **Test-client acceptance is precisely the evidence that failed in KD-44**:
 our implementation agreeing with itself.
 
 So the claim is "sent, self-consistent, and encoded from the jar", not "verified against a client". The packet
-is still the right one to send \u2014 it exists for exactly this, and its field order and `BitSet` form come from
-`javap` \u2014 but the difference between those two sentences is the whole point of this phase.
+is still the right one to send — it exists for exactly this, and its field order and `BitSet` form come from
+`javap` — but the difference between those two sentences is the whole point of this phase.
 
 **The stale guidance, corrected.** `tools/visual-check/run.py` still told the reader that a hand-placed torch
 would *not* relight its chunk, which was true when it was written. It now asks for the opposite observation:
 **break a block and watch the light follow it**. That is the one remaining way to learn whether a real client
-accepts the packet \u2014 and if it disconnects instead, that is a real finding rather than a surprise.
+accepts the packet — and if it disconnects instead, that is a real finding rather than a surprise.
 
-### KD-49 (continued) \u2014 the unverified part is two `VarInt`s, not a packet
+### KD-49 (continued) — the unverified part is two `VarInt`s, not a packet
 
 The last round left KD-49 as a flat "no real client has received our `light_update`". That is true and it
 understated how much of the packet is already covered, so the risk is now **narrowed by evidence** instead.
 
 * the light half is written by **one implementation**, `write_light_data`, shared with
   `level_chunk_with_light`;
-* a real client accepts that half on **every chunk it is sent** \u2014 753-packet sessions with no protocol error;
+* a real client accepts that half on **every chunk it is sent** — 753-packet sessions with no protocol error;
 * a test now asserts the two are **byte-identical** for equal light, so the sharing is pinned rather than
   asserted in prose;
 * the only difference between the packets is the two coordinates, `VarInt` here and `i32` there, and that is
   `javap`-confirmed and pinned by a test that asserts both encodings side by side.
 
 **What remains unexercised is therefore two `VarInt`s, not a packet.** That is a claim a person can settle by
-breaking one block with `tools/visual-check/run.py` running \u2014 which is what it now asks for.
+breaking one block with `tools/visual-check/run.py` running — which is what it now asks for.
 
 **A note on the shape of this.** Three times in this phase a finding has been narrowed by comparing against
 something real rather than by more tests: KD-44 (the jar's bytecode, after two implementations agreed with each
 other), KD-46 (vanilla's own light, after the unit tests passed), and now KD-49. The pattern is not that tests
 are weak; it is that tests written by the same author as the code share its assumptions.
 
-### KD-49 closed \u2014 a real 26.1.2 client accepts our `light_update`
+### KD-49 closed — a real 26.1.2 client accepts our `light_update`
 
 The gap was that no real client had ever received one, and that self-testing cannot close it: our `TestClient`
 agreeing with our encoder is the evidence that failed in KD-44.
@@ -795,7 +795,7 @@ relative to vanilla is not**, and that is recorded rather than papered over.
 The method is committed: `tools/light-update-trigger/run.py`, with the driver as
 `crates/server/tests/light_update_trigger.rs`.
 
-### KD-50 \u2014 the client never left "Loading terrain"; my diagnosis of it was wrong twice over
+### KD-50 — the client never left "Loading terrain"; my diagnosis of it was wrong twice over
 
 **The owner looked at the screen and reported the client stuck on "加载地形中".** That is real, it corrects a
 claim I made twice, and the explanation I then produced was **wrong**.
@@ -813,12 +813,12 @@ of something they do not establish, and only a person looking settled it. The cl
   our own `ids.rs` has always said so. **The measurement was against two constants that have nothing to do with
   the packets.** \"Sent 0 times\" was an artefact of my own labelling.
 * **They were already being sent**, by the network layer at `crates/network/src/connection.rs:542`. So the
-  \"fix\" sent correct packets **twice** \u2014 visible in the next trace as `94, 95, 95, 94` where the original
+  \"fix\" sent correct packets **twice** — visible in the next trace as `94, 95, 95, 94` where the original
   was `94, 95`. It is reverted.
 
 **What the episode is actually worth.** A wrong number that looks measured is worse than no number: I reported
 \"sent 0 times\" as evidence, built a fix on it, and only the trace from the *next* run contradicted it. The
-lesson is the one this phase keeps teaching from the other direction \u2014 the earlier corrections came from
+lesson is the one this phase keeps teaching from the other direction — the earlier corrections came from
 comparing against something real, and this error came from not doing that: I never looked up the ids in the
 table that exists for exactly that purpose.
 
@@ -831,7 +831,7 @@ the cause is something else, and it is **not known**.
 spawning anywhere else would be given the wrong centre. Recorded rather than fixed here, since the join path is
 not something to change again without knowing what is actually wrong.
 
-### KD-50 (continued) \u2014 two hypotheses tested and both disproved
+### KD-50 (continued) — two hypotheses tested and both disproved
 
 The client still sits on the loading screen. Two explanations were tested against the jar and **neither holds**,
 which is worth as much as a cause would be: it removes them from the search and it records that the obvious
@@ -839,7 +839,7 @@ answers are wrong.
 
 **Hypothesis 1, disproved: the chunk-cache packets.** I claimed `set_chunk_cache_center` and
 `set_chunk_cache_radius` were never sent. They were, all along, by the network layer at
-`connection.rs:542` \u2014 and I had measured the trace for ids **11** and **12**, which are
+`connection.rs:542` — and I had measured the trace for ids **11** and **12**, which are
 `chunk_batch_finished` and `chunk_batch_start`. The real ids are **94** and **95**, and our own `ids.rs` has
 always said so. My "sent 0 times" was an artefact of labelling the packets from memory. The duplicate sends
 this produced are reverted.
@@ -854,20 +854,20 @@ load tracker.** So it is not the gate either.
 **What the client's own classes say.** `LevelLoadingScreen` dismisses on `LevelLoadTracker.isLevelReady()`, and
 the tracker holds a `ChunkLoadStatusView` the server can push, plus a `CLIENT_WAIT_TIMEOUT_MS` and a
 `LEVEL_LOAD_CLOSE_DELAY_MS`. There is also a `ServerboundPlayerLoadedPacket` (serverbound 44), a handshake our
-server does not model \u2014 it logs it as an unmodelled packet at most.
+server does not model — it logs it as an unmodelled packet at most.
 
 **What is established, and what is not.** The client receives `join_game`, the cache centre and radius, its
 position, and 289 chunks including the one it stands in, and it reports no protocol error. **Why
 `isLevelReady()` stays false is not known.** The next step is concrete and small: find what calls
-`LevelLoadTracker.loadingPacketsReceived()` in `ClientPacketListener` \u2014 it is at bytecode offset 658 and
-is neither chunk-batch handler \u2014 and read `isLevelReady()`'s actual condition rather than inferring it from
+`LevelLoadTracker.loadingPacketsReceived()` in `ClientPacketListener` — it is at bytecode offset 658 and
+is neither chunk-batch handler — and read `isLevelReady()`'s actual condition rather than inferring it from
 method names.
 
 **One latent bug found on the way**, recorded but not fixed: `connection.rs:542` sends
 `SetChunkCacheCenter { x: 0, z: 0 }` **hard-coded**. The test world's spawn happens to be chunk (0, 0), so it is
 not this symptom, but a player spawning elsewhere would be handed the wrong centre.
 
-### KD-50 closed \u2014 the missing `game_event(LEVEL_CHUNKS_LOAD_START)`, and the client is in the world
+### KD-50 closed — the missing `game_event(LEVEL_CHUNKS_LOAD_START)`, and the client is in the world
 
 **The owner confirmed the client enters the world** after this fix. Before it, the client sat on "Loading
 terrain" indefinitely with every packet well-formed and no error anywhere.
@@ -877,24 +877,24 @@ terrain" indefinitely with every packet well-formed and no error anywhere.
 1. `LevelLoadingScreen` dismisses on `LevelLoadTracker.isLevelReady()` (`javap` on the **client** jar).
 2. `isLevelReady()` is true only once `clientState` has become `ClientLevelReady`, and `startClientLoad` puts it
    in **`WaitingForServer`** (`javap`).
-3. The **only** caller of `LevelLoadTracker.loadingPacketsReceived()` \u2014 the thing that moves it out of that
-   state \u2014 is `ClientPacketListener.handleGameEvent` (`javap`).
+3. The **only** caller of `LevelLoadTracker.loadingPacketsReceived()` — the thing that moves it out of that
+   state — is `ClientPacketListener.handleGameEvent` (`javap`).
 4. `ClientboundGameEventPacket` has an event type **`LEVEL_CHUNKS_LOAD_START`** (`javap`).
 5. A real vanilla server sends it on join, and the capture gives the wire values with nothing inferred:
-   `game_event` (clientbound play 38), body 6 bytes, **`26 0d 00000000`** \u2014 id 38, event **13**, value
+   `game_event` (clientbound play 38), body 6 bytes, **`26 0d 00000000`** — id 38, event **13**, value
    `0.0`.
 6. Our join sequence contained **no `game_event` at all**: `49, 94, 95, 95, 94, 72, 97, 104, 103, 121`.
 
-Our server now sends it, and the packet is **byte-for-byte identical to the real server's** \u2014 `26 0d
+Our server now sends it, and the packet is **byte-for-byte identical to the real server's** — `26 0d
 00000000`, at the same point in the join sequence, between the chunk-cache packets and the teleport.
 
 **Two wrong turns are recorded because they cost real time and both had the same shape.** First I claimed the
-chunk-cache packets were never sent, having labelled their ids from memory as 11 and 12 \u2014 which are
+chunk-cache packets were never sent, having labelled their ids from memory as 11 and 12 — which are
 `chunk_batch_finished` and `chunk_batch_start`; the real ids are 94 and 95 and they were always sent, so the
 "fix" duplicated them and had to be reverted. Then I hypothesised the chunk-batch protocol was the gate, and
 `javap` on `handleChunkBatchFinished` disproved it: it only paces the calculator and never touches the load
 tracker. **The successful conclusion came from reading the client's own bytecode and then taking the number
-from a real server's wire \u2014 not from reasoning about names.** That is the same lesson as KD-44, KD-46 and
+from a real server's wire — not from reasoning about names.** That is the same lesson as KD-44, KD-46 and
 KD-49, and this time it was learned from the other side.
 
 **One latent bug found on the way**, recorded but not fixed: `connection.rs:542` sends
@@ -904,11 +904,11 @@ not this symptom, but a player spawning elsewhere would be handed the wrong cent
 **What this changes for the phase.** The claim that a real client is "live and rendering" was withdrawn as
 unproven; it is now **established**, by the owner seeing the world.
 
-### KD-51 \u2014 the black surface blocks are not our light data, established by eliminating six of my own errors
+### KD-51 — the black surface blocks are not our light data, established by eliminating six of my own errors
 
 The owner is in the world and reports **a small number of surface blocks dead black**. The engine and the wire
-were both checked against the invariant that decides it \u2014 **a cell with only air above it is open to the sky,
-and open to the sky means 15** \u2014 and **both pass**:
+were both checked against the invariant that decides it — **a cell with only air above it is open to the sky,
+and open to the sky means 15** — and **both pass**:
 
 * the **engine**, over a 9x9 of chunks of generated terrain, so chunk borders are included;
 * the **wire**, over 53 chunks a real session captured, reconstructing the light the way a client does: a set
@@ -921,18 +921,18 @@ are the same code that the verified chunk packets use.
 **Six errors, all mine, all in the measuring rather than the measured.** They are listed because the shape
 repeats and each one cost real time:
 
-1. **a packet id labelled from memory** \u2014 I wrote "(id 12)" for `set_chunk_cache_center` and measured the trace
+1. **a packet id labelled from memory** — I wrote "(id 12)" for `set_chunk_cache_center` and measured the trace
    for it; 12 is `chunk_batch_start`. The real id is 94, the packets were always sent, and the "fix" this
    produced sent them twice and had to be reverted (KD-50).
-2. **a body read from byte 0** \u2014 the rig's `head` includes the packet id, so `level_chunk_with_light`'s chunk x
+2. **a body read from byte 0** — the rig's `head` includes the packet id, so `level_chunk_with_light`'s chunk x
    decoded as 754 974 720, which is `0x2D` (its own id) followed by three zeros.
-3. **a mask read as bitmask words** \u2014 the masks are lists of set section **indices**, so nine indices looked
+3. **a mask read as bitmask words** — the masks are lists of set section **indices**, so nine indices looked
    like one set bit against nine arrays and produced a confident mismatch report.
-4. **a light section indexed without its one-offset** \u2014 light section `i` holds world section `i - 1`, so
+4. **a light section indexed without its one-offset** — light section `i` holds world section `i - 1`, so
    reading `offset / 16` looked up the section *below*: underground, where sky light genuinely is 0.
-5. **a block column read a section low** \u2014 the same offset applied to blocks, which printed a coherent-looking
+5. **a block column read a section low** — the same offset applied to blocks, which printed a coherent-looking
    tree sixteen levels below the one beside it.
-6. **a "uniformly lit" array filled with `0x0F` instead of `0xFF`** \u2014 this is the one that mattered. Every byte
+6. **a "uniformly lit" array filled with `0x0F` instead of `0xFF`** — this is the one that mattered. Every byte
    had a low nibble of 15 and a **high nibble of 0**, so every cell at an odd index read as dark. It produced a
    finding of **"2176 of 13568 surface cells dark"** that was entirely fictitious, and the tell was in the data
    all along: exactly **half** of every affected chunk, always at odd `x`.
@@ -946,14 +946,14 @@ KD-50, now from the side of the measurer rather than the measured.
 * `connection.rs:542` sends `SetChunkCacheCenter { x: 0, z: 0 }` **hard-coded**; the test world's spawn happens
   to be chunk (0, 0), so a player spawning elsewhere would be handed the wrong centre;
 * a capture session logged **`outbound queue full; the player will be disconnected`** repeatedly, and a
-  **tick of 3618 ms against a 50 ms budget** \u2014 the light work of KD-45 landing on one tick.
+  **tick of 3618 ms against a 50 ms budget** — the light work of KD-45 landing on one tick.
 
 **Where the black blocks must come from instead.** With the light values excluded, the remaining suspects are
 outside them: the **block-state ids** the chunk palette carries, which a client resolves against the registry we
 sent it and would render as the wrong block if the two disagreed; or client-side rendering of the sections
-themselves. Both are testable the same way \u2014 against what a real client does with what we send.
+themselves. Both are testable the same way — against what a real client does with what we send.
 
-### KD-52 \u2014 a real decoder bug, found at the end of eight errors of my own
+### KD-52 — a real decoder bug, found at the end of eight errors of my own
 
 **`PalettedContainer::decode` put the block-state id where the palette index belongs.** For the single-value
 form (`bits = 0`) it returned
@@ -966,13 +966,13 @@ values: vec![value; entries],   // the id in every slot
 and `values` is documented as **indices into `palette`**, so every slot must be `0`. The result is that
 `palette[values[i]]` is an out-of-range read for every container whose single value is not zero.
 
-**It hid because the single-value form is overwhelmingly used for air, whose state id is `0`** \u2014 so the
+**It hid because the single-value form is overwhelmingly used for air, whose state id is `0`** — so the
 wrong index and the right one are the same number, and every round-trip test agreed with itself. It showed only
 for a uniform section of something else: a chunk section that is **entirely leaves**, `palette=[86]`,
 `values=[86, 86, ...]`.
 
 **The test fixture had the same misunderstanding.** `uniform_section`, which every chunk test is built from,
-constructed `values: vec![block_state; BLOCKS_PER_SECTION]` \u2014 the decoder's bug written a second time, in
+constructed `values: vec![block_state; BLOCKS_PER_SECTION]` — the decoder's bug written a second time, in
 the fixture, so six tests failed the moment the decoder was corrected. **This is KD-44's shape exactly**: an
 implementation and its tests sharing an assumption, green together and wrong together.
 
@@ -981,10 +981,10 @@ a cell open to the sky reading `14`, and the search went after the light engine.
 asked directly: the world has leaves through `y = 48..63`, the packet's own section 7 is `palette=[86]`, and the
 light is right.
 
-### KD-49 corrected \u2014 the acceptance test rested on a packet that was never sent
+### KD-49 corrected — the acceptance test rested on a packet that was never sent
 
 The `light_update` capture contained **zero** id-48 packets. The driver announced "breaking the block at ..."
-before sending anything, and the server **refuses a break in a chunk it has not loaded** \u2014 which is exactly
+before sending anything, and the server **refuses a break in a chunk it has not loaded** — which is exactly
 the state a client is in right after `join_game`. So the run that concluded "a real client accepts our
 `light_update`" had no `light_update` in it, and the client accepted nothing.
 
@@ -1015,11 +1015,11 @@ was a measurement rather than a subject.
   `seq` numbers that no longer match the per-run body file names.
 * the capture driver waits for chunks before digging, which is what made the `light_update` capture empty.
 
-### KD-53 \u2014 the world was an ocean, and the spawn was in it
+### KD-53 — the world was an ocean, and the spawn was in it
 
 **The owner reported that terrain and biomes were wrong**: no trees, no structures, only "dirt variants and
-stone". The blocks confirmed it \u2014 the chunks the server had sent use **exactly three states**, `stone`,
-`water` and `sand` \u2014 and none of that is a generation defect. Those three states are what an **ocean** is made
+stone". The blocks confirmed it — the chunks the server had sent use **exactly three states**, `stone`,
+`water` and `sand` — and none of that is a generation defect. Those three states are what an **ocean** is made
 of.
 
 Sampling the height field over a 1024-block square says the generator is healthy:
@@ -1032,7 +1032,7 @@ biomes: ocean 39.2% \u00b7 plains 26.6% \u00b7 forest 25.3% \u00b7 desert 4.6% \
 
 **Six biomes, sensible heights, and two columns in five are ocean.** The defect was where the player starts: a
 fresh world's `level.dat` names `(0, 64, 0)`, and `(0, 0)` is water. With a view distance of four to eight
-chunks, everything visible was sea bed \u2014 no grass, no trees, no biome variety, and an ocean floor that is
+chunks, everything visible was sea bed — no grass, no trees, no biome variety, and an ocean floor that is
 **correctly** dark because water attenuates sky light. Every part of the report follows from one hard-coded
 spawn.
 
@@ -1040,7 +1040,7 @@ spawn.
 world's own choice is left alone. `crates/server/tests/spawn_on_land.rs` asserts it, and asserts that the search
 *moved* the spawn rather than the origin having been dry by luck.
 
-### KD-54 \u2014 `~12` and `12` were the same value, so `/tp ~` ignored the player
+### KD-54 — `~12` and `12` were the same value, so `/tp ~` ignored the player
 
 Fixing the spawn broke `command_e2e`'s relative-teleport test, with `-7.5 -> 1.5`. The reference was right
 (`base=(-8, 66, -8)`) and the resolution was wrong:
@@ -1049,28 +1049,28 @@ Fixing the spawn broke `command_e2e`'s relative-teleport test, with `-7.5 -> 1.5
 let resolve = |offset: Option<i32>, base: i32| offset.unwrap_or(base);
 ```
 
-`~1` arrived as `Some(1)`, so `unwrap_or` returned **`1`** \u2014 the offset was used as an absolute coordinate and
+`~1` arrived as `Some(1)`, so `unwrap_or` returned **`1`** — the offset was used as an absolute coordinate and
 the source's position was discarded.
 
 **The argument type could not have done better.** `parse_axis` produced `Some(12)` for both `12` and `~12`, so no
 consumer could tell them apart; its own doc comment claimed the two were "distinguishable once the source
 moves", which was true of the intent and false of the code.
 
-**And the test was vacuous.** It teleported the player to the spawn and then stepped with `~1` \u2014 while the
+**And the test was vacuous.** It teleported the player to the spawn and then stepped with `~1` — while the
 spawn *was* the origin, so `0 + 1` and the right answer were the same number. It passed without the property it
 named. It now acknowledges the teleport (the server holds a teleport pending until the client confirms, which is
 vanilla's `awaitingPositionFromClient` and correct), and the parser test asserts the thing the type exists for:
 **`12` and `~12` must differ, and must resolve to different places from a source away from the origin.**
 
 `Coordinate { value, relative }` replaces `Option<i32>`, with `resolve(base)` as the one place the two are
-combined. Bare `~` and `~0` collapse to the same value, which is right \u2014 both mean "the source's own
-coordinate" \u2014 and the old comment's insistence that they differ was part of the same confusion. **This affects
+combined. Bare `~` and `~0` collapse to the same value, which is right — both mean "the source's own
+coordinate" — and the old comment's insistence that they differ was part of the same confusion. **This affects
 every command that takes coordinates, not just `/tp`.**
 
-### KD-55 \u2014 no world this server generated ever contained a tree
+### KD-55 — no world this server generated ever contained a tree
 
 **`TerrainGenerator::generate_chunk` produces terrain only.** Trees are `TerrainGenerator::decorate`, a separate
-pass \u2014 "terrain and decoration are two passes in Vanilla too", as its own doc says \u2014 and **the server never
+pass — "terrain and decoration are two passes in Vanilla too", as its own doc says — and **the server never
 called it**. `decorate_with_structures` runs structures and nothing else, and returns early when no structure
 templates are loaded, which they are not.
 
@@ -1080,8 +1080,8 @@ templates are loaded, which they are not.
 stone 256758 \u00b7 water 10754 \u00b7 sand 9114 \u00b7 dirt 4724 \u00b7 grass_block 2362 \u00b7 podzol 2000 \u00b7 coarse_dirt 1000
 ```
 
-Grass over dirt over stone, podzol and coarse dirt for taiga, sand and water for ocean \u2014 **the biome surface
-rule is working perfectly** \u2014 and not one `oak_log` or `oak_leaves` anywhere.
+Grass over dirt over stone, podzol and coarse dirt for taiga, sand and water for ocean — **the biome surface
+rule is working perfectly** — and not one `oak_log` or `oak_leaves` anywhere.
 
 **That is why the world read as broken terrain rather than as an unlit one.** Every block was the right block for
 its biome; the features that make a biome recognisable were simply absent, and nothing anywhere said so: the
@@ -1095,13 +1095,13 @@ asserts both that the pass ran and that logs and leaves are **in the loaded chun
 **The order is terrain, structures, trees.** Structures already ran after terrain and that is unchanged; trees
 go last so one cannot be planted through a structure placed a line earlier.
 
-### KD-56 \u2014 `default_state` returned the lowest state id, and 642 of 1168 blocks disagree with it
+### KD-56 — `default_state` returned the lowest state id, and 642 of 1168 blocks disagree with it
 
 **The owner looked at a tree and said what was wrong:** "the leaves contain water, the logs are lying on their
 side". Both are one mistake.
 
 `BlockRegistry::default_state(name)` returned `first_state_id`, and its doc comment said *"the id of this
-block's first (default) state"* \u2014 **the assumption written into the comment**. Vanilla chooses the default
+block's first (default) state"* — **the assumption written into the comment**. Vanilla chooses the default
 explicitly with `registerDefaultState`, and it is not in general the lowest id:
 
 ```text
@@ -1111,7 +1111,7 @@ minecraft:grass_block   9   (lowest   8 -> snowy=true)
 ```
 
 A probe of the jar says **642 of 1168 blocks** differ, **55%**. So every log a world generator placed lay on its
-side, every leaf held water, and every grass block was snowy \u2014 and none of it had an error anywhere: the
+side, every leaf held water, and every grass block was snowy — and none of it had an error anywhere: the
 blocks were all real, the light was plausible, and the chunks were well-formed.
 
 **Extracted, not guessed.** `tools/vanilla-probe/DefaultStateProbe.java` boots the server's own registry and
@@ -1127,55 +1127,55 @@ path, and the absence of any table to consult.
 Two asserted the bug as an expectation, and both said so in their own words:
 
 * `structure.rs` compared a resolved `axis=y` log against `default_state("minecraft:oak_log")` and required them
-  to **differ**, with the comment *"a different id from the property-less **first** state"* \u2014 naming the
+  to **differ**, with the comment *"a different id from the property-less **first** state"* — naming the
   thing it was really comparing against. It now asserts that resolving `axis=y` names the default, and that
   `axis=x` is what differs, which is the property it existed for.
 * The doc comment on `first_state_id` read *"the id of this block's first (default) state"*.
 
-**This is the third time this round that a test encoded the implementation's mistake** \u2014 after KD-52's
-palette fixture and KD-49's vacuous teleport \u2014 and the pattern is worth naming: the suites pass because the
+**This is the third time this round that a test encoded the implementation's mistake** — after KD-52's
+palette fixture and KD-49's vacuous teleport — and the pattern is worth naming: the suites pass because the
 code and the tests were written from one understanding, so an audit of either confirms the other.
 
-### KD-57 \u2014 the review's second clue: where every fixture came from, and the two that cannot say
+### KD-57 — the review's second clue: where every fixture came from, and the two that cannot say
 
 **Every fixture in `crates/test-support/fixtures/` now has a known source**, which is the property that decides
 whether a test can disagree with the wire at all:
 
 | fixture | source |
 |---|---|
-| `anvil/level_26_1_2.dat`, `anvil/region_26_1_2.mca` | **a real server** \u2014 the manifest records the jar's sha1, the seed, and a sha256 per file |
+| `anvil/level_26_1_2.dat`, `anvil/region_26_1_2.mca` | **a real server** — the manifest records the jar's sha1, the seed, and a sha256 per file |
 | `registry/blocks.tsv` | jar (`DumpRegistries` + `compact_blocks.py`, with ids verified before writing) |
 | `registry/block_light.tsv` | jar (`LightProbe.java`) |
 | `registry/block_defaults.tsv` | jar (`DefaultStateProbe.java`, KD-56) |
-| `registry/items.tsv` | jar \u2014 **verified this round**, see below |
-| `protocol/handshake_login.hex` | hand-assembled \u2014 **verified against a real client**, see below |
+| `registry/items.tsv` | jar — **verified this round**, see below |
+| `protocol/handshake_login.hex` | hand-assembled — **verified against a real client**, see below |
 | `protocol/frame_uncompressed.hex` | hand-written, no source stated |
 | `protocol/nbt_literal_text.hex` | hand-written, **never compared to anything real** |
 
 **`items.tsv` was the one table that only claimed a source.** Its header says "Vanilla 26.1.2 item registry
-order" and nothing in the repository would have failed had it been wrong \u2014 a transcription error in 1 506 ids
+order" and nothing in the repository would have failed had it been wrong — a transcription error in 1 506 ids
 would leave every lookup succeeding and naming the wrong item. `tools/vanilla-probe/ItemProbe.java` now extracts
 the same three columns from the jar, and the two agree **row for row, 1506 of 1506, zero differences**.
 
 **`handshake_login.hex` was the one golden byte string written from a reading of the spec** rather than
-captured \u2014 the shape every confirmed failure of this review has had. A real 26.1.2 handshake, captured
+captured — the shape every confirmed failure of this review has had. A real 26.1.2 handshake, captured
 through the rig, is `00 87 06 09 <"127.0.0.1"> 63 eb 02` against the fixture's `87 06 09 <"localhost"> 63 dd 02`:
 **identical in every field the test exercises**, and it verifies.
 
 **Two fixtures still cannot say where they came from**, and one of them has never been checked against anything:
 
-* `frame_uncompressed.hex` is four bytes and is self-consistent by inspection \u2014 `03` is the length of
-  `2A 01 02` \u2014 which is why it has not mattered;
+* `frame_uncompressed.hex` is four bytes and is self-consistent by inspection — `03` is the length of
+  `2A 01 02` — which is why it has not mattered;
 * **`nbt_literal_text.hex` claims to be "network NBT for the text component `{"text":"bye"}`" and has never been
   compared with network NBT from a real server.** The vanilla captures contain no `system_chat` at all, so
   nothing in the repository can contradict it, and comparing it with our own server's chat would be the
   round-trip trap this review exists to find. The next capture must have the vanilla server say something.
 
-**What this round did not do:** clues 3 and 4 \u2014 tests that cannot fail, and doc comments that describe a
-semantics the code does not implement \u2014 are untouched. Both have already produced confirmed findings
+**What this round did not do:** clues 3 and 4 — tests that cannot fail, and doc comments that describe a
+semantics the code does not implement — are untouched. Both have already produced confirmed findings
 (KD-49, KD-54, KD-56), and both are still open.
 
-### KD-58 \u2014 the last hand-written fixture is checked, and `say` does not use `system_chat`
+### KD-58 — the last hand-written fixture is checked, and `say` does not use `system_chat`
 
 **`nbt_literal_text.hex` had never been compared with anything real.** No vanilla capture contained a
 `system_chat`, so nothing in the repository could contradict it, and comparing it with our own chat output would
@@ -1189,12 +1189,12 @@ vanilla 26.1.2 server, a connected client, and `say bye` on the console **after*
 ^TAG_String ^len3 "bye"
 ```
 
-\u2014 tag type `08`, a two-byte name length, UTF-8 payload, exactly the form the fixture uses for its string
+— tag type `08`, a two-byte name length, UTF-8 payload, exactly the form the fixture uses for its string
 entry. Vanilla wrote the **bare-string** form of the component there and the fixture writes the **compound**
 form; both are valid, and the encoding the test exercises is the one they share.
 
 **And the capture turned up a parity difference.** The console `say` is carried by **`disguised_chat`
-(clientbound play 33)**, not `system_chat` \u2014 two commands, two packets, and `system_chat` (121) appears zero
+(clientbound play 33)**, not `system_chat` — two commands, two packets, and `system_chat` (121) appears zero
 times. Our server uses `system_chat` for its own welcome message, which is a legitimate use of that packet, but
 **a `/say` implemented with it would be wrong**, and nothing in the repository says which of the two a given
 message belongs in.
@@ -1202,15 +1202,15 @@ message belongs in.
 **Two of my own errors on the way**, both of the kind this review keeps finding:
 
 * I filtered the capture for **id 119** and then for `system_chat`, and reported "no chat was sent" twice. The
-  table said **121** all along \u2014 the same mislabelled-id mistake as KD-50, made again after recording it as a
+  table said **121** all along — the same mislabelled-id mistake as KD-50, made again after recording it as a
   lesson. The packets were in the capture the first time.
 * The first two capture attempts failed on `server.properties`: the vanilla server defaults to port **25565**,
   which this project must not bind because it belongs to the owner's own server. Both the port and offline mode
   are now set before boot, and `eula.txt` with it, which a fresh scratch directory does not have.
 
-### KD-59 \u2014 the review's third clue: tests that cannot fail, and why the interesting half resists a search
+### KD-59 — the review's third clue: tests that cannot fail, and why the interesting half resists a search
 
-**The crude form does not exist here.** A scan of every test in the workspace \u2014 around twelve hundred \u2014 for
+**The crude form does not exist here.** A scan of every test in the workspace — around twelve hundred — for
 bodies that name no `assert`, no `expect`, no `unwrap`, no `panic!`, and no helper called `check_*`, `verify_*`
 or `ensure_*`, returns **nothing that is actually vacuous**. The four candidates it did surface were each
 verified by reading them: `byte_compare_passes_on_equal_input` and `fractal_noise_matches_five_frozen_values`
@@ -1218,39 +1218,39 @@ assert through helpers named `assert_bytes_eq` and `assert_bits`; `every_tag_typ
 `round_trip_disk` that carries three assertions; and `the_whole_pipeline_runs_against_the_real_pack` drives four
 `stage_*` helpers carrying three, seven, nine and six.
 
-**Two versions of the filter were wrong before that answer was trustworthy**, and both failed the same way \u2014 by
+**Two versions of the filter were wrong before that answer was trustworthy**, and both failed the same way — by
 producing a tidy list:
 
 * `\bassert\b` does not match `assert_bytes_eq`, because `_` is a word character, and `\bpanic!\b` does not
   match `panic!(..)`, because `!` is not one. It reported **sixteen** tests.
 * The naming conventions it then looked for were incomplete, so it reported **two**.
 
-**A tidy list is not a correct one** \u2014 which is the failure this review exists to find, arriving this time in
+**A tidy list is not a correct one** — which is the failure this review exists to find, arriving this time in
 the tool doing the reviewing.
 
 ### And the interesting half cannot be found this way at all
 
 KD-49's relative-teleport test had a real assertion, and it was structurally satisfiable: it teleported the
 player to the spawn and stepped with `~1` **while the spawn was the origin**, so `0 + 1` and the correct answer
-were the same number. No scan of test bodies can see that. It took **moving the spawn** \u2014 an unrelated change
-\u2014 for the assertion to become capable of failing, and it failed immediately.
+were the same number. No scan of test bodies can see that. It took **moving the spawn** — an unrelated change
+— for the assertion to become capable of failing, and it failed immediately.
 
 KD-52's palette fixture has the same shape: a test helper that encoded the decoder's own misunderstanding, found
 only when the decoder was corrected for an unrelated reason.
 
-**So clue 3's method is not a search, it is a perturbation**: change an input the tests hold fixed \u2014 a spawn
-point, a seed, a coordinate, a default \u2014 and see which assertions stop holding. Both of this review's
+**So clue 3's method is not a search, it is a perturbation**: change an input the tests hold fixed — a spawn
+point, a seed, a coordinate, a default — and see which assertions stop holding. Both of this review's
 clue-3 findings arrived that way by accident, from changes made for other reasons. Making it deliberate is the
 remaining work.
 
 **What this round did change.** Nothing in the product. The filter is committed as
 `tools/review/scan_vacuous_tests.py`: its answer is negative **today**, and a check whose answer is none is
-worth re-running after the next round of changes rather than rewriting from memory \u2014 which is exactly how the
+worth re-running after the next round of changes rather than rewriting from memory — which is exactly how the
 two broken versions of it happened.
 
-### KD-60 \u2014 the perturbation method works, and it found KD-49's shape in my own test on the first try
+### KD-60 — the perturbation method works, and it found KD-49's shape in my own test on the first try
 
-Clue 3's crude half \u2014 a test that cannot fail \u2014 is absent from this codebase (KD-59). The half that matters
+Clue 3's crude half — a test that cannot fail — is absent from this codebase (KD-59). The half that matters
 cannot be found by reading tests at all, because the assertion is real and merely **structurally satisfiable for
 one input**. So the method is to **perturb an input the tests hold fixed** and see which assertions stop holding.
 
@@ -1268,14 +1268,14 @@ assert_ne!((sx, sz), (0, 0),
     "the default spawn at the origin is ocean at this seed, so a spawn still there means no search ran");
 ```
 
-**"at this seed"** \u2014 in a test that uses whatever the production seed is. At seed 0 the origin is ocean and the
+**"at this seed"** — in a test that uses whatever the production seed is. At seed 0 the origin is ocean and the
 assertion holds; at any other seed the origin may be dry, the search correctly does nothing, and the test fails
 **having found no defect**. That is KD-49's shape exactly: satisfiable for one input, unsatisfiable for another,
 with nothing in the test saying which it needs.
 
 **The fix is a split**, and it is what the perturbation taught:
 
-* the **property** stays with the production seed \u2014 a fresh world spawns the player on land, true whatever the
+* the **property** stays with the production seed — a fresh world spawns the player on land, true whatever the
   seed;
 * the **evidence that the search runs** moves to its own test which **names the seed it needs**, because it is
   *about* that precondition: `WATER_AT_ORIGIN_SEED = 0`, and it asserts the precondition (the origin is under
@@ -1285,12 +1285,12 @@ with nothing in the test saying which it needs.
 and `git diff` clean.
 
 **What this suggests for the rest of the review.** Two of this review's findings arrived by accident from
-changes made for other reasons \u2014 KD-49 from moving the spawn, KD-52 from correcting the palette. Deliberate
+changes made for other reasons — KD-49 from moving the spawn, KD-52 from correcting the palette. Deliberate
 perturbation found a third **on its first attempt**. The inputs worth perturbing next are the ones the suite
 holds fixed and the code assumes: coordinates (many tests use the origin or `(8, 8)`), the view distance, chunk
 section counts, and the tick counts a test waits for.
 
-### KD-61 \u2014 the second perturbation: a tick count standing in for a property
+### KD-61 — the second perturbation: a tick count standing in for a property
 
 `CHUNKS_PER_TICK` from 64 to 8 failed one test, and again **having found no defect**:
 
@@ -1309,7 +1309,7 @@ for _ in 0..8 {                                             // 8,  a property of
 assert_eq!(total, expected, "the view distance must be exactly (2r+1)^2 chunks");
 ```
 
-**The server streamed 72 of 81 chunks in the eight ticks the test allowed, which is correct behaviour** \u2014 a
+**The server streamed 72 of 81 chunks in the eight ticks the test allowed, which is correct behaviour** — a
 view is streamed over as many ticks as the budget needs. The test had baked the budget it happened to run with
 into an assertion about the view distance.
 
@@ -1317,8 +1317,8 @@ into an assertion about the view distance.
 structurally satisfiable for one value of an input it never names.** The fix is to **wait for the count** with a
 deadline generous enough for any budget the server ships, which is what the test meant in the first place.
 
-**And the loop closed**: with the fix in, the same perturbation now passes \u2014 **1240 passed, 0 failed, 86
-suites** \u2014 with the budget restored and `git diff` clean.
+**And the loop closed**: with the fix in, the same perturbation now passes — **1240 passed, 0 failed, 86
+suites** — with the budget restored and `git diff` clean.
 
 **Two perturbations, two findings, both closed loops.** Every one is a test that was green for a reason other
 than the property it names, and none of them could have been found by reading the tests: in both cases the
@@ -1326,15 +1326,15 @@ assertion is real, and the input that makes it unable to fail is one the suite h
 
 **A process note, recorded because it is now twice.** I committed with a failing `cargo clippy` in the previous
 commit (KD-60's doc comment needed fencing). It was caught and fixed immediately, and it is the second time this
-review has committed over a failing gate \u2014 the first being `check_line_endings` in KD-57. **The gates are run
+review has committed over a failing gate — the first being `check_line_endings` in KD-57. **The gates are run
 before the commit in both cases; what fails is reading their output as a formality once the interesting work is
 done.**
 
-### KD-62 \u2014 two more perturbations, and the one test in the tree that guards against this review's subject
+### KD-62 — two more perturbations, and the one test in the tree that guards against this review's subject
 
 **`LIGHT_UPDATES_PER_TICK` from 4 to 1: nothing failed.** 1240 passed, 0 failed. The light-update tests wait for
 what they assert rather than assuming a budget, so lowering it changed nothing. A perturbation that finds
-nothing is worth recording as such \u2014 otherwise the method reads as though every input hides a defect.
+nothing is worth recording as such — otherwise the method reads as though every input hides a defect.
 
 **The view-distance clamp from `(2, 16)` to `(2, 2)`: one failure, and it is the harness working correctly.**
 
@@ -1348,7 +1348,7 @@ assert!(
 
 At a view distance of two the join sends the whole 5x5 view itself, so no *subsequent* tick has a chunk in it,
 and this guard fires. **It is a sentinel against the determinism test becoming vacuous**, and at that input the
-test genuinely is vacuous \u2014 so failing is the correct behaviour, not a defect.
+test genuinely is vacuous — so failing is the correct behaviour, not a defect.
 
 **It is the only assertion of its kind in the codebase**, and it anticipates exactly what this review has spent
 four rounds finding: a test that passes for a reason other than the property it names. `the same seed replays
@@ -1359,7 +1359,7 @@ counting as a pass. Every other test examined here would have been improved by o
 and one deliberate guard; the guard is the pattern worth copying, and the four rounds of this review are the
 argument for it.
 
-### KD-63 \u2014 clue 4 opens with a fourth instance of the same sentence
+### KD-63 — clue 4 opens with a fourth instance of the same sentence
 
 Three of this review's confirmed failures came from **prose that names two ideas side by side and conflates
 them**: `first_state_id`'s "first (**default**) state" (KD-56), `parse_axis`'s "distinguishable from `~0`"
@@ -1372,19 +1372,19 @@ pub fn is_valid(&self) -> bool {
 }
 ```
 
-`ItemStack` promises **three** things at line 66 \u2014 `item_id >= 0`, `0 <= count <= 64`, and **`item_id == 0`
-implies `count == 0`** \u2014 and `new` enforces all three by returning `EMPTY` whenever the id is air. `is_valid`
+`ItemStack` promises **three** things at line 66 — `item_id >= 0`, `0 <= count <= 64`, and **`item_id == 0`
+implies `count == 0`** — and `new` enforces all three by returning `EMPTY` whenever the id is air. `is_valid`
 checks two, so its doc names a superset of what it does.
 
 **It is benign, and why it is benign is the part worth writing down.** The third invariant cannot be violated
 through the public API: every path into an `ItemStack`, **including the decode path in `player.rs` that
 inventory spoofing would use**, goes through `new`. So the omission is covered **by construction rather than by
-this function** \u2014 and nothing in the code said which.
+this function** — and nothing in the code said which.
 
 **So the doc moves and the code does not.** Adding the check would add a branch that can never be taken: dead
 code dressed as a defence, which is worse than the sentence it replaces. The doc now says exactly what is
 checked and where the rest is kept, and
-`a_valid_stack_covers_the_whole_guarantee` **pins the relationship** \u2014 it asserts that everything `new`
+`a_valid_stack_covers_the_whole_guarantee` **pins the relationship** — it asserts that everything `new`
 accepts satisfies the third invariant, so a later change that let `new` build `{item_id: 0, count: 5}` fails
 there rather than producing a stack this function waves through.
 
@@ -1395,33 +1395,33 @@ read, and the counts are what make it usable: `distinguishable` appears three ti
 parentheses also three, and those are the two signatures of the defects already confirmed. This finding came
 from six of those lines.
 
-### KD-64 \u2014 clue 4's equality claims are clean, and that says where the defects live
+### KD-64 — clue 4's equality claims are clean, and that says where the defects live
 
-The signatures that **equate two things** \u2014 `same as`, `equivalent`, `identical` \u2014 are about twenty-five doc
+The signatures that **equate two things** — `same as`, `equivalent`, `identical` — are about twenty-five doc
 lines in product code, and every one is checkable by looking at both sides. Four were read in full:
 
-* `ClientInformation::encode_body`'s `# Errors` says "Same as `Packet::encode`" \u2014 looser than the others, since
+* `ClientInformation::encode_body`'s `# Errors` says "Same as `Packet::encode`" — looser than the others, since
   the two write different bodies, but both write the same fields and the error conditions coincide;
 * `Packet::to_raw`'s says "Same as `Packet::encode`" and its body is `Ok(RawPacket::new(Self::ID, self.encode()?))`
-  \u2014 **the only error source is that call**, so it is exact;
+  — **the only error source is that call**, so it is exact;
 * `PacketWriter::write_identifier`'s says "Same as `write_string`" and its body is
-  `self.write_string(&value.to_string())` \u2014 likewise exact;
+  `self.write_string(&value.to_string())` — likewise exact;
 * `mc_entity::Vec3`'s says the parallel `mc_world::Vec3` is "structurally identical and conversion is a field
-  move" \u2014 and both are exactly `{ x: f64, y: f64, z: f64 }`. **Correct.**
+  move" — and both are exactly `{ x: f64, y: f64, z: f64 }`. **Correct.**
 
 **None is a defect.** That is worth recording rather than passing over, because it locates the problem: every
-prose defect this review has found \u2014 KD-52, KD-54, KD-56 and KD-63 \u2014 is in prose that **defines a term**
+prose defect this review has found — KD-52, KD-54, KD-56 and KD-63 — is in prose that **defines a term**
 (`default`, `distinguishable`, `indices`), not in prose that **equates two things**.
 
 The difference is not stylistic. "A is the same as B" is checkable in one reading, and the author writing it has
 both sides in front of them. "The default state" is a term the author believes they know, and the belief is what
-turns out to be wrong \u2014 642 times, in KD-56's case.
+turns out to be wrong — 642 times, in KD-56's case.
 
 **So clue 4's remaining work is the defining prose**: `(default)` in parentheses (three lines, one read, one
 verified correct), `must` and `cannot` (358 lines), and `invariant` (48). The counts are what make 1044 lines
 readable, and they now have a direction.
 
-### KD-65 \u2014 every chunk said `badlands`, which is what "the terrain and the biomes do not generate correctly" was
+### KD-65 — every chunk said `badlands`, which is what "the terrain and the biomes do not generate correctly" was
 
 ```rust
 // Biome ids are not modelled in P04: one plains biome fills every cell.
@@ -1429,18 +1429,18 @@ const PLAINS_BIOME_ID: u32 = 0;
 ```
 
 **A constant named for one biome and valued for another.** The client resolves a chunk's biome ids against the
-registry this server hands it \u2014 a verbatim replay of vanilla's \u2014 and in that registry **id 0 is
+registry this server hands it — a verbatim replay of vanilla's — and in that registry **id 0 is
 `minecraft:badlands`**. So every column of every chunk was painted as badlands: **red sand and orange terracotta
 under a hazy sky**, wherever the player stood, with the terrain, the blocks and the light all correct.
 
 **That is the owner's report, precisely.** A biome decides the colour of grass, leaves and water, the sky and the
-fog \u2014 so a world painted one wrong biome looks broken everywhere and nothing errors. It was reported as a
+fog — so a world painted one wrong biome looks broken everywhere and nothing errors. It was reported as a
 terrain and generation problem, and three rounds of this review went after light, palettes and features before
 this.
 
 **Measured, not guessed.** `crates/network/src/registry_data/config-payload.bin` is the exact byte sequence the
 client receives. The identifier run after `minecraft:worldgen/biome` is **65 names in alphabetical order**,
-ending at `minecraft:chat_type` \u2014 the next registry, which is where the run stops being alphabetical:
+ending at `minecraft:chat_type` — the next registry, which is where the run stops being alphabetical:
 
 ```text
 0 badlands \u00b7 21 forest \u00b7 35 ocean \u00b7 40 plains \u00b7 64 wooded_badlands
@@ -1460,22 +1460,22 @@ boundary can be checked from the data.
 
 KD-56 was a block's default state assumed to be its lowest id. KD-65 is a biome assumed to be id 0. **Both are a
 number sent to a client, resolved by a rule that was assumed rather than looked up**, and neither had anything in
-the repository that could contradict it \u2014 the prose said what the number was for, and the number was never
+the repository that could contradict it — the prose said what the number was for, and the number was never
 compared with the registry it indexes.
 
 Per-column biomes are still not modelled: `Biome::index()` is this crate's own six-biome slot, a **different
 numbering** from the client's registry, so sending it would be a new defect rather than a fix. That is recorded
 rather than half-done.
 
-### KD-66 \u2014 the sweep is done, and the rule is: an id with an assertion is right, an id without one is wrong
+### KD-66 — the sweep is done, and the rule is: an id with an assertion is right, an id without one is wrong
 
 Every numeric registry id this server puts on the wire, and where each comes from:
 
 | id | source | verdict |
 |---|---|---|
-| block state | `blocks.tsv`, jar-derived, ids verified before writing | **was wrong** \u2014 KD-56, `default_state` returned the lowest id, wrong for 642 of 1168 blocks |
-| biome | the registry the client is sent, read out of `config-payload.bin` | **was wrong** \u2014 KD-65, every chunk said `badlands` |
-| item | `items.tsv`, jar-derived | **correct** \u2014 verified row for row by `ItemProbe`, 1506 of 1506 |
+| block state | `blocks.tsv`, jar-derived, ids verified before writing | **was wrong** — KD-56, `default_state` returned the lowest id, wrong for 642 of 1168 blocks |
+| biome | the registry the client is sent, read out of `config-payload.bin` | **was wrong** — KD-65, every chunk said `badlands` |
+| item | `items.tsv`, jar-derived | **correct** — verified row for row by `ItemProbe`, 1506 of 1506 |
 | dimension type | `0`, hard-coded | **correct, and asserted** |
 | block entity type | `4` for a chest, in a golden test | **correct**, and the golden bytes came from a vanilla capture |
 
@@ -1485,14 +1485,14 @@ Every numeric registry id this server puts on the wire, and where each comes fro
 > `join_game` sends `dimension_type_id: 0`, so entry 0 of that registry must be the overworld.
 
 **and then line 311 asserts it**: "entry 0 must be the overworld, because join_game references dimension_type id
-0". Reading the registry out of the payload we send confirms it \u2014 entry 0 is `minecraft:overworld`, the
+0". Reading the registry out of the payload we send confirms it — entry 0 is `minecraft:overworld`, the
 registry is four long, and `minecraft:damage_type` begins right after it.
 
 **So the pattern is not "these ids are hard".** It is that **the two ids with nothing checking them were both
 wrong, and the three with something checking them are all right**:
 
 * the block-state id had a jar-derived table whose *rows* were verified and whose *default column did not exist*
-  \u2014 the check was one column narrow, and the missing column was the one that mattered;
+  — the check was one column narrow, and the missing column was the one that mattered;
 * the biome id was a constant named for one biome and valued for another, with a comment admitting the ids were
   not modelled;
 * the item id had an independent extraction and is exact;
@@ -1501,11 +1501,11 @@ wrong, and the three with something checking them are all right**:
 
 **What follows for the rest of the project**, and it is the single most useful thing this review has produced:
 **a number sent to a client is a claim about a registry the client owns, and it needs the same evidence as any
-other compatibility claim** \u2014 a jar extraction, a capture, or an assertion that names the registry. The two
+other compatibility claim** — a jar extraction, a capture, or an assertion that names the registry. The two
 that had none were both wrong, in ways that produced a world of sideways waterlogged logs and then a world of red
 sand, neither of which errored anywhere.
 
-### KD-67 \u2014 the regression test KD-65 was fixed without, and proof that it has teeth
+### KD-67 — the regression test KD-65 was fixed without, and proof that it has teeth
 
 **KD-65 was fixed with no test.** `PLAINS_BIOME_ID` went from 0 to 40 and nothing stopped it, or the next
 constant like it, from going back. `crates/server/tests/registry_ids.rs` now reads the registry blob the client
@@ -1517,7 +1517,7 @@ is sent and holds the constant against it:
   asserting against a number it invented.
 * `PLAINS_BIOME_ID`'s index into that prefix must name `minecraft:plains`.
 * and `dimension_type_id 0` must name `minecraft:overworld`, which the code already asserted in
-  `registry_data/mod.rs:311` \u2014 the one id in the sweep that had a check and was right.
+  `registry_data/mod.rs:311` — the one id in the sweep that had a check and was right.
 
 **Verified by perturbation, because a test that has never failed is not a test.** Setting the constant back to
 the value KD-65 shipped fails it with
@@ -1527,10 +1527,10 @@ PLAINS_BIOME_ID is 0, and the registry the client is sent gives that id to "mine
 Every chunk would be painted as badlands
 ```
 
-\u2014 which is the defect and the symptom in one sentence, and the constant is back at 40.
+— which is the defect and the symptom in one sentence, and the constant is back at 40.
 
 **Two things this round got wrong, both worth the line.** The test first went through `captured_payload()`, whose
-payloads concatenate to 41 097 bytes containing `minecraft:` and **not** the biome registry's key \u2014 so it is not
+payloads concatenate to 41 097 bytes containing `minecraft:` and **not** the biome registry's key — so it is not
 the uncompressed registry bytes, whatever the reason; the test now reads the committed blob directly through
 `CARGO_MANIFEST_DIR` and **says so**, rather than quietly reading a file and letting a reader assume it went
 through the server. And the identifier scan found **nothing at all** in a file the same test had just located a
@@ -1538,7 +1538,7 @@ key in, which is impossible for a correct scanner; a byte-index version was repl
 first time. **A test that does not work is worse than no test**, which is why the second failure was diagnosed
 rather than committed.
 
-### KD-68 \u2014 my commit guard checked four gates out of six, and I committed over a failing clippy a third time
+### KD-68 — my commit guard checked four gates out of six, and I committed over a failing clippy a third time
 
 The loop that runs the gates before committing recorded a boolean for the **four docs-audit scripts** and
 nothing else, so if ( -eq 0 -and ) was true while cargo clippy -D warnings had failed on a binding
@@ -1548,11 +1548,11 @@ name. The commit went through, as it had twice before for different reasons.
 now records **fmt, clippy, the test count and all four audits**, and the boolean is only true if every one of
 them is zero.
 
-The failure itself was trivial \u2014 
-amed too similar to another binding \u2014 and that is the point: a guard that
+The failure itself was trivial — 
+amed too similar to another binding — and that is the point: a guard that
 lets a trivial failure through will let a real one through, and three commits in this session are evidence.
 
-### KD-69 \u2014 `is_default()` answered a different question from the one it was named for
+### KD-69 — `is_default()` answered a different question from the one it was named for
 
 ```rust
 /// Whether this state has no properties.
@@ -1565,7 +1565,7 @@ The name says **default**; the body answers **has no properties**; the doc match
 default is `axis=y`, which has a property, so this returns `false` for the real default and `true` for any
 stateless block.
 
-**It is called from nowhere** \u2014 not in product code, not in a test. That makes it a **trap rather than a
+**It is called from nowhere** — not in product code, not in a test. That makes it a **trap rather than a
 defect**: a future caller reads `is_default()`, believes it, and rebuilds exactly the assumption behind KD-56,
 where a block's default was taken to be its lowest state id and every log lay on its side with water inside every
 leaf.
@@ -1578,28 +1578,28 @@ already said.
 none.
 
 **KD-56 and this are mirror images, which is what makes the pair worth stating.** There the doc claimed more than
-the code did \u2014 "the id of this block's first (**default**) state" \u2014 and the name was merely ambiguous. Here the
+the code did — "the id of this block's first (**default**) state" — and the name was merely ambiguous. Here the
 doc is exact and the **name** claims more. Both were read as the same wrong thing, *this number is the default*,
 and one of the two ended up sending a client sideways logs with water inside them.
 
 **And a smaller repeat**: the commit that carried this fix has no CHANGELOG entry, because the inline script
 writing it died on a quoting error and **the commit guard only reads the gates**. A guard that checks what it can
-and reports a whole \u2014 the same shape as KD-68 one round earlier, and not fixable by a boolean: a shell heredoc is
+and reports a whole — the same shape as KD-68 one round earlier, and not fixable by a boolean: a shell heredoc is
 not a place to write a document.
 
-### KD-70 \u2014 the standard this review has been arguing for, already in use, with one word wrong
+### KD-70 — the standard this review has been arguing for, already in use, with one word wrong
 
-Searching for the KD-69 class \u2014 a name or doc about a numeric default \u2014 turns up eight functions. Two of them
+Searching for the KD-69 class — a name or doc about a numeric default — turns up eight functions. Two of them
 make numeric claims about vanilla, and one of those is the best-written comment this review has read:
 
 ```rust
 /// **From the jar's own data, verified by counting**: every `blasting` recipe carries `cookingtime: 100` ...
-/// These defaults matter only for a pack that omits the field, which vanilla never does \u2014 so they are
+/// These defaults matter only for a pack that omits the field, which vanilla never does — so they are
 /// recorded as *not exercised by vanilla* rather than presented as verified.
 ```
 
 **It says where the numbers came from, and it states its own limit.** That is precisely the evidence discipline
-KD-56 and KD-65 were missing, already in use here \u2014 which is worth recording, because four rounds of this review
+KD-56 and KD-65 were missing, already in use here — which is worth recording, because four rounds of this review
 have been arguing for a standard the codebase already meets in places.
 
 **And one word of it is wrong.** The sentence read "every `smoking` and `campfire_cooking` recipe carries
@@ -1607,11 +1607,11 @@ have been arguing for a standard the codebase already meets in places.
 Vanilla cooks blasting, smoking and campfire cooking in half the time it cooks smelting; the code is right and the
 sentence was not.
 
-**A number in prose that nothing compares with the code beside it** \u2014 KD-56's shape in one word, inside a comment
+**A number in prose that nothing compares with the code beside it** — KD-56's shape in one word, inside a comment
 that gets the hard part right. The fix is the sentence.
 
 **The other numeric claim checks out.** `ContainerKind::default_slots` gives 41 for a player (36 + 4 armour + 1
-offhand), 10 for crafting (a table's nine plus its result) and 3 for a furnace (input, fuel, output) \u2014 all three
+offhand), 10 for crafting (a table's nine plus its result) and 3 for a furnace (input, fuel, output) — all three
 correct. Its doc does **not** say where they came from, which is the weaker standard next to the cooking-time
 comment, and it is a gap rather than a defect: the numbers are right and nothing depends on the reader trusting
 them.

@@ -150,7 +150,7 @@ impl BlockStateRef {
     /// **Not `is_default`.** That is what this was called, and it is a different question: `oak_log`'s default
     /// state is `axis=y`, which has a property, so this returns `false` for the real default and the old name
     /// said otherwise. It answered "has no properties" while being read as "is the default", which is the
-    /// assumption behind KD-56 \u2014 a block's default taken to be its lowest state id, wrong for 642 of 1168.
+    /// assumption behind KD-56 — a block's default taken to be its lowest state id, wrong for 642 of 1168.
     ///
     /// `BlockStateRef` holds a name, its properties and an id, and no registry to compare against, so it
     /// **cannot** answer whether it is a block's default. [`BlockRegistry::default_state`] can, given the name.
@@ -374,8 +374,8 @@ impl BlockRegistry {
     /// persistent false, waterlogged false. The table this reads is `block_defaults.tsv`, extracted from the
     /// jar by `DefaultStateProbe`.
     ///
-    /// This doc used to say the opposite \u2014 "for a block with properties this is its first state ... callers
-    /// that need the true default must supply properties" \u2014 which was accurate until KD-56 changed the body and
+    /// This doc used to say the opposite — "for a block with properties this is its first state ... callers
+    /// that need the true default must supply properties" — which was accurate until KD-56 changed the body and
     /// left the sentence behind, still telling readers to work around a defect that had been fixed.
     ///
     /// # Errors
