@@ -165,19 +165,19 @@ produced a world of sideways waterlogged logs and the other a world of red sand.
 ## P00\u2013P09 review: what is covered and what is not (2026-09-13)
 
 The findings are in the table above. **This says where the review stopped**, because a review that reports only
-what it found reads as complete when it is not \u2014 which is the failure this whole exercise has been about.
+what it found reads as complete when it is not — which is the failure this whole exercise has been about.
 
 | clue | searched | read | left |
 |---|---|---|---|
 | (1) "first" taken for "default" | every `first_state_id` use in product code (12 lines) | all of them, plus `is_default` (KD-69) and the whole `blocks.rs` neighbourhood | **done** |
 | (2) fixture and expectation provenance | every file under `crates/test-support/fixtures` (10) | all ten, each classified as jar, capture, or hand-written (KD-57) | **done** |
 | (3) tests that cannot fail | every test in the workspace (1257) | the crude form is **absent**; the form that matters needs **perturbation**, and four were run (KD-60, KD-61, KD-62) | crude form done; perturbation is a **method**, not a finite sweep |
-| (4) prose that disagrees with code | 1052 doc lines making a falsifiable claim, 60 of them naming a number | the two highest-yield sub-lines are closed: **jar-measurable counts** (4 files: `recipe.rs` wrong, `advancement.rs` 8/8, `loot.rs` 3+3, `tag.rs` 2+2) and **doc tables versus code** (2 tables: fuel wrong, smelting exact) | **the long tail is not read**: roughly 992 claim lines name no number, and **of the 60 that do, about a quarter sit in the files the two sub-lines above cover** \u2014 the rest are unread |
+| (4) prose that disagrees with code | 1052 doc lines making a falsifiable claim, 60 of them naming a number | the two highest-yield sub-lines are closed: **jar-measurable counts** (4 files: `recipe.rs` wrong, `advancement.rs` 8/8, `loot.rs` 3+3, `tag.rs` 2+2) and **doc tables versus code** (2 tables: fuel wrong, smelting exact) | **all sixty are now read** — the `entity` group, the two closed sub-lines, and the remainder in `data`, `protocol`, `redstone`, `server` and `worldgen`, which holds. The long tail **not** read is the roughly 992 claim lines naming no number, and **those have produced nothing in this review**: every clue-4 finding came from a line checkable against data — the rest are unread |
 
 **One item on this line was chased and left open, on purpose.** `StackSizeTable::len` carries "always 165 for
 the 26.1.2 vanilla table", and the module doc says the table comes from "every `stacksTo` call site in the game".
-Five rounds produced `tools/vanilla-probe/StacksToProbe.java` \u2014 which compiles, runs, and reports **1506 items,
-1506 unreadable, with `ERROR:NullPointerException:Components_not_bound_yet` on every row** \u2014 and four attempts at
+Five rounds produced `tools/vanilla-probe/StacksToProbe.java` — which compiles, runs, and reports **1506 items,
+1506 unreadable, with `ERROR:NullPointerException:Components_not_bound_yet` on every row** — and four attempts at
 the bootstrap step that would bind item components: `getDefaultMaxStackSize`, `item.components()`,
 `new ItemStack(item).getMaxStackSize()`, and `MappedRegistry.freeze()`, the last directed by scanning the jar for
 the class carrying the error message.
@@ -191,7 +191,7 @@ dedicated server performs, reachable with the launcher already at `target/vanill
 is a tool for checking one of sixty doc lines, and keeping it alive because it had been alive for a while is the
 shape of the problem this review exists to find.
 
-**What "not read" means here, concretely.** Nothing in the unread remainder is *suspected* \u2014 the two sub-lines that
+**What "not read" means here, concretely.** Nothing in the unread remainder is *suspected* — the two sub-lines that
 produced every clue-4 finding are the ones that name a value checkable from data, and the KD-73 lesson is that a
 claim is only worth checking when there is something independent to check it against. The unread lines are prose
 about control flow and invariants, which is the majority and has produced nothing.
@@ -199,7 +199,31 @@ about control flow and invariants, which is the majority and has produced nothin
 **And the honest qualification on clue 3.** Four perturbations were run and two found defects. There is no
 measure of how many inputs the suite holds fixed, so "perturbation complete" is not a state this review can
 claim; what it can claim is that the method is written down, was productive twice, and returns nothing on a third
-input \u2014 which is what a method with a hit rate looks like, not what a finished search looks like.
+input — which is what a method with a hit rate looks like, not what a finished search looks like.
+
+## P00—P09 review: closed
+
+**The four clues have been executed and their productive areas closed.** Clue 1 reviewed every
+`first_state_id` use and the whole `blocks.rs` neighbourhood; clue 2 classified all ten fixtures and
+independently reproduced the one table that had only claimed a source; clue 3 established that the crude form
+of a vacuous test **does not exist here**, and that the form which does **requires perturbation** — which
+found two defects and closed both loops; clue 4 read all sixty doc lines naming a number, plus the two
+sub-lines where the findings turned out to live.
+
+**What the review produced:** findings with fixes from KD-63 to KD-87, of which three were real product
+defects — a block default taken to be a lowest id (**every log on its side and water inside every
+leaf**), a biome id naming `badlands` (**every chunk of every world painted red sand**), and a campfire
+cooking time of 100 where the jar says 600. **Three regression tests, each verified to fail** when its defect
+is put back, and the recording discipline itself: 237 literal escape sequences removed from the documents
+this review wrote, and a commit guard that had been checking four gates of six.
+
+**Left open, stated rather than implied:** about 992 doc lines that make a claim and name no number, which
+have produced nothing; `StackSizeTable::len`'s 165 and `mob.rs`'s 16.0, both unverified with the attempts and
+the route out on record; and the stack-size table's rows, which have still never been compared with the jar.
+
+**The one sentence this review would keep:** a number sent to a client, or written in a comment, is **a claim
+about something outside the file it sits in**, and it needs the same evidence as any other compatibility
+claim. Every defect found here was a number that had none, and every one of them passed a green test suite.
 
 ## Removed rows (governance, 2026-09-12)
 
