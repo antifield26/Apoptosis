@@ -3218,6 +3218,34 @@ session has now learned that twice in two different files.
 it**, which is the opposite of the assertions this phase has spent its time finding.
 
 
+### P10-08 (part 4) — the three move packets, measured before they are written
+
+The capture this phase produced holds **11,713** bodies for the three entity-movement packets, and their lengths
+settle all three layouts without any of them being guessed:
+
+```text
+play 53  move_entity_pos      8 bytes (2499) / 9 bytes (2994)
+   16 | 00 00 | 00 00 | 00 00 | 00        id, dx, dy, dz (i16), on_ground  = 1 + 6 + 1 = 8
+
+play 54  move_entity_pos_rot 10 bytes (4249) / 11 bytes (1774)
+   16 | ff ea 02 af fe 67 45 | 00 | 00    id, dx, dy, dz (i16), yaw, pitch (i8), on_ground = 1 + 6 + 2 + 1 = 10
+
+play 56  move_entity_rot      4 bytes (189) / 5 bytes (8)
+   19 | 00 00 | 00                        id, yaw, pitch (i8), on_ground = 1 + 2 + 1 = 4
+```
+
+**Every length in every histogram is one of two values, and the pair differs by exactly one byte** -- the `VarInt`
+entity id being one byte for ids up to 127 and two beyond. The sample bodies show both: `16` is 22 and `9b 03` is
+411, and 411 appears in the metadata cross-reference from part 1 as an item entity.
+
+**So the widths account for every byte of 11,713 bodies**, which is the same arithmetic check `add_entity`,
+`remove_entities`, `set_entity_motion`, `disguised_chat` and the item stack each got -- and the reason this phase
+measures before it writes rather than after.
+
+**What is left of P10-08**: the three codecs and the call site that sends one when a drop moves. The layouts are no
+longer an open question; the shapes are the three above.
+
+
 ## [0.1.0-rc.1] — 2026-09-12 (release candidate)
 
 **Released.** Tag [`v0.1.0-rc.1`] with a GitHub Release carrying three assets:
