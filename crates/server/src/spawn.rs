@@ -63,10 +63,16 @@
 //! - **Pack geometry**: vanilla spreads a pack across nearby cells and
 //!   re-validates each member; this build lands every member on the one
 //!   validated cell. Movement (P11-02) spreads them.
-//! - **Category order per position**: vanilla draws one category per chunk
-//!   attempt from its spawning list; this build tries monsters before
-//!   creatures at every position, which biases attempt counts toward
-//!   monsters when both categories are near their caps.
+//! - **One pack per position**: vanilla's `getFilteredSpawningCategories`
+//!   attempts **every** spawning category per position independently, so a
+//!   dark grass block at night can carry a hostile pack *and* an animal pack;
+//!   this build resolves at most one — monsters first, the creature row only
+//!   when the monster rule rejects. The divergence is exclusivity, not just
+//!   attempt ordering.
+//! - **No thundering case**: `isDarkEnoughToSpawn` reads brightness as
+//!   `getMaxLocalRawBrightness(pos, 10)` while thundering, which brightens
+//!   (loosens) the night check. No weather model exists here; if one lands,
+//!   this case must be revisited.
 
 // The sky-darken curve replicates vanilla's own f32 arithmetic (a timeline
 // multiplier applied to 15.0f, then `f2i`), so the casts here are the measured
@@ -444,7 +450,15 @@ pub fn despawn(
     no_action_ticks: u64,
     random: &mut RandomSource,
 ) -> bool {
-    if distance_sq > DESPAWN_DISTANCE_SQR && category.despawns_by_distance() {
+    // Vanilla gates **both** discards on `removeWhenFarAway(d)`: the distance
+    // path at bytecode offsets 98-102 and the idle path at 161-166. Creatures
+    // are persistent (`Animal.removeWhenFarAway` returns false), so neither
+    // path ever discards one — an idle cow outside the ring accumulates
+    // noActionTime and still stays.
+    if !category.despawns_by_distance() {
+        return false;
+    }
+    if distance_sq > DESPAWN_DISTANCE_SQR {
         return true;
     }
     no_action_ticks > NO_ACTION_LIMIT
@@ -609,6 +623,24 @@ mod tests {
         );
         assert!(!animal_spawn_allowed(0, true), "darkness refuses animals");
         assert!(!animal_spawn_allowed(15, false), "the tag below decides");
+    }
+
+    #[test]
+    fn a_creature_is_never_discarded_by_either_despawn_path() {
+        // Vanilla gates both paths on removeWhenFarAway, and creatures return
+        // false there: no distance, no idle roll, no seed, ever.
+        for draw in 0..2000_u32 {
+            let mut random = RandomSource::new(SEED + i64::from(draw));
+            assert!(
+                !despawn(
+                    MobCategory::Creature,
+                    DESPAWN_DISTANCE_SQR + 1.0,
+                    NO_ACTION_LIMIT + 10_000,
+                    &mut random
+                ),
+                "draw {draw}: a creature survived every despawn path in vanilla"
+            );
+        }
     }
 
     #[test]

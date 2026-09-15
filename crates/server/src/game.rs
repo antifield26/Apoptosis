@@ -13,7 +13,7 @@
 //! |---|---|---|
 //! | [`TickPhase::Network`] | drain the inbound channel (bounded) and *queue* the work: player intents go to a pending buffer, joins/leaves apply inline | implemented |
 //! | [`TickPhase::ScheduledTicks`] | none — block/fluid scheduled ticks are P05-05/P05-06 | **documented no-op** |
-//! | [`TickPhase::Entities`] | per-entity timers, gravity + swept collision, landing/fall damage, and the AI hook | physics implemented, AI is a **documented no-op** (P05-11..14) |
+//! | [`TickPhase::Entities`] | the natural spawn cycle, then per-entity AI, despawn, timers, gravity + swept collision, landing/fall damage | implemented (AI live as of P11-02) |
 //! | [`TickPhase::Players`] | apply the queued intents in arrival order, then player timers and physics | implemented |
 //! | [`TickPhase::BlockEntities`] | none — block-entity behaviour is P06 | **documented no-op** |
 //! | [`TickPhase::Broadcast`] | block changes, chunk streaming, world time, entity-removal sweep, chunk unloading | implemented |
@@ -120,16 +120,19 @@
 //! Simulated: movement with swept collision (players and non-player entities),
 //! fall damage, block break and place with reach/targeting validation,
 //! health/hunger/experience, death and respawn, chunk streaming (join and
-//! chunk-border crossings) from memory *and* from disk, world time, entity
-//! timers/gravity/despawn, chunk unloading outside the view distance.
+//! chunk-border crossings) from memory *and* from disk, world time, natural mob
+//! spawning with the measured vanilla rules (`crate::spawn`), mob AI driving
+//! movement and melee, mob despawn, entity timers/gravity, chunk unloading
+//! outside the view distance, chat relay, commands, and the
+//! `add_entity`/`remove_entities`/`set_entity_data` packets that make entities
+//! visible to a client. World *generation* lives in `mc-worldgen` and is wired.
 //!
-//! **Not** simulated, and therefore not claimed: mob AI, mob spawning, block and
-//! fluid scheduled ticks, block-entity behaviour, redstone, fluids, lighting,
-//! world generation, chat relay, commands, item pickup and merging, entity
-//! persistence, per-player data persistence, and the `add_entity`/`remove_entities`
-//! packets that would make non-player entities visible to a client. Each is
-//! recorded in `docs/vanilla-parity/PARITY-MATRIX.md` and the phase reports, and
-//! every no-op in this file says so at its definition.
+//! **Not** simulated, and therefore not claimed: block and fluid scheduled
+//! ticks, block-entity behaviour, redstone, fluids, item pickup and merging,
+//! entity persistence, per-player data persistence, and the projectile and
+//! explosion attack styles. Each is recorded in
+//! `docs/vanilla-parity/PARITY-MATRIX.md`, and every no-op in this file says so
+//! at its definition.
 
 // Simulation narrows and widens constantly: protocol fields are `f64`/`i32`, world
 // coordinates are `i32` blocks, and block ids are `i32` while wire palettes are
@@ -149,7 +152,21 @@ use mc_core::tick::Tick;
 use mc_entity::entity::{EntityBody, EntityId, EntityKind, EntityStore};
 use mc_entity::inventory::Hand;
 use mc_entity::item_entity::ItemEntity;
-use mc_entity::mob::Mob;
+use mc_entity::mob::{
+    ATTACK_RANGE, Mob, MobAttackStyle, MobGoal, MobKind, MobObservation, MobSighting,
+};
+
+/// Adapter: the AI reads randomness through `mc_entity`'s one-method [`Rng`]
+/// trait, and `mc-entity` cannot depend on `mc-simulation` to implement it for
+/// [`RandomSource`] itself. This forwards to the game's own source, so the AI's
+/// draws join the same deterministic stream as everything else.
+struct AiRng<'a>(&'a mut RandomSource);
+
+impl mc_entity::mob::Rng for AiRng<'_> {
+    fn next_i32_bounded(&mut self, bound: i32) -> i32 {
+        self.0.next_i32_bounded(bound)
+    }
+}
 use mc_entity::player::{DamageOutcome, GameMode, Player};
 use mc_entity::stack::ItemStack;
 use mc_network::bridge::{ClientEvent, ClientEventKind, ConnectionId, GameEvents, OutboundSender};
@@ -724,9 +741,8 @@ pub struct TickReport {
     pub entities_spawned: usize,
     /// Ids swept this tick, ascending.
     ///
-    /// Carried so tests can name what disappeared and so the P05 packet work has
-    /// the batch it needs. **No `remove_entities` packet is encoded yet**: clients
-    /// are not told, which is stated here rather than implied away.
+    /// Carried so tests can name what disappeared; the Broadcast phase turns
+    /// the batch into the `remove_entities` packet clients see.
     pub removed_ids: Vec<EntityId>,
 }
 
@@ -759,6 +775,10 @@ pub struct Game {
     /// The per-biome natural-spawn tables (`crate::spawn`), loaded from the committed
     /// fixture extracted from vanilla's data pack.
     spawn_tables: crate::spawn::SpawnTables,
+    /// Rotating cursor into the entity list for the movement-broadcast budget
+    /// (P11-03): which entity starts this tick's slice, so a capped tick never
+    /// starves the same tail every time.
+    entity_move_cursor: u64,
     /// Runs and times the six phases of a tick.
     scheduler: Scheduler,
     /// Intents drained this tick, applied by the Players phase in arrival order.
@@ -1020,6 +1040,7 @@ impl Game {
             random_seed: seed,
             random: RandomSource::new(seed),
             spawn_tables: crate::spawn::SpawnTables::vanilla(),
+            entity_move_cursor: 0,
             scheduler: Scheduler::new(),
             pending_intents: Vec::new(),
             pending_light: BTreeSet::new(),
@@ -1244,6 +1265,29 @@ impl Game {
         Ok(id)
     }
 
+    /// Spawn one mob of `kind` at `position`, announcing it like a drop.
+    ///
+    /// The spawn cycle's packs come through here, and so do tests and admin
+    /// tooling; the broadcast phase turns the pending id into an `add_entity`
+    /// with the kind's registry id and its spawn health.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Invariant`] when the entity store refuses (its cap or id
+    /// space), exactly as [`Self::spawn_item`] reports.
+    pub fn spawn_mob(
+        &mut self,
+        kind: mc_entity::mob::MobKind,
+        position: mc_entity::player::Vec3,
+    ) -> ServerResult<EntityId> {
+        let id = self
+            .entities
+            .spawn(EntityBody::Mob(Mob::new(kind)), position)?;
+        // Announced in the Broadcast phase; see the field's docs for why not here.
+        self.pending_entity_spawns.push(id);
+        Ok(id)
+    }
+
     /// Give the owned world handle back (shutdown, or handing it to a save worker).
     ///
     /// Returns `None` when this game never owned one.
@@ -1328,19 +1372,40 @@ impl Game {
                 Ok(())
             }
             TickPhase::Entities => {
+                // The budget is above the phase body: items-before-statements.
+                const ENTITY_MOVES_PER_TICK: usize = 128;
                 // **Positions before the phase, compared after it.** The position update lives in a per-entity
                 // helper that has no `report`, so the signal has to be raised here, on the boundary.
+                // Yaw joins the snapshot (P11-03): a mob that turned faces its
+                // target on the client, which a position-only delta cannot say.
                 let before: Vec<_> = self
                     .entities
                     .ids()
-                    .filter_map(|id| self.entities.get(id).map(|e| (id, e.position)))
+                    .filter_map(|id| self.entities.get(id).map(|e| (id, e.position, e.yaw)))
                     .collect();
                 self.phase_entities(report);
-                for (id, was) in before {
-                    let Some(now) = self.entities.get(id).map(|entity| entity.position) else {
+                // The budget (P11-03): vanilla streams every moved entity every
+                // tick, and at this server's mob counts that is far below the
+                // cap; the cap exists so a pathological crowd degrades by
+                // *deferred* movement packets — the rotating cursor means a
+                // deferred entity is first in line next tick — rather than by
+                // unbounded queue growth.
+                let mut before: Vec<_> = before;
+                let population = before.len();
+                if population > ENTITY_MOVES_PER_TICK {
+                    let start = (self.entity_move_cursor % population as u64) as usize;
+                    before.rotate_left(start);
+                    before.truncate(ENTITY_MOVES_PER_TICK);
+                    self.entity_move_cursor = (self.entity_move_cursor
+                        + ENTITY_MOVES_PER_TICK as u64)
+                        % population as u64;
+                }
+                for (id, was, was_yaw) in before {
+                    let Some(entity) = self.entities.get(id) else {
                         // Removed during the phase; its removal is announced where removals are swept.
                         continue;
                     };
+                    let now = entity.position;
                     // Deltas are 1/4096 of a block, which is what the packet carries. A movement too small for
                     // that is one no client could be told about, so **the comparison is between the values that
                     // would go on the wire rather than between the floats** -- which is both the honest test and
@@ -1362,14 +1427,30 @@ impl Game {
                     if dx == 0 && dy == 0 && dz == 0 {
                         continue;
                     }
-                    let packet = mc_protocol::packets::play::MoveEntityPos {
-                        entity_id: id.get(),
-                        dx,
-                        dy,
-                        dz,
-                        on_ground: self.entities.get(id).is_some_and(|entity| entity.on_ground),
-                    }
-                    .to_raw()?;
+                    let (on_ground, yaw, pitch) = (entity.on_ground, entity.yaw, entity.pitch);
+                    // A turned mob rides the rotation variant of the same
+                    // packet; an unchanged heading keeps the cheaper form.
+                    let packet = if wire_angle(yaw) == wire_angle(was_yaw) {
+                        mc_protocol::packets::play::MoveEntityPos {
+                            entity_id: id.get(),
+                            dx,
+                            dy,
+                            dz,
+                            on_ground,
+                        }
+                        .to_raw()?
+                    } else {
+                        mc_protocol::packets::play::MoveEntityPosRot {
+                            entity_id: id.get(),
+                            dx,
+                            dy,
+                            dz,
+                            yaw: wire_angle(yaw),
+                            pitch: wire_angle(pitch),
+                            on_ground,
+                        }
+                        .to_raw()?
+                    };
                     self.broadcast_chunk(chunk_of(now.x, now.z), &packet, report);
                 }
                 Ok(())
@@ -1505,20 +1586,20 @@ impl Game {
                         + self
                             .random
                             .next_i32_bounded(bounds.1.saturating_sub(2).max(1));
-                    self.try_spawn_pack(x, y, z, darken, counts);
+                    self.try_spawn_pack(x, y, z, darken, &mut counts);
                 }
             }
         }
     }
 
     /// Validate one candidate position and, if its rules pass, spawn a pack of
-    /// the biome table's chosen kind.
+    /// the biome table's chosen kind, updating the live cap counts.
     ///
-    /// The cap counts are read-only here: a cycle spawns at most
-    /// [`crate::spawn::CHUNKS_SAMPLED_PER_CYCLE`] packs per player, so the
-    /// overshoot beyond a cap stays bounded and the next cycle sees the new
-    /// counts.
-    fn try_spawn_pack(&mut self, x: i32, y: i32, z: i32, darken: i32, counts: [i32; 2]) {
+    /// The counts thread through as `&mut`, so a cap reached mid-cycle blocks
+    /// later attempts in the *same* tick — vanilla updates its spawn state
+    /// after every pack, and a by-value copy would let one tick's 289
+    /// positions each land a pack before the next count.
+    fn try_spawn_pack(&mut self, x: i32, y: i32, z: i32, darken: i32, counts: &mut [i32; 2]) {
         // A solid block below and two air cells to stand in.
         let below = self.world.get_block(x, y - 1, z);
         let feet = self.world.get_block(x, y, z);
@@ -1578,6 +1659,7 @@ impl Game {
                     &mut self.random,
                 )
             {
+                counts[crate::spawn::MobCategory::Monster as usize] += 1;
                 self.spawn_pack(row, x, y, z);
                 return;
             }
@@ -1589,6 +1671,7 @@ impl Game {
                     block_light.max(sky_light),
                     below_name == "minecraft:grass_block",
                 ) {
+                    counts[crate::spawn::MobCategory::Creature as usize] += 1;
                     self.spawn_pack(row, x, y, z);
                 }
             }
@@ -1666,7 +1749,8 @@ impl Game {
             mob.no_action_ticks = 0;
             return;
         }
-        mob.no_action_ticks += 1;
+        // The increment lives in the AI hook (goal activity resets the counter
+        // there); this pass only reads it and applies the roll.
         let no_action = mob.no_action_ticks;
         if crate::spawn::despawn(category, distance_sq, no_action, &mut self.random) {
             entity.removed = true;
@@ -1687,17 +1771,230 @@ impl Game {
             .min_by(f64::total_cmp)
     }
 
-    /// Per-entity AI and behaviour. **Documented no-op.**
+    /// Per-entity AI and behaviour — live as of P11-02.
     ///
-    /// Mob AI - goal selectors, pathfinding, target acquisition - is Phase 11's
-    /// next task (P11-02). The despawn pass above already reads the mob's idle
-    /// counter, so the AI wiring changes that counter's meaning from "always
-    /// climbing" to "climbing without goal activity" without touching this
-    /// phase's order.
-    // The receiver is unused today and is the whole point of the hook.
-    #[allow(clippy::unused_self)]
+    /// The AI itself is `mc_entity`'s [`MobAi`], a pure function of its own
+    /// state and an observation; this hook builds the observation, calls
+    /// [`MobAi::decide`] **once per tick per mob in ascending entity id** (the
+    /// loop's order, which the AI's calling convention requires), and resolves
+    /// the goal: horizontal steering for movement, a melee swing for an
+    /// in-range [`MobGoal::Attack`], and the idle counter the despawn pass
+    /// reads.
+    ///
+    /// [`MobGoal::Attack`] intents from [`MobAttackStyle::Ranged`] and
+    /// [`MobAttackStyle::Explosive`] mobs (skeleton, creeper) are **refused**:
+    /// the bow and the fuse are not modelled, and the creeper's damage figure
+    /// is the explosion value, not a melee one (see `mob.rs`'s gap list).
     fn tick_entity_ai(&mut self, id: EntityId) {
-        let _ = id;
+        // Observation first: these read through `&self`, so no entity borrow is
+        // live when `decide` needs `&mut self.entities`.
+        let Some(entity) = self.entities.get(id) else {
+            return;
+        };
+        if entity.removed {
+            return;
+        }
+        let EntityBody::Mob(mob) = &entity.body else {
+            return;
+        };
+        let kind = mob.kind;
+        let position = entity.position;
+        let health_fraction = if kind.max_health() > 0.0 {
+            entity.health / kind.max_health()
+        } else {
+            1.0
+        };
+        let sighting = self
+            .nearest_ready_player(position)
+            .map(|(player, distance)| MobSighting::new(player, distance));
+        let observation = MobObservation::new(
+            (
+                position.x.floor() as i32,
+                position.y.floor() as i32,
+                position.z.floor() as i32,
+            ),
+            sighting,
+            health_fraction,
+            self.tick,
+        );
+        // `self.entities` and `self.random` are disjoint fields, so the AI can
+        // draw from the game's own source while mutating the mob.
+        let goal = {
+            let Some(entity) = self.entities.get_mut(id) else {
+                return;
+            };
+            let EntityBody::Mob(mob) = &mut entity.body else {
+                return;
+            };
+            let mut rng = AiRng(&mut self.random);
+            mob.ai.decide(kind, observation, &mut rng)
+        };
+        self.resolve_mob_goal(id, kind, goal, position);
+    }
+
+    /// The nearest ready player as `(entity id, distance in blocks)`, or `None`.
+    ///
+    /// Three-dimensional: the AI's radii are block distances and the mob can be
+    /// above or below its target. The AI applies its own range filtering, so the
+    /// true nearest player is passed regardless of distance.
+    fn nearest_ready_player(&self, position: mc_entity::player::Vec3) -> Option<(EntityId, f64)> {
+        self.sessions
+            .values()
+            .filter(|session| session.ready)
+            .map(|session| {
+                let p = session.player.position;
+                let dx = p.x - position.x;
+                let dy = p.y - position.y;
+                let dz = p.z - position.z;
+                (session.entity, (dx * dx + dy * dy + dz * dz).sqrt())
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+    }
+
+    /// Act on the goal `decide` returned.
+    ///
+    /// The idle counter climbs on an [`MobGoal::Idle`] and resets on any other
+    /// goal — the meaning P11-01's despawn pass documented for it once goal
+    /// activity existed. Movement is **direct steering**: the horizontal
+    /// velocity points at the goal at the kind's walk speed and the yaw faces
+    /// it, with the existing physics phase integrating and colliding. There is
+    /// no pathfinding — a mob walks into walls — which is a named
+    /// simplification of P11-02, not a bug.
+    fn resolve_mob_goal(
+        &mut self,
+        id: EntityId,
+        kind: MobKind,
+        goal: MobGoal,
+        position: mc_entity::player::Vec3,
+    ) {
+        {
+            let Some(entity) = self.entities.get_mut(id) else {
+                return;
+            };
+            let EntityBody::Mob(mob) = &mut entity.body else {
+                return;
+            };
+            if matches!(goal, MobGoal::Idle) {
+                mob.no_action_ticks += 1;
+            } else {
+                mob.no_action_ticks = 0;
+            }
+        }
+        // Horizontal steering as `(dx, dz)`, normalised by the caller of the
+        // velocity write; `None` stands still.
+        let steer: Option<(f64, f64, i32)> = match &goal {
+            // Idle stands; an in-range attack also stands and swings.
+            MobGoal::Idle | MobGoal::Attack { .. } => None,
+            MobGoal::Wander { target } => Some((
+                f64::from(target.0) + 0.5 - position.x,
+                f64::from(target.2) + 0.5 - position.z,
+                0,
+            )),
+            MobGoal::Chase { target } | MobGoal::Flee { from: target } => {
+                let Some(other) = self.entities.get(*target) else {
+                    return;
+                };
+                // A gone target is the end of the goal this tick; `decide`
+                // re-chooses next tick.
+                let sign = match &goal {
+                    MobGoal::Flee { .. } => -1,
+                    _ => 1,
+                };
+                Some((
+                    (other.position.x - position.x) * f64::from(sign),
+                    (other.position.z - position.z) * f64::from(sign),
+                    0,
+                ))
+            }
+        };
+        if let Some((dx, dz, _)) = steer {
+            let length = (dx * dx + dz * dz).sqrt();
+            if length > 1.0e-6 {
+                let (dir_x, dir_z) = (dx / length, dz / length);
+                let speed = kind.movement_speed();
+                // Vanilla's yaw convention: 0 faces +Z, increasing clockwise,
+                // so `yaw = degrees(atan2(-x, z))` — pinned by a unit test.
+                let yaw = (-dir_x).atan2(dir_z).to_degrees();
+                if let Some(entity) = self.entities.get_mut(id) {
+                    entity.velocity.x = dir_x * speed;
+                    entity.velocity.z = dir_z * speed;
+                    entity.yaw = yaw as f32;
+                }
+            }
+        } else if matches!(goal, MobGoal::Idle) {
+            // An idle mob halts; its friction then does the rest.
+            if let Some(entity) = self.entities.get_mut(id) {
+                entity.velocity.x = 0.0;
+                entity.velocity.z = 0.0;
+            }
+        }
+        if let MobGoal::Attack {
+            target,
+            cooldown: 0,
+        } = goal
+        {
+            self.resolve_mob_melee(id, kind, target, position);
+        }
+    }
+
+    /// Resolve one melee swing against a player.
+    ///
+    /// Only [`MobAttackStyle::Melee`] resolves; ranged and explosive intents
+    /// are refused (see [`Self::tick_entity_ai`]'s doc). The swing re-checks
+    /// the range at resolution time — the target may have moved since the
+    /// decision — and the attack cooldown restarts through
+    /// [`MobAi::note_attack_landed`] whether or not the hit landed, because the
+    /// swing itself was spent.
+    ///
+    /// The rate limit is the AI's own [`ATTACK_COOLDOWN_TICKS`]; the shared
+    /// 10-tick hurt window on the player side is P11-06's combat work.
+    fn resolve_mob_melee(
+        &mut self,
+        attacker: EntityId,
+        kind: MobKind,
+        target: EntityId,
+        position: mc_entity::player::Vec3,
+    ) {
+        if kind.attack_style() != Some(MobAttackStyle::Melee) {
+            return;
+        }
+        // Range re-check against the live position.
+        let Some(target_entity) = self.entities.get(target) else {
+            return;
+        };
+        let dx = target_entity.position.x - position.x;
+        let dy = target_entity.position.y - position.y;
+        let dz = target_entity.position.z - position.z;
+        if (dx * dx + dy * dy + dz * dz).sqrt() > ATTACK_RANGE {
+            return;
+        }
+        // The AI only targets players; find the session whose projection is
+        // the target, damage the authoritative `Player`, and push vitals.
+        let session_id = self
+            .sessions
+            .values()
+            .find(|session| session.entity == target)
+            .map(|session| session.id);
+        let Some(session_id) = session_id else {
+            return;
+        };
+        let outcome = self
+            .sessions
+            .get_mut(&session_id)
+            .map(|session| session.player.apply_damage(kind.attack_damage()));
+        let Some(outcome) = outcome else {
+            return;
+        };
+        if outcome.applied {
+            debug!(attacker = %attacker, kind = kind.name(), dealt = outcome.dealt, "mob melee hit");
+        }
+        self.after_damage(session_id, outcome);
+        // The swing is spent whether or not it landed.
+        if let Some(entity) = self.entities.get_mut(attacker)
+            && let EntityBody::Mob(mob) = &mut entity.body
+        {
+            mob.ai.note_attack_landed();
+        }
     }
 
     /// Timers, gravity, collision, landing and fall damage for one entity.
@@ -3212,9 +3509,9 @@ impl Game {
             }
             ACTION_DROP_ITEM => {
                 // The held stack leaves the inventory and becomes a dropped-item
-                // entity at roughly eye height. Item pickup, merging and the
-                // `add_entity` packet that would show it are still P05-15; the
-                // entity itself is real and is ticked from the next tick onwards.
+                // entity at roughly eye height. The entity is announced by the
+                // Broadcast phase with its stack metadata; item pickup and
+                // merging are still open (P11-05/P11-09).
                 let (dropped, owner, at) = {
                     let Some(session) = self.sessions.get_mut(&id) else {
                         return Ok(());
