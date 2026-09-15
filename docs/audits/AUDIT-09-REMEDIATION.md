@@ -128,6 +128,27 @@ is a player-visible divergence that the owner should decide rather than inherit.
    whatever is held, so a diamond sword hits as hard as a hand.
 4. **The zombie's follow range** (D-04 above): our night is less dangerous than
    vanilla's by design, pending the owner's decision.
+5. **Most shipped loot tables drop nothing** (found while preparing this landing's
+   handover, after the landing itself was pushed and CI-verified — which is the point:
+   the tests that existed could not see it). `mc-data::loot::roll` refuses a whole
+   table when any construct in it is unmodelled, and the 26.1.2 pack contains
+   unmodelled constructs in most tables. Measured from the extracted pack
+   (`target/loot_condition_census.py`, 1 326 tables): `match_tool` **156**,
+   `block_state_property` **149**, `entity_properties` **27**, `killed_by_player`
+   **22**, `table_bonus` **17**, `random_chance_with_enchanted_bonus` **11**; **167**
+   tables are enchantment-gated on their own. Since the break path supplies
+   `enchantment_levels: None` — which this crate defines as "the tool is unknown" —
+   those tables refuse, and the rest refuse on their own unmodelled conditions. So
+   mining stone and killing a cow yield **nothing** where vanilla yields cobblestone
+   and leather. P11-04's tests use a hand-written pack with none of those constructs,
+   so they prove the wiring and cannot see the interaction; the differential test
+   their module docs promised in `vanilla_loot.rs` was never written, and that
+   dangling reference is now corrected. Two candidate fixes, both player-visible and
+   both therefore the owner's call: supply a **known, unenchanted** tool
+   (`Some(empty map)` — the module's own reading of "tool known, level 0") instead of
+   `None`; and decide whether an unmodelled construct should refuse the **pool**
+   rather than the table. The smallest experiment that fails today: load the extracted
+   pack, break `minecraft:stone` bare-handed, assert `minecraft:cobblestone`.
 
 ## Final verification (this landing's tree)
 
@@ -144,7 +165,10 @@ is a player-visible divergence that the owner should decide rather than inherit.
   and `target/falsify_protocol_pin.py` (both sides of the protocol pin).
   Seven perturbations, seven failures, seven byte-exact restores.
 - The audit's own instruments (`target/audit_lane_*.py`,
-  `target/scan_doc_claims_copy.py`) and the re-derived `javap` runs (`Zombie`,
+  `target/scan_doc_claims_copy.py`), the loot census
+  (`target/loot_condition_census.py`, whose numbers are quoted above), the
+  measurement scripts (`target/measure_tests.py`, `target/count_tests_from_source.py`)
+  and the re-derived `javap` runs (`Zombie`,
   `Mob`, `LivingEntity`, `AbstractCow`, `StoredUserList`) are uncommitted: they are
   provenance for this document. **That is itself a finding** — B-03 could not be
   settled because the instrument exists only as an uncommitted copy, and B-04's fix

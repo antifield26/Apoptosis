@@ -19,10 +19,15 @@
 //! replaced the table lookup with a hard-coded mapping fails
 //! `a_survival_break_drops_what_the_loot_table_says`.
 //!
-//! A **differential** counterpart lives in `vanilla_loot.rs`: it loads the real
-//! 26.1.2 `data/minecraft` pack and asserts the shipped tables are reached by the
-//! same names. This file proves the wiring; that one proves the names match the
-//! jar. Neither alone is enough, which is why both exist.
+//! A **differential** counterpart does not exist yet, and its absence is what let a
+//! real defect through: these fixtures are hand-written, so they prove the wiring
+//! and cannot see how the *shipped* tables interact with this crate's roll rules.
+//! They do interact badly — see the measurement and the two candidate fixes in
+//! `docs/audits/AUDIT-09-REMEDIATION.md` §"open divergences" and the Phase 11
+//! CHANGELOG entry. The counterpart that would have caught it loads the real
+//! `data/minecraft` pack and asserts that a bare-handed stone break yields
+//! **cobblestone** (`blocks/stone` is an `alternatives` whose first child is gated on
+//! a silk-touch `match_tool`), which is the smallest experiment that fails today.
 //!
 //! ## What these do not prove
 //!

@@ -70,6 +70,41 @@ vanilla's own rule. The context carries **no enchantments** (the no-silk-touch
 reading of a bare hand) and `survives_explosion: true` for a break, so every
 enchantment-gated pool refuses rather than assuming level 0.
 
+**And that last sentence is where this landing's most serious open defect lives.**
+`roll` refuses the **whole table** when any construct in it is unmodelled, and the
+26.1.2 pack contains such constructs in most tables. Counted from the extracted pack
+(`target/loot_condition_census.py`, 1 326 tables): `match_tool` **156**,
+`block_state_property` **149**, `entity_properties` **27**, `killed_by_player`
+**22**, `table_bonus` **17**, `random_chance_with_enchanted_bonus` **11** — 167
+tables are enchantment-gated alone. The consequence is player-visible and the
+opposite of what the fixtures suggest: **mining stone yields nothing** (its table is
+an `alternatives` whose first child is gated on a silk-touch `match_tool`, which
+refuses when the tool is unknown) and **so does killing a cow** (whose table carries
+`entity_properties`). Vanilla yields cobblestone and leather.
+
+P11-04's own tests cannot see this: they load a hand-written pack that contains none
+of those constructs, so they prove the wiring — that the block's table is found, that
+its item is the one dropped, that a table-less block drops nothing — and nothing
+about how the *shipped* tables meet this crate's rules. The differential test that
+would have caught it was described in `loot_and_pickup.rs`'s module docs as living in
+a `vanilla_loot.rs` that **was never written**; that dangling promise is corrected in
+the same breath as this paragraph, and the smallest failing experiment is written
+down in its place.
+
+Two candidate fixes, both of which change player-visible behaviour and are therefore
+the owner's decision rather than a silent retarget:
+
+1. supply a **known, unenchanted** tool — `enchantment_levels: Some(empty map)`,
+   which `mc-data::loot`'s own documentation defines as "the tool is known and
+   carries no enchantment, so level 0" — instead of `None`, which means "the tool is
+   unknown" and is what triggers the refusal. This is one line at two call sites and
+   rescues the 167 enchantment-gated tables whose other conditions are executable;
+2. decide whether an unmodelled construct should refuse the **pool** (or the entry)
+   rather than the table, so a table with one unmodelled branch still drops what it
+   can. That is the larger question: the current rule is deliberate and documented
+   ("a wrong roll is worse than no roll"), and it is only wrong in the presence of a
+   pack this build cannot fully execute.
+
 **A defect found here by the first test written against it**, and the reason this
 phase's test work was worth doing before the commit: `ItemStack::new(item_id, count)`
 was called with the arguments **reversed** in `Game::spawn_loot_table` and

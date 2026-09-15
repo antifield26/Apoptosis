@@ -16,7 +16,7 @@
 //! first one asserts the chunk really is dirty before saving.
 //!
 //! That is a real divergence from vanilla and it is recorded rather than hidden:
-//! see the "entity persistence" row in `docs/testing/PARITY-MATRIX.md` and
+//! see the "entity persistence" row in `docs/vanilla-parity/PARITY-MATRIX.md` and
 //! `docs/audits/AUDIT-09-REMEDIATION.md`. What these tests pin is the part that
 //! *is* implemented — a saved chunk's entities survive — and they fail loudly if
 //! the dirty-chunk rule is ever tightened or loosened.
