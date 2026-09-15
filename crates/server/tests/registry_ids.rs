@@ -136,7 +136,8 @@ fn the_chat_type_this_server_sends_is_the_one_named_chat() {
     // **The wire carries index + 1**, and `0` would read as "absent" -- the
     // acceptance finding, reproduced twice.
     assert_eq!(
-        at + 1, CHAT_TYPE_CHAT,
+        at + 1,
+        CHAT_TYPE_CHAT,
         "the payload gives `minecraft:chat` the index {at} (wire {wire}), and the server sends {CHAT_TYPE_CHAT}. Registered: {names:?}",
         wire = at + 1,
     );
