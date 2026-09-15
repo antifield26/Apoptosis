@@ -19,15 +19,16 @@
 //! replaced the table lookup with a hard-coded mapping fails
 //! `a_survival_break_drops_what_the_loot_table_says`.
 //!
-//! A **differential** counterpart does not exist yet, and its absence is what let a
-//! real defect through: these fixtures are hand-written, so they prove the wiring
-//! and cannot see how the *shipped* tables interact with this crate's roll rules.
-//! They do interact badly — see the measurement and the two candidate fixes in
-//! `docs/audits/AUDIT-09-REMEDIATION.md` §"open divergences" and the Phase 11
-//! CHANGELOG entry. The counterpart that would have caught it loads the real
-//! `data/minecraft` pack and asserts that a bare-handed stone break yields
-//! **cobblestone** (`blocks/stone` is an `alternatives` whose first child is gated on
-//! a silk-touch `match_tool`), which is the smallest experiment that fails today.
+//! The differential counterpart exists now — `vanilla_loot.rs`, `#[ignore]`d
+//! behind `MC_VANILLA_DATA` — and it caught the landing's real defect after
+//! these hand-written fixtures had passed a green suite: the shipped tables'
+//! enchantment-gated conditions refused under a `None` (tool-unknown) context,
+//! so mining stone yielded nothing until the owner's fix 1 made a bare hand a
+//! **known, unenchanted** tool. The construct-refusing remainder
+//! (`block_state_property`, `entity_properties`; the cow among them) is the
+//! pool-level-refusal follow-up, and `vanilla_loot.rs` deliberately does not
+//! assert today's no-cow-drop behaviour, so the fix cannot be pinned by its
+//! own defect.
 //!
 //! ## What these do not prove
 //!

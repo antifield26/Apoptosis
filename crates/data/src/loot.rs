@@ -1181,16 +1181,61 @@ pub fn roll(
     let mut visited = BTreeSet::new();
     check_references(table, tables, &mut path, &mut visited, 0)?;
 
-    let mut refusals = Vec::new();
-    let mut out = Vec::new();
-    roll_into(table, tables, rng, context, &mut refusals, &mut out, 0);
-    if refusals.is_empty() {
-        Ok(out)
+    let outcome = roll_scoped(table, tables, rng, context)?;
+    if outcome.skipped.is_empty() {
+        Ok(outcome.stacks)
     } else {
+        // The old doctrine: any refusal means the whole roll is unexecutable.
+        // The scoped roll collects every level of refusal into `skipped`, and
+        // the whole-table error still tells the whole story.
+        let mut refusals = outcome.skipped;
         refusals.sort();
         refusals.dedup();
         Err(RollError::Unexecutable { refusals })
     }
+}
+
+/// What a scoped roll produced and what it had to skip.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RollOutcome {
+    /// The stacks that survived the refusal ladder.
+    pub stacks: Vec<ItemStackLike>,
+    /// Every pool, entry or function that could not be evaluated, with the
+    /// reason. Empty means the table rolled completely.
+    pub skipped: Vec<Refusal>,
+}
+
+/// Roll a table, refusing at the **lowest scope it can** (owner decision 2).
+///
+/// A pool whose conditions cannot be evaluated is discarded whole; an entry or
+/// a function that cannot be evaluated is skipped, and the stack keeps the
+/// other functions' effects. Every refusal is reported in
+/// [`RollOutcome::skipped`] with the reason, so a reduced drop is visible
+/// rather than silent.
+///
+/// # Errors
+///
+/// The reference-graph pre-checks (unknown table, depth, cycle) as `roll`
+/// reports them.
+pub fn roll_scoped(
+    table: &LootTable,
+    tables: &LootTables,
+    rng: &mut impl Rng,
+    context: &LootContext,
+) -> Result<RollOutcome, RollError> {
+    let mut path = Vec::new();
+    let mut visited = BTreeSet::new();
+    check_references(table, tables, &mut path, &mut visited, 0)?;
+
+    let mut skipped = Vec::new();
+    let mut out = Vec::new();
+    roll_into(table, tables, rng, context, &mut skipped, &mut out, 0);
+    skipped.sort();
+    skipped.dedup();
+    Ok(RollOutcome {
+        stacks: out,
+        skipped,
+    })
 }
 
 /// Why a roll could not be completed.
@@ -1369,12 +1414,12 @@ fn roll_into(
     tables: &LootTables,
     rng: &mut impl Rng,
     context: &LootContext,
-    refusals: &mut Vec<Refusal>,
+    skipped: &mut Vec<Refusal>,
     out: &mut Vec<ItemStackLike>,
     depth: usize,
 ) {
     if depth > MAX_TABLE_NESTING {
-        refusals.push(Refusal {
+        skipped.push(Refusal {
             kind: "loot_table",
             type_name: format!("nesting deeper than {MAX_TABLE_NESTING} tables"),
             reason: "the nesting guard fired",
@@ -1383,7 +1428,7 @@ fn roll_into(
     }
     for function in &table.functions {
         if let Some(reason) = function.refusal_reason() {
-            refusals.push(Refusal {
+            skipped.push(Refusal {
                 kind: "function",
                 type_name: function.type_name().to_owned(),
                 reason,
@@ -1393,20 +1438,28 @@ fn roll_into(
 
     let mut produced = Vec::new();
     for pool in &table.pools {
-        if !conditions_pass(&pool.conditions, rng, context, refusals) {
+        // **The refusal ladder (owner decision 2).** Three granularities: a
+        // pool whose *conditions* cannot be evaluated is discarded whole (the
+        // pool's identity is its conditions); an entry or a function that
+        // cannot be evaluated is skipped and its neighbours stand -- a skipped
+        // `furnace_smelt` leaves raw beef, a skipped `enchanted_count_increase`
+        // leaves the unenchanted count. Every refusal is reported through
+        // `skipped`, so a reduced drop is visible rather than silent. A failed
+        // condition (a random_chance draw that lost) is still a plain skip
+        // with no refusal: "could not evaluate" versus "evaluated and said
+        // no".
+        let mut pool_condition_refusals = Vec::new();
+        let passed = conditions_pass(&pool.conditions, rng, context, &mut pool_condition_refusals);
+        // **"Unknown" is not "false"**: a pool whose conditions contain an
+        // unevaluable term is skipped even when the evaluated terms passed,
+        // because the outcome could differ. The verdict would otherwise depend
+        // on where in the disjunction the unknown term sat.
+        if !passed || !pool_condition_refusals.is_empty() {
+            skipped.extend(pool_condition_refusals);
             continue;
         }
-        for function in &pool.functions {
-            if let Some(reason) = function.refusal_reason() {
-                refusals.push(Refusal {
-                    kind: "function",
-                    type_name: function.type_name().to_owned(),
-                    reason,
-                });
-            }
-        }
-        let rolls = draw_count(&pool.rolls, rng, refusals, "rolls");
-        let bonus = draw_count(&pool.bonus_rolls, rng, refusals, "bonus_rolls");
+        let rolls = draw_count(&pool.rolls, rng, skipped, "rolls");
+        let bonus = draw_count(&pool.bonus_rolls, rng, skipped, "bonus_rolls");
         // Vanilla adds the two as `f32` and truncates the sum, so the rounding is
         // reproduced rather than replaced with an integer sum that rounds differently.
         let total = numeric::roll_count(rolls + bonus);
@@ -1416,14 +1469,25 @@ fn roll_into(
                 tables,
                 rng,
                 context,
-                refusals,
+                skipped,
                 depth,
             ));
+        }
+        // The pool's own functions: a construct this build cannot execute is
+        // skipped and reported; the pool's stacks stand.
+        for function in &pool.functions {
+            if let Some(reason) = function.refusal_reason() {
+                skipped.push(Refusal {
+                    kind: "function",
+                    type_name: function.type_name().to_owned(),
+                    reason,
+                });
+            }
         }
     }
 
     for mut stack in produced {
-        apply_functions(&table.functions, &mut stack, rng, context, refusals);
+        apply_functions(&table.functions, &mut stack, rng, context, skipped);
         out.push(stack);
     }
     // A table function that could not be executed has already been refused, so the output
@@ -1436,7 +1500,7 @@ fn one_roll(
     tables: &LootTables,
     rng: &mut impl Rng,
     context: &LootContext,
-    refusals: &mut Vec<Refusal>,
+    skipped: &mut Vec<Refusal>,
     depth: usize,
 ) -> Vec<ItemStackLike> {
     if entries.is_empty() {
@@ -1449,7 +1513,7 @@ fn one_roll(
         if entry.quality() != 0 {
             match context.luck {
                 Some(luck) => weight += numeric::luck_bonus(luck, entry.quality()),
-                None => refusals.push(Refusal {
+                None => skipped.push(Refusal {
                     kind: "entry",
                     type_name: format!("{} with quality", entry.type_name()),
                     reason: "the entry scales with luck and LootContext::luck was not supplied",
@@ -1476,7 +1540,7 @@ fn one_roll(
             break;
         }
     }
-    resolve_entry(&entries[chosen], tables, rng, context, refusals, depth)
+    resolve_entry(&entries[chosen], tables, rng, context, skipped, depth)
 }
 
 /// Turn a chosen entry into zero or more stacks.
@@ -1491,16 +1555,16 @@ fn resolve_entry(
     tables: &LootTables,
     rng: &mut impl Rng,
     context: &LootContext,
-    refusals: &mut Vec<Refusal>,
+    skipped: &mut Vec<Refusal>,
     depth: usize,
 ) -> Vec<ItemStackLike> {
-    if !conditions_pass(entry.conditions(), rng, context, refusals) {
+    if !conditions_pass(entry.conditions(), rng, context, skipped) {
         return Vec::new();
     }
     let mut stacks = match entry {
         LootEntry::Item { name, expand, .. } => {
             if *expand {
-                refusals.push(Refusal {
+                skipped.push(Refusal {
                     kind: "entry",
                     type_name: entry.type_name().to_owned(),
                     reason: "the entry expands a tag, which needs the tag set",
@@ -1511,7 +1575,7 @@ fn resolve_entry(
         }
         LootEntry::Empty { .. } => Vec::new(),
         LootEntry::Dynamic { name, .. } => {
-            refusals.push(Refusal {
+            skipped.push(Refusal {
                 kind: "entry",
                 type_name: format!("minecraft:dynamic {name}"),
                 reason: "the contents come from a block entity, which is not modelled",
@@ -1519,7 +1583,7 @@ fn resolve_entry(
             Vec::new()
         }
         LootEntry::Tag { name, .. } => {
-            refusals.push(Refusal {
+            skipped.push(Refusal {
                 kind: "entry",
                 type_name: format!("minecraft:tag {name}"),
                 reason: "expanding a tag needs the tag set, which is not supplied to a roll",
@@ -1527,7 +1591,7 @@ fn resolve_entry(
             Vec::new()
         }
         LootEntry::Sequence { .. } => {
-            refusals.push(Refusal {
+            skipped.push(Refusal {
                 kind: "entry",
                 type_name: entry.type_name().to_owned(),
                 reason: "minecraft:sequence is not implemented and is not exercised by \
@@ -1541,7 +1605,7 @@ fn resolve_entry(
             // to them below.
             let mut chosen = Vec::new();
             for child in children {
-                chosen = resolve_entry(child, tables, rng, context, refusals, depth);
+                chosen = resolve_entry(child, tables, rng, context, skipped, depth);
                 if !chosen.is_empty() {
                     break;
                 }
@@ -1558,7 +1622,7 @@ fn resolve_entry(
             let Some(nested) = nested else {
                 // Unreachable after `check_references`; refused rather than silently
                 // producing nothing, because "unreachable" is not a guarantee.
-                refusals.push(Refusal {
+                skipped.push(Refusal {
                     kind: "entry",
                     type_name: entry.type_name().to_owned(),
                     reason: "the referenced table was not supplied",
@@ -1566,11 +1630,11 @@ fn resolve_entry(
                 return Vec::new();
             };
             let mut out = Vec::new();
-            roll_into(nested, tables, rng, context, refusals, &mut out, depth + 1);
+            roll_into(nested, tables, rng, context, skipped, &mut out, depth + 1);
             out
         }
         LootEntry::Raw(_) => {
-            refusals.push(Refusal {
+            skipped.push(Refusal {
                 kind: "entry",
                 type_name: entry.type_name().to_owned(),
                 reason: "this loot entry type is not implemented in this build",
@@ -1580,7 +1644,7 @@ fn resolve_entry(
     };
     // Applied for every entry type, because the format allows `functions` on every entry type.
     for stack in &mut stacks {
-        apply_functions(entry.functions(), stack, rng, context, refusals);
+        apply_functions(entry.functions(), stack, rng, context, skipped);
     }
     stacks
 }
@@ -1784,29 +1848,31 @@ fn apply_functions(
     stack: &mut ItemStackLike,
     rng: &mut impl Rng,
     context: &LootContext,
-    refusals: &mut Vec<Refusal>,
+    skipped: &mut Vec<Refusal>,
 ) {
     for function in functions {
-        // The refusal is recorded **before** the conditions are evaluated, and that order
-        // matters: a table that uses a construct this build cannot execute is not rollable,
-        // full stop. Recording it only when the conditions happened to pass would make the
-        // verdict depend on a coin flip, and a caller that rolled once and saw success would
-        // be looking at a table this build cannot actually reproduce.
+        // A function type this build cannot execute is **skipped, not fatal**
+        // (owner decision 2): the stack keeps the other functions' effects and
+        // the skip is reported. The refusal is recorded **before** the
+        // conditions are evaluated, so the verdict does not depend on a coin
+        // flip.
         if let Some(reason) = function.refusal_reason() {
-            refusals.push(Refusal {
+            skipped.push(Refusal {
                 kind: "function",
                 type_name: function.type_name().to_owned(),
                 reason,
             });
+            continue;
         }
-        // A function's own conditions gate whether it runs at all. Skipping them would apply
-        // a function vanilla would not have applied, which is a wrong roll.
-        if !function.conditions_pass(rng, context, refusals) {
+        // A function whose own conditions cannot be evaluated is skipped the
+        // same way: its absence degrades the stack (no furnace_smelt -> raw
+        // beef) rather than poisoning the roll, and the skip is reported.
+        if !function.conditions_pass(rng, context, skipped) {
             continue;
         }
         match &function.kind {
             LootFunctionKind::SetCount { count, add } => {
-                let value = draw_count(count, rng, refusals, "count");
+                let value = draw_count(count, rng, skipped, "count");
                 // Vanilla truncates the drawn count towards zero before setting it.
                 let value = numeric::count(value);
                 stack.count = if *add {
@@ -1830,7 +1896,7 @@ fn apply_functions(
             LootFunctionKind::SetDamage { damage, add } => {
                 // Modelled but not executable, so the damage is recorded for a caller that
                 // wants it and the refusal above is what makes `roll` fail.
-                let value = draw_count(damage, rng, refusals, "damage").clamp(0.0, 1.0);
+                let value = draw_count(damage, rng, skipped, "damage").clamp(0.0, 1.0);
                 stack.damage = Some(if *add {
                     (stack.damage.unwrap_or(0.0) + value).clamp(0.0, 1.0)
                 } else {

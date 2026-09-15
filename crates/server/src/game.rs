@@ -4631,11 +4631,23 @@ impl Game {
             return;
         };
         let mut rng = LootRng(&mut self.random);
-        let Ok(stacks) = mc_data::loot::roll(table, &self.loot, &mut rng, context) else {
-            // Refusals already carry what could not be modelled; the drop is
-            // skipped rather than half-issued.
-            debug!(%table_id, "the loot roll refused; nothing drops");
-            return;
+        // The scoped roll (owner decision 2): an unmodelled construct refuses
+        // its pool, not the table, so a table with one branch this build cannot
+        // execute still drops what it can. Every skipped pool is logged with
+        // its reason — a silently reduced drop is the failure mode this
+        // replaces, and the log is where it becomes visible.
+        let outcome = mc_data::loot::roll_scoped(table, &self.loot, &mut rng, context);
+        let stacks = match outcome {
+            Ok(outcome) => {
+                for refusal in &outcome.skipped {
+                    info!(%table_id, refusal = %refusal, "a pool of the loot table was skipped");
+                }
+                outcome.stacks
+            }
+            Err(error) => {
+                debug!(%table_id, %error, "the loot roll refused; nothing drops");
+                return;
+            }
         };
         for stack in stacks {
             let Ok(item_id) = self.registries.items.id(&stack.item.to_string()) else {

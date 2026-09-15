@@ -225,3 +225,40 @@ fn an_idle_mob_holds_still() {
         "a mob with no goal has no horizontal velocity (x held)"
     );
 }
+
+#[test]
+fn two_simultaneous_attackers_land_one_hit_per_window() {
+    // AUDIT-10: `Session::hurt_invuln_ticks` had no test that could fail if the
+    // window were deleted -- every existing scenario has a single attacker
+    // whose own 20-tick cooldown already exceeds the 10-tick player window, so
+    // the mob-side windows shadow the session one. Two zombies in range at the
+    // same tick is the case the window exists for: both AIs resolve a swing at
+    // cooldown 0, the first lands, the second must be refused, and the same
+    // collapse repeats every 20 ticks.
+    let mut harness = Harness::new("p11-ai-two-attackers", "Crowded");
+    harness.join();
+    harness.summon("zombie", 2, 1, 0);
+    harness.summon("zombie", -2, 1, 0);
+    // One window: both AIs swing on the same tick, exactly one hit lands.
+    harness.run(11);
+    let after_first_window = harness.health();
+    assert_eq!(
+        after_first_window, 17.0,
+        "two simultaneous melee attackers must land exactly one 3.0 hit in the first window"
+    );
+    // Two further windows: the swings land again, but the two attackers'
+    // cooldowns drift out of phase, so the exact hit count depends on the
+    // seeded sequence. What the window still guarantees: six swings (two
+    // attackers x three 20-tick cooldowns) can never all land -- without the
+    // session window the player would be at 2.0 here.
+    harness.run(40);
+    let later = harness.health();
+    assert!(
+        later < after_first_window,
+        "the swings land again after the window expires (was {after_first_window}, now {later})"
+    );
+    assert!(
+        later > 20.0 - 6.0 * 3.0,
+        "two adjacent zombies cannot take the player from full to dead in 51 ticks; the window          collapsed at least one swing (saw {later})"
+    );
+}

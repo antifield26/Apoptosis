@@ -187,6 +187,12 @@ impl Harness {
         });
     }
 
+    fn run(&mut self, ticks: usize) {
+        for _ in 0..ticks {
+            self.game.tick().expect("tick");
+        }
+    }
+
     fn item_id(&self, name: &str) -> i32 {
         self.game
             .registries()
@@ -281,4 +287,58 @@ fn a_shipped_ungated_table_drops_without_a_tool() {
         Some(dirt),
         "the shipped dirt table names dirt and needs no tool"
     );
+}
+
+/// The shipped cow table, killed by player swings: the ladder's cow case.
+///
+/// The shipped table's second entry carries a `furnace_smelt` function whose
+/// conditions include an unevaluable `entity_properties` term; under the
+/// refusal ladder that **function** is skipped (raw beef, which is correct for
+/// a mob that was not on fire) while the leather pool rolls beside it. Before
+/// both fixes this table refused whole and a dead cow dropped nothing.
+#[test]
+#[ignore = "needs MC_VANILLA_DATA (absolute pack root); see the module docs"]
+fn a_swing_kills_a_shipped_cow_and_its_table_drops() {
+    let mut harness = Harness::new("p11-vanilla-loot-cow");
+    harness.join("Hunter");
+    let (sx, sy, sz) = harness.game.spawn();
+    let at = mc_entity::player::Vec3::new(f64::from(sx) + 2.5, f64::from(sy), f64::from(sz) + 0.5);
+    let cow = harness
+        .game
+        .spawn_mob(mc_entity::mob::MobKind::Cow, at)
+        .expect("the cow spawns");
+
+    // The fist deals 1.0 a swing and the mob holds a 10-tick window, so the
+    // kill takes 10 swings spaced past the window.
+    for _ in 0..12 {
+        harness.intent(PlayIntent::Interact {
+            entity: cow.get(),
+            kind: 1,
+        });
+        harness.run(11);
+    }
+    let drops = ground(&harness);
+    assert!(
+        !drops.is_empty(),
+        "a dead shipped cow drops what its table's executable pools say, not nothing"
+    );
+    let names: Vec<String> = drops
+        .iter()
+        .map(|stack| {
+            let id = stack.item_id().expect("a live stack names an item");
+            harness
+                .game
+                .registries()
+                .items
+                .name(id)
+                .unwrap_or("?")
+                .to_owned()
+        })
+        .collect();
+    for name in &names {
+        assert!(
+            name.contains("leather") || name.contains("beef"),
+            "the shipped cow table names leather and beef; saw {names:?}"
+        );
+    }
 }
