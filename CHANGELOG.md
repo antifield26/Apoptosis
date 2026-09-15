@@ -3456,6 +3456,19 @@ assertions (758 tags, 1 202 structures, 256 terrain columns, a gold-block marker
 instrument read the test's body and not its callees, which is the same shape lesson as the handover's fifth
 instrument. `every_tag_type_round_trips_on_disk` **was** a real finding, and it now opens with an
 independent byte-shape anchor (root compound id, two-byte name prefix), verified by perturbation.
+### Acceptance verdict -- the owner confirmed the rendering on the live client
+
+The owner played on the acceptance environment and reported: **colours correct, lighting correct**
+(including the dead-black patches, which the fully-lit-sections-unmentioned fix cleared), and **chat
+delivered**. Survival digging reaches the server and breaks blocks server-side; the mining-progress
+animation and the drops are P11 scope (no mining-time model; the loaded loot tables are not yet wired
+to breaks), and the owner's missing-systems list (water physics, player damage, visible entities,
+structures) matches the P11+ task tables exactly -- the acceptance confirmed the roadmap rather than
+revealing new gaps.
+
+The lighting row (KD-23) moves from "not implemented" to **full (static model), owner-confirmed**:
+the P10-04/05 engine, the wire encoding fixed in the acceptance round, and the owner's eyes together
+close the loop that no server-side assertion could.
 ### Acceptance finding -- the real client kicked our disguised_chat, and the encoder is fixed
 
 The acceptance session (tools/visual-check/run.py) found what the whole suite could not: a real 26.1.2
