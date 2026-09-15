@@ -167,3 +167,47 @@ the two weakest rows (C-05/C-07) now also carry the shared-helper code evidence
 
 Fix 2 (pool-level refusal, owner-approved) is a separate change to `mc-data`'s
 refusal architecture and lands after this document.
+
+## The owner's P11-10 acceptance round (2026-09-15 21:44 session) — four defects
+
+The owner played on the fixed build (LpVec3, entities=17 live). Positive: pigs, cows,
+creepers, spiders and zombies **spawned and rendered on a real client**; the client also
+**rendered nightfall** (26.1's clock works farther than the P10-03 record claims).
+Four defects, each with the instrument run so far:
+
+1. **M-1 · confirmed · respawn packet is undecodable by the real client.** Bytecode-read
+   (`CommonPlayerSpawnInfo` read ctor + `ClientboundRespawnPacket.write`, client jar):
+   26.1.2's Respawn = dimension-type **registry-friendly holder**, dimension ResourceKey
+   (VarInt), hashed seed (long), game mode (byte), previous game mode (byte), debug
+   (bool), flat (bool), **Optional<GlobalPos> death location**, **portal cooldown
+   VarInt**, **one more VarInt**, plus a **trailing byte** after the spawn info. Our
+   Respawn ends at `is_flat` — the client reads past our body and refuses. Fix: extend
+   the encoder (death location `None` = absent, cooldown 0, trailing byte).
+2. **M-2 · confirmed · survival mining does not break blocks.** The rig trace holds the
+   owner's session: **95 `player_action` packets (c2s id 0) with 2-3-byte bodies**
+   (`00 00` / `00 00 00`) against only 12 block updates. Our decode expects
+   status+position+face+sequence (11 bytes minimum), so every dig is dropped. The
+   client's own `ServerboundPlayerActionPacket.write` bytecode still shows
+   enum+BlockPos+direction+sequence — which cannot produce a 2-byte body — so the id-0
+   packets on the wire are either a different packet or 26.1.2 reshaped the action;
+   **the decisive instrument is a client-jar read of the real play-protocol id map**
+   (`GameProtocols` builder order does not match the wire: extraction says move packets
+   ride 26-28, the trace says 30-31). The trace's frequencies (30/31 = the move flood,
+   0 = the dig attempts) agree with OUR table for 13/30/31/63, so the first fix to try
+   is decoding id 0's body as two VarInts and treating it as a dig at the client's aimed
+   block — which the protocol no longer carries, meaning 26.1.2 mining needs the
+   **`ServerboundAttackPacket` (new in 26.x, id 1, 4 seen)** and the swing/interact path
+   re-examined against the client's own `MultiPlayerGameMode`.
+3. **M-3 · confirmed · mobs move too fast.** `SPEED_BLOCKS_PER_SECOND_PER_ATTRIBUTE`
+   (43.17) is the player-walk derivation applied to mobs whose attribute is not the
+   player's 0.1: the zombie (0.23) walks at 9.9 blocks/second — over twice the player.
+   The constant was marked unverified in `mob.rs` and used anyway in P11-02; the owner
+   saw the result. Fix: measure the real conversion from the captured move deltas
+   (entity-capture bodies carry 1/4096-scaled per-tick movement for vanilla mobs), or
+   pin the vanilla formula.
+4. **M-4 · Low · pathing is direct steering** (recorded): mobs walk into water and
+   walls. A one-cell passability lookahead (stop or re-target when the next cell is not
+   passable) is the cheap first mitigation; real pathfinding stays a named gap.
+
+The environment was left running for a follow-up round; the four fixes above are the
+next session's opening work, before any P12 start.
