@@ -1,0 +1,28 @@
+# Provenance: extracted verbatim from the 26.1.2 server jar's own `version.json`
+# entry (the jar states its identity; nothing here is transcribed by hand).
+#
+# Source file: target/vanilla-capture/versions/26.1.2/server-26.1.2.jar
+#   size    24555215 bytes
+#   sha1    83eb1106f12f24c9127ce22070d71853157af127
+#   sha256  4723380bd2a0a0206719b50f2e390383afdaf82b0a76a0d573baf788e6aa3e86
+#
+# Reproduce:
+#   python -c "import zipfile;print(zipfile.ZipFile('server-26.1.2.jar').read('version.json').decode())"
+#
+# Why this file is committed: AUDIT-09 E-03 found that the end-to-end test compared
+# the server's protocol version against `mc_protocol::ids::PROTOCOL_VERSION` -- the
+# same constant -- so a client and server that agreed on a *wrong* version would
+# pass. This is the external statement that makes the comparison mean something:
+# 775 is the jar's own number, not ours.
+#
+# Note on the jar's identity: this is the captured `server-26.1.2.jar`, whose sha1
+# differs from the `anvil/` fixture's `server.jar` (97ccd4c0...). Both are 26.1.2
+# and both state protocol_version 775; the two files are different downloads, so
+# the hash recorded here is the one for *this* fixture's source.
+
+version.json  315 bytes  sha256=939886455096c103d74c3b48796f686aed87761d16dbd6aebce0129906f7d73a
+
+protocol_version 775
+world_version    4790
+id               26.1.2
+data_major       101

@@ -487,6 +487,22 @@ fn every_constant_we_use_matches_the_vanilla_jar() {
         "command_suggestion",
         serverbound::play::COMMAND_SUGGESTION,
     );
+    // AUDIT-09 A-02: two serverbound ids this build decodes (or deliberately
+    // ignores) had no assertion. Both were already correct; the guard was what
+    // was missing, and a wrong one here is a packet a real client sends that the
+    // server reads as something else.
+    check(
+        "game",
+        "serverbound",
+        "chat_command_signed",
+        serverbound::play::CHAT_COMMAND_SIGNED,
+    );
+    check(
+        "game",
+        "serverbound",
+        "client_tick_end",
+        serverbound::play::CLIENT_TICK_END,
+    );
 
     // Play: clientbound.
     check(
@@ -631,6 +647,211 @@ fn every_constant_we_use_matches_the_vanilla_jar() {
         "set_player_inventory",
         clientbound::play::SET_PLAYER_INVENTORY,
     );
+    // AUDIT-09 A-02: ten clientbound ids this build encodes had no assertion --
+    // the entity and light families added in Phases 10 and 11. Every value below
+    // was checked against `docs/protocol/packet-ids-775.tsv` before this was
+    // written; a transposed pair among them (53 `move_entity_pos` vs 54
+    // `move_entity_pos_rot` is one keystroke) would put an entity at the wrong
+    // position or rotation on a real client.
+    check(
+        "game",
+        "clientbound",
+        "add_entity",
+        clientbound::play::ADD_ENTITY,
+    );
+    check(
+        "game",
+        "clientbound",
+        "block_entity_data",
+        clientbound::play::BLOCK_ENTITY_DATA,
+    );
+    check(
+        "game",
+        "clientbound",
+        "light_update",
+        clientbound::play::LIGHT_UPDATE,
+    );
+    check(
+        "game",
+        "clientbound",
+        "remove_entities",
+        clientbound::play::REMOVE_ENTITIES,
+    );
+    check(
+        "game",
+        "clientbound",
+        "move_entity_pos",
+        clientbound::play::MOVE_ENTITY_POS,
+    );
+    check(
+        "game",
+        "clientbound",
+        "move_entity_pos_rot",
+        clientbound::play::MOVE_ENTITY_POS_ROT,
+    );
+    check(
+        "game",
+        "clientbound",
+        "move_entity_rot",
+        clientbound::play::MOVE_ENTITY_ROT,
+    );
+    check(
+        "game",
+        "clientbound",
+        "set_entity_motion",
+        clientbound::play::SET_ENTITY_MOTION,
+    );
+    check(
+        "game",
+        "clientbound",
+        "disguised_chat",
+        clientbound::play::DISGUISED_CHAT,
+    );
+    check(
+        "game",
+        "clientbound",
+        "player_chat",
+        clientbound::play::PLAYER_CHAT,
+    );
+}
+
+/// One packet-id constant as the source scan found it:
+/// `(direction, state, NAME, value)`.
+///
+/// A named type rather than the tuple inline, because the four fields are all
+/// strings and integers that a signature would otherwise leave unlabelled at every
+/// use site — `(String, String, String, i32)` does not say which string is which.
+type Constant = (String, String, String, i32);
+
+/// Every `pub const NAME: i32` inside a state module of `src/ids.rs`, as
+/// `(direction, state, NAME, value)`.
+///
+/// Parsed from the source rather than listed by hand, because the test below
+/// exists to catch a constant that nobody remembered to assert — and a hand-kept
+/// list has the same blind spot as the `check()` calls it backstops. The nesting
+/// is two levels (`pub mod serverbound { pub mod play {`), and a sibling state
+/// module replaces the previous one; a module at the direction's own indent ends
+/// it, which is what keeps the crate's own `mod tests` out.
+///
+/// The names differ from the table's in exactly two places, both the jar's
+/// spelling rather than ours: `config` is the table's `configuration`, and `play`
+/// is its `game`.
+fn constants_in_ids_rs() -> (Vec<Constant>, Vec<String>) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/ids.rs");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let mut inside = Vec::new();
+    let mut outside = Vec::new();
+    let mut direction: Option<String> = None;
+    let mut direction_indent = 0usize;
+    let mut state = String::new();
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        let indent = line.len() - trimmed.len();
+        if let Some(rest) = trimmed.strip_prefix("pub mod ")
+            && let Some(name) = rest.split([' ', '{']).next()
+        {
+            if name == "serverbound" || name == "clientbound" {
+                direction = Some(name.to_owned());
+                direction_indent = indent;
+                state.clear();
+            } else if direction.is_some() && indent > direction_indent {
+                state = match name {
+                    "config" => "configuration".to_owned(),
+                    "play" => "game".to_owned(),
+                    other => other.to_owned(),
+                };
+            } else {
+                direction = None;
+                state.clear();
+            }
+            continue;
+        }
+        let Some(rest) = trimmed.strip_prefix("pub const ") else {
+            continue;
+        };
+        let Some((name, tail)) = rest.split_once(':') else {
+            continue;
+        };
+        let Some(value) = tail.trim().strip_prefix("i32 = ") else {
+            continue;
+        };
+        let Some(value) = value.trim().strip_suffix(';') else {
+            continue;
+        };
+        let Ok(value) = value.trim().parse::<i32>() else {
+            continue;
+        };
+        match &direction {
+            Some(direction) if !state.is_empty() => inside.push((
+                direction.clone(),
+                state.clone(),
+                name.trim().to_owned(),
+                value,
+            )),
+            _ => outside.push(name.trim().to_owned()),
+        }
+    }
+    (inside, outside)
+}
+
+/// AUDIT-09 A-02, closed as a *property* rather than as twelve lines.
+///
+/// The finding was that twelve ids had no `check()` call. Adding twelve calls
+/// fixes the instance; this test is what stops the thirteenth. It reads
+/// `src/ids.rs` and `docs/protocol/packet-ids-775.tsv` -- two artifacts written
+/// independently, one by us and one extracted from the Mojang jar -- and requires
+/// **every** packet-id constant to appear in the jar's table under its own name
+/// (lowercased) in its own state and direction, with the same number.
+///
+/// The floor assertion is not decoration: a regex that matched nothing would
+/// otherwise make this test pass vacuously, which is the failure mode the whole
+/// audit exists to catch.
+#[test]
+fn every_constant_in_ids_rs_matches_the_vanilla_table() {
+    let (constants, outside) = constants_in_ids_rs();
+    // Exactly one constant is legitimately outside a state module, and it is not a
+    // packet id. Naming it here rather than skipping unknown constants is what
+    // keeps "a packet id must live in a state module" a checked rule: a second
+    // top-level constant fails this test instead of being silently ignored.
+    assert_eq!(
+        outside,
+        vec!["PROTOCOL_VERSION".to_owned()],
+        "the only constant allowed outside a state module is PROTOCOL_VERSION; a packet-id \
+         constant placed here could never be sent in a state and cannot be checked"
+    );
+    assert!(
+        constants.len() > 100,
+        "the source scan found only {} constants, which means the parser stopped matching; \
+         a silent no-match would make this test vacuous",
+        constants.len()
+    );
+
+    let rows = authoritative_table();
+    let mut checked = 0usize;
+    for (direction, state, name, value) in &constants {
+        let expected = rows
+            .iter()
+            .find(|(s, d, _, n)| s == state && d == direction && n == &name.to_lowercase())
+            .unwrap_or_else(|| {
+                panic!(
+                    "ids.rs declares {direction}/{state}/{name} = {value}, but the 26.1.2 table \
+                     has no {state}/{direction}/{} row",
+                    name.to_lowercase()
+                )
+            });
+        assert_eq!(
+            *value, expected.2,
+            "{direction}/{state}/{name}: ids.rs says {value}, the 26.1.2 jar says {}",
+            expected.2
+        );
+        checked += 1;
+    }
+    assert_eq!(
+        checked,
+        constants.len(),
+        "every constant must be compared, not merely visited"
+    );
 }
 
 #[test]
@@ -646,5 +867,55 @@ fn the_regression_that_motivated_this_test_stays_fixed() {
     assert_eq!(
         id_of(&rows, "game", "serverbound", "chat_command_signed"),
         8
+    );
+}
+
+/// The protocol version is checked against the **jar's own statement of it**.
+///
+/// AUDIT-09 E-03: `e2e_login_play` asserted that the server's reported protocol
+/// version equalled `mc_protocol::ids::PROTOCOL_VERSION` — the same constant the
+/// server had just encoded from. That comparison is one value against itself: a
+/// build that spoke 776 while calling itself 775 would have passed it, and so would
+/// a build whose whole table was shifted. This test is the external half.
+///
+/// `crates/test-support/fixtures/protocol/version.json` is the 26.1.2 server jar's
+/// own `version.json`, byte for byte, with its source's size and two hashes in the
+/// `MANIFEST.txt` beside it. The jar states `protocol_version: 775`; this build must
+/// agree. It also pins the two figures the rest of the suite assumes — the version
+/// *name* the status response carries and the `DataVersion` the chunk codec accepts
+/// — because a jar swap that changed any of the three would otherwise be noticed
+/// only by a real client.
+#[test]
+fn the_protocol_version_matches_the_jars_own_version_json() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../test-support/fixtures/protocol/version.json");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let parsed: serde_json::Value =
+        serde_json::from_str(&text).expect("the fixture is the jar's own JSON");
+    let stated = parsed
+        .get("protocol_version")
+        .and_then(serde_json::Value::as_i64)
+        .expect("the jar's version.json states protocol_version");
+    assert_eq!(
+        i64::from(mc_protocol::ids::PROTOCOL_VERSION),
+        stated,
+        "ids.rs says {}, the 26.1.2 jar's own version.json says {stated}",
+        mc_protocol::ids::PROTOCOL_VERSION
+    );
+    assert_eq!(
+        parsed.get("id").and_then(serde_json::Value::as_str),
+        Some("26.1.2"),
+        "the fixture is the 26.1.2 jar's, so the version name is pinned with it"
+    );
+    // The table's own file name carries the version it was extracted for. A jar
+    // swap that updated the fixture but not the table (or the reverse) fails here
+    // rather than silently pairing two different versions.
+    assert!(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../../docs/protocol/packet-ids-{stated}.tsv"))
+            .is_file(),
+        "the jar states protocol {stated}, so docs/protocol/packet-ids-{stated}.tsv must be the \
+         table this suite reads"
     );
 }

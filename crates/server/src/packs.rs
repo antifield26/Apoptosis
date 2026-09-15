@@ -75,6 +75,15 @@ pub struct PackLoadOutcome {
     pub structures_loaded: usize,
     /// Structure files that were refused, with the reason.
     pub structures_refused: Vec<String>,
+    /// How many loot tables loaded across every pack (P11-04).
+    pub loot_tables_loaded: usize,
+    /// Loot table files seen, loaded or not (P11-04).
+    pub loot_files_seen: usize,
+    /// `(unmodelled kind, count)` pairs from the loot load, so what the drop
+    /// authority does not cover is on the record (P11-04).
+    pub loot_unmodelled: Vec<(String, usize)>,
+    /// Loot table files that were refused, with the reason (P11-04).
+    pub loot_refused: Vec<String>,
 }
 
 impl PackLoadOutcome {
@@ -248,6 +257,39 @@ pub fn load_packs(
         }
     }
     game.set_structures(structures);
+
+    // Loot, from every pack's `loot_table/` directory in load order (P11-04).
+    // The registries are read once here; `load_directory` only consults them
+    // for validation reports. Last-wins insert keeps the override semantics.
+    let mut loot = mc_data::loot::LootTables::new();
+    let mut loot_report = mc_data::loot::LootLoadReport::default();
+    let blocks = game.registries().blocks.clone();
+    let items = game.registries().items.clone();
+    for (namespace, root, _source) in set.load_plan() {
+        if !root.join("loot_table").is_dir() {
+            continue;
+        }
+        let loaded = mc_data::loot::load_directory(
+            &root,
+            &namespace,
+            mc_data::Limits::DEFAULT,
+            Some(&items),
+            Some(&blocks),
+            &mut loot_report,
+        );
+        for table in loaded {
+            loot.insert(table);
+        }
+    }
+    outcome.loot_tables_loaded = loot.len();
+    outcome.loot_files_seen = loot_report.files;
+    outcome.loot_unmodelled = loot_report
+        .unmodelled
+        .iter()
+        .map(|(kind, count)| (kind.clone(), *count))
+        .collect();
+    outcome.loot_refused.clone_from(&loot_report.skipped);
+    game.set_loot(loot);
 
     Ok(outcome)
 }

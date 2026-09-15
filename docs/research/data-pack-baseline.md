@@ -40,9 +40,19 @@ with zipfile.ZipFile(JAR) as archive:
 Then:
 
 ```text
-set MC_VANILLA_DATA=target\vanilla-26.1.2\extract\data\minecraft
+set MC_VANILLA_DATA=%CD%\target\vanilla-26.1.2\extract\data\minecraft
 cargo test -p mc-data --test vanilla_pack -- --ignored --nocapture
 ```
+
+**The value must be absolute** (AUDIT-09 D-06). The relative form
+`target\vanilla-26.1.2\extract\data\minecraft` does not work as written: `cargo test`
+runs the test binary with its working directory set to the *package* directory
+(`crates/data`), so the test resolves the value against the wrong place and its
+`root.is_dir()` guard fails with a message pointing at the directory it actually
+looked in. `%CD%` expands to the repository root when the command is run from there;
+in a POSIX shell use
+`export MC_VANILLA_DATA="$PWD/target/vanilla-26.1.2/extract/data/minecraft"`, which is
+the form `docs/testing/TEST-MATRIX.md` already uses.
 
 The jar itself is obtained per `docs/research/protocol-baseline.md` section 1. Note the
 distinction from the tools this project has *not* committed (Audit 05's reproducibility

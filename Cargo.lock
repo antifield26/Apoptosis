@@ -338,6 +338,7 @@ dependencies = [
  "mc-core",
  "mc-data",
  "mc-entity",
+ "mc-nbt",
  "mc-network",
  "mc-persistence",
  "mc-protocol",

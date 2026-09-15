@@ -23,27 +23,48 @@
 //!
 //! - **verified** — read off the public Java Edition wiki page for that mob
 //!   (minecraft.wiki, fetched 2026-09-11 while this work item was being written);
+//! - **jar-measured** — read out of 26.1.2's own bytecode with `javap -c`, which
+//!   outranks the wiki because it is the build this server speaks to;
 //! - **task-supplied** — came with the work item and was **not** independently
 //!   checked against a 26.1.2 baseline;
 //! - **approximation** — this crate's own choice; it is *not* a Vanilla value.
 //!
 //! | Kind | Health | Width × Height | Behaviour | Attack (Normal) | Speed attr. |
 //! |---|---|---|---|---|---|
-//! | [`MobKind::Zombie`] | 20.0 verified | 0.6 × 1.95 verified | hostile | 3.0 melee verified | 0.23 verified |
+//! | [`MobKind::Zombie`] | 20.0 verified | 0.6 × 1.95 verified | hostile | 3.0 melee jar-measured | 0.23 jar-measured |
 //! | [`MobKind::Skeleton`] | 20.0 task-supplied | 0.6 × 1.99 task-supplied | hostile | 2.0 melee approximation | 0.25 task-supplied |
-//! | [`MobKind::Cow`] | 10.0 task-supplied | 0.9 × 1.4 task-supplied | passive | — | 0.25 task-supplied |
+//! | [`MobKind::Cow`] | 10.0 jar-measured (`AbstractCow`) | 0.9 × 1.4 task-supplied | passive | — | 0.2 jar-measured (`AbstractCow`, AUDIT-09 D-01) |
 //! | [`MobKind::Pig`] | 10.0 task-supplied | 0.9 × 0.9 task-supplied | passive | — | 0.25 task-supplied |
 //! | [`MobKind::Sheep`] | 8.0 task-supplied | 0.9 × 1.3 task-supplied | passive | — | 0.23 task-supplied |
 //! | [`MobKind::Chicken`] | 4.0 task-supplied | 0.4 × 0.7 task-supplied | passive | — | 0.25 task-supplied |
 //! | [`MobKind::Spider`] | 16.0 verified | 1.4 × 0.9 task-supplied | hostile | 2.0 melee verified | 0.3 task-supplied |
 //! | [`MobKind::Creeper`] | 20.0 task-supplied | 0.6 × 1.7 task-supplied | hostile | 49.0 explosion, see below | 0.25 task-supplied |
 //!
-//! The zombie row is the one row checked line by line: the wiki infobox gives
-//! health 20, hitbox 0.6 × 1.95 (Java Edition), attack strength Easy 2.5 /
-//! Normal 3 / Hard 4.5, and speed 0.23. The spider's health 16 and
-//! Normal-difficulty damage 2 come from community documentation that cites the
-//! game's own data, not from the wiki, so they are "verified" only in the sense
-//! that an external source states them — they are **not** a 26.1.2 measurement.
+//! Two rows have been replaced by jar measurements, both in `createAttributes`:
+//!
+//! - **Zombie.** `Zombie.createAttributes` adds `FOLLOW_RANGE = 35.0`,
+//!   `MOVEMENT_SPEED = 0.23000000417232513`, `ATTACK_DAMAGE = 3.0` and
+//!   `ARMOR = 2.0`, then `SPAWN_REINFORCEMENTS_CHANCE`. The speed is `0.23f32`
+//!   widened to a double, so the 0.23 the table already carried is the same
+//!   number; `ATTACK_DAMAGE` confirms the wiki's Normal-difficulty 3.0; and
+//!   **`FOLLOW_RANGE` has no effect here** — see [`AGGRO_RADIUS`] for why, and
+//!   AUDIT-09 D-04 for the decision. The zombie contributes no `MAX_HEALTH`
+//!   literal anywhere in the chain (`LivingEntity.createLivingAttributes`
+//!   registers the attribute without a value), so its health stays
+//!   wiki-verified rather than jar-measured.
+//! - **Cow.** `AbstractCow.createAttributes` adds `MAX_HEALTH = 10.0` and
+//!   `MOVEMENT_SPEED = 0.20000000298023224`; the health confirms the table and the
+//!   speed is AUDIT-09 D-01's correction.
+//!
+//! The remaining six rows are still task-supplied or wiki-verified, and a sweep of
+//! `createAttributes` for every modelled kind is the work that would close them.
+//!
+//! The zombie row was the one row checked line by line against the wiki: health 20,
+//! hitbox 0.6 × 1.95 (Java Edition), attack strength Easy 2.5 / Normal 3 / Hard 4.5,
+//! and speed 0.23. The spider's health 16 and Normal-difficulty damage 2 come from
+//! community documentation that cites the game's own data, not from the wiki, so
+//! they are "verified" only in the sense that an external source states them — they
+//! are **not** a 26.1.2 measurement.
 //!
 //! ## How movement speed is derived, and why it is still unverified
 //!
@@ -79,9 +100,11 @@
 //!   caller must resolve or refuse. In particular
 //!   [`MobKind::Creeper`]'s [`MobKind::attack_damage`] is the documented
 //!   point-blank **explosion** damage, not a melee value.
-//! - **No per-mob follow range.** [`AGGRO_RADIUS`] is Vanilla's default
-//!   `FOLLOW_RANGE`; mobs that override it in Vanilla (the zombie is widely
-//!   reported to see further) are not modelled.
+//! - **No per-mob follow range.** [`AGGRO_RADIUS`] is jar-measured as Vanilla's
+//!   *default* `FOLLOW_RANGE` (`Mob.createMobAttributes` = 16.0), but the per-kind
+//!   overrides are not modelled: `Zombie.createAttributes` sets 35.0, so a zombie
+//!   here acquires a target at 16 where Vanilla's does at 35. Recorded as an open
+//!   product decision in AUDIT-09 D-04 rather than retargeted silently.
 //! - **No line of sight, light level, day/night, difficulty scaling, anger or
 //!   panic sources, baby variants, jockeys or equipment.**
 //! - **Passive mobs flee on lost health rather than on being damaged.** Vanilla's
@@ -119,8 +142,18 @@ pub const SPEED_BLOCKS_PER_SECOND_PER_ATTRIBUTE: f64 = 43.17;
 
 /// Distance in blocks at which a hostile mob acquires a player as its target.
 ///
-/// Natural reading: Vanilla's default `FOLLOW_RANGE` attribute (16.0). Per-mob
-/// overrides are not modelled (module gap list). Approximation.
+/// **Jar-measured as Vanilla's default.** `Mob.createMobAttributes` adds
+/// `FOLLOW_RANGE = 16.0`, and every mob inherits it unless it overrides it, so
+/// 16.0 is the right number for "a mob with no override".
+///
+/// **The override is what is missing** (AUDIT-09 D-04, OPEN). `Zombie.createAttributes`
+/// adds `FOLLOW_RANGE = 35.0`, also jar-measured, and this crate applies one
+/// radius to every kind — so a zombie here notices a player at 16 blocks where
+/// Vanilla's notices one at 35, which makes our hostiles *less* aggressive than
+/// Vanilla's. That is a product decision and not a silent one: retargeting the
+/// zombie would change the difficulty of every night, so it is recorded as an
+/// open decision rather than applied. Per-kind overrides need a table, and the
+/// sweep that would fill it is named in the module documentation.
 pub const AGGRO_RADIUS: f64 = 16.0;
 
 /// Distance in blocks at which a hostile mob gives up a target it already has.
@@ -412,7 +445,11 @@ impl MobKind {
             Self::Zombie => 0.23,
             Self::Sheep => 0.23,
             Self::Spider => 0.3,
-            Self::Skeleton | Self::Cow | Self::Pig | Self::Chicken | Self::Creeper => 0.25,
+            // Cow: jar-measured (AUDIT-09 D-01) at `AbstractCow`'s
+            // MOVEMENT_SPEED 0.20000000298023224, not the 0.25 the table
+            // carried before; the other three remain task-supplied.
+            Self::Skeleton | Self::Pig | Self::Chicken | Self::Creeper => 0.25,
+            Self::Cow => 0.200_000_002_980_232_24,
         }
     }
 

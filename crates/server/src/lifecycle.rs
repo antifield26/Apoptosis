@@ -53,10 +53,22 @@ impl TickHook for NoopHook {
     }
 }
 
-/// Capacity of the network → game event queue.
+/// Capacity of the network → game event queue, **shared by every connection**.
 ///
-/// Sized so a full server (10 players) plus status pings can burst without
-/// dropping gameplay events, while still bounding memory if the tick loop stalls.
+/// One queue, not one per connection (AUDIT-09 A-01): every connection's reader
+/// pushes into this channel, and the game loop drains it at up to
+/// [`crate::game::PENDING_INTENT_BUDGET`] events per tick. Sized so a full server
+/// (10 players) plus status pings can burst without dropping gameplay events,
+/// while still bounding memory if the tick loop stalls.
+///
+/// **The consequence of sharing, stated because it is not obvious:** when the
+/// queue is full, the event that cannot be queued is dropped and counted on that
+/// connection's receiver ([`mc_network::bridge::InboundReceiver::dropped`]) — so
+/// one connection sending faster than the loop drains can occupy the queue and
+/// cause *another* player's movement events to be shed. There is no per-connection
+/// bound in the running server; `mc_network::bridge::DEFAULT_INBOUND_CAPACITY`
+/// names the figure a per-connection queue would use and says so itself. Giving
+/// each connection its own queue is the recorded follow-up.
 pub const EVENT_QUEUE: usize = 1024;
 
 /// Longest a shutdown waits for the final world save before giving up.

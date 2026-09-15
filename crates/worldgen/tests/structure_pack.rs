@@ -12,8 +12,11 @@
 //! `crates/container/tests/vanilla_smelting.rs`, so the extraction command in
 //! `docs/research/data-pack-baseline.md` section 0 serves all three:
 //!
+//! (Absolute: the test's working directory is the crate's, not the repository
+//! root -- AUDIT-09 D-06. Above the fence, because it is prose, not part of the command.)
+//!
 //! ```text
-//! set MC_VANILLA_DATA=target\vanilla-26.1.2\extract\data\minecraft
+//! set MC_VANILLA_DATA=%CD%\target\vanilla-26.1.2\extract\data\minecraft
 //! cargo test -p mc-worldgen --test structure_pack -- --ignored --nocapture
 //! ```
 //!

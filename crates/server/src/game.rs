@@ -167,8 +167,20 @@ impl mc_entity::mob::Rng for AiRng<'_> {
         self.0.next_i32_bounded(bound)
     }
 }
+
+/// Adapter for `mc-data`'s loot [`Rng`](mc_data::loot::Rng) onto the game's own
+/// source: `nextInt()`'s full 32 bits, which is exactly the `next(32)` the
+/// loot conditions' float defaults reshape.
+struct LootRng<'a>(&'a mut RandomSource);
+
+impl mc_data::loot::Rng for LootRng<'_> {
+    fn next_u32(&mut self) -> u32 {
+        u32::from_ne_bytes(self.0.next_i32().to_ne_bytes())
+    }
+}
 use mc_entity::player::{DamageOutcome, GameMode, Player};
 use mc_entity::stack::ItemStack;
+use mc_nbt::NbtTag;
 use mc_network::bridge::{ClientEvent, ClientEventKind, ConnectionId, GameEvents, OutboundSender};
 use mc_persistence::chunk::{ChunkData, ChunkPos};
 use mc_persistence::dimension::Dimension;
@@ -433,6 +445,23 @@ pub const CHUNKS_PER_TICK: usize = 64;
 const PENDING_INTENT_BUDGET: usize = 256;
 
 /// `player_action` status: start digging.
+/// The bare-hand attack damage (vanilla 1.0); a held sword's bonus is not
+/// modelled, because the item table carries no damage column (named gap).
+const FIST_ATTACK_DAMAGE: f32 = 1.0;
+/// One ground item's snapshot for the merge/pickup passes (P11-05, P11-09).
+#[derive(Clone, Copy)]
+struct GroundItem {
+    id: EntityId,
+    item: Option<i32>,
+    position: mc_entity::player::Vec3,
+    age: u64,
+    ready: bool,
+}
+
+/// Ground stacks of the same item within half a block merge (P11-09), squared.
+const ITEM_MERGE_RADIUS_SQR: f64 = 0.25;
+/// A ground stack is collected when a player is within one block (P11-05), squared.
+const ITEM_PICKUP_RADIUS_SQR: f64 = 1.0;
 const ACTION_START_DESTROY_BLOCK: i32 = 0;
 /// `player_action` status: finish digging (creative instant break, survival result).
 const ACTION_FINISH_DESTROY_BLOCK: i32 = 2;
@@ -610,6 +639,10 @@ pub(crate) struct Session {
     menu: mc_container::Menu,
     /// Whether this player may receive world packets.
     ready: bool,
+    /// Ticks of shared hurt invulnerability left (P11-06): a mob hit inside the
+    /// window is refused, exactly like `Entity::invulnerable_ticks` for
+    /// non-players, which the authoritative `Player` does not carry.
+    hurt_invuln_ticks: u32,
 }
 
 impl Session {
@@ -775,10 +808,17 @@ pub struct Game {
     /// The per-biome natural-spawn tables (`crate::spawn`), loaded from the committed
     /// fixture extracted from vanilla's data pack.
     spawn_tables: crate::spawn::SpawnTables,
+    /// The loaded loot tables (P11-04), keyed by resource id; the drop
+    /// authority for block breaks. Empty until `load_packs` runs.
+    loot: mc_data::loot::LootTables,
     /// Rotating cursor into the entity list for the movement-broadcast budget
     /// (P11-03): which entity starts this tick's slice, so a capped tick never
     /// starves the same tail every time.
     entity_move_cursor: u64,
+    /// Chunks that are **stored but unreadable** this session (AUDIT-09 B-01):
+    /// generation over them is refused, because a clean generated chunk plus
+    /// one edit would replace real terrain at the next autosave.
+    unreadable_chunks: BTreeSet<ChunkPos>,
     /// Runs and times the six phases of a tick.
     scheduler: Scheduler,
     /// Intents drained this tick, applied by the Players phase in arrival order.
@@ -1040,7 +1080,9 @@ impl Game {
             random_seed: seed,
             random: RandomSource::new(seed),
             spawn_tables: crate::spawn::SpawnTables::vanilla(),
+            loot: mc_data::loot::LootTables::new(),
             entity_move_cursor: 0,
+            unreadable_chunks: BTreeSet::new(),
             scheduler: Scheduler::new(),
             pending_intents: Vec::new(),
             pending_light: BTreeSet::new(),
@@ -1212,6 +1254,25 @@ impl Game {
             .collect()
     }
 
+    /// Every dropped-item entity as `(stack, position)`, ascending by entity id.
+    ///
+    /// The same kind of read-only view as [`Self::mobs`], and for the same reason:
+    /// a test that asserts on what is on the ground needs to see the stack, and
+    /// iterating the raw entity store would make every such test re-implement the
+    /// `EntityBody::Item` match. Mutation still goes through the tick pipeline.
+    #[must_use]
+    pub fn dropped_items(&self) -> Vec<(ItemStack, mc_entity::Vec3)> {
+        self.entities
+            .iter()
+            .filter_map(|entity| {
+                let mc_entity::EntityBody::Item(item) = &entity.body else {
+                    return None;
+                };
+                Some((item.stack, entity.position))
+            })
+            .collect()
+    }
+
     /// The world spawn point, as `(x, y, z)` block coordinates.
     #[must_use]
     pub fn spawn(&self) -> (i32, i32, i32) {
@@ -1224,6 +1285,18 @@ impl Game {
         self.view_distance
     }
 
+    /// How many loaded chunks are currently marked "never persist me".
+    ///
+    /// Exposed for tests and diagnostics because the set's only other reader is
+    /// [`Game::queue_dirty_chunks`], so a set that grows without bound has no
+    /// visible symptom: AUDIT-09 B-06 was exactly that — the field was inserted
+    /// into on two paths and never cleared, and nothing could see it. This is the
+    /// same reason [`mc_world::World::light_cache_len`] exists.
+    #[must_use]
+    pub fn placeholder_chunk_count(&self) -> usize {
+        self.placeholder_without_storage.len()
+    }
+
     /// Spawn a dropped-item entity holding `stack`.
     ///
     /// This closes the Phase 04 gap where a dropped stack was taken out of the
@@ -1231,10 +1304,14 @@ impl Game {
     /// this crate runs them (Entities phase) and reaps the entity when the despawn
     /// timer fires.
     ///
-    /// What is **not** implemented, and is not faked: item pickup, item merging and
-    /// the `add_entity` packet that would make the drop visible to a client. A
-    /// dropped item exists on the server and in radius queries; no client is told
-    /// about it yet (P05-15 owns the entity spawn/despawn packets).
+    /// What a drop gets now that P11-04..08 have landed: the `add_entity` +
+    /// `set_entity_data` pair in the Broadcast phase (so a client renders it), the
+    /// merge and pickup passes in the Entities phase
+    /// ([`Self::merge_and_collect_items`]), and a place in its chunk's saved
+    /// entity list ([`Self::serialize_chunk_entities`]). What it still does
+    /// **not** get, and does not fake: a per-drop pickup delay or despawn timer
+    /// other than [`mc_entity::item_entity::ItemEntity::new`]'s defaults, and the
+    /// owner-only pickup rule (the `owner` argument is carried and never read).
     ///
     /// # Errors
     ///
@@ -1521,6 +1598,189 @@ impl Game {
             if self.tick_entity(id) {
                 report.entities_ticked += 1;
             }
+        }
+        self.merge_and_collect_items();
+    }
+
+    /// Merge stacks and collect them into players (P11-05, P11-09).
+    ///
+    /// **Merging**: two ground stacks of the same item within half a block
+    /// combine into the older entity, up to the item's stack limit (vanilla's
+    /// merge rule, radius simplified from the box-overlap shape); the younger
+    /// entity keeps whatever did not fit and is removed when empty, which the
+    /// sweep announces. **Pickup**: a stack whose pickup delay has expired and
+    /// that a ready player's cell overlaps (vanilla's radius, as a 1.0-block
+    /// distance) goes into that player's inventory through `add_stack`, whose
+    /// leftover stays on the ground when the inventory is full; the client sees
+    /// the new slot contents through the inventory re-mirror, and the removal
+    /// through the entity sweep.
+    fn merge_and_collect_items(&mut self) {
+        self.merge_ground_stacks();
+        self.collect_items_into_players();
+    }
+
+    /// Merge adjacent same-item ground stacks into the older entity (P11-09).
+    fn merge_ground_stacks(&mut self) {
+        let ground: Vec<GroundItem> = self
+            .entities
+            .iter()
+            .filter_map(|entity| {
+                let EntityBody::Item(item) = &entity.body else {
+                    return None;
+                };
+                Some(GroundItem {
+                    id: entity.id,
+                    item: item.item_id(),
+                    position: entity.position,
+                    age: entity.age,
+                    ready: item.pickup_delay == 0,
+                })
+            })
+            .collect();
+        // Merging: same item, half a block apart, older survives. One pass per
+        // pair is enough at these populations; a full binning pass is worth it
+        // only when item counts make the O(n^2) observable.
+        for a in 0..ground.len() {
+            for b in (a + 1)..ground.len() {
+                let (first, second) = (ground[a], ground[b]);
+                if first.item.is_none() || first.item != second.item {
+                    continue;
+                }
+                let dx = first.position.x - second.position.x;
+                let dy = first.position.y - second.position.y;
+                let dz = first.position.z - second.position.z;
+                if dx * dx + dy * dy + dz * dz > ITEM_MERGE_RADIUS_SQR {
+                    continue;
+                }
+                let (keep, drop) = if first.age <= second.age {
+                    (first.id, second.id)
+                } else {
+                    (second.id, first.id)
+                };
+                // The player inventory's own limit table governs merges the
+                // same way it governs inserts, so the two cannot disagree.
+                let item_id = self
+                    .entities
+                    .get(keep)
+                    .and_then(|entity| match &entity.body {
+                        EntityBody::Item(item) => item.item_id(),
+                        _ => None,
+                    });
+                let max_stack = self.sessions.values().next().map_or(
+                    mc_entity::stack::DEFAULT_MAX_STACK_SIZE,
+                    |session| {
+                        item_id.map_or(mc_entity::stack::DEFAULT_MAX_STACK_SIZE, |id| {
+                            session.player.inventory.stack_sizes().max_stack_size(id)
+                        })
+                    },
+                );
+                // The store cannot hand out two mutable borrows at once, so the
+                // younger stack is copied out, merged into the keeper, and the
+                // remainder written back.
+                let Some(drop_entity) = self.entities.get(drop) else {
+                    continue;
+                };
+                let EntityBody::Item(drop_item) = &drop_entity.body else {
+                    continue;
+                };
+                if drop_item.stack.is_empty() {
+                    continue;
+                }
+                let mut incoming = drop_item.stack;
+                let Some(keep_entity) = self.entities.get_mut(keep) else {
+                    continue;
+                };
+                let EntityBody::Item(keep_item) = &mut keep_entity.body else {
+                    continue;
+                };
+                let before = keep_item.stack.count();
+                keep_item.stack.merge_capped(&mut incoming, max_stack);
+                let _merged = keep_item.stack.count() > before;
+                let Some(drop_entity) = self.entities.get_mut(drop) else {
+                    continue;
+                };
+                let EntityBody::Item(drop_item) = &mut drop_entity.body else {
+                    continue;
+                };
+                drop_item.stack = incoming;
+                if drop_item.stack.is_empty() {
+                    drop_entity.removed = true;
+                }
+            }
+        }
+    }
+
+    /// Give every ready, overdue ground stack to the nearest player within the
+    /// pickup radius (P11-05), mirroring the new slot contents to that client.
+    fn collect_items_into_players(&mut self) {
+        let players: Vec<(EntityId, ConnectionId, mc_entity::player::Vec3)> = self
+            .sessions
+            .values()
+            .filter(|session| session.ready)
+            .map(|session| (session.entity, session.id, session.player.position))
+            .collect();
+        let ground: Vec<GroundItem> = self
+            .entities
+            .iter()
+            .filter_map(|entity| {
+                let EntityBody::Item(item) = &entity.body else {
+                    return None;
+                };
+                Some(GroundItem {
+                    id: entity.id,
+                    item: item.item_id(),
+                    position: entity.position,
+                    age: entity.age,
+                    ready: item.pickup_delay == 0,
+                })
+            })
+            .collect();
+        for item in ground {
+            if !item.ready {
+                continue;
+            }
+            let Some((_, connection, _player_position)) = players
+                .iter()
+                .copied()
+                .min_by(|a, b| {
+                    let da = (a.2.x - item.position.x).powi(2)
+                        + (a.2.y - item.position.y).powi(2)
+                        + (a.2.z - item.position.z).powi(2);
+                    let db = (b.2.x - item.position.x).powi(2)
+                        + (b.2.y - item.position.y).powi(2)
+                        + (b.2.z - item.position.z).powi(2);
+                    da.total_cmp(&db)
+                })
+                .filter(|(_, _, position)| {
+                    let dx = position.x - item.position.x;
+                    let dy = position.y - item.position.y;
+                    let dz = position.z - item.position.z;
+                    dx * dx + dy * dy + dz * dz <= ITEM_PICKUP_RADIUS_SQR
+                })
+            else {
+                continue;
+            };
+            let Some(entity) = self.entities.get_mut(item.id) else {
+                continue;
+            };
+            let EntityBody::Item(ground_stack) = &mut entity.body else {
+                continue;
+            };
+            let stack = ground_stack.stack;
+            let leftover = match self.sessions.get_mut(&connection) {
+                Some(session) => session.player.inventory.add_stack(stack),
+                None => continue,
+            };
+            if leftover.is_empty() {
+                entity.removed = true;
+                debug!(item = ?item.item, player = %connection, "item picked up");
+            } else {
+                let EntityBody::Item(ground_stack) = &mut entity.body else {
+                    continue;
+                };
+                ground_stack.stack = leftover;
+            }
+            self.sync_menu_from_inventory(connection, &mut TickReport::default());
         }
     }
 
@@ -1978,10 +2238,19 @@ impl Game {
         let Some(session_id) = session_id else {
             return;
         };
-        let outcome = self
+        // The shared hurt window: any mob hit inside it is refused, the same
+        // 10-tick rule `damage_entity` applies to non-players.
+        if self
             .sessions
-            .get_mut(&session_id)
-            .map(|session| session.player.apply_damage(kind.attack_damage()));
+            .get(&session_id)
+            .is_some_and(|session| session.hurt_invuln_ticks > 0)
+        {
+            return;
+        }
+        let outcome = self.sessions.get_mut(&session_id).map(|session| {
+            session.hurt_invuln_ticks = INVULNERABLE_TICKS;
+            session.player.apply_damage(kind.attack_damage())
+        });
         let Some(outcome) = outcome else {
             return;
         };
@@ -2132,7 +2401,31 @@ impl Game {
         if entity.health > 0.0 {
             return false;
         }
+        let body = &entity.body;
+        let kind = match body {
+            EntityBody::Mob(mob) => Some(mob.kind),
+            _ => None,
+        };
+        let position = entity.position;
         entity.removed = true;
+        // P11-04: a dead mob's loot table is the drop authority, same as
+        // blocks. Looting-enchanted drops are not modelled (the context carries
+        // no enchantments), so rare `killed_by_player`-gated pools refuse.
+        if let Some(kind) = kind {
+            let stem = kind.name();
+            if let Ok(table_id) =
+                mc_core::ids::ResourceId::parse(&format!("minecraft:entities/{stem}"))
+            {
+                let context = mc_data::loot::LootContext {
+                    enchantment_levels: None,
+                    survives_explosion: None,
+                    block_properties: None,
+                    luck: None,
+                };
+                let centre = mc_world::Vec3::new(position.x, position.y + 0.5, position.z);
+                self.spawn_loot_table(&table_id, centre, &context);
+            }
+        }
         true
     }
 
@@ -2398,26 +2691,15 @@ impl Game {
             if self.broadcast_chunk(change.pos, &packet, report) > 0 {
                 report.block_changes += 1;
             }
-            // The changed chunk *and* the neighbours `World::set_block` invalidated, since the light the
-            // client holds for those changed too.
-            self.pending_light.insert(change.pos);
-            let local_x = change.x.rem_euclid(16);
-            let local_z = change.z.rem_euclid(16);
-            if local_x == 0 {
-                self.pending_light
-                    .insert(ChunkPos::new(change.pos.x - 1, change.pos.z));
-            }
-            if local_x == 15 {
-                self.pending_light
-                    .insert(ChunkPos::new(change.pos.x + 1, change.pos.z));
-            }
-            if local_z == 0 {
-                self.pending_light
-                    .insert(ChunkPos::new(change.pos.x, change.pos.z - 1));
-            }
-            if local_z == 15 {
-                self.pending_light
-                    .insert(ChunkPos::new(change.pos.x, change.pos.z + 1));
+            // The changed chunk *and* every neighbour whose one-block light margin
+            // reads across the border the block sits within one block of, since the
+            // light the client holds for those changed too. The rule is
+            // `mc_world::chunks_a_block_can_light` rather than a second copy of the
+            // four edge tests: the copy that used to live here could not express the
+            // diagonal case at a corner, so a corner change left the diagonal chunk
+            // unqueued and the client drawing its old light (AUDIT-09 B-05).
+            for affected in mc_world::chunks_a_block_can_light(change.pos, change.x, change.z) {
+                self.pending_light.insert(affected);
             }
         }
         Ok(())
@@ -2617,6 +2899,7 @@ impl Game {
                 name: profile.name.clone(),
                 menu,
                 ready: false,
+                hurt_invuln_ticks: 0,
             },
         );
 
@@ -2774,6 +3057,24 @@ impl Game {
             PlayIntent::MovePlayerStatusOnly { on_ground } => {
                 if let Some(session) = self.sessions.get_mut(&id) {
                     session.player.on_ground = on_ground;
+                }
+            }
+            PlayIntent::Interact { entity, kind } => {
+                // Only the attack acts; a use/interact-at on an entity needs the
+                // interaction surfaces (villagers, boats), which are not modelled.
+                // The wire id is this server's own `EntityId` value --
+                // `AddEntity` is written from `id.get()` with no base offset, so
+                // the id a client echoes back is the id the store holds (checked
+                // against the encoder, not assumed).
+                if kind == 1 {
+                    // `EntityId::new` validates; the wire id came from this
+                    // server's own `add_entity`, so an invalid one is a hostile
+                    // packet, refused rather than reconstructed.
+                    if let Ok(target) = EntityId::new(entity) {
+                        let damage = FIST_ATTACK_DAMAGE;
+                        let died = self.damage_entity(target, damage);
+                        debug!(id = %id, target = %target, damage, died, "player attack");
+                    }
                 }
             }
             PlayIntent::PlayerAction {
@@ -3505,13 +3806,18 @@ impl Game {
                     return Ok(());
                 }
                 debug!(id = %id, x, y, z, "block broken");
+                if !creative {
+                    // P11-04: the loot table is the drop authority in survival.
+                    self.spawn_block_drops(current, x, y, z);
+                }
                 self.sync_menu_from_inventory(id, report);
             }
             ACTION_DROP_ITEM => {
                 // The held stack leaves the inventory and becomes a dropped-item
                 // entity at roughly eye height. The entity is announced by the
-                // Broadcast phase with its stack metadata; item pickup and
-                // merging are still open (P11-05/P11-09).
+                // Broadcast phase with its stack metadata, and the Entities
+                // phase's merge and pickup passes (P11-05/P11-09) take it from
+                // there.
                 let (dropped, owner, at) = {
                     let Some(session) = self.sessions.get_mut(&id) else {
                         return Ok(());
@@ -3772,6 +4078,7 @@ impl Game {
         let mut messages: Vec<(ConnectionId, String)> = Vec::new();
         for session in self.sessions.values_mut() {
             session.tick_start_y = session.player.position.y;
+            session.hurt_invuln_ticks = session.hurt_invuln_ticks.saturating_sub(1);
             // Vanilla heals on a 4-second timer (`foodTickTimer`), not every tick.
             // Calling this every tick made regeneration ~20x too fast and meant
             // exhaustion never accrued, so food never depleted in play (Audit 03).
@@ -3819,6 +4126,27 @@ impl Game {
         let mut local = TickReport::default();
         if outcome.applied {
             let _ = self.send_vitals(id, &mut local);
+        }
+        if outcome.died {
+            // P11-07: the inventory becomes ground entities at the death
+            // position, right now, which is when vanilla drops it. The later
+            // `respawn` call finds an empty inventory and drops nothing twice.
+            // Experience orbs are not an entity kind here (named gap), so the
+            // experience reset happens at respawn with nothing on the ground.
+            let (position, stacks) = match self.sessions.get_mut(&id) {
+                Some(session) => {
+                    let p = session.player.position;
+                    let position = mc_world::Vec3::new(p.x, p.y, p.z);
+                    (position, session.player.inventory.drain_all())
+                }
+                None => return,
+            };
+            for stack in stacks {
+                match self.spawn_item_owned(stack, position, None) {
+                    Ok(entity) => debug!(id = %id, %entity, "death drop spawned"),
+                    Err(error) => warn!(id = %id, %error, "could not spawn a death drop"),
+                }
+            }
         }
         if outcome.died {
             let _ = self.send(
@@ -3883,20 +4211,39 @@ impl Game {
             return;
         }
         let mut loaded = false;
+        let mut read_failed = false;
         match self.read_stored_chunk(pos) {
-            Ok(Some(data)) => match Chunk::from_chunk_data(&data, &self.registries.blocks) {
-                Ok(chunk) => {
-                    self.world.load_chunk(chunk);
-                    loaded = true;
+            Ok(Some(data)) => {
+                let entities = data.entities.clone();
+                match Chunk::from_chunk_data(&data, &self.registries.blocks) {
+                    Ok(chunk) => {
+                        self.world.load_chunk(chunk);
+                        loaded = true;
+                        // P11-08: the chunk's saved entities come back as live
+                        // entities; the Broadcast phase announces them like any
+                        // other spawn.
+                        self.load_chunk_entities(&entities);
+                    }
+                    Err(error) => {
+                        warn!(?pos, %error, "stored chunk could not be converted; using a placeholder");
+                        read_failed = true;
+                    }
                 }
-                Err(error) => {
-                    warn!(?pos, %error, "stored chunk could not be converted; using a placeholder");
-                }
-            },
+            }
             Ok(None) => {}
             Err(error) => {
                 warn!(?pos, %error, "chunk read failed; using a placeholder (it will not be saved)");
+                read_failed = true;
             }
+        }
+        if read_failed {
+            // AUDIT-09 B-01: a chunk that is *stored but unreadable* must never
+            // be generated over. The loaded terrain would be clean, so the file
+            // would survive until the first edit made the chunk dirty and the
+            // next autosave replaced real terrain with generated blocks — the
+            // data-loss class the generation gate exists to prevent. The mark
+            // lasts for the session; the next boot re-reads the file.
+            self.unreadable_chunks.insert(pos);
         }
         if !loaded {
             // Generation requires knowing that **nothing is stored**, and only a game that
@@ -3909,7 +4256,8 @@ impl Game {
             // This is the **only** place generation happens, which is what makes "an
             // existing world is never regenerated" a structural property rather than a
             // promise.
-            let may_generate = self.can_read_stored_chunks();
+            let may_generate =
+                self.can_read_stored_chunks() && !self.unreadable_chunks.contains(&pos);
             match self
                 .generator
                 .as_ref()
@@ -4053,6 +4401,258 @@ impl Game {
     #[must_use]
     pub const fn structures(&self) -> &mc_worldgen::structures::StructureRegistry {
         &self.structures
+    }
+
+    /// Install the loaded loot tables (P11-04).
+    ///
+    /// Called once from the pack loader; a game that never loads packs keeps
+    /// the empty registry, whose only honest reading is "no table drops
+    /// anything" — vanilla's own behaviour for a block with no loot table.
+    pub fn set_loot(&mut self, loot: mc_data::loot::LootTables) {
+        self.loot = loot;
+    }
+
+    /// The loaded loot tables.
+    #[must_use]
+    pub const fn loot(&self) -> &mc_data::loot::LootTables {
+        &self.loot
+    }
+
+    /// Roll a block's loot table and drop the stacks at the block centre.
+    ///
+    /// The table name is `minecraft:blocks/<stem>`; a block with no table (or
+    /// an unmodelled one) drops nothing, which is vanilla's rule. The context
+    /// carries **no enchantments** — tool enchants are not modelled, so every
+    /// enchantment-dependent condition refuses, which is the no-silk-touch
+    /// reading of a bare hand — and `survives_explosion: true`, because a
+    /// player break is not an explosion.
+    fn spawn_block_drops(&mut self, block_id: i32, x: i32, y: i32, z: i32) {
+        let Ok(name) = self.registries.blocks.block_name(block_id) else {
+            return;
+        };
+        // Own the name so the mutable work below cannot see the registry borrow.
+        let name = name.to_owned();
+        let stem = name.strip_prefix("minecraft:").unwrap_or(&name);
+        let Ok(table_id) = mc_core::ids::ResourceId::parse(&format!("minecraft:blocks/{stem}"))
+        else {
+            return;
+        };
+        let context = mc_data::loot::LootContext {
+            enchantment_levels: None,
+            survives_explosion: Some(true),
+            block_properties: None,
+            luck: None,
+        };
+        let centre =
+            mc_world::Vec3::new(f64::from(x) + 0.5, f64::from(y) + 0.5, f64::from(z) + 0.5);
+        self.spawn_loot_table(&table_id, centre, &context);
+    }
+
+    /// The saved entities of one chunk as NBT (P11-08).
+    ///
+    /// The shape is vanilla-compatible for the fields a client or server needs
+    /// to reconstruct the entity: `id` (the resource id), `Pos` (three
+    /// doubles), `Motion` (three doubles), and for a mob `Health`; for a
+    /// dropped item, `Item` with `id` and `Count`. Fields this build does not
+    /// model are absent, so a vanilla server reading our file would see a
+    /// default-valued entity rather than a corrupt one — the honest direction
+    /// for a gap.
+    fn serialize_chunk_entities(&self, pos: ChunkPos) -> Vec<mc_nbt::NbtTag> {
+        self.entities
+            .iter()
+            .filter(|entity| {
+                !entity.removed
+                    && entity.kind() != EntityKind::Player
+                    && chunk_of(entity.position.x, entity.position.z) == pos
+            })
+            .map(|entity| {
+                let mut fields: Vec<(String, mc_nbt::NbtTag)> = Vec::new();
+                match &entity.body {
+                    EntityBody::Mob(mob) => {
+                        fields.push((
+                            "id".to_owned(),
+                            mc_nbt::NbtTag::String(format!("minecraft:{}", mob.kind.name())),
+                        ));
+                        fields.push(("Health".to_owned(), mc_nbt::NbtTag::Float(entity.health)));
+                    }
+                    EntityBody::Item(item) => {
+                        let item_name = item
+                            .item_id()
+                            .and_then(|id| self.registries.items.name(id).ok())
+                            .unwrap_or_default();
+                        fields.push((
+                            "id".to_owned(),
+                            mc_nbt::NbtTag::String("minecraft:item".to_owned()),
+                        ));
+                        fields.push((
+                            "Item".to_owned(),
+                            mc_nbt::NbtTag::Compound(vec![
+                                (
+                                    "id".to_owned(),
+                                    mc_nbt::NbtTag::String(item_name.to_owned()),
+                                ),
+                                ("Count".to_owned(), mc_nbt::NbtTag::Int(item.stack.count())),
+                            ]),
+                        ));
+                    }
+                    EntityBody::Player | EntityBody::Projectile(_) => {}
+                }
+                fields.push((
+                    "Pos".to_owned(),
+                    mc_nbt::NbtTag::List(vec![
+                        mc_nbt::NbtTag::Double(entity.position.x),
+                        mc_nbt::NbtTag::Double(entity.position.y),
+                        mc_nbt::NbtTag::Double(entity.position.z),
+                    ]),
+                ));
+                fields.push((
+                    "Motion".to_owned(),
+                    mc_nbt::NbtTag::List(vec![
+                        mc_nbt::NbtTag::Double(entity.velocity.x),
+                        mc_nbt::NbtTag::Double(entity.velocity.y),
+                        mc_nbt::NbtTag::Double(entity.velocity.z),
+                    ]),
+                ));
+                mc_nbt::NbtTag::Compound(fields)
+            })
+            .collect()
+    }
+
+    /// Spawn the entities a saved chunk carries (P11-08).
+    ///
+    /// Malformed entries are logged and skipped: one bad entity must not stop
+    /// the chunk from loading, and the loss is visible in the log. Every skip
+    /// below carries its own reason at `warn!` for that second half — an
+    /// earlier version of this function documented "logged and skipped" while
+    /// several of its `continue`s were silent, which is the failure mode where a
+    /// save quietly loses entities and nothing anywhere says so.
+    fn load_chunk_entities(&mut self, tags: &[mc_nbt::NbtTag]) {
+        for tag in tags {
+            let mc_nbt::NbtTag::Compound(fields) = tag else {
+                warn!("a saved entity was not a compound; skipped");
+                continue;
+            };
+            let get = |name: &str| {
+                fields
+                    .iter()
+                    .find(|(key, _)| key == name)
+                    .map(|(_, value)| value)
+            };
+            let Some(mc_nbt::NbtTag::String(id)) = get("id") else {
+                warn!("a saved entity has no string `id`; skipped");
+                continue;
+            };
+            let position = match get("Pos") {
+                Some(mc_nbt::NbtTag::List(coords)) if coords.len() == 3 => {
+                    let (
+                        Some(mc_nbt::NbtTag::Double(x)),
+                        Some(mc_nbt::NbtTag::Double(y)),
+                        Some(mc_nbt::NbtTag::Double(z)),
+                    ) = (coords.first(), coords.get(1), coords.get(2))
+                    else {
+                        warn!(%id, "a saved entity's `Pos` is not three doubles; skipped");
+                        continue;
+                    };
+                    mc_world::Vec3::new(*x, *y, *z)
+                }
+                _ => {
+                    warn!(%id, "a saved entity has no three-element `Pos`; skipped");
+                    continue;
+                }
+            };
+            let kind = MobKind::from_name(id.strip_prefix("minecraft:").unwrap_or(id));
+            if id == "minecraft:item" {
+                let Some(mc_nbt::NbtTag::Compound(item_fields)) = get("Item") else {
+                    warn!("a saved item has no `Item` compound; skipped");
+                    continue;
+                };
+                let (Some(NbtTag::String(item_name)), Some(NbtTag::Int(count))) = (
+                    item_fields.iter().find(|(k, _)| k == "id").map(|(_, v)| v),
+                    item_fields
+                        .iter()
+                        .find(|(k, _)| k == "Count")
+                        .map(|(_, v)| v),
+                ) else {
+                    warn!("a saved item has no `Item.id`/`Item.Count` pair; skipped");
+                    continue;
+                };
+                let Ok(item_id) = self.registries.items.id(item_name) else {
+                    warn!(item = %item_name, "a saved item names an unknown item; skipped");
+                    continue;
+                };
+                // `ItemStack::new` takes `(item_id, count)`. Passing them the
+                // other way round produced a stack of whatever item had the
+                // *count* as its registry id -- a saved diamond pickaxe came
+                // back as N of item 1 -- and the argument order is the whole
+                // reason this line is called out (found by the P11-08
+                // persistence test).
+                let Ok(stack) = mc_entity::stack::ItemStack::new(item_id, *count) else {
+                    warn!("a saved item's stack is not a legal stack; skipped");
+                    continue;
+                };
+                if self.spawn_item(stack, position).is_err() {
+                    warn!("a saved item could not be spawned");
+                }
+                continue;
+            }
+            let Some(kind) = kind else {
+                warn!(%id, "a saved entity names a kind this build does not model; skipped");
+                continue;
+            };
+            if self.spawn_mob(kind, to_entity(position)).is_err() {
+                warn!("a saved mob could not be spawned");
+            }
+        }
+    }
+
+    /// Roll one loot table and drop the stacks at `centre`.
+    ///
+    /// Shared by the block-break and mob-death paths; a missing table drops
+    /// nothing (vanilla's rule for a block or entity without one), and a
+    /// refused roll drops nothing rather than half-issuing.
+    fn spawn_loot_table(
+        &mut self,
+        table_id: &mc_core::ids::ResourceId,
+        centre: mc_world::Vec3,
+        context: &mc_data::loot::LootContext,
+    ) {
+        let Some(table) = self.loot.by_name(table_id) else {
+            debug!(%table_id, "no loot table");
+            return;
+        };
+        let mut rng = LootRng(&mut self.random);
+        let Ok(stacks) = mc_data::loot::roll(table, &self.loot, &mut rng, context) else {
+            // Refusals already carry what could not be modelled; the drop is
+            // skipped rather than half-issued.
+            debug!(%table_id, "the loot roll refused; nothing drops");
+            return;
+        };
+        for stack in stacks {
+            let Ok(item_id) = self.registries.items.id(&stack.item.to_string()) else {
+                warn!(item = %stack.item, "the loot table named an item the registry does not hold");
+                continue;
+            };
+            // `(item_id, count)`, in that order: see the same call in
+            // `load_chunk_entities`. Reversed, every loot drop named the item
+            // whose registry id equalled the intended count, so a broken stone
+            // block dropped 35x `minecraft:stone` instead of 1x
+            // `minecraft:cobblestone` (found by
+            // `loot_and_pickup::a_survival_break_drops_what_the_loot_table_says`).
+            let Ok(stack) = mc_entity::stack::ItemStack::new(item_id, stack.count) else {
+                // A count above the hard stack limit is the only way this fails,
+                // and it drops the stack, so it is logged rather than swallowed.
+                warn!(
+                    item = %stack.item,
+                    count = stack.count,
+                    "a loot table asked for a stack no inventory could hold; the drop is skipped"
+                );
+                continue;
+            };
+            match self.spawn_item_owned(stack, centre, None) {
+                Ok(entity) => debug!(%entity, %table_id, "loot drop spawned"),
+                Err(error) => warn!(%error, "could not spawn a block drop"),
+            }
+        }
     }
 
     /// Place whatever structure this chunk's selection picks, if any.
@@ -4233,10 +4833,107 @@ impl Game {
                 session.sent_chunks.insert(pos);
             }
             report.chunks_sent += 1;
+            // P11-08/P11-10: entities already in the streamed chunk are
+            // announced to **this** player — the pending-spawn path only
+            // reaches players who held the chunk at spawn time, so a joining
+            // player would otherwise never learn what lives here.
+            let residents: Vec<EntityId> = self
+                .entities
+                .ids()
+                .filter(|entity| {
+                    self.entities.get(*entity).is_some_and(|entity| {
+                        !entity.removed
+                            && entity.kind() != EntityKind::Player
+                            && chunk_of(entity.position.x, entity.position.z) == pos
+                    })
+                })
+                .collect();
+            for entity in residents {
+                for packet in self.entity_announce_packets(entity)? {
+                    // `packet` is already framed, so it goes through the raw
+                    // sender rather than the Packet-implementing path.
+                    self.send_raw(id, packet, report);
+                }
+            }
         } else {
             debug!(?pos, "chunk packet dropped; it will be retried next tick");
         }
         Ok(())
+    }
+
+    /// The packets that introduce one entity: `add_entity`, then the body
+    /// packet — the item stack for a drop, the spawn health for a mob.
+    ///
+    /// Shared by the broadcast phase (to every player holding the chunk) and
+    /// the chunk stream (to the player that just received the chunk).
+    fn entity_announce_packets(&self, id: EntityId) -> ServerResult<Vec<RawPacket>> {
+        let Some(entity) = self.entities.get(id) else {
+            return Ok(Vec::new());
+        };
+        let Some(uuid) = self.entities.uuid(id) else {
+            return Ok(Vec::new());
+        };
+        let type_id = match &entity.body {
+            mc_entity::EntityBody::Mob(mob) => {
+                // `entity_types.tsv` stores the full resource id, and
+                // `MobKind::name` is the bare suffix.
+                let full = format!("minecraft:{}", mob.kind.name());
+                self.registries.entities.id(&full)?
+            }
+            _ => self.registries.entities.id(mc_registry::entities::ITEM)?,
+        };
+        let position = entity.position;
+        let (yaw, pitch) = (entity.yaw, entity.pitch);
+        let add = mc_protocol::packets::play::AddEntity {
+            entity_id: id.get(),
+            uuid,
+            type_id,
+            x: position.x,
+            y: position.y,
+            z: position.z,
+            pitch: wire_angle(pitch),
+            yaw: wire_angle(yaw),
+            head_yaw: wire_angle(yaw),
+            data: 0,
+            velocity_x: 0,
+            velocity_y: 0,
+            velocity_z: 0,
+        }
+        .to_raw()?;
+        let mut out = vec![add];
+        match &entity.body {
+            mc_entity::EntityBody::Item(item) => {
+                if let Some(item_id) = item.item_id() {
+                    out.push(
+                        mc_protocol::packets::play::SetEntityData {
+                            entity_id: id.get(),
+                            entries: vec![(
+                                8,
+                                mc_protocol::packets::play::MetadataValue::ItemStack {
+                                    count: item.count(),
+                                    item_id,
+                                },
+                            )],
+                        }
+                        .to_raw()?,
+                    );
+                }
+            }
+            mc_entity::EntityBody::Mob(mob) => {
+                out.push(
+                    mc_protocol::packets::play::SetEntityData {
+                        entity_id: id.get(),
+                        entries: vec![(
+                            mc_protocol::packets::play::METADATA_INDEX_HEALTH,
+                            mc_protocol::packets::play::MetadataValue::Float(mob.kind.max_health()),
+                        )],
+                    }
+                    .to_raw()?,
+                );
+            }
+            mc_entity::EntityBody::Player | mc_entity::EntityBody::Projectile(_) => {}
+        }
+        Ok(out)
     }
 
     /// Unload chunks no player can see any more.
@@ -4285,6 +4982,15 @@ impl Game {
             }
             if self.world.unload_chunk(pos).is_some() {
                 removed += 1;
+                // AUDIT-09 B-06: the do-not-persist mark belongs to a *loaded*
+                // placeholder. Holding it after the chunk is gone leaked one entry
+                // per chunk a player ever visited (the set was only ever inserted
+                // into, never cleared), and it bought nothing: a chunk that is not
+                // loaded cannot be in `world.dirty_chunks()`, and a reload marks
+                // itself again through the same two placeholder paths. Dropping it
+                // here is what keeps the mark's meaning "this live chunk must not
+                // be written".
+                self.placeholder_without_storage.remove(&pos);
             }
             for session in self.sessions.values_mut() {
                 session.sent_chunks.remove(&pos);
@@ -4642,7 +5348,10 @@ impl Game {
                 continue;
             }
             if let Some(chunk) = self.world.chunk(pos) {
-                let data = chunk.to_chunk_data(&self.registries.blocks)?;
+                let mut data = chunk.to_chunk_data(&self.registries.blocks)?;
+                // P11-08: the chunk's live entities ride the save, so a
+                // restart puts the world back the way it was left.
+                data.entities = self.serialize_chunk_entities(pos);
                 storage
                     .storage_mut()
                     .queue_chunk_save(&Dimension::Overworld, &data)?;

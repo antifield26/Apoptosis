@@ -30,9 +30,9 @@ and [docs/operations/RUNBOOK.md](docs/operations/RUNBOOK.md)).
 
 ## Quality gates (all must pass before you push)
 
-| Gate | Command | Current state (2026-09-12) |
+| Gate | Command | Current state (2026-09-15) |
 |---|---|---|
-| Tests | `cargo test --workspace --no-fail-fast` | 1 212 passed / 0 failed / 21 ignored, 78 suites |
+| Tests | `cargo test --workspace --no-fail-fast` | 1 344 passed / 0 failed / 30 ignored, 102 suites |
 | Formatting | `cargo fmt --all -- --check` | clean |
 | Lints | `cargo clippy --workspace --all-targets -- -D warnings` | clean |
 | aarch64 | `cargo check --target aarch64-unknown-linux-gnu --workspace --all-targets` | clean |

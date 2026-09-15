@@ -265,9 +265,12 @@ pub trait Rng {
     /// 53 bits matches `java.util.Random.nextDouble()`. The numerator is below `2^53`, so `f64`
     /// represents it and the divisor exactly.
     fn next_f64(&mut self) -> f64 {
-        let high = u64::from(self.next_u32() >> 5);
-        let low = u64::from(self.next_u32() >> 6);
-        numeric::draw53((high << 26) + low) / numeric::draw53(1u64 << 53)
+        // `java.util.Random.nextDouble` draws **26 bits first, then 27**;
+        // an earlier build drew 27-then-26, which changes which rolls succeed
+        // near a boundary (AUDIT-09 D-05). The shape here is Java's own.
+        let first = u64::from(self.next_u32() >> 6); // top 26 of the 32-bit draw
+        let second = u64::from(self.next_u32() >> 5); // top 27
+        numeric::draw53((first << 27) + second) / numeric::draw53(1u64 << 53)
     }
 
     /// Whether a draw of probability `chance` succeeds.
@@ -1435,9 +1438,9 @@ fn one_roll(
     context: &LootContext,
     refusals: &mut Vec<Refusal>,
     depth: usize,
-) -> Option<ItemStackLike> {
+) -> Vec<ItemStackLike> {
     if entries.is_empty() {
-        return None;
+        return Vec::new();
     }
     let mut weights = Vec::with_capacity(entries.len());
     let mut total: i64 = 0;
@@ -1458,7 +1461,7 @@ fn one_roll(
         weights.push(weight);
     }
     if total <= 0 {
-        return None;
+        return Vec::new();
     }
     let draw = numeric::weighted_index(rng.next_f64(), total);
     // A draw of exactly `total` is impossible for a generator returning `[0, 1)`, but a
@@ -1476,11 +1479,13 @@ fn one_roll(
     resolve_entry(&entries[chosen], tables, rng, context, refusals, depth)
 }
 
-/// Turn a chosen entry into a stack.
+/// Turn a chosen entry into zero or more stacks.
 ///
-/// The entry's own conditions gate it, then its *contents* decide the base stack, then the
-/// entry's own functions apply on top. That order is the format's: a child of `alternatives`
-/// applies its functions first, and the `alternatives` entry's functions apply afterwards.
+/// A nested `minecraft:loot_table` produces **every** stack the nested roll
+/// makes (vanilla's `NestedLootTable` hands its consumer all of them); the
+/// entry's own functions apply to each produced stack, because the format
+/// allows functions on every entry type. Conditions still gate the whole
+/// entry, and refusals still mean "produce nothing".
 fn resolve_entry(
     entry: &LootEntry,
     tables: &LootTables,
@@ -1488,11 +1493,11 @@ fn resolve_entry(
     context: &LootContext,
     refusals: &mut Vec<Refusal>,
     depth: usize,
-) -> Option<ItemStackLike> {
+) -> Vec<ItemStackLike> {
     if !conditions_pass(entry.conditions(), rng, context, refusals) {
-        return None;
+        return Vec::new();
     }
-    let mut stack = match entry {
+    let mut stacks = match entry {
         LootEntry::Item { name, expand, .. } => {
             if *expand {
                 refusals.push(Refusal {
@@ -1500,18 +1505,18 @@ fn resolve_entry(
                     type_name: entry.type_name().to_owned(),
                     reason: "the entry expands a tag, which needs the tag set",
                 });
-                return None;
+                return Vec::new();
             }
-            Some(ItemStackLike::new(name.clone(), 1))
+            vec![ItemStackLike::new(name.clone(), 1)]
         }
-        LootEntry::Empty { .. } => None,
+        LootEntry::Empty { .. } => Vec::new(),
         LootEntry::Dynamic { name, .. } => {
             refusals.push(Refusal {
                 kind: "entry",
                 type_name: format!("minecraft:dynamic {name}"),
                 reason: "the contents come from a block entity, which is not modelled",
             });
-            None
+            Vec::new()
         }
         LootEntry::Tag { name, .. } => {
             refusals.push(Refusal {
@@ -1519,7 +1524,7 @@ fn resolve_entry(
                 type_name: format!("minecraft:tag {name}"),
                 reason: "expanding a tag needs the tag set, which is not supplied to a roll",
             });
-            None
+            Vec::new()
         }
         LootEntry::Sequence { .. } => {
             refusals.push(Refusal {
@@ -1528,13 +1533,16 @@ fn resolve_entry(
                 reason: "minecraft:sequence is not implemented and is not exercised by \
                          vanilla's own pack",
             });
-            None
+            Vec::new()
         }
         LootEntry::Alternatives { children, .. } => {
-            let mut chosen = None;
+            // The first child that *produces* anything wins; its stacks are the
+            // alternatives entry's stacks, and the entry's own functions apply
+            // to them below.
+            let mut chosen = Vec::new();
             for child in children {
-                if let Some(stack) = resolve_entry(child, tables, rng, context, refusals, depth) {
-                    chosen = Some(stack);
+                chosen = resolve_entry(child, tables, rng, context, refusals, depth);
+                if !chosen.is_empty() {
                     break;
                 }
             }
@@ -1555,11 +1563,11 @@ fn resolve_entry(
                     type_name: entry.type_name().to_owned(),
                     reason: "the referenced table was not supplied",
                 });
-                return None;
+                return Vec::new();
             };
             let mut out = Vec::new();
             roll_into(nested, tables, rng, context, refusals, &mut out, depth + 1);
-            out.into_iter().next()
+            out
         }
         LootEntry::Raw(_) => {
             refusals.push(Refusal {
@@ -1567,14 +1575,14 @@ fn resolve_entry(
                 type_name: entry.type_name().to_owned(),
                 reason: "this loot entry type is not implemented in this build",
             });
-            None
+            Vec::new()
         }
     };
     // Applied for every entry type, because the format allows `functions` on every entry type.
-    if let Some(stack) = stack.as_mut() {
+    for stack in &mut stacks {
         apply_functions(entry.functions(), stack, rng, context, refusals);
     }
-    stack
+    stacks
 }
 
 /// Whether every condition passes. `false` means "do not roll"; a refusal means "I do not
@@ -1808,8 +1816,13 @@ fn apply_functions(
                 };
             }
             LootFunctionKind::LimitCount { min, max } => {
+                // The jar's `LimitCount.run` resolves to `Mth.clamp(count,
+                // min, max)`: a stack below `min` is raised to `min`, not
+                // discarded. (An earlier version of this build zeroed it; the
+                // pinned test enshrining that reading was rewritten against the
+                // bytecode.)
                 if stack.count < *min {
-                    stack.count = 0;
+                    stack.count = *min;
                 } else if stack.count > *max {
                     stack.count = *max;
                 }

@@ -12,8 +12,11 @@
 //! Each stage is its own function so a failure names the stage, and they run inside one `#[test]`
 //! because the *sequence* is the claim.
 //!
+//! (Absolute: the test's working directory is the crate's, not the repository
+//! root -- AUDIT-09 D-06. Above the fence, because it is prose, not part of the command.)
+//!
 //! ```text
-//! set MC_VANILLA_DATA=target\vanilla-26.1.2\extract\data\minecraft
+//! set MC_VANILLA_DATA=%CD%\target\vanilla-26.1.2\extract\data\minecraft
 //! cargo test -p mc-server --test scenario_vanilla -- --ignored --nocapture
 //! ```
 

@@ -22,10 +22,17 @@
 //!   this phase is not the place to make it silently.
 //! - **A missing file is not an error.** Vanilla creates one on first run; a server with no
 //!   operators is a normal server.
-//! - **A malformed file is an error, and it stops the load rather than being ignored.**
-//!   Silently running with no operators because a JSON comma was wrong would look like "my
-//!   permissions stopped working" with no cause anywhere. Refusing to load, naming the file
-//!   and the problem, is the only diagnosis that helps.
+//! - **A malformed file is an error from [`OperatorList::load`], and the *caller*
+//!   decides.** The load itself refuses to guess: it names the file and the problem
+//!   and returns an error rather than returning a half-parsed list. What the server
+//!   does with that error is a separate decision, made at the call site
+//!   ([`crate::lifecycle`]): it logs the error at `error!` and boots with **no
+//!   operators**, because taking a working world offline over a comma in an operator
+//!   file is the worse failure, and the operator can read the message and fix it.
+//!   The two halves used to be described as one policy here ("it stops the load"),
+//!   which contradicted the call site (AUDIT-09 C-04); Vanilla's
+//!   `StoredUserList.load()` likewise propagates and leaves the choice to its
+//!   caller (`javap -c`: it declares `throws IOException` and catches nothing).
 //! - **A uuid is the identity, a name is not.** Names change; the file's `name` field is
 //!   carried for messages and matching is by uuid. An entry with a valid uuid and a stale
 //!   name still grants — which is Vanilla's behaviour and the reason the uuid is the key.
@@ -95,7 +102,10 @@ impl OperatorList {
     /// Load `ops.json` from a directory.
     ///
     /// A missing file yields an empty list, which is a normal server. A **malformed** file is
-    /// an error: see the module docs for why silence would be worse.
+    /// an error, and this function returns it rather than a partial list — the *policy* for
+    /// what to do about that error belongs to the caller, and `crate::lifecycle` logs it and
+    /// boots with no operators. The module documentation states both halves and why they are
+    /// separate (AUDIT-09 C-04: this doc and the call site disagreed about which it was).
     ///
     /// # Errors
     ///

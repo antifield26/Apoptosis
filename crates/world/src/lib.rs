@@ -47,7 +47,7 @@ pub mod world;
 pub use chunk::{Chunk, ChunkPos, SECTION_HEIGHT, SECTION_WIDTH};
 pub use collision::{Aabb, BlockHit, Vec3, is_solid, is_solid_or_unknown, look_vector};
 pub use ray::{BlockSampler, RegionSampler, ray_cast};
-pub use world::{BlockChange, MoveResult, World};
+pub use world::{BlockChange, MoveResult, World, chunks_a_block_can_light};
 
 /// Y range of the Vanilla overworld: sections -4..=19 cover y = -64..=319.
 pub const OVERWORLD_MIN_SECTION_Y: i8 = -4;

@@ -204,7 +204,7 @@ fn set_count_sets_and_adds() {
 }
 
 #[test]
-fn limit_count_clamps_and_discards() {
+fn limit_count_clamps_both_ways() {
     let mut table = table_with(vec![item("minecraft:stick", 1)], 1.0);
     let entry = LootEntry::Item {
         name: id("minecraft:stick"),
@@ -239,7 +239,64 @@ fn limit_count_clamps_and_discards() {
         conditions: Vec::new(),
     };
     let out = roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context()).expect("rolls");
-    assert_eq!(out[0].count, 0, "below min means an empty stack");
+    // The jar's `LimitCount.run` is `Mth.clamp(count, min, max)`: a stack below
+    // `min` is raised to `min`, not discarded. An earlier build zeroed it and a
+    // test enshrined that reading; AUDIT-09 (D-03) re-derived the bytecode and
+    // this assertion now pins the jar's own semantics.
+    assert_eq!(
+        out[0].count, 1,
+        "below min clamps up to min, like Mth.clamp"
+    );
+}
+
+#[test]
+fn a_nested_table_produces_every_stack_it_rolls() {
+    // AUDIT-09 D-02: vanilla's NestedLootTable hands its consumer every stack;
+    // an earlier build kept only the first, and the one nested-table test used
+    // a single-entry table, so the loss was invisible. Two pools, one stack
+    // each: both must survive.
+    let inline = LootTable {
+        name: None,
+        kind: "minecraft:inline".to_owned(),
+        random_sequence: None,
+        pools: vec![
+            LootPool {
+                rolls: CountProvider::Constant(1.0),
+                bonus_rolls: CountProvider::Constant(0.0),
+                entries: vec![item("minecraft:stick", 1)],
+                conditions: Vec::new(),
+                functions: Vec::new(),
+            },
+            LootPool {
+                rolls: CountProvider::Constant(1.0),
+                bonus_rolls: CountProvider::Constant(0.0),
+                entries: vec![item("minecraft:coal", 1)],
+                conditions: Vec::new(),
+                functions: Vec::new(),
+            },
+        ],
+        functions: Vec::new(),
+    };
+    let mut table = table_with(
+        vec![LootEntry::LootTable {
+            name: None,
+            inline: Some(Box::new(inline)),
+            weight: 1,
+            quality: 0,
+            conditions: Vec::new(),
+            functions: Vec::new(),
+        }],
+        1.0,
+    );
+    table.pools[0].rolls = CountProvider::Constant(1.0);
+    let out = roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context()).expect("rolls");
+    let mut names: Vec<String> = out.iter().map(|stack| format!("{}", stack.item)).collect();
+    names.sort_unstable();
+    assert_eq!(
+        names,
+        vec!["minecraft:coal", "minecraft:stick"],
+        "every stack of a nested roll reaches the output, not just the first"
+    );
 }
 
 #[test]

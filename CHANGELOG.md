@@ -11,6 +11,207 @@ entry is the release candidate matching the workspace version (`0.1.0` in
 [Cargo.toml](Cargo.toml)); it is **published** as tag `v0.1.0-rc.1` with built
 artifacts, and no later version has been released.
 
+## Unreleased — Phase 11 (Living World)
+
+P11 is the phase where the world starts moving on its own: mobs spawn, walk, chase
+and hit back, blocks drop what their loot table says, drops lie on the ground and
+are picked up, a dead player leaves their inventory behind, and all of it survives
+a restart. Every gameplay constant added here carries its source in the module that
+owns it — jar bytecode, jar data pack, or a named simplification — because this
+phase is where a plausible-looking wrong number would be hardest to see.
+
+### P11-01 — natural mob spawning, with the rules measured rather than recalled
+
+`Game::run_spawn_cycle` samples the chunk ring around each ready player every tick
+and applies the jar-derived rules in `mc_server::spawn`: the monster light test
+against the sampled `0..=7` bound under the current sky darkening, the animal rule's
+raw brightness, the `ANIMALS_SPAWNABLE_ON` tag, the 24-block minimum distance, and
+the per-category caps. `spawn.rs`'s module documentation is the standard the rest of
+the phase follows: each constant states whether it came from `javap` bytecode, the
+jar's own `data/minecraft` (spawner tables, `dimension_type`, `timeline/day.json`
+for the time authority), or this project's choice.
+
+Two pieces of folklore the bytecode corrected, both now asserted by tests rather
+than described:
+
+- **Animals read raw brightness with no sky darkening** (`getRawBrightness(pos, 0)`),
+  so a moonlit surface passes the animal rule. The night test asserts hostiles spawn
+  and deliberately does **not** assert that passives cannot.
+- **A creature never despawns.** Both `checkDespawn` discard paths are gated on
+  `removeWhenFarAway`, which a persistent category returns false for (AUDIT-09 C-01,
+  fixed here with the bytecode offsets in the comment).
+
+### P11-02 / P11-03 — the AI drives the world, and a turned mob is broadcast as turned
+
+`tick_entity_ai` is no longer a no-op. Each tick, per mob in ascending id, the hook
+builds a `MobObservation` and calls `MobAi::decide`; `Wander`/`Chase`/`Flee` steer
+horizontally at the kind's walk speed with yaw on the vanilla `atan2(-x, z)`
+convention, and `Attack` resolves only for `MobAttackStyle::Melee` (zombie 3.0,
+spider 2.0) through `apply_damage` and the existing `after_damage` path. A creeper's
+explosive intent is refused, so its point-blank 49.0 figure can never land as a
+melee hit.
+
+The move broadcast now snapshots **yaw** as well as position across the phase
+boundary, so a turned mob rides `move_entity_pos_rot` and an unchanged heading keeps
+`move_entity_pos`. A 128-packet-per-tick budget with a rotating cursor bounds a
+pathological crowd by *deferring* moves rather than growing a queue.
+
+`RandomSource` cannot implement `mc-data`'s or `mc_entity`'s one-method `Rng`
+traits (orphan rule), so `AiRng` and `LootRng` in `game.rs` forward draws onto the
+game's own seeded stream — which is what makes a spawn or a loot roll reproducible
+from `(seed, tick)`.
+
+### P11-04 — the loot table is the drop authority
+
+`packs.rs` loads `loot_table/` from every pack into `LootTables`, and survival block
+breaks roll `minecraft:blocks/<stem>` while mob deaths roll
+`minecraft:entities/<kind>`. A block or entity with no table drops nothing, which is
+vanilla's own rule. The context carries **no enchantments** (the no-silk-touch
+reading of a bare hand) and `survives_explosion: true` for a break, so every
+enchantment-gated pool refuses rather than assuming level 0.
+
+**A defect found here by the first test written against it**, and the reason this
+phase's test work was worth doing before the commit: `ItemStack::new(item_id, count)`
+was called with the arguments **reversed** in `Game::spawn_loot_table` and
+`Game::load_chunk_entities`, so a broken stone block dropped 35 × `minecraft:stone`
+instead of 1 × `minecraft:cobblestone`, and a restored dropped item came back as
+whatever item had the count as its registry id. A green 1 325-test suite did not
+notice; `loot_and_pickup::a_survival_break_drops_what_the_loot_table_says` did, on
+its first run. The test was itself written with the same reversed order first and had
+to be corrected, which is the sharpest illustration available of the failure this
+project's audit discipline exists to name.
+
+### P11-05 / P11-09 — merging and pickup
+
+`merge_ground_stacks` joins same-item stacks within half a block into the **older**
+entity, up to the inventory's own stack limit, so the merge and an insert cannot
+disagree about how much fits; the leftover stays on the ground when nothing merged.
+`collect_items_into_players` gives a delay-expired stack to the nearest ready player
+within one block through `add_stack`, leaves the remainder on the ground when the
+inventory is full, and acks the new slot contents with a container-slot update.
+`loot_and_pickup.rs` asserts each of those, including both negative cases — 0.8
+blocks apart does not merge, and a different item never does. The merge radius is a
+**named simplification** (a 0.5-block sphere where vanilla tests box overlap).
+
+### P11-06 — attacking, and the hurt window
+
+Serverbound `interact` is decoded fully for all three wire types, and type 1 (attack)
+applies `FIST_ATTACK_DAMAGE` to the named entity through `damage_entity`, which
+refuses a hit inside the 10-tick invulnerability window. Players gained the same
+window as `Session::hurt_invuln_ticks`, decremented each tick and checked before a
+mob's melee lands, so a mob cannot take a player from full to dead in one window.
+`player_attack.rs` pins the damage, the refusal inside the window and the expiry
+after it. A held item's damage is **not** used (the fist figure applies whatever is
+held) and a swing outside the interaction range is **not** refused; both are named
+gaps in the parity matrix rather than implied by silence.
+
+### P11-07 — a death leaves the inventory on the ground
+
+`after_damage` drains the dead player's inventory with `PlayerInventory::drain_all`
+and spawns each stack as a ground item entity at the death position, which is when
+vanilla drops it. The later `respawn` therefore finds nothing and double-drops
+nothing. XP orbs are a named gap: an orb is not an entity kind in this build, so the
+experience reset happens at respawn with nothing on the ground.
+
+### P11-08 — entities ride the chunk save
+
+`serialize_chunk_entities` writes `id`, `Pos`, `Motion`, `Health` and (for a drop)
+`Item` into the chunk's saved NBT, and `load_chunk_entities` spawns them back on the
+next load with every skip reason logged — an earlier version of that function
+documented "logged and skipped" while several of its `continue`s were silent, which
+is how a save quietly loses entities. `entity_persistence.rs` proves the round trip
+by building a **second `Game` on the same `world_dir`**, which is the only form of
+the claim that is not the encoder agreeing with the decoder written beside it, and
+asserts that a joining player is told about a chunk's resident entities **on the join
+tick** (the announcement in `send_chunk`; the pending-spawn path would only reach
+them a tick later).
+
+**The limit is real and recorded rather than papered over**: this build saves dirty
+chunks and leaves generated ones clean, and spawning an entity does not mark a chunk
+dirty — so an entity in a chunk no player has modified is not persisted. Vanilla's
+save set is not the same set. `AUDIT-09-REMEDIATION.md` carries it as an open
+divergence.
+
+### AUDIT-09 — five lanes, thirty-seven findings, and what was actually fixed
+
+A read-only audit ran against `81ae385` in five lanes. Lane C re-derived every
+spawn-rule constant from the jar (all checked out); Lane D verified the `MobKind`
+attribute table with `javap` and found the cow's movement speed 25% high (D-01) and
+two loot-roll defects (nested tables losing stacks, `limit_count` zeroing instead of
+clamping). Lane B found the one **High** defect that mattered most: a stored but
+unreadable chunk was **generated over**, which is unrecoverable world loss.
+
+Dispositions are in `docs/audits/AUDIT-09-REMEDIATION.md` and the evidence in
+`docs/audits/AUDIT-09-FINDINGS.md`. Closed in this landing, each with the instrument
+that pins it:
+
+- **B-01** (High, data loss): a chunk whose read fails is recorded in
+  `unreadable_chunks` and never generated over for the session.
+- **B-05** (Medium): light-cache invalidation missed the **diagonal** chunk at a
+  corner, in both `World::invalidate_light_around` and the server's `light_update`
+  queue. Both now iterate one rule, `mc_world::chunks_a_block_can_light`, whose
+  completeness is a property of enumerating all nine offsets rather than of
+  remembering the diagonal. Proven by a corner test and by an exhaustive comparison
+  against an oracle derived independently from the margin interval.
+- **B-06** (Low): the do-not-persist mark was never cleared on unload, so it grew by
+  one entry per chunk ever visited. Now an exact invariant — the mark's size equals
+  the loaded chunk count — is asserted.
+- **A-01** (Medium): `DEFAULT_INBOUND_CAPACITY` promised a per-connection inbound
+  bound that does not exist (the real design is one shared 1 024-entry queue); the
+  constant and `EVENT_QUEUE` now say what the server does and name the fairness
+  consequence, and a per-connection queue is the recorded follow-up.
+- **A-02** (Medium): twelve packet ids had no assertion. Closed as a **property** —
+  a new test reads `src/ids.rs` and requires **every** constant to match the
+  jar-extracted table in its own state and direction (104 constants), so the
+  thirteenth unasserted id cannot happen. Falsified by transposing an id and by
+  renaming a state module.
+- **C-04** (Medium): `ops.rs` said a malformed `ops.json` stops the load while the
+  lifecycle logs and continues. Policy chosen: **log and continue**; the module now
+  states both halves, and `javap` on `StoredUserList.load` shows vanilla leaves the
+  choice to its caller too.
+- **C-06** (Low): the `execute as` comment said permission does not travel with the
+  new source; `select` attaches each matched player's own level, so it does. Reworded.
+- **D-04** (Medium): deliberately **not** applied. `AGGRO_RADIUS = 16.0` is
+  jar-measured as `Mob.createMobAttributes`'s default `FOLLOW_RANGE`, and the zombie
+  overrides it to a jar-measured 35.0. Retargeting the zombie would change the
+  difficulty of every night, so the measurement, the consequence and the decision are
+  recorded and the change is left to the owner.
+- **D-06** (Low): the documented `MC_VANILLA_DATA` value was relative, and `cargo
+  test` runs a test binary with its working directory set to the *package*, so it
+  never resolved. Fixed at all six sites, with the reason in the canonical document.
+- **E-01** (High): the matrices were stale. This file had no P11 entries;
+  `TEST-MATRIX.md` reported a run from three commits earlier; `PARITY-MATRIX.md`'s
+  KD-16 row still said **"no mob ever spawns"** and its tick-order row that the
+  seeded RNG was unused. Eleven rows were corrected in all, several found only while
+  fixing the three named ones.
+- **Stale in-code docs**: `spawn_item`, the drop path and the `Interact` arm carried
+  comments describing pickup, merging, entity announcement and an entity-id base
+  offset that had all stopped being true.
+
+Left **open**, each with the experiment that would close it: A-03 (a decoder accepts
+trailing bytes — a hard refusal risks breaking a real client, so detect-and-report is
+the design and a sweep over the 19 000 captured packet bodies is the instrument),
+B-02 (the location-word ordering test passes under a reordered write and needs an
+ordering-observable instrument), B-04 (the audit's own scanner reads `///` and never
+`//!`, so the module docs — where this repository puts its most load-bearing prose —
+are the prose it does not read), C-08 (the command dispatcher tree is rebuilt per
+command), D-07 (the NBT writer encodes a heterogeneous list instead of refusing it),
+E-02 (`MC_FIXTURE_DIR`'s environment half is untested), E-03's second half (the
+hostile-realistic `TestClient` mode that sends serverbound play 13 every tick), E-05
+(the scanner's helper names are opaque).
+
+One finding was **contradicted rather than confirmed**: B-03 claimed the scanner
+omits the word `invariant`, and the only doc-claims scanner in the tree
+(`target/scan_doc_claims_copy.py`) has had it in the pattern list all along. It is
+recorded as not re-derived, and the honest follow-up is B-04's — commit the
+instrument, so that "which scanner" stops being unanswerable.
+
+**Falsification, not assertion.** Every fix above was re-broken to watch its test
+fail, and the tree restored byte-exact with a SHA-256 check: the save's entity list,
+the chunk-stream announcement, the diagonal invalidation, the unload cleanup, a
+transposed packet id, and a renamed state module. A test that has never been seen to
+fail is a test whose failure mode is unknown.
+
 ## Unreleased — Phase 10 (client compatibility and rendering)
 
 ### P10-01 — client-capture rig

@@ -37,6 +37,52 @@ pub struct BlockChange {
     pub new_id: i32,
 }
 
+/// Every chunk whose light a block change at world `(x, z)` can alter.
+///
+/// Light is computed over a chunk **plus a one-block margin on all four sides**
+/// (see [`World::compute_light`]), so a block belongs to the light of every chunk
+/// whose margin contains it: the chunk it is in, the neighbour it is within one
+/// block of, and — the case an earlier version of this rule missed — the
+/// **diagonal** neighbour when the block is within one block of a corner on both
+/// axes. A torch at local `(0, 0)` lights the corner of the chunk at
+/// `(x - 1, z - 1)`, whose margin reads both of those columns.
+///
+/// AUDIT-09 B-05: both `World::invalidate_light_around` and the server's
+/// `light_update` queue previously spelled this out as four independent `if`s over
+/// the four edges, which cannot express the diagonal and so left one chunk's
+/// cached light stale after a corner change — and left the client drawing it. The
+/// rule lives here, once, and both callers iterate it.
+///
+/// The enumeration is over all nine offsets with each axis tested separately, so
+/// completeness is a property of the shape rather than of remembering four more
+/// `if`s: a new edge case cannot be forgotten because there is nothing to
+/// remember.
+#[must_use]
+pub fn chunks_a_block_can_light(pos: ChunkPos, x: i32, z: i32) -> Vec<ChunkPos> {
+    let local_x = x.rem_euclid(SECTION_WIDTH);
+    let local_z = z.rem_euclid(SECTION_WIDTH);
+    let last = SECTION_WIDTH - 1;
+    let mut out = Vec::with_capacity(9);
+    for dx in -1..=1 {
+        for dz in -1..=1 {
+            let within_x = match dx {
+                -1 => local_x == 0,
+                0 => true,
+                _ => local_x == last,
+            };
+            let within_z = match dz {
+                -1 => local_z == 0,
+                0 => true,
+                _ => local_z == last,
+            };
+            if within_x && within_z {
+                out.push(ChunkPos::new(pos.x + dx, pos.z + dz));
+            }
+        }
+    }
+    out
+}
+
 /// A block accessor with a one-chunk memo; see [`World::block_cursor`].
 ///
 /// Owned separately from `World` so the borrow it holds can be scoped: the light engine reads the world
@@ -290,28 +336,18 @@ impl World {
 
     /// Drop cached light for the chunks a change at `(x, z)` can affect.
     ///
-    /// The changed chunk always, plus whichever neighbour's one-block margin reads across the border the block
-    /// sits within one block of.
+    /// The changed chunk always, plus every neighbour whose one-block margin reads
+    /// across the border the block is within one block of. The rule lives in
+    /// [`chunks_a_block_can_light`] so this and the server's `light_update` queue
+    /// cannot disagree about it.
     ///
     /// This is **invalidation, not incremental relighting**: the whole chunk is dropped and recomputed when
     /// next needed, where vanilla relights only the region a change can reach. It is correct, and cheaper than
     /// what it replaces by the ratio of how often a chunk is sent to how often it changes — but a torch placed
     /// in a large lit chunk still costs a full recompute.
     fn invalidate_light_around(&mut self, pos: ChunkPos, x: i32, z: i32) {
-        self.light.remove(&pos);
-        let local_x = x.rem_euclid(16);
-        let local_z = z.rem_euclid(16);
-        if local_x == 0 {
-            self.light.remove(&ChunkPos::new(pos.x - 1, pos.z));
-        }
-        if local_x == 15 {
-            self.light.remove(&ChunkPos::new(pos.x + 1, pos.z));
-        }
-        if local_z == 0 {
-            self.light.remove(&ChunkPos::new(pos.x, pos.z - 1));
-        }
-        if local_z == 15 {
-            self.light.remove(&ChunkPos::new(pos.x, pos.z + 1));
+        for affected in chunks_a_block_can_light(pos, x, z) {
+            self.light.remove(&affected);
         }
     }
 

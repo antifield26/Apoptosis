@@ -117,8 +117,15 @@ impl Game {
         };
 
         // The inner command goes back through the dispatcher, so its **own** permission check
-        // applies. That is what makes `/execute as @a run stop` safe: `as` changes who the
-        // command runs as, not what they are allowed to do.
+        // applies -- and the source it is checked against is the one the chain produced.
+        // `select` attaches each matched session's **own** permission level
+        // (`with_permission(session.permission)`), so `/execute as @a run <op command>`
+        // succeeds only for the operators in `@a`: the permission travels with the new
+        // source rather than staying with the invoker. An earlier version of this comment
+        // said the opposite ("`as` changes who the command runs as, not what they are
+        // allowed to do"), which is the reverse of what the code does and was read that way
+        // (AUDIT-09 C-06). That the transfer is also Vanilla's behaviour is AUDIT-09 lane C's
+        // finding; it is not re-derived here, and `execute_e2e` pins our side.
         let dispatcher = mc_command::Dispatcher::new(Self::build_command_tree());
         match dispatcher.parse(&command, &inner_source) {
             mc_command::CommandOutcome::Parsed(parsed) => {

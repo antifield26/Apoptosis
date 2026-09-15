@@ -3130,6 +3130,17 @@ pub enum PlayIntent {
         /// Hand id: 0 main, 1 off.
         hand: i32,
     },
+    /// Player interaction with an entity (serverbound `minecraft:interact`).
+    ///
+    /// Wire type 1 is an **attack**, 0 an interaction, 2 an interaction at a
+    /// coordinate. All three decode here so a body is never silently half-read;
+    /// the server only *acts* on the attack.
+    Interact {
+        /// Entity being attacked or used.
+        entity: i32,
+        /// Wire interaction type: 0 interact, 1 attack, 2 interact-at.
+        kind: i32,
+    },
     /// Block placement / item use on a block.
     UseItemOn {
         /// Hand id: 0 main, 1 off.
@@ -3289,6 +3300,30 @@ impl PlayIntent {
             serverbound::play::SWING => Some(Self::Swing {
                 hand: reader.read_varint()?,
             }),
+            serverbound::play::INTERACT => {
+                let entity = reader.read_varint()?;
+                let kind = reader.read_varint()?;
+                // Types 0 and 2 carry a target coordinate and a hand after the
+                // entity id; type 1 (attack) stops after `sneaking`. Reading
+                // each shape fully is what keeps a body from being half-decoded.
+                match kind {
+                    1 => {
+                        let _sneaking = reader.read_bool()?;
+                    }
+                    2 => {
+                        let _x = reader.read_f32()?;
+                        let _y = reader.read_f32()?;
+                        let _z = reader.read_f32()?;
+                        let _hand = reader.read_varint()?;
+                        let _sneaking = reader.read_bool()?;
+                    }
+                    _ => {
+                        let _hand = reader.read_varint()?;
+                        let _sneaking = reader.read_bool()?;
+                    }
+                }
+                Some(Self::Interact { entity, kind })
+            }
             serverbound::play::USE_ITEM_ON => Some(Self::UseItemOn {
                 hand: reader.read_varint()?,
                 position: reader.read_i64()?,

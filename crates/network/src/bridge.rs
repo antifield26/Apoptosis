@@ -61,10 +61,18 @@ impl ConnectionIds {
     }
 }
 
-/// Capacity of the inbound (connection → game loop) queue.
+/// Capacity of a **per-connection** inbound (connection → game loop) queue.
 ///
-/// Movement packets arrive at up to 20/s per player; 64 gives several ticks of
-/// slack before the drop policy starts shedding.
+/// **Not wired, and this constant does not describe the running server**
+/// (AUDIT-09 A-01). Inbound events for *every* connection share one bounded queue
+/// — [`mc_server::lifecycle::EVENT_QUEUE`], 1 024 entries — which the game loop
+/// drains at a bounded rate; see that constant for the design and for the
+/// fairness consequence of sharing one queue between connections. Nothing reads
+/// this value, so leaving a per-connection number here unqualified read as a
+/// guarantee the server does not make. Kept rather than deleted because it is the
+/// measured figure a per-connection queue would want (movement packets arrive at
+/// up to 20/s per player, so 64 is several ticks of slack), and the follow-up is
+/// to give each connection its own queue and use it.
 pub const DEFAULT_INBOUND_CAPACITY: usize = 64;
 
 /// Capacity of the outbound (game loop → connection) queue.

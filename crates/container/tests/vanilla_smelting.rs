@@ -10,8 +10,11 @@
 //! baseline recipes were community knowledge, and the jar states their real values. If the
 //! conversion disagrees with the jar on iron, either the loader or the convertor is wrong.
 //!
+//! (Absolute: the test's working directory is the crate's, not the repository
+//! root -- AUDIT-09 D-06. Above the fence, because it is prose, not part of the command.)
+//!
 //! ```text
-//! set MC_VANILLA_DATA=target\vanilla-26.1.2\extract\data\minecraft
+//! set MC_VANILLA_DATA=%CD%\target\vanilla-26.1.2\extract\data\minecraft
 //! cargo test -p mc-container --test vanilla_smelting -- --ignored --nocapture
 //! ```
 

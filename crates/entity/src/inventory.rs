@@ -285,6 +285,24 @@ impl PlayerInventory {
     /// through right-click equip logic, which is a click-handler concern rather
     /// than an `add` concern. A stack larger than one slot holds is spread
     /// across slots rather than dropped.
+    /// Remove and return every stored stack, leaving the inventory empty.
+    ///
+    /// The death-drop path uses this: the stacks become ground entities at the
+    /// death position, and the later `respawn` call then finds nothing to drop
+    /// a second time.
+    #[must_use]
+    pub fn drain_all(&mut self) -> Vec<ItemStack> {
+        let mut out = Vec::new();
+        for slot in &mut self.slots {
+            if !slot.is_empty() {
+                out.push(*slot);
+                *slot = ItemStack::EMPTY;
+            }
+        }
+        out
+    }
+
+    /// Insert `stack`, filling partial stacks first, and return what did not fit.
     pub fn add_stack(&mut self, mut stack: ItemStack) -> ItemStack {
         if stack.is_empty() {
             return ItemStack::EMPTY;

@@ -387,5 +387,17 @@ impl TestClient {
     }
 }
 
-/// Assert helper: protocol constant used by tests.
+/// The protocol version this test client expects, for assertions.
+///
+/// **This is deliberately the server's own constant**, and on its own that would
+/// make every assertion built on it vacuous — a client and server that agreed on a
+/// wrong version would pass (AUDIT-09 E-03). What makes the chain meaningful is that
+/// the constant is pinned from outside it:
+/// `mc_protocol::ids::PROTOCOL_VERSION` is asserted against the 26.1.2 jar's own
+/// `version.json`, committed at
+/// `crates/test-support/fixtures/protocol/version.json`, by
+/// `packet_ids::the_protocol_version_matches_the_jars_own_version_json`. So the
+/// chain is: the jar states 775 → our constant must equal it → this value (aliasing
+/// that constant) is what the status response must report. A test using this alias is
+/// only as strong as that pin, which is why the pin exists and names the artifact.
 pub const EXPECTED_PROTOCOL: i32 = ids::PROTOCOL_VERSION;

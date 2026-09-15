@@ -621,6 +621,20 @@ fn chunks_outside_the_view_are_unloaded_and_re_streamed_on_return() {
         !harness.game.world().is_loaded(home),
         "a clean chunk no player can see must be unloaded, not kept forever"
     );
+    // AUDIT-09 B-06: the do-not-persist mark must be held by exactly the loaded
+    // chunks. In a borrowing game (`Game::with_seed`) every chunk that loads is a
+    // placeholder -- there is no storage to read, so `may_generate` is false and
+    // every path through `load_or_create_chunk` marks it -- which makes the mark's
+    // size an exactly checkable invariant rather than a rough bound.
+    //
+    // The defect this pins: the set was only ever inserted into, so a player who
+    // walked unloaded nothing and it grew by one entry per chunk ever visited.
+    assert_eq!(
+        harness.game.placeholder_chunk_count(),
+        harness.game.world().chunk_positions().count(),
+        "the do-not-persist mark is held by the loaded chunks and nothing else; a larger \
+         number means the set is accumulating entries for chunks that are gone"
+    );
 
     // Coming back must re-stream it: the unload drops the `sent_chunks` entry, so
     // a hole in the client's view cannot survive.

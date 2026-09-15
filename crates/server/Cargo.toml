@@ -21,6 +21,7 @@ mc-data = { path = "../data" }
 serde_json.workspace = true
 mc-entity = { path = "../entity" }
 mc-network = { path = "../network" }
+mc-nbt = { path = "../nbt" }
 mc-persistence = { path = "../persistence" }
 mc-protocol = { path = "../protocol" }
 mc-registry = { path = "../registry" }

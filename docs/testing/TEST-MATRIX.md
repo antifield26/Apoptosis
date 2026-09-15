@@ -5,22 +5,40 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 212 passed, 0 failed, 21 ignored** across **78 suites**, re-derived from
-`cargo test --workspace --no-fail-fast` on the P10-03 tree. The count has moved
-1 191 -> 1 194 -> 1 196 -> 1 206 -> 1 207 -> 1 212 as tests were added: three from the Audit 07
-remediation, two Audit 08 coverage tests, ten from the `mc-capture-rig` crate (P10-01), one regression
-test for the compression-transition defect (P10-02), and the synced-registry work (P10-03), which also
-replaced a magic registry count in `e2e_login_play` with the rule it was standing in for. The 21 ignored = 7 differential suites (15 tests, jar-gated) + `pi_profile` 4 +
-`tick_baseline` 2 — all run on demand (see the last section).
+Totals: **1 344 passed, 0 failed, 30 ignored** across **102 suites**, re-derived from
+`cargo test --workspace --no-fail-fast` on the P11-04..09 tree. The count has moved
+1 194 -> 1 196 -> 1 206 -> 1 207 -> 1 212 -> 1 325 -> 1 344: three from the Audit 07
+remediation, two Audit 08 coverage tests, ten from the `mc-capture-rig` crate
+(P10-01), one regression test for the compression-transition defect (P10-02), the
+synced-registry work (P10-03), then P10-04..11 and P11-01..03, and nineteen from
+this landing — eight in `loot_and_pickup`, five in `player_attack`, two in
+`entity_persistence`, two in `light_cache`, one closing the packet-id gap
+(AUDIT-09 A-02) and one pinning the protocol version to the jar's own `version.json`
+(AUDIT-09 E-03). The 30 ignored = the differential (jar-gated) suites listed in the
+last section, plus `pi_profile` 4 and `tick_baseline` 2 — all run on demand.
 
-**Every per-crate count below was re-measured with `cargo test -p <crate> --lib`** while updating this
-total, and five were wrong: `mc-protocol` said 126, `mc-world` 103, `mc-command` 27, `mc-data` 4 and
-`mc-worldgen` 64, where the real figures are 103, 31, 89, 126 and 81. Each stated value turned out to be
-**another crate's** count, so the figures were right and the names were rotated (Audit 07 remediation;
-the audit itself missed it — see `docs/audits/AUDIT-07-REMEDIATION.md` §"what the audit missed"). The lib
-counts sum to 972, the 5 doc-tests and 235 named-suite tests complete the 1 212
-(972 + 5 + 235 = 1 212; re-derived from the run log with a cargo-metadata
-target-to-package mapping, 0 of 78 suites unattributed).
+**Every per-crate count below was re-measured with `cargo test -p <crate> --lib`**
+while updating this total. The 17 lib counts sum to **1 019**, the 5 doc-tests and
+the 320 named-suite tests complete the 1 344 (1 019 + 5 + 320 = 1 344, the third
+figure derived from the run total and the other two rather than counted
+independently). Both Audit 07's method and its lesson still apply: the figures must
+be re-measured per crate, because five of them once turned out to be **another
+crate's** count with the names rotated (`docs/audits/AUDIT-07-REMEDIATION.md`
+§"what the audit missed").
+
+**Limitation, stated rather than left as a trap.** The per-*area* lib counts below
+are measured and current. The named-suite counts in the middle column were measured
+in the P10-03 round; the suites this landing touched are updated
+(`packet_ids` 4 -> 6, `light_cache` 8, `loot_and_pickup` 8, `entity_persistence` 2,
+`player_attack` 5, `entity_lifecycle` 9), and the P10/P11 suites the old table never
+listed (`natural_spawn` 4, `ai_wiring` 5, and the server suites added since) are
+added. A re-measure of **every** named suite is outstanding, and the two obvious
+instruments both fail: `target/debug/deps` accumulates binaries from every past
+session (listing them summed to 6 385 against a real total of 1 344), and counting
+`#[test]` in the sources over-counts (348 against the derived 320, because some test
+files contain `#[test]` sequences inside template strings). The authoritative figures
+are the totals above and the per-crate lib counts; a per-suite figure without a note
+is from the P10-03 round.
 
 This file replaced an accumulator that had grown one per-phase section per
 phase (255 rows, six duplicated "Bugs found" tables). The per-phase historical
@@ -30,24 +48,23 @@ each suite proves, and the deduplicated defect history.
 
 ## Current coverage by area
 
-Counts are from the 2026-09-12 run log. Named integration suites are counted
-explicitly; the remaining per-crate lib binaries (core, nbt, registry,
-simulation, redstone, server, test-support and the rest) complete the 1 212
-total and are itemised in the run log rather than here.
+Counts are from the P11-04..09 run, except the named-suite figures noted above as
+from the P10-03 round. Named integration suites are counted explicitly; the
+remaining per-crate lib binaries are itemised above and complete the 1 344 total.
 
-| Area | Named suites (count) | What they prove |
+| Area | Named suites (lib count) | What they prove |
 |---|---|---|
-| Protocol | `packet_ids` (4), `fixtures` (4), `mc-protocol` lib (103) | every packet id matches the jar's registration bytecode (incl. the `chat_command`=7 regression, L7); golden wire bytes for frames/handshake/NBT; hostile VarInt/frame corpora; compression bomb rejection |
-| Network | `mc-network` lib (16), `keepalive` (1), `login_tolerance` (2), `e2e_login_play` (6) | connection lifecycle, admission limits, keepalive timeout kick, malformed input drops only that connection, login-phase tolerance, full offline login over a real socket |
-| Persistence | `mc-persistence` lib (74), `anvil_fixture` (9), `corruption` (16), `restart` (7) | region/NBT codec edges, byte-identical palette repack, bit-flip → typed error with no partial publish, save→close→reopen semantics, atomic tmp→rename pinned by `a_failed_commit_leaves_the_live_file_untouched` (Audit 07 finding H1), dirty-flag retry on failure |
-| Survival & world | `mc-world` lib (31), `vanilla_chunk` (4), `survival_e2e` (7), `network_game_bridge` (4) | collision/ray/hostile movement guards; a real vanilla chunk walks and round-trips losslessly; join/stream budgets, break/place validation, death/respawn, save-reload over real sockets |
-| Entities & simulation | `mc-entity` lib (128 + 4 doc), `entity_lifecycle` (9) | ids never reused, timers/effects/projectiles/pathfinding invariants, JDK-25-verified RNG, phase ordering, determinism replays, spawn/despawn/chunk-unload lifecycle |
-| Inventory & containers | `mc-container` lib (130), `container_e2e` (6), `block_entity_e2e` (6), `inventory_duplication` (5) | click/swap/drag conservation, stale-state resync, computed slots, retirement reporting; real-socket click round trips; 2 000-click floods cannot create or destroy items — the flood over a **capped slot** reaches the over-limit path the chest flood cannot, so a discarded overflow is caught (Audit 07 finding M1) |
+| Protocol | `packet_ids` (6), `fixtures` (4), `mc-protocol` lib (110) | every packet id matches the jar's registration bytecode (incl. the `chat_command`=7 regression, L7); **every constant in `ids.rs` is compared against the jar-extracted table, in its own state and direction** (104 of them, AUDIT-09 A-02); **the protocol version is compared against the jar's own `version.json`** (AUDIT-09 E-03); golden wire bytes for frames/handshake/NBT; hostile VarInt/frame corpora; compression bomb rejection |
+| Network | `mc-network` lib (18), `keepalive` (1), `login_tolerance` (2), `e2e_login_play` (6) | connection lifecycle, admission limits, keepalive timeout kick, malformed input drops only that connection, login-phase tolerance, full offline login over a real socket |
+| Persistence | `mc-persistence` lib (74), `anvil_fixture` (9), `corruption` (16), `restart` (7) | region/NBT codec edges, byte-identical palette repack, bit-flip → typed error with no partial publish, save→close→reopen semantics, atomic tmp→rename pinned by `a_failed_commit_leaves_the_live_file_untouched` (Audit 07 finding H1), dirty-flag retry on failure. **Gap, AUDIT-09 B-02**: `the_location_word_is_written_last` asserts the end state, so it passes under a reordered write — the ordering needs an instrument that observes the sequence |
+| Survival & world | `mc-world` lib (41), `light_cache` (8), `vanilla_chunk` (4), `survival_e2e` (7), `network_game_bridge` (4) | collision/ray/hostile movement guards; a real vanilla chunk walks and round-trips losslessly; join/stream budgets, break/place validation, death/respawn, save-reload over real sockets; **light-cache invalidation drops the diagonal chunk at a corner**, compared against an oracle derived independently from the margin interval (AUDIT-09 B-05) |
+| Entities & simulation | `mc-entity` lib (135 + 4 doc), `entity_lifecycle` (9), `entity_persistence` (2), `player_attack` (5), `natural_spawn` (4), `ai_wiring` (5) | ids never reused, timers/effects/projectiles/pathfinding invariants, JDK-25-verified RNG, phase ordering, determinism replays, spawn/despawn/chunk-unload lifecycle; **a second `Game` on the same `world_dir` gets the saved mobs and drops back**, and a joining player is told about a resident entity on the join tick (P11-08); **one swing takes exactly the fist damage, a second inside the 10-tick window is refused** (P11-06); day/night spawn rules and the 24-block minimum (P11-01) |
+| Inventory & containers | `mc-container` lib (130), `container_e2e` (6), `block_entity_e2e` (6), `inventory_duplication` (5), `loot_and_pickup` (8) | click/swap/drag conservation, stale-state resync, computed slots, retirement reporting; real-socket click round trips; 2 000-click floods cannot create or destroy items — the flood over a **capped slot** reaches the over-limit path the chest flood cannot, so a discarded overflow is caught (Audit 07 finding M1); **the loot table is the drop authority** — a survival break drops the table's item (the fixture names cobblestone for stone, so a block-echoing path fails), creative and table-less blocks drop nothing, a mob death rolls `entities/<kind>`, a ready stack is collected, nearby stacks merge into the older one, and a full inventory leaves the leftover on the ground (P11-04/05/09) |
 | Redstone | `propagation` (17), `budget_exhaustion` (7), `determinism` (6), `golden_circuits` (5), `power_model` (8), `world_integration` (4) | budgeted propagation reaches unbounded-run state, full change-vector determinism, golden circuits, power bounds; the model is complete and (deliberately) not tick-wired |
-| Commands & data | `mc-command` lib (89), `command_e2e` (11), `execute_e2e` (9), `function_e2e` (14), `mc-data` lib (126), `pack_discovery` (10), `pack_loading_e2e` (8) | permission-before-grammar, every declared command reachable, malformed commands never disconnect, execute modifier chains, function recursion/privilege bounds, pack discovery and world-pack loading |
+| Commands & data | `mc-command` lib (89), `command_e2e` (11), `execute_e2e` (9), `function_e2e` (14), `mc-data` lib (127), `pack_discovery` (10), `pack_loading_e2e` (8) | permission-before-grammar, every declared command reachable, malformed commands never disconnect, execute modifier chains, function recursion/privilege bounds, pack discovery and world-pack loading |
 | World generation | `mc-worldgen` lib (81), `worldgen_e2e` (7), `structure_golden` (9), `seed_derivation` (8), `golden` (6), `determinism` (7) | seed determinism, terrain invariants, structure placement goldens, existing-world-first generation |
-| Server foundations | `mc-server` lib (44), `mc-core` (10), `mc-nbt` (16 + 1 doc), `mc-registry` (15), `mc-simulation` (27), `mc-redstone` (64), `mc-test-support` (4) | config guardrails, backup/verify/restore, shutdown barrier, operational metrics snapshot, error taxonomy, NBT vectors, the registry table itself, fixture helpers, the tick scheduler, the redstone model's own invariants |
-| Security (cross-cutting) | classes live inside the suites above | hostile VarInt/frames + random-byte connections (protocol/network libs), slow-drip bound, registry reservation cap, 300-command flood (`command_e2e`), hostile op paths (`ops_e2e`, 7), 2 000-click conservation (`inventory_duplication`), hostile disk state (`corruption`, 16), config bounds (`mc-server` lib) |
+| Server foundations | `mc-server` lib (61), `mc-core` (10), `mc-nbt` (16 + 1 doc), `mc-registry` (21), `mc-simulation` (27), `mc-redstone` (64), `mc-test-support` (4), `mc-capture-rig` (11) | config guardrails, backup/verify/restore, shutdown barrier, operational metrics snapshot, error taxonomy, NBT vectors, the registry table itself (including the `MC_FIXTURE_DIR` precedence half), fixture helpers, the tick scheduler, the redstone model's own invariants, the client-capture rig |
+| Security (cross-cutting) | classes live inside the suites above | hostile VarInt/frames + random-byte connections (protocol/network libs), slow-drip bound, registry reservation cap, 300-command flood (`command_e2e`), hostile op paths (`ops_e2e`, 7), 2 000-click conservation (`inventory_duplication`), hostile disk state (`corruption`, 16), config bounds (`mc-server` lib), **a decoded packet body with trailing bytes is accepted** (AUDIT-09 A-03, open) |
 
 ## Differential suites (jar-gated, `--ignored`)
 
