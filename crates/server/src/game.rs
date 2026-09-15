@@ -2409,15 +2409,21 @@ impl Game {
         let position = entity.position;
         entity.removed = true;
         // P11-04: a dead mob's loot table is the drop authority, same as
-        // blocks. Looting-enchanted drops are not modelled (the context carries
-        // no enchantments), so rare `killed_by_player`-gated pools refuse.
+        // blocks. Looting-enchanted bonuses are not modelled (the level map is
+        // empty), so a looting-gated rare pool reads level 0 and stays closed.
         if let Some(kind) = kind {
             let stem = kind.name();
             if let Ok(table_id) =
                 mc_core::ids::ResourceId::parse(&format!("minecraft:entities/{stem}"))
             {
+                // Owner decision (§2 of the audit handoff): a bare hand is a
+                // **known, unenchanted** tool, not an unknown one. `None` means
+                // "tool unknown", which turned every enchantment-gated condition
+                // into a refusal and made a dead cow drop nothing; an empty map
+                // is "known, level 0", which the module's own docs define, so
+                // the conditions *evaluate* instead.
                 let context = mc_data::loot::LootContext {
-                    enchantment_levels: None,
+                    enchantment_levels: Some(BTreeMap::new()),
                     survives_explosion: None,
                     block_properties: None,
                     luck: None,
@@ -4437,8 +4443,12 @@ impl Game {
         else {
             return;
         };
+        // Same owner decision as the death context above: a player's hand is
+        // known and unenchanted, so `match_tool` reads level 0 instead of
+        // refusing the whole table — which is how a bare-handed stone break
+        // reaches the cobblestone child of its `alternatives`.
         let context = mc_data::loot::LootContext {
-            enchantment_levels: None,
+            enchantment_levels: Some(BTreeMap::new()),
             survives_explosion: Some(true),
             block_properties: None,
             luck: None,
