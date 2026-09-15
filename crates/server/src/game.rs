@@ -177,6 +177,7 @@ use tracing::{debug, info, trace, warn};
 /// Both `level_chunk_with_light` and `light_update` carry exactly this, so it is built once here rather than
 /// twice. A drift between two copies would be invisible — both packets stay well-formed, and the client renders
 /// whichever arrived last.
+#[derive(Debug, Clone, Default)]
 struct LightFields {
     sky_mask: Vec<u32>,
     block_mask: Vec<u32>,
@@ -188,11 +189,13 @@ struct LightFields {
 
 /// Split computed light into the masks and arrays the wire carries (P10-05).
 ///
-/// Every light section is accounted for: light section `i` is world section `i - 1`, so there is one below the
-/// world and one above it, and both hold no blocks — full sky, no block light. A section that is uniformly the
-/// layer's default (15 for sky, 0 for block) goes in the matching `empty_*` mask and needs no array; anything
-/// else gets a 2 048-byte array and a bit in the matching mask. That is what a real server does and what keeps
-/// the packet small.
+/// Light section `i` is world section `i - 1`, so there is one below the world and one above it. Sections are
+/// classified three ways, and **which three matters**: an all-dark section goes in the matching `empty_*` mask
+/// (the client reads that as "no light here"), a partially lit section carries its 2 048-byte array, and a
+/// **fully lit sky section is left unmentioned** — the client defaults an unmentioned sky section to fully
+/// lit, while the empty mask would tell it the section is dark. That distinction is the dead-black surface
+/// finding from the acceptance session; marking fully lit sections empty painted patches of the surface dark.
+/// (Block light has no such default, so all-dark block sections are marked empty honestly.)
 ///
 /// # Errors
 ///
@@ -223,20 +226,107 @@ fn light_fields(
         let index = u32::try_from(index).map_err(|_| {
             ServerError::Invariant("more light sections than a mask can index".to_owned())
         })?;
-        if sky.uniform() == Some(mc_world::light::MAX_LIGHT) {
-            fields.empty_sky_mask.push(index);
-        } else {
+        push_light_section(&mut fields, index, &sky, &block);
+    }
+    Ok(fields)
+}
+
+/// Classify one light section into the masks and arrays the wire carries.
+///
+/// The three ways the client understands a light section: an **all-dark**
+/// section goes in the matching empty mask, which tells the client the section
+/// holds no light; a **partially lit** section carries its full 2 048-byte
+/// array; a **fully lit sky** section is left *unmentioned* -- the client's
+/// default for a sky section it has no data for is fully lit, and marking one
+/// "empty" instead tells it the section is dark, which painted the dead-black
+/// surface patches the acceptance session found (the air cells a surface face
+/// samples live in the section above). Vanilla's own chunk packets leave
+/// fully-lit sections unmentioned too: its captured chunk (0, 0) carries sky
+/// data only for the two terrain sections, marks the bedrock section empty,
+/// and says nothing about the twenty-one fully-lit air sections above it.
+fn push_light_section(fields: &mut LightFields, index: u32, sky: &LightArray, block: &LightArray) {
+    match sky.uniform() {
+        Some(0) => fields.empty_sky_mask.push(index),
+        Some(mc_world::light::MAX_LIGHT) => {}
+        _ => {
             fields.sky_mask.push(index);
             fields.sky.push(sky.as_bytes().to_vec());
         }
-        if block.uniform() == Some(0) {
-            fields.empty_block_mask.push(index);
-        } else {
-            fields.block_mask.push(index);
-            fields.block.push(block.as_bytes().to_vec());
+    }
+    if block.uniform() == Some(0) {
+        fields.empty_block_mask.push(index);
+    } else {
+        fields.block_mask.push(index);
+        fields.block.push(block.as_bytes().to_vec());
+    }
+}
+
+#[cfg(test)]
+mod light_fields_tests {
+    use super::push_light_section;
+    use super::{LightArray, LightFields};
+    use mc_world::light::MAX_LIGHT;
+
+    fn fields() -> LightFields {
+        LightFields {
+            sky_mask: Vec::new(),
+            block_mask: Vec::new(),
+            empty_sky_mask: Vec::new(),
+            empty_block_mask: Vec::new(),
+            sky: Vec::new(),
+            block: Vec::new(),
         }
     }
-    Ok(fields)
+
+    // The acceptance finding, pinned at the encoding layer: a fully-lit sky
+    // section must be **unmentioned** (the client's default for a sky section
+    // it has no data for is fully lit), not marked "empty" -- the empty mask
+    // tells the client the section is dark, and a surface whose face samples
+    // such a section rendered dead black in the live acceptance session.
+    #[test]
+    fn a_fully_lit_sky_section_is_left_unmentioned() {
+        let mut fields = fields();
+        push_light_section(
+            &mut fields,
+            7,
+            &LightArray::filled(MAX_LIGHT),
+            &LightArray::filled(0),
+        );
+        assert!(
+            fields.empty_sky_mask.is_empty(),
+            "a fully lit section must not be marked empty: {fields:?}"
+        );
+        assert!(
+            fields.sky_mask.is_empty(),
+            "a uniform section needs no data array: {fields:?}"
+        );
+        assert!(fields.sky.is_empty());
+        // the block side of the same section is all-dark, which is empty
+        assert!(fields.empty_block_mask.contains(&7), "{fields:?}");
+    }
+
+    #[test]
+    fn an_all_dark_sky_section_is_marked_empty() {
+        let mut fields = fields();
+        push_light_section(
+            &mut fields,
+            7,
+            &LightArray::filled(0),
+            &LightArray::filled(0),
+        );
+        assert!(fields.empty_sky_mask.contains(&7), "{fields:?}");
+    }
+
+    #[test]
+    fn a_partially_lit_sky_section_carries_its_array() {
+        let mut fields = fields();
+        let mut sky = LightArray::filled(MAX_LIGHT);
+        sky.set(0, 0, 0, 3);
+        push_light_section(&mut fields, 7, &sky, &LightArray::filled(0));
+        assert!(fields.sky_mask.contains(&7), "{fields:?}");
+        assert_eq!(fields.sky.len(), 1, "one data array follows the mask");
+        assert!(fields.empty_sky_mask.is_empty(), "{fields:?}");
+    }
 }
 
 /// How far the spawn search looks, in blocks, and how finely.

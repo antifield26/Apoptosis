@@ -70,8 +70,14 @@ pub const DEFAULT_INBOUND_CAPACITY: usize = 64;
 /// Capacity of the outbound (game loop → connection) queue.
 ///
 /// Chunk bursts are the largest writer: a view-distance-8 join needs ~289 chunk
-/// packets. 512 keeps a join from stalling while still bounding memory per player.
-pub const DEFAULT_OUTBOUND_CAPACITY: usize = 512;
+/// packets, and since the light fix every surface chunk also carries ~9
+/// 2 048-byte sky arrays, so the burst peaks near 1 000 packets when the
+/// client is still booting its render pipeline and drains slowly. 512 was
+/// measured overflowing on a real client's join (the acceptance session kicked
+/// a player with `Outbound queue overflow`); 1 024 absorbs the burst while the
+/// exhaustion defence still bounds memory per player — a client that never
+/// reads is disconnected at the same threshold as before, just later.
+pub const DEFAULT_OUTBOUND_CAPACITY: usize = 1024;
 
 /// The sending half the game loop keeps for one connection.
 #[derive(Debug, Clone)]
