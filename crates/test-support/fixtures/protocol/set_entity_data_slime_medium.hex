@@ -1,0 +1,18 @@
+# set_entity_data body for a summoned minecraft:slime (NBT Size:2b),
+# captured from a vanilla 26.1.2 dedicated server.
+#
+# Provenance: tools/chat-capture/chicken_experiment.py, session
+# target/chicken-capture/bodies/061828_s2c_play_99.bin (one client in the
+# world; the summon ran through the server console at the player).
+#
+# a7 09              entity id 1191 (VarInt)
+# 09 03              index 9, serializer 3 (float)
+# 41 10 00 00        9.0 — the slime's max health, big-endian IEEE 754
+# 10 01              index 16, serializer 1 (VarInt)
+# 03                 the slime's size slot: NBT Size 2 sends 3, i.e. Size + 1
+# ff                 terminator
+#
+# Together with the small slime: NBT Size 1 sends health 4.0 and size slot 2;
+# NBT Size 2 sends health 9.0 and size slot 3. Health tracks the square of the
+# *wire* size slot ((size+1)^2 = 4.0, 9.0) — two measured points, no more.
+a7 09 09 03 41 10 00 00 10 01 03 ff

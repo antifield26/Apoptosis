@@ -3818,4 +3818,35 @@ governance round, 2026-09-12). Build and release procedure:
   per-phase reports distilled into this file and retired to git history, and
   the documentation-audit scripts committed to `tools/docs-audit/`.
 
+### P10-07 closed — the entity metadata table, measured from the server's own sends
+
+The last open Phase 10 task. The slot indices live in per-class
+`defineSynchedData` code, so the jar cannot say which slots a spawn emits —
+but a console `summon` with one client in the world makes a vanilla server
+enumerate them. Two sessions did that
+(`tools/chat-capture/entity_experiment.py`, then
+`chicken_experiment.py` after the first run's summoned creeper **killed the
+client mid-run** and took the chicken, sheep and slime rows with it), and the
+bodies were read back through this repo's own `SetEntityData` decoder, which
+refuses any body it cannot walk to a clean terminator.
+
+- **Every kind Phase 11 spawns measures the same load-bearing pair: health =
+  index 9, float serializer** — now `METADATA_INDEX_HEALTH`, so a mob spawn
+  that sends only health matches vanilla's spawn shape (default-variant mobs
+  omit everything else).
+- Per-type slots are pinned as `(index, serializer)` pairs in
+  `crates/test-support/fixtures/registry/entity_metadata.tsv`: sheep wool byte
+  (18/0), cow variant (18/23), pig variant (19/28), chicken variants (18/30,
+  19/31), creeper fuse (16/1), slime size (16/1 — NBT `Size + 1`, health its
+  square at both measured sizes: 4.0/9.0).
+- Two whole slime bodies are committed goldens
+  (`crates/protocol/tests/entity_metadata_golden.rs`, 8 tests): decode,
+  byte-perturbation, re-encode round-trip, terminator-truncation refusal, and
+  the table pinned row by row against the constants the send path will use.
+- **Honest boundaries, recorded in the matrix**: the table covers the 9 Phase
+  11 kinds plus the item and incidental natural spawns, not all 157 types; the
+  value widths of the variant serializers (8, 20, 23, 28, 30, 31) were not
+  solved and their rows record pairs only; one earlier-capture body stays
+  unattributed.
+
 [`v0.1.0-rc.1`]: https://github.com/antifield26/Apoptosis/releases/tag/v0.1.0-rc.1

@@ -1,0 +1,70 @@
+# Vanilla 26.1.2 entity metadata (set_entity_data) slots, per entity type,
+# measured from the server's own sends — not extracted from the jar.
+#
+# Why the instrument is the capture and not the jar: the slot indices are
+# per-class code (defineSynchedData), so a jar grep cannot say which slots a
+# spawn actually emits or at which index. A console `summon` with one client in
+# the world makes the vanilla server enumerate them; the capture reads them
+# back through this repo's own SetEntityData decoder, which rejects anything it
+# cannot fully consume, so every row here walked to a clean terminator.
+#
+# Sessions (capture directories are not tracked):
+#   entity-capture  tools/chat-capture/entity_experiment.py — nine summons
+#                   (chicken and sheep produced nothing: the summoned creeper
+#                   killed the client mid-run) plus a night's natural spawns
+#   chicken-capture tools/chat-capture/chicken_experiment.py — the daylight
+#                   fill-in run for chicken, sheep and slime (sizes 1/2/4)
+#   bodies-lit      the earlier natural-spawn capture (slime, sheep, cow)
+#
+# Widths: 1 = one byte, 4 = four bytes, V = VarInt, ? = width not solved from
+# the capture (the walk records the pair and stops — the slot table is the
+# deliverable, not the value decode). Serializer ids are the captured wire ids;
+# only 0 (byte), 1 (varint), 3 (float) and 7 (item stack) are modelled here.
+#
+# Format: <entity type>	<index>	<serializer>	<width>	<note>
+#
+# --- shared LivingEntity slots (present on every mob kind captured) ---
+# index 9, serializer 3, width 4: max health, e.g. slime 4.0/9.0, zombie 20.0
+# index 6, serializer 20, width ?: on every fresh spawn (re-sync bodies in
+#   bodies-lit omit it), suspected pose; values not decoded
+# --- item (minecraft:item, the dropped stack) ---
+# index 8, serializer 7: the item stack — the slot this server already sends
+minecraft:item	8	7	stack (count, item, empty component patch)
+# --- falling block ---
+# serializer 10 (index 8) measured as a fixed 8 bytes across 6 bodies
+#
+# The table below is the fresh-spawn union per kind. Shared rows (9/3 and 6/20)
+# are listed once per kind for grep-ability; that duplication is deliberate.
+minecraft:zombie	0	0	1	flags byte
+minecraft:zombie	6	20	?	on every fresh spawn
+minecraft:zombie	9	3	4	health
+minecraft:zombie	15	0	1	byte slot
+minecraft:zombie	16	8	?	equipment-adjacent byte slot? values not decoded
+minecraft:skeleton	0	0	1	flags byte
+minecraft:skeleton	6	20	?	on every fresh spawn
+minecraft:skeleton	8	0	1	byte slot (zombie lacks it)
+minecraft:skeleton	9	3	4	health
+minecraft:skeleton	15	0	1	byte slot
+minecraft:creeper	6	20	?	on every fresh spawn
+minecraft:creeper	9	3	4	health
+minecraft:creeper	15	0	1	byte slot
+minecraft:creeper	16	1	V	fuse/state varint
+minecraft:spider	6	20	?	on every fresh spawn
+minecraft:spider	9	3	4	health
+minecraft:spider	15	0	1	byte slot
+minecraft:spider	16	0	1	byte slot (climbing)
+minecraft:pig	6	20	?	on every fresh spawn
+minecraft:pig	9	3	4	health
+minecraft:pig	19	28	?	variant slot (26.x pig variants); width unsolved
+minecraft:chicken	6	20	?	on every fresh spawn
+minecraft:chicken	9	3	4	health
+minecraft:chicken	18	30	?	variant slot; width unsolved
+minecraft:chicken	19	31	?	second variant slot; width unsolved
+minecraft:sheep	6	20	?	on every fresh spawn
+minecraft:sheep	9	3	4	health
+minecraft:sheep	18	0	1	byte slot, value 15 observed on one natural sheep
+minecraft:cow	6	20	?	on every fresh spawn
+minecraft:cow	9	3	4	health
+minecraft:cow	18	23	?	variant slot (26.x cow variants); width unsolved
+minecraft:slime	9	3	4	health = (size slot)^2 at the two measured sizes
+minecraft:slime	16	1	V	size slot = NBT Size + 1

@@ -2596,7 +2596,6 @@ pub const METADATA_TYPE_BYTE: i32 = 0;
 pub const METADATA_TYPE_VARINT: i32 = 1;
 /// Wire type id for [`MetadataValue::Float`].
 pub const METADATA_TYPE_FLOAT: i32 = 3;
-
 /// Wire type id for [`MetadataValue::ItemStack`].
 ///
 /// Read off the wire rather than from the serializer table alone: a captured `set_entity_data` for a dropped item
@@ -2605,6 +2604,15 @@ pub const METADATA_TYPE_ITEM_STACK: i32 = 7;
 
 /// Terminator that ends a metadata entry list.
 pub const METADATA_TERMINATOR: u8 = 0xFF;
+
+/// The metadata **slot index** a living entity's health rides on: **9**, with [`METADATA_TYPE_FLOAT`].
+///
+/// Measured, not read off a table: every mob kind Phase 11 spawns (zombie, skeleton, creeper, spider, pig,
+/// chicken, sheep, cow, slime) sent its spawn health at index 9 with the float type in the console-summon
+/// captures, across several hundred bodies whose walk ended on a clean terminator. The full per-type slot table
+/// lives in `crates/test-support/fixtures/registry/entity_metadata.tsv`, and
+/// `crates/protocol/tests/entity_metadata_golden.rs` pins both the constant and two whole captured bodies.
+pub const METADATA_INDEX_HEALTH: u8 = 9;
 
 /// One entity metadata value.
 ///
