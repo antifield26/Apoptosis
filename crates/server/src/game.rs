@@ -527,13 +527,18 @@ const ENTITY_GRAVITY: f64 = 0.04;
 /// `crates/server/tests/registry_ids.rs`.
 pub const PLAINS_BIOME_ID: u32 = 40;
 
-/// The `chat_type` **wire** value a plain message uses: **0**, proven by a real
-/// client (the acceptance session rendered the welcome on screen with this
-/// value). An open question is recorded beside it: a vanilla server's console
-/// `say` went out as **5**, while the alphabetical `chat_type` registry both
-/// servers send puts `minecraft:chat` first -- so vanilla's id-for-name mapping
-/// does not match a plain positional read of the payload, and nobody has
-/// explained the difference yet. Our 0 is what the real client accepted.
+/// The `chat_type` **wire** value a plain message uses: **1**.
+///
+/// The wire encoding of a registry-friendly chat type is **1-based** -- the
+/// payload index plus one, with 0 meaning "absent". The evidence, from two
+/// independent instruments that agree: (a) a real 26.1.2 server's console
+/// `say` went out as **5** while `minecraft:say_command` sits at payload index
+/// **4** of the chat_type registry both servers send, and (b) our first sends
+/// used **0**, and every joined real client failed with `DecoderException` on
+/// the welcome message (two independent sessions) until the offset landed.
+/// The earlier retraction of this fix was based on misdating that first
+/// session's evidence: its `[CHAT] Welcome` line predates the DisguisedChat
+/// conversion, so it says nothing about the disguised_chat id.
 ///
 /// **Resolved from the payload this server sends**, because `minecraft:chat_type` is one of the registries in it
 /// -- the registry order is "ending at `minecraft:chat_type`". So a jar extraction would be the
@@ -542,7 +547,7 @@ pub const PLAINS_BIOME_ID: u32 = 40;
 ///
 /// `crates/server/tests/registry_ids.rs` resolves it the way it resolves [`PLAINS_BIOME_ID`], which is the check
 /// that keeps this from being another unverified constant.
-pub const CHAT_TYPE_CHAT: i32 = 0;
+pub const CHAT_TYPE_CHAT: i32 = 1;
 
 /// One connected player's server-side state.
 /// One connected player's simulation state.
