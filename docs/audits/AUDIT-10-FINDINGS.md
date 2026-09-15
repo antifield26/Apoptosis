@@ -109,10 +109,10 @@ planted data (the data-loss path the guard closes).
   in-tree to name it and to state what it now deliberately does *not* assert
   (the cow, until fix 2).
 - **C-02 · confirmed, already corrected ·** the handoff's two dangling
-  references in Rust comments (the promised `vanilla_loot.rs`; the
-  `docs/testing/PARITY-MATRIX.md` mis-path) are absent from the pushed tree;
-  the *lesson* stands — `check_links.py` reads markdown links only, so Rust
-  comments need their own grep, and this audit greps them.
+  references in Rust comments (the promised `vanilla_loot.rs`, and the
+  `docs/testing/…` mis-path of the parity matrix) are absent from the pushed
+  tree; the *lesson* stands — `check_links.py` reads markdown links only, so
+  Rust comments need their own grep, and this audit greps them.
 - **C-03 · the totals drift by construction.** After AUDIT-10's two additions
   (the two-attacker test; the B-01 test; the two `#[ignore]`d differential
   tests) the tree measures **1346 passed / 0 failed / 32 ignored / 104

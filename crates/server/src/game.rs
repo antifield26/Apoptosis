@@ -2616,11 +2616,11 @@ impl Game {
                 pitch: wire_angle(pitch),
                 yaw: wire_angle(yaw),
                 head_yaw: wire_angle(yaw),
-                // A dropped stack has no variant fields.
+                // A dropped stack has no variant fields, and our entities
+                // spawn at rest: vanilla's `LpVec3` encodes a stationary
+                // movement as one zero byte.
                 data: 0,
-                velocity_x: 0,
-                velocity_y: 0,
-                velocity_z: 0,
+                movement: (0.0, 0.0, 0.0),
             }
             .to_raw()?;
             if self.broadcast_chunk(chunk_of(position.x, position.z), &packet, report) > 0 {
@@ -4917,9 +4917,7 @@ impl Game {
             yaw: wire_angle(yaw),
             head_yaw: wire_angle(yaw),
             data: 0,
-            velocity_x: 0,
-            velocity_y: 0,
-            velocity_z: 0,
+            movement: (0.0, 0.0, 0.0),
         }
         .to_raw()?;
         let mut out = vec![add];

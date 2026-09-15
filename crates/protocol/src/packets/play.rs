@@ -838,7 +838,7 @@ pub struct ChunkSection {
 /// a degree), a `VarInt` data field and three `i16` velocities (in 1/8000 of a block per tick). **Those widths sum
 /// to 52 bytes**, and the first `add_entity` body a real 26.1.2 server sent through the capture rig is exactly
 /// 52 bytes: `crates/test-support/fixtures/protocol/add_entity_slime.hex`, whose type id is 117, which the table
-/// names `minecraft:slime`.
+/// names `minecraft:slime`. The movement field rides vanilla's `LpVec3` — see [`write_lp_vec3`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct AddEntity {
     /// Entity id, unique within the connection.
@@ -861,12 +861,117 @@ pub struct AddEntity {
     pub head_yaw: i8,
     /// Object data: the variant fields of a non-living entity, `0` for a living one.
     pub data: i32,
-    /// Velocity X, in 1/8000 of a block per tick.
-    pub velocity_x: i16,
-    /// Velocity Y, in 1/8000 of a block per tick.
-    pub velocity_y: i16,
-    /// Velocity Z, in 1/8000 of a block per tick.
-    pub velocity_z: i16,
+    /// The entity's movement, encoded at vanilla's lower precision — a real
+    /// 26.1.2 client **refused our packet when this carried the old velocity
+    /// triple**, "found 5 bytes extra".
+    pub movement: (f64, f64, f64),
+}
+
+/// Vanilla's `LpVec3`: a 26.x movement vector at "lower precision".
+///
+/// Bytecode-read from the client jar (`net.minecraft.network.LpVec3`, per the
+/// `Vec3.LP_STREAM_CODEC` bootstrap): a stationary vector is **one byte** of
+/// zero; anything else writes scale bits, three 15-bit quantized deltas and a
+/// `VarInt` magnitude tail. The rounding, the threshold and the bit layout are
+/// the bytecode's own; a plausible-looking approximation here would be another
+/// wire rejection.
+///
+/// # Errors
+///
+/// [`ServerError::Protocol`] never for these field types; the signature
+/// matches the neighbouring writers.
+pub fn write_lp_vec3(writer: &mut PacketWriter, movement: &(f64, f64, f64)) -> ServerResult<()> {
+    // `sanitize`: NaN becomes zero; everything else is clamped into the range
+    // the 44-bit packing can represent.
+    let sanitize = |value: f64| {
+        if value.is_nan() {
+            0.0
+        } else {
+            value.clamp(-1.717_986_918_3e10, 1.717_986_918_3e10)
+        }
+    };
+    let (x, y, z) = (
+        sanitize(movement.0),
+        sanitize(movement.1),
+        sanitize(movement.2),
+    );
+    let abs_max = x.abs().max(y.abs()).max(z.abs());
+    // The stationary threshold: `2^-15`, exactly the bytecode's
+    // `3.051944088384301E-5`.
+    if abs_max < 3.051_944_088_384_301e-5 {
+        writer.write_u8(0);
+        return Ok(());
+    }
+    let magnitude = abs_max.ceil() as i64;
+    // The two low bits carry `(scale & 3)`; a scale whose low bits are nonzero
+    // sets the `| 4` continuation marker, and the rest rides the `VarInt`.
+    let has_extra = (magnitude & 3) != 0;
+    let low = if has_extra {
+        (magnitude & 3) | 4
+    } else {
+        magnitude
+    };
+    // `pack`: 15 bits of `[-1, 1]` as `round((d * 0.5 + 0.5) * 32766)`.
+    let pack = |value: f64| ((value * 0.5 + 0.5) * 32_766.0).round() as i64;
+    let combined = low
+        | (pack(x / abs_max.ceil()) << 3)
+        | (pack(y / abs_max.ceil()) << 18)
+        | (pack(z / abs_max.ceil()) << 33);
+    writer.write_u8((combined & 0xFF) as u8);
+    writer.write_u8(((combined >> 8) & 0xFF) as u8);
+    // The low 32 bits of the 48-bit composition, as a bit pattern: the top
+    // bit is set for magnitudes whose scale reaches into it, so the signed
+    // conversion must preserve the pattern rather than the value.
+    let high = ((combined >> 16) & 0xFFFF_FFFF) as u32 as i32;
+    writer.write_i32(high);
+    if has_extra {
+        writer.write_varint(i32::try_from((magnitude >> 2) & 0x3FFF_FFFF).unwrap_or(0));
+    }
+    Ok(())
+}
+
+/// The read half of [`write_lp_vec3`], for tests that decode a captured body
+/// and re-encode it.
+///
+/// # Errors
+///
+/// [`ServerError::Protocol`] when the input ends early, a `VarInt` is
+/// malformed, or a nonzero movement carries a zero magnitude.
+#[allow(
+    clippy::cast_precision_loss // 15-bit values into f64; the loss is unreachable
+)]
+pub fn read_lp_vec3(reader: &mut PacketReader<'_>) -> ServerResult<(f64, f64, f64)> {
+    let unpack = |packed: i64| {
+        let value = packed & 0x7FFF;
+        let value = value.min(32_766);
+        value as f64 * 2.0 / 32_766.0 - 1.0
+    };
+    let low = reader.read_u8()?;
+    if low == 0 {
+        return Ok((0.0, 0.0, 0.0));
+    }
+    let next = reader.read_u8()?;
+    let high = reader.read_i32()?;
+    let combined =
+        i64::from(low) | (i64::from(next) << 8) | ((i64::from(high) & 0xFFFF_FFFF) << 16);
+    let magnitude_low = combined & 7;
+    let scale = if magnitude_low & 4 != 0 {
+        let rest = i64::from(reader.read_varint()?);
+        ((rest << 2) & 0x3FFF_FFFC) | (magnitude_low & 3)
+    } else {
+        magnitude_low & 3
+    };
+    if scale == 0 {
+        return Err(ServerError::Protocol(
+            "lp_vec3: a nonzero movement carries a zero scale".to_owned(),
+        ));
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let scale_f = scale as f64;
+    let x = unpack((combined >> 3) & 0x7FFF) * scale_f;
+    let y = unpack((combined >> 18) & 0x7FFF) * scale_f;
+    let z = unpack((combined >> 33) & 0x7FFF) * scale_f;
+    Ok((x, y, z))
 }
 
 impl AddEntity {
@@ -889,13 +994,13 @@ impl AddEntity {
         writer.write_f64(self.x);
         writer.write_f64(self.y);
         writer.write_f64(self.z);
+        // The movement rides vanilla's `LpVec3`, between the position and the
+        // rotations — exactly the bytecode's order.
+        write_lp_vec3(writer, &self.movement)?;
         writer.write_i8(self.pitch);
         writer.write_i8(self.yaw);
         writer.write_i8(self.head_yaw);
         writer.write_varint(self.data);
-        writer.write_i16(self.velocity_x);
-        writer.write_i16(self.velocity_y);
-        writer.write_i16(self.velocity_z);
         Ok(())
     }
 
@@ -905,20 +1010,25 @@ impl AddEntity {
     ///
     /// [`ServerError::Protocol`] when the input ends early or a `VarInt` is malformed or too long.
     pub fn decode(reader: &mut PacketReader<'_>) -> ServerResult<Self> {
+        let entity_id = reader.read_varint()?;
+        let uuid = reader.read_uuid()?;
+        let type_id = reader.read_varint()?;
+        let x = reader.read_f64()?;
+        let y = reader.read_f64()?;
+        let z = reader.read_f64()?;
+        let movement = read_lp_vec3(reader)?;
         Ok(Self {
-            entity_id: reader.read_varint()?,
-            uuid: reader.read_uuid()?,
-            type_id: reader.read_varint()?,
-            x: reader.read_f64()?,
-            y: reader.read_f64()?,
-            z: reader.read_f64()?,
+            entity_id,
+            uuid,
+            type_id,
+            x,
+            y,
+            z,
+            movement,
             pitch: reader.read_i8()?,
             yaw: reader.read_i8()?,
             head_yaw: reader.read_i8()?,
             data: reader.read_varint()?,
-            velocity_x: reader.read_i16()?,
-            velocity_y: reader.read_i16()?,
-            velocity_z: reader.read_i16()?,
         })
     }
 }

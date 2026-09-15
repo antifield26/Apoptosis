@@ -94,16 +94,44 @@ fn add_entity_round_trips_through_our_own_codec() {
         yaw: -20,
         head_yaw: 30,
         data: 0,
-        velocity_x: 0,
-        velocity_y: -100,
-        velocity_z: 250,
+        // A nonzero movement exercises the full `LpVec3` ladder (scale bytes,
+        // three 15-bit deltas); the round trip pins the composition exactly.
+        movement: (-0.25, 3.0, 1.5),
     };
     let mut writer = PacketWriter::new();
     entity.encode_into(&mut writer).expect("encodes");
     let out = writer.finish();
     let mut reader = PacketReader::new(&out);
-    assert_eq!(AddEntity::decode(&mut reader).expect("decodes"), entity);
+    let back = AddEntity::decode(&mut reader).expect("decodes");
     assert_eq!(reader.remaining(), 0);
+    // `LpVec3` is deliberately lossy (15 bits per delta against the magnitude),
+    // so the round trip is asserted within one quantization step rather than by
+    // exact float equality — which is what the wire actually promises.
+    let tolerance = 3.0 / 32_766.0 + 1.0e-9;
+    let (dx, dy, dz) = (
+        back.movement.0 - entity.movement.0,
+        back.movement.1 - entity.movement.1,
+        back.movement.2 - entity.movement.2,
+    );
+    assert!(
+        dx.abs() <= tolerance && dy.abs() <= tolerance && dz.abs() <= tolerance,
+        "movement {entity:?} round-tripped to {back:?}, beyond the 15-bit quantization"
+    );
+    // The rest of the body is exact; the position doubles are not quantized,
+    // so their equality is compared bit for bit.
+    #[allow(clippy::float_cmp)]
+    let positions_equal = back.x == entity.x && back.y == entity.y && back.z == entity.z;
+    assert!(
+        positions_equal,
+        "the position doubles round-tripped exactly"
+    );
+    assert_eq!(back.entity_id, entity.entity_id);
+    assert_eq!(back.uuid, entity.uuid);
+    assert_eq!(back.type_id, entity.type_id);
+    assert_eq!(back.pitch, entity.pitch);
+    assert_eq!(back.yaw, entity.yaw);
+    assert_eq!(back.head_yaw, entity.head_yaw);
+    assert_eq!(back.data, entity.data);
 }
 
 #[test]
