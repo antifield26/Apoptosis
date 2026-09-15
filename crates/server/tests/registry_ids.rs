@@ -118,7 +118,7 @@ fn the_dimension_type_id_this_server_sends_is_the_overworld() {
 /// payload rather than the jar. The wire value is the payload index **plus one** (a registry-friendly id is
 /// 1-based, and 0 would read as "absent"): a real 26.1.2 capture has `minecraft:say_command` at payload
 /// index **4** and its console say went out as **5**, and our own `0` was what made two joined real clients
-/// fail with a DecoderException on the welcome message (the acceptance rounds).
+/// fail with a `DecoderException` on the welcome message (the acceptance rounds).
 #[test]
 fn the_chat_type_this_server_sends_is_the_one_named_chat() {
     let names = identifiers_after(&payload(), "minecraft:chat_type");

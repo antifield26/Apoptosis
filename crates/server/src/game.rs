@@ -533,12 +533,12 @@ pub const PLAINS_BIOME_ID: u32 = 40;
 /// payload index plus one, with 0 meaning "absent". The evidence, from two
 /// independent instruments that agree: (a) a real 26.1.2 server's console
 /// `say` went out as **5** while `minecraft:say_command` sits at payload index
-/// **4** of the chat_type registry both servers send, and (b) our first sends
+/// **4** of the `chat_type` registry both servers send, and (b) our first sends
 /// used **0**, and every joined real client failed with `DecoderException` on
 /// the welcome message (two independent sessions) until the offset landed.
 /// The earlier retraction of this fix was based on misdating that first
-/// session's evidence: its `[CHAT] Welcome` line predates the DisguisedChat
-/// conversion, so it says nothing about the disguised_chat id.
+/// session's evidence: its `[CHAT] Welcome` line predates the `DisguisedChat`
+/// conversion, so it says nothing about the `disguised_chat` id.
 ///
 /// **Resolved from the payload this server sends**, because `minecraft:chat_type` is one of the registries in it
 /// -- the registry order is "ending at `minecraft:chat_type`". So a jar extraction would be the
