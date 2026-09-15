@@ -149,6 +149,7 @@ use mc_core::tick::Tick;
 use mc_entity::entity::{EntityBody, EntityId, EntityKind, EntityStore};
 use mc_entity::inventory::Hand;
 use mc_entity::item_entity::ItemEntity;
+use mc_entity::mob::Mob;
 use mc_entity::player::{DamageOutcome, GameMode, Player};
 use mc_entity::stack::ItemStack;
 use mc_network::bridge::{ClientEvent, ClientEventKind, ConnectionId, GameEvents, OutboundSender};
@@ -755,6 +756,9 @@ pub struct Game {
     /// The live source; its state advances with the work done, so a replay from the
     /// same seed takes the same draws.
     random: RandomSource,
+    /// The per-biome natural-spawn tables (`crate::spawn`), loaded from the committed
+    /// fixture extracted from vanilla's data pack.
+    spawn_tables: crate::spawn::SpawnTables,
     /// Runs and times the six phases of a tick.
     scheduler: Scheduler,
     /// Intents drained this tick, applied by the Players phase in arrival order.
@@ -1015,6 +1019,7 @@ impl Game {
             view_distance: view_distance.clamp(2, 16),
             random_seed: seed,
             random: RandomSource::new(seed),
+            spawn_tables: crate::spawn::SpawnTables::vanilla(),
             scheduler: Scheduler::new(),
             pending_intents: Vec::new(),
             pending_light: BTreeSet::new(),
@@ -1169,6 +1174,24 @@ impl Game {
     }
 
     /// Spawn point.
+    #[must_use]
+    /// Every mob in the world as `(kind, position)`, ascending by entity id.
+    ///
+    /// Read-only view for tests, metrics and the admin tooling; mutation goes
+    /// through the tick pipeline like every other entity change.
+    pub fn mobs(&self) -> Vec<(mc_entity::mob::MobKind, mc_entity::Vec3)> {
+        self.entities
+            .iter()
+            .filter_map(|entity| {
+                let mc_entity::EntityBody::Mob(mob) = &entity.body else {
+                    return None;
+                };
+                Some((mob.kind, entity.position))
+            })
+            .collect()
+    }
+
+    /// The world spawn point, as `(x, y, z)` block coordinates.
     #[must_use]
     pub fn spawn(&self) -> (i32, i32, i32) {
         self.world.spawn()
@@ -1403,6 +1426,9 @@ impl Game {
     /// world write is logged and skipped). It gains a `ServerResult` when entity AI
     /// lands and starts making fallible world queries.
     fn phase_entities(&mut self, report: &mut TickReport) {
+        // Natural spawning runs at the head of the Entities phase, every tick,
+        // where vanilla's spawn cycle sits relative to entity ticking.
+        self.run_spawn_cycle();
         // Collected first: the loop mutates the store, so it cannot hold the
         // iterator. `ids()` is ascending because the store is a `BTreeMap`.
         let ids: Vec<EntityId> = self.entities.ids().collect();
@@ -1410,22 +1436,265 @@ impl Game {
             // The AI hook runs first, as Vanilla orders `tick` before the move. It
             // is a no-op today; see `tick_entity_ai`.
             self.tick_entity_ai(id);
+            self.tick_mob_despawn(id);
             if self.tick_entity(id) {
                 report.entities_ticked += 1;
             }
         }
     }
 
+    /// The natural spawn cycle (P11-01): sampled candidate positions around
+    /// each player, the measured light/solid/biome rules, and the category
+    /// caps. The rules and every constant's provenance live in
+    /// [`crate::spawn`]; this is the orchestration only.
+    ///
+    /// Spawned mobs go through [`Game::pending_entity_spawns`] like drops, so
+    /// the Broadcast phase announces them with their per-type registry id and
+    /// their spawn health.
+    fn run_spawn_cycle(&mut self) {
+        let players: Vec<mc_entity::Vec3> = self
+            .sessions
+            .values()
+            .filter(|session| session.ready)
+            .map(|session| session.player.position)
+            .collect();
+        if players.is_empty() {
+            return;
+        }
+        let darken = crate::spawn::sky_darken(crate::spawn::time_of_day(
+            self.tick as i64,
+            self.time_offset,
+        ));
+        // Per-category counts over the world; the cap scope is a named
+        // simplification (see `crate::spawn`'s module docs).
+        let mut counts = [0_i32; 2];
+        for entity in self.entities.iter() {
+            if let EntityBody::Mob(mob) = &entity.body {
+                counts[crate::spawn::category_of(mob.kind) as usize] += 1;
+            }
+        }
+        // Vanilla sweeps the whole chunk ring every tick; so does this, with
+        // the per-position randomness in the block coordinates.
+        let half = crate::spawn::SPAWN_DISTANCE_CHUNK;
+        for player in &players {
+            let player_chunk_x = (player.x as i64).div_euclid(16) as i32;
+            let player_chunk_z = (player.z as i64).div_euclid(16) as i32;
+            for dx in -half..=half {
+                for dz in -half..=half {
+                    let chunk_x = player_chunk_x + dx;
+                    let chunk_z = player_chunk_z + dz;
+                    let x = chunk_x * 16 + self.random.next_i32_bounded(16);
+                    let z = chunk_z * 16 + self.random.next_i32_bounded(16);
+                    let centre = (f64::from(x) + 0.5, f64::from(z) + 0.5);
+                    if players.iter().any(|other| {
+                        let ox = other.x - centre.0;
+                        let oz = other.z - centre.1;
+                        ox * ox + oz * oz < crate::spawn::MIN_SPAWN_DISTANCE_SQR
+                    }) {
+                        continue;
+                    }
+                    let bounds = {
+                        let Some(chunk) =
+                            self.world.chunk(mc_world::ChunkPos::new(chunk_x, chunk_z))
+                        else {
+                            continue;
+                        };
+                        (chunk.min_y(), chunk.sections.len() as i32 * 16)
+                    };
+                    let y = bounds.0
+                        + self
+                            .random
+                            .next_i32_bounded(bounds.1.saturating_sub(2).max(1));
+                    self.try_spawn_pack(x, y, z, darken, counts);
+                }
+            }
+        }
+    }
+
+    /// Validate one candidate position and, if its rules pass, spawn a pack of
+    /// the biome table's chosen kind.
+    ///
+    /// The cap counts are read-only here: a cycle spawns at most
+    /// [`crate::spawn::CHUNKS_SAMPLED_PER_CYCLE`] packs per player, so the
+    /// overshoot beyond a cap stays bounded and the next cycle sees the new
+    /// counts.
+    fn try_spawn_pack(&mut self, x: i32, y: i32, z: i32, darken: i32, counts: [i32; 2]) {
+        // A solid block below and two air cells to stand in.
+        let below = self.world.get_block(x, y - 1, z);
+        let feet = self.world.get_block(x, y, z);
+        let head = self.world.get_block(x, y + 1, z);
+        if !mc_world::collision::is_solid_or_unknown(&self.registries.blocks, below)
+            || feet != 0
+            || head != 0
+        {
+            return;
+        }
+        // The biome's tables decide category and kind. A biome with no modeled
+        // rows in its category (the ocean's creature list, say) rejects here,
+        // as does an unloaded generator.
+        // One biome for the whole world is what the generator models
+        // (`PLAINS_BIOME_ID`'s docs), so the tables are keyed once; when
+        // per-column biomes land this lookup moves to the position.
+        let Some(generator) = self.generator.as_ref() else {
+            return;
+        };
+        let biome_name = mc_worldgen::terrain::ChunkGenerator::biome_at(generator, x, z).id();
+        let Some(tables) = self.spawn_tables.biomes.get(biome_name) else {
+            return;
+        };
+        // Vanilla attempts **each category independently** per position
+        // (`spawnCategoryForPosition` runs for every `SPAWNING_CATEGORIES`
+        // entry), so both rows are drawn up front: the choice phase reads only
+        // the tables and the RNG, and the light and spawn work below needs
+        // `self` mutable, so the table borrow has to end first. A category at
+        // its cap, or with no modeled row in this biome, draws nothing.
+        let picked = {
+            let mut monster = None;
+            let mut creature = None;
+            if counts[crate::spawn::MobCategory::Monster as usize]
+                < crate::spawn::MobCategory::Monster.max_instances()
+            {
+                monster = tables.pick(crate::spawn::MobCategory::Monster, &mut self.random);
+            }
+            if counts[crate::spawn::MobCategory::Creature as usize]
+                < crate::spawn::MobCategory::Creature.max_instances()
+            {
+                creature = tables.pick(crate::spawn::MobCategory::Creature, &mut self.random);
+            }
+            (monster.copied(), creature.copied())
+        };
+        let (monster, creature) = picked;
+        {
+            let Some((block_light, sky_light)) = self.light_at(x, y, z) else {
+                return;
+            };
+            // Monsters first, vanilla's category order; the creature row is
+            // the fallback when the monster rule rejects the position.
+            if let Some(row) = monster
+                && crate::spawn::monster_spawn_allowed(
+                    block_light,
+                    sky_light,
+                    darken,
+                    &mut self.random,
+                )
+            {
+                self.spawn_pack(row, x, y, z);
+                return;
+            }
+            if let Some(row) = creature {
+                // The animal rule reads raw brightness with no darkening, and
+                // the tag below the position is grass only.
+                let below_name = self.registries.blocks.block_name(below).unwrap_or_default();
+                if crate::spawn::animal_spawn_allowed(
+                    block_light.max(sky_light),
+                    below_name == "minecraft:grass_block",
+                ) {
+                    self.spawn_pack(row, x, y, z);
+                }
+            }
+        }
+    }
+
+    /// Spawn one pack on the already-validated cell.
+    ///
+    /// Vanilla spreads the members over nearby cells and re-validates each;
+    /// this build lands every member on the one validated cell, which keeps
+    /// the position accounting honest until P11-02's movement spreads them.
+    fn spawn_pack(&mut self, row: crate::spawn::SpawnRow, x: i32, y: i32, z: i32) {
+        let span = (row.max_count - row.min_count + 1) as i32;
+        let count = row.min_count as i32 + self.random.next_i32_bounded(span);
+        for _ in 0..count {
+            let position =
+                mc_entity::Vec3::new(f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5);
+            let Ok(id) = self
+                .entities
+                .spawn(EntityBody::Mob(Mob::new(row.kind)), position)
+            else {
+                return;
+            };
+            self.pending_entity_spawns.push(id);
+        }
+    }
+
+    /// Sky and block light at one world position, from the chunk's cached
+    /// computation. A chunk without light computes it; a chunk that cannot be
+    /// lit reports absence rather than guessing zero.
+    fn light_at(&mut self, x: i32, y: i32, z: i32) -> Option<(u8, u8)> {
+        let pos = mc_world::ChunkPos::new(x >> 4, z >> 4);
+        if self.world.cached_light(pos).is_none() {
+            self.world.compute_light(pos, &self.registries.light).ok()?;
+        }
+        let light = self.world.cached_light(pos)?;
+        let min_y = {
+            let chunk = self.world.chunk(pos)?;
+            chunk.min_y()
+        };
+        let section = usize::try_from((y - min_y).div_euclid(16)).ok()?;
+        let sky = light.sky.get(section)?.get(x & 15, y & 15, z & 15);
+        let block = light.block.get(section)?.get(x & 15, y & 15, z & 15);
+        Some((block, sky))
+    }
+
+    /// The despawn pass for one mob, every tick (`Mob.checkDespawn`).
+    ///
+    /// The idle counter climbs outside the no-despawn ring and resets inside
+    /// it; the distance rule applies to monsters only, because creatures are
+    /// persistent (`Animal.removeWhenFarAway` returns false). Items and
+    /// players are not mobs and are skipped.
+    fn tick_mob_despawn(&mut self, id: EntityId) {
+        let Some(entity) = self.entities.get(id) else {
+            return;
+        };
+        if entity.removed {
+            return;
+        }
+        let EntityBody::Mob(mob) = &entity.body else {
+            return;
+        };
+        let category = crate::spawn::category_of(mob.kind);
+        let position = entity.position;
+        let Some(distance_sq) = self.nearest_player_distance_sq(position) else {
+            return;
+        };
+        let Some(entity) = self.entities.get_mut(id) else {
+            return;
+        };
+        let EntityBody::Mob(mob) = &mut entity.body else {
+            return;
+        };
+        if distance_sq < crate::spawn::NO_DESPAWN_DISTANCE_SQR {
+            mob.no_action_ticks = 0;
+            return;
+        }
+        mob.no_action_ticks += 1;
+        let no_action = mob.no_action_ticks;
+        if crate::spawn::despawn(category, distance_sq, no_action, &mut self.random) {
+            entity.removed = true;
+        }
+    }
+
+    /// Squared distance from `position` to the nearest ready player, if any.
+    fn nearest_player_distance_sq(&self, position: mc_entity::Vec3) -> Option<f64> {
+        self.sessions
+            .values()
+            .filter(|session| session.ready)
+            .map(|session| {
+                let p = session.player.position;
+                let dx = p.x - position.x;
+                let dz = p.z - position.z;
+                dx * dx + dz * dz
+            })
+            .min_by(f64::total_cmp)
+    }
+
     /// Per-entity AI and behaviour. **Documented no-op.**
     ///
-    /// Mob AI — goal selectors, pathfinding, target acquisition, breeding,
-    /// panic/flee — is P05-11..P05-14 and belongs to `mc-entity`'s AI modules,
-    /// which are written in parallel with this change. The hook exists so the phase
-    /// order is already right when that lands: an AI that moves an entity *before*
-    /// that entity's own physics step is what Vanilla does, and wiring it in later
-    /// should be a body change here, not a reordering of the phases.
-    // The receiver is unused today and is the whole point of the hook: the AI will
-    // read the world and mutate the entity through `self`.
+    /// Mob AI - goal selectors, pathfinding, target acquisition - is Phase 11's
+    /// next task (P11-02). The despawn pass above already reads the mob's idle
+    /// counter, so the AI wiring changes that counter's meaning from "always
+    /// climbing" to "climbing without goal activity" without touching this
+    /// phase's order.
+    // The receiver is unused today and is the whole point of the hook.
     #[allow(clippy::unused_self)]
     fn tick_entity_ai(&mut self, id: EntityId) {
         let _ = id;
@@ -1725,12 +1994,26 @@ impl Game {
             let (Some(entity), Some(uuid)) = (self.entities.get(id), self.entities.uuid(id)) else {
                 continue;
             };
+            // The registry id the client's own entity-type table maps back to a
+            // model: a drop's 71, or the mob kind's row from `entity_types.tsv`
+            // (P10-06). An unmodeled id would be sent as nothing recognizable.
+            let type_id = match &entity.body {
+                mc_entity::EntityBody::Mob(mob) => {
+                    // `entity_types.tsv` stores the full resource id, and
+                    // `MobKind::name` is the bare suffix.
+                    let full = format!("minecraft:{}", mob.kind.name());
+                    self.registries.entities.id(&full)?
+                }
+                mc_entity::EntityBody::Item(_)
+                | mc_entity::EntityBody::Player
+                | mc_entity::EntityBody::Projectile(_) => item,
+            };
             let position = entity.position;
             let (yaw, pitch) = (entity.yaw, entity.pitch);
             let packet = mc_protocol::packets::play::AddEntity {
                 entity_id: id.get(),
                 uuid,
-                type_id: item,
+                type_id,
                 x: position.x,
                 y: position.y,
                 z: position.z,
@@ -1753,21 +2036,39 @@ impl Game {
             //
             // The chain rather than nested `if`s: two conditions, one body, and `clippy::collapsible_if` is right
             // that the flat form says it better.
-            if let mc_entity::EntityBody::Item(item) = &entity.body
-                && let Some(item_id) = item.item_id()
-            {
-                let contents = mc_protocol::packets::play::SetEntityData {
-                    entity_id: id.get(),
-                    entries: vec![(
-                        8,
-                        mc_protocol::packets::play::MetadataValue::ItemStack {
-                            count: item.count(),
-                            item_id,
-                        },
-                    )],
+            match &entity.body {
+                mc_entity::EntityBody::Item(item) => {
+                    if let Some(item_id) = item.item_id() {
+                        let contents = mc_protocol::packets::play::SetEntityData {
+                            entity_id: id.get(),
+                            entries: vec![(
+                                8,
+                                mc_protocol::packets::play::MetadataValue::ItemStack {
+                                    count: item.count(),
+                                    item_id,
+                                },
+                            )],
+                        }
+                        .to_raw()?;
+                        self.broadcast_all(&contents, report);
+                    }
                 }
-                .to_raw()?;
-                self.broadcast_all(&contents, report);
+                // **A spawn health, as the second packet** -- the slot every
+                // captured mob kind sends at spawn (P10-07's measured table:
+                // index 9, float serializer). A default-variant mob omits every
+                // other slot, so health alone matches vanilla's spawn shape.
+                mc_entity::EntityBody::Mob(mob) => {
+                    let contents = mc_protocol::packets::play::SetEntityData {
+                        entity_id: id.get(),
+                        entries: vec![(
+                            mc_protocol::packets::play::METADATA_INDEX_HEALTH,
+                            mc_protocol::packets::play::MetadataValue::Float(mob.kind.max_health()),
+                        )],
+                    }
+                    .to_raw()?;
+                    self.broadcast_all(&contents, report);
+                }
+                mc_entity::EntityBody::Player | mc_entity::EntityBody::Projectile(_) => {}
             }
         }
         Ok(())

@@ -1,0 +1,95 @@
+# Vanilla 26.1.2 natural-spawn tables (per-biome spawners), measured from the
+# server jar's own data pack — data/minecraft/worldgen/biome/<biome>.json in
+# target/vanilla-capture/versions/26.1.2/server-26.1.2.jar.
+#
+# The biome set is this project's six-biome model (crates/worldgen/biome.rs).
+# **`minecraft:mountains` no longer exists in 26.1**: the name was renamed to
+# `windswept_hills` in 1.18, so `Biome::Mountains` maps to
+# `data/minecraft/worldgen/biome/windswept_hills.json`. That mapping is a name
+# correspondence, not a claim that our `Mountains` covers the same terrain —
+# the biome crate itself says its names are "not verified as a mapping".
+#
+# Format: <biome>	<category>	<mob>	<weight>	<min count>	<max count>
+#
+# Categories other than monster/creature (ambient, axolotls, ...) carry mobs
+# this build does not model and are not recorded here. Rows whose mob is not
+# one of the eight modeled kinds are recorded anyway; the loader skips them and
+# counts them, and the spawn module's tests assert those skip counts, so a
+# silently dropped row is a failed test.
+minecraft:plains	monster	minecraft:spider	100	4	4
+minecraft:plains	monster	minecraft:zombie	90	4	4
+minecraft:plains	monster	minecraft:zombie_villager	5	1	1
+minecraft:plains	monster	minecraft:zombie_horse	5	1	1
+minecraft:plains	monster	minecraft:skeleton	100	4	4
+minecraft:plains	monster	minecraft:creeper	100	4	4
+minecraft:plains	monster	minecraft:slime	100	4	4
+minecraft:plains	monster	minecraft:enderman	10	1	4
+minecraft:plains	monster	minecraft:witch	5	1	1
+minecraft:plains	creature	minecraft:sheep	12	4	4
+minecraft:plains	creature	minecraft:pig	10	4	4
+minecraft:plains	creature	minecraft:chicken	10	4	4
+minecraft:plains	creature	minecraft:cow	8	4	4
+minecraft:plains	creature	minecraft:horse	5	2	6
+minecraft:plains	creature	minecraft:donkey	1	1	3
+minecraft:desert	monster	minecraft:spider	100	4	4
+minecraft:desert	monster	minecraft:zombie	19	4	4
+minecraft:desert	monster	minecraft:zombie_villager	1	1	1
+minecraft:desert	monster	minecraft:skeleton	50	4	4
+minecraft:desert	monster	minecraft:creeper	100	4	4
+minecraft:desert	monster	minecraft:slime	100	4	4
+minecraft:desert	monster	minecraft:enderman	10	1	4
+minecraft:desert	monster	minecraft:witch	5	1	1
+minecraft:desert	monster	minecraft:husk	80	4	4
+minecraft:desert	monster	minecraft:parched	50	4	4
+minecraft:desert	creature	minecraft:rabbit	12	2	3
+minecraft:desert	creature	minecraft:camel	1	1	1
+minecraft:forest	monster	minecraft:spider	100	4	4
+minecraft:forest	monster	minecraft:zombie	95	4	4
+minecraft:forest	monster	minecraft:zombie_villager	5	1	1
+minecraft:forest	monster	minecraft:skeleton	100	4	4
+minecraft:forest	monster	minecraft:creeper	100	4	4
+minecraft:forest	monster	minecraft:slime	100	4	4
+minecraft:forest	monster	minecraft:enderman	10	1	4
+minecraft:forest	monster	minecraft:witch	5	1	1
+minecraft:forest	creature	minecraft:sheep	12	4	4
+minecraft:forest	creature	minecraft:pig	10	4	4
+minecraft:forest	creature	minecraft:chicken	10	4	4
+minecraft:forest	creature	minecraft:cow	8	4	4
+minecraft:forest	creature	minecraft:wolf	5	4	4
+minecraft:ocean	monster	minecraft:spider	100	4	4
+minecraft:ocean	monster	minecraft:zombie	95	4	4
+minecraft:ocean	monster	minecraft:zombie_villager	5	1	1
+minecraft:ocean	monster	minecraft:skeleton	100	4	4
+minecraft:ocean	monster	minecraft:creeper	100	4	4
+minecraft:ocean	monster	minecraft:slime	100	4	4
+minecraft:ocean	monster	minecraft:enderman	10	1	4
+minecraft:ocean	monster	minecraft:witch	5	1	1
+minecraft:ocean	monster	minecraft:drowned	5	1	1
+minecraft:windswept_hills	monster	minecraft:spider	100	4	4
+minecraft:windswept_hills	monster	minecraft:zombie	95	4	4
+minecraft:windswept_hills	monster	minecraft:zombie_villager	5	1	1
+minecraft:windswept_hills	monster	minecraft:skeleton	100	4	4
+minecraft:windswept_hills	monster	minecraft:creeper	100	4	4
+minecraft:windswept_hills	monster	minecraft:slime	100	4	4
+minecraft:windswept_hills	monster	minecraft:enderman	10	1	4
+minecraft:windswept_hills	monster	minecraft:witch	5	1	1
+minecraft:windswept_hills	creature	minecraft:sheep	12	4	4
+minecraft:windswept_hills	creature	minecraft:pig	10	4	4
+minecraft:windswept_hills	creature	minecraft:chicken	10	4	4
+minecraft:windswept_hills	creature	minecraft:cow	8	4	4
+minecraft:windswept_hills	creature	minecraft:llama	5	4	6
+minecraft:taiga	monster	minecraft:spider	100	4	4
+minecraft:taiga	monster	minecraft:zombie	95	4	4
+minecraft:taiga	monster	minecraft:zombie_villager	5	1	1
+minecraft:taiga	monster	minecraft:skeleton	100	4	4
+minecraft:taiga	monster	minecraft:creeper	100	4	4
+minecraft:taiga	monster	minecraft:slime	100	4	4
+minecraft:taiga	monster	minecraft:enderman	10	1	4
+minecraft:taiga	monster	minecraft:witch	5	1	1
+minecraft:taiga	creature	minecraft:sheep	12	4	4
+minecraft:taiga	creature	minecraft:pig	10	4	4
+minecraft:taiga	creature	minecraft:chicken	10	4	4
+minecraft:taiga	creature	minecraft:cow	8	4	4
+minecraft:taiga	creature	minecraft:wolf	8	4	4
+minecraft:taiga	creature	minecraft:rabbit	4	2	3
+minecraft:taiga	creature	minecraft:fox	8	2	4

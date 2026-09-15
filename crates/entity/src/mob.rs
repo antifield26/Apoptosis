@@ -265,6 +265,27 @@ impl MobKind {
         }
     }
 
+    /// The kind whose [`MobKind::name`] is `name`, or `None`.
+    ///
+    /// This is the inverse of [`MobKind::name`], used by the natural-spawn
+    /// tables (`crates/test-support/fixtures/registry/biome_spawners.tsv`),
+    /// whose mob names are the vanilla datapack's resource-id suffixes — the
+    /// same lowercase identifiers this method matches.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "zombie" => Some(Self::Zombie),
+            "skeleton" => Some(Self::Skeleton),
+            "cow" => Some(Self::Cow),
+            "pig" => Some(Self::Pig),
+            "sheep" => Some(Self::Sheep),
+            "chicken" => Some(Self::Chicken),
+            "spider" => Some(Self::Spider),
+            "creeper" => Some(Self::Creeper),
+            _ => None,
+        }
+    }
+
     /// Maximum health, in half-hearts (Vanilla's `MAX_HEALTH` attribute base).
     ///
     /// See the module table for which rows were verified against a source.
@@ -889,6 +910,13 @@ pub struct Mob {
     pub kind: MobKind,
     /// Its AI state.
     pub ai: MobAi,
+    /// Ticks since the mob last acted — Vanilla's `noActionTime`.
+    ///
+    /// The despawn rule rolls 1-in-800 per tick once this exceeds 600 and the
+    /// nearest player is beyond the no-despawn ring; it resets inside that
+    /// ring. Until Phase 11 wires goal activity (`tick_entity_ai`), every mob
+    /// is idle and the counter simply climbs.
+    pub no_action_ticks: u64,
 }
 
 impl Mob {
@@ -899,6 +927,7 @@ impl Mob {
         Self {
             kind,
             ai: MobAi::new(),
+            no_action_ticks: 0,
         }
     }
 
