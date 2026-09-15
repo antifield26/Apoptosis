@@ -212,6 +212,43 @@ the chunk-stream announcement, the diagonal invalidation, the unload cleanup, a
 transposed packet id, and a renamed state module. A test that has never been seen to
 fail is a test whose failure mode is unknown.
 
+### P11-10 — real-client survival acceptance: NOT RUN, and why
+
+P11-10 asks for a survival session through a **real 26.1.2 client** — night, mobs,
+drops, pickup, combat, death, respawn and restart-persistence — plus the phase
+review. **It has not been executed, and it is not recorded as done.**
+
+What was available: the P10 launcher pattern (`target/p10_launcher.py`), the capture
+rig, and HMCL at `D:\HMCL`. What was not: the session in P11-10 is not a *join* — it
+is play. A real client can be launched into the world
+(`--quickPlayMultiplayer`), and the rig can record every packet it receives, but
+nothing in this environment can mine a block, swing at a mob, die or respawn on the
+client's behalf, and the task is explicitly about a real client doing those things.
+The session that would produce the evidence needs either the owner at the keyboard or
+a Computer-Use-style driver, and this session had neither (owner-led runs and the
+Computer Use fallback are named in the handoff; no such tool was available here).
+
+The honest decomposition of the task's own list, so the next attempt starts where
+this one stopped:
+
+- **Covered by the automated suites in this landing, not by a real client**: drops
+  from a survival break and from a mob death, pickup, merging, damage and the hurt
+  window, death drops, and entity persistence across a second `Game`.
+- **Covered by the P10-11 acceptance and unchanged here**: a real client reaching
+  play, rendering a lit world, seeing drops and receiving chat.
+- **Genuinely unverified by anything in this repository**: whether a real client
+  renders a *spawned mob* and its movement, a *picked-up* item leaving the ground, a
+  *death* and the respawn that follows, and whether the world it re-joins after a
+  server restart holds the mobs and drops it saw before. Those four are the whole
+  reason P11-10 exists.
+
+**The phase review's findings are recorded anyway**, because the evidence for them
+does not depend on the client: `docs/audits/AUDIT-09-FINDINGS.md` (37 findings, five
+lanes), `AUDIT-09-REMEDIATION.md` (per-finding disposition), and the four open
+divergences it names — an unmodified chunk's entities are not persisted, a swing
+outside the interaction range is not refused, a held item's damage is not used, and
+the zombie's follow range is the jar's default rather than its override.
+
 ## Unreleased — Phase 10 (client compatibility and rendering)
 
 ### P10-01 — client-capture rig
