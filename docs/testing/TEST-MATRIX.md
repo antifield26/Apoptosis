@@ -5,21 +5,22 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 344 passed, 0 failed, 30 ignored** across **102 suites**, re-derived from
-`cargo test --workspace --no-fail-fast` on the P11-04..09 tree. The count has moved
-1 194 -> 1 196 -> 1 206 -> 1 207 -> 1 212 -> 1 325 -> 1 344: three from the Audit 07
-remediation, two Audit 08 coverage tests, ten from the `mc-capture-rig` crate
-(P10-01), one regression test for the compression-transition defect (P10-02), the
-synced-registry work (P10-03), then P10-04..11 and P11-01..03, and nineteen from
-this landing — eight in `loot_and_pickup`, five in `player_attack`, two in
-`entity_persistence`, two in `light_cache`, one closing the packet-id gap
-(AUDIT-09 A-02) and one pinning the protocol version to the jar's own `version.json`
-(AUDIT-09 E-03). The 30 ignored = the differential (jar-gated) suites listed in the
-last section, plus `pi_profile` 4 and `tick_baseline` 2 — all run on demand.
+Totals: **1 346 passed, 0 failed, 33 ignored** across **104 suites**, re-derived from
+`cargo test --workspace --no-fail-fast` on the AUDIT-10 tree. The count has moved
+1 194 -> 1 196 -> 1 206 -> 1 207 -> 1 212 -> 1 325 -> 1 344 -> 1 346: three from the
+Audit 07 remediation, two Audit 08 coverage tests, ten from the `mc-capture-rig`
+crate (P10-01), one regression test for the compression-transition defect (P10-02),
+the synced-registry work (P10-03), then P10-04..11 and P11-01..03, nineteen from the
+P11-04..09 landing, and two from AUDIT-10 itself — the session hurt window's
+distinguishing test (`two_simultaneous_attackers_land_one_hit_per_window`, ai_wiring
+6) and the unreadable-chunk guard's regression test (`unreadable_chunk`, B-01). The
+33 ignored = the differential (jar-gated) suites listed in the last section, the
+three new `vanilla_loot` differential tests, plus `pi_profile` 4 and `tick_baseline`
+2 — all run on demand.
 
 **Every per-crate count below was re-measured with `cargo test -p <crate> --lib`**
 while updating this total. The 17 lib counts sum to **1 019**, the 5 doc-tests and
-the 320 named-suite tests complete the 1 344 (1 019 + 5 + 320 = 1 344, the third
+the 322 named-suite tests complete the 1 346 (1 019 + 5 + 322 = 1 346, the third
 figure derived from the run total and the other two rather than counted
 independently). Both Audit 07's method and its lesson still apply: the figures must
 be re-measured per crate, because five of them once turned out to be **another
@@ -31,7 +32,7 @@ are measured and current. The named-suite counts in the middle column were measu
 in the P10-03 round; the suites this landing touched are updated
 (`packet_ids` 4 -> 6, `light_cache` 8, `loot_and_pickup` 8, `entity_persistence` 2,
 `player_attack` 5, `entity_lifecycle` 9), and the P10/P11 suites the old table never
-listed (`natural_spawn` 4, `ai_wiring` 5, and the server suites added since) are
+listed (`natural_spawn` 4, `ai_wiring` 6, and the server suites added since) are
 added. A re-measure of **every** named suite is outstanding, and the two obvious
 instruments both fail: `target/debug/deps` accumulates binaries from every past
 session (listing them summed to 6 385 against a real total of 1 344), and counting
