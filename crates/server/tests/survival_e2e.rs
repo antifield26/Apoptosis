@@ -621,6 +621,103 @@ fn tp_above_surface_does_not_embed_and_death_respawns_from_there() {
     );
 }
 
+/// P12-07: the player crafting grid fills from clicks and crafts.
+///
+/// Puts two oak planks into the 2x2 grid through real clicks, asserts the
+/// result slot recomputes to sticks, takes the result, and asserts the grid
+/// was consumed. Runs against the game's table (baseline in tests without
+/// packs, pack conversion once `load_packs` runs — the hook is the same).
+#[test]
+fn crafting_grid_recomputes_and_taking_consumes() {
+    let mut harness = Harness::new("p12-craft");
+    harness.build_floor();
+    let mut out = harness.join("Crafter");
+    let _ = Harness::drain_ids(&mut out);
+    let planks = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:oak_planks")
+        .expect("planks");
+    {
+        let player = harness.game.player_mut(harness.id).expect("player");
+        player
+            .inventory
+            .set_slot(
+                0,
+                mc_entity::stack::ItemStack::new(planks, 2).expect("stack"),
+            )
+            .expect("give planks");
+    }
+    // Player menu is window 0. Hotbar 0 is menu slot 36; grid is menu 1..=4.
+    let window = 0;
+    let mut state = harness.game.menu_state_id(harness.id).expect("state");
+    // Pick up planks from hotbar (menu 36).
+    harness.intent(PlayIntent::ContainerClick {
+        window_id: window,
+        state_id: state,
+        slot: 36,
+        button: 0,
+        click_type: 0,
+    });
+    // Place one into grid slot 1 (menu 1 = grid 0).
+    state = harness.game.menu_state_id(harness.id).expect("state");
+    harness.intent(PlayIntent::ContainerClick {
+        window_id: window,
+        state_id: state,
+        slot: 1,
+        button: 1,
+        click_type: 0,
+    });
+    // Place one into grid slot 3 (menu 3 = grid 2) for the 1x2 sticks pattern.
+    state = harness.game.menu_state_id(harness.id).expect("state");
+    harness.intent(PlayIntent::ContainerClick {
+        window_id: window,
+        state_id: state,
+        slot: 3,
+        button: 0,
+        click_type: 0,
+    });
+    let result = harness.game.menu_slot(harness.id, 0).expect("result");
+    let sticks = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:stick")
+        .expect("sticks");
+    assert_eq!(
+        result.item_id(),
+        Some(sticks),
+        "two stacked planks must recompute to sticks, got {result:?}"
+    );
+    assert_eq!(result.count(), 4);
+    // Take the result: the grid must be consumed.
+    state = harness.game.menu_state_id(harness.id).expect("state");
+    harness.intent(PlayIntent::ContainerClick {
+        window_id: window,
+        state_id: state,
+        slot: 0,
+        button: 0,
+        click_type: 0,
+    });
+    let cursor = harness.game.menu_cursor(harness.id).expect("cursor");
+    assert_eq!(cursor.item_id(), Some(sticks));
+    let grid_left: i64 = [1, 2, 3, 4]
+        .iter()
+        .map(|slot| {
+            i64::from(
+                harness
+                    .game
+                    .menu_slot(harness.id, *slot)
+                    .expect("grid")
+                    .count(),
+            )
+        })
+        .sum();
+    assert_eq!(grid_left, 0, "taking the result must consume the grid");
+    let _ = Harness::drain_ids(&mut out);
+}
+
 /// P12-09: closing a chest returns the cursor and restores the player menu.
 ///
 /// Picks up a chest stack onto the cursor, closes the window through the real

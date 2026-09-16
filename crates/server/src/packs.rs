@@ -84,6 +84,14 @@ pub struct PackLoadOutcome {
     pub loot_unmodelled: Vec<(String, usize)>,
     /// Loot table files that were refused, with the reason (P11-04).
     pub loot_refused: Vec<String>,
+    /// How many recipes loaded across every pack (P12-07/08).
+    pub recipes_loaded: usize,
+    /// Crafting recipes converted to the table (P12-07).
+    pub crafting_converted: usize,
+    /// Crafting recipes skipped for tags/unknowns (P12-07).
+    pub crafting_skipped: usize,
+    /// Smelting rows converted for the furnace table (P12-08).
+    pub smelting_rows: usize,
 }
 
 impl PackLoadOutcome {
@@ -169,6 +177,7 @@ impl PackRoots {
 ///
 /// Only for a failure that makes the *game* unusable. A pack problem never propagates: it is
 /// recorded in the returned outcome, because a broken pack must not stop the server.
+#[allow(clippy::too_many_lines)]
 pub fn load_packs(
     game: &mut Game,
     roots: &PackRoots,
@@ -290,6 +299,66 @@ pub fn load_packs(
         .collect();
     outcome.loot_refused.clone_from(&loot_report.skipped);
     game.set_loot(loot);
+
+    // Recipes, from every pack's `recipe/` directory in load order (P12-07/08).
+    // Last-wins insert keeps pack overrides; the conversions below count what
+    // they could not represent rather than dropping it silently.
+    let mut book = mc_data::RecipeBook::new();
+    let mut recipe_report = mc_data::RecipeLoadReport::default();
+    for (namespace, root, _source) in set.load_plan() {
+        // `load_directory` expects the namespace directory (`.../data/<ns>`).
+        let namespace_dir = root.join(&namespace);
+        if !namespace_dir.join("recipe").is_dir() {
+            continue;
+        }
+        for recipe in mc_data::recipe::load_directory(
+            &namespace_dir,
+            &namespace,
+            mc_data::Limits::DEFAULT,
+            &mut recipe_report,
+        ) {
+            book.insert(recipe);
+        }
+    }
+    outcome.recipes_loaded = book.len();
+    // Crafting table: item-only conversion (tags counted, not guessed).
+    match mc_container::RecipeRegistry::from_book(&book, &items) {
+        Ok((table, report)) => {
+            outcome.crafting_converted = report.converted;
+            outcome.crafting_skipped =
+                report.tag_or_unknown + report.malformed.len() + report.other_kinds;
+            // An empty pack (no packs configured) keeps the baseline: replacing
+            // a working table with nothing would uncraft sticks.
+            if !table.is_empty() {
+                game.set_crafting_registry(table);
+            }
+        }
+        Err(error) => {
+            outcome
+                .rejected
+                .push(format!("crafting table conversion refused: {error}"));
+        }
+    }
+    // Furnace table: smelting-kind rows from the same book (P12-08). Fuel
+    // values stay the jar-verified baseline; only recipes come from data.
+    match mc_container::SmeltingRegistry::from_recipes(
+        &book,
+        mc_data::SmeltingKind::Smelting,
+        &items,
+        None,
+    ) {
+        Ok((table, report)) => {
+            outcome.smelting_rows = report.rows;
+            if !table.is_empty() {
+                game.set_smelting_furnace(table);
+            }
+        }
+        Err(error) => {
+            outcome
+                .rejected
+                .push(format!("smelting table conversion refused: {error}"));
+        }
+    }
 
     Ok(outcome)
 }

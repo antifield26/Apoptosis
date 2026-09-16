@@ -930,6 +930,14 @@ pub struct Game {
     /// The loaded loot tables (P11-04), keyed by resource id; the drop
     /// authority for block breaks. Empty until `load_packs` runs.
     loot: mc_data::loot::LootTables,
+    /// The crafting table (P12-07): baseline until `load_packs` replaces it
+    /// with the pack conversion. The player menu's result slot recomputes
+    /// from this after every grid change.
+    crafting_registry: mc_container::RecipeRegistry,
+    /// The furnace table (P12-08): baseline until `load_packs` replaces it
+    /// with the pack conversion. `tick_block_entities` cooks from this.
+    /// Fuel values stay the jar-verified baseline (`FUEL_BURST_TICKS`).
+    smelting_furnace: mc_container::SmeltingRegistry,
     /// Rotating cursor into the entity list for the movement-broadcast budget
     /// (P11-03): which entity starts this tick's slice, so a capped tick never
     /// starves the same tail every time.
@@ -1187,6 +1195,11 @@ impl Game {
             }
         }
 
+        // Baselines until `load_packs` replaces them (P12-07/08). Built here
+        // because the struct literal below moves `registries`.
+        let crafting_registry = mc_container::RecipeRegistry::baseline(&registries.items)?;
+        let smelting_furnace = mc_container::SmeltingRegistry::baseline(&registries.items)?;
+
         Ok(Self {
             registries,
             storage: owned,
@@ -1200,6 +1213,11 @@ impl Game {
             random: RandomSource::new(seed),
             spawn_tables: crate::spawn::SpawnTables::vanilla(),
             loot: mc_data::loot::LootTables::new(),
+            // Baselines until `load_packs` replaces them with pack conversions
+            // (P12-07/08). Failing construction here would refuse to boot over
+            // a registry problem, which is startup-time corruption.
+            crafting_registry,
+            smelting_furnace,
             entity_move_cursor: 0,
             unreadable_chunks: BTreeSet::new(),
             scheduler: Scheduler::new(),
@@ -1695,9 +1713,10 @@ impl Game {
     /// block positions ascending.
     #[allow(clippy::too_many_lines)]
     fn tick_block_entities(&mut self, report: &mut TickReport) -> ServerResult<()> {
-        // Resolve once per tick: the tables are small and furnaces are few.
+        // Resolve once per tick: the table is small and furnaces are few. The
+        // table itself is the pack conversion once packs load (P12-08);
+        // fuel stays the jar-verified baseline.
         let stack_sizes = mc_entity::stack::StackSizeTable::resolve(&self.registries.items)?;
-        let recipes = mc_container::SmeltingRegistry::baseline(&self.registries.items)?;
         let slots = mc_container::FurnaceSlots::CANONICAL;
 
         // Phase one: advance every furnace, recording data-slot deltas.
@@ -1741,7 +1760,7 @@ impl Game {
                 &mut state,
                 &mut container,
                 slots,
-                &recipes,
+                &self.smelting_furnace,
                 &self.registries.items,
                 &stack_sizes,
             );
@@ -4441,6 +4460,7 @@ impl Game {
     /// type, a slot this menu does not have, or a stale state id. A stale state id
     /// is not an error — it resynchronises the client, which is the whole point of
     /// the state id.
+    #[allow(clippy::too_many_lines)]
     fn apply_container_click(&mut self, id: ConnectionId, raw: RawClick, report: &mut TickReport) {
         let Ok(click) = mc_container::Click::new(
             raw.window_id,
@@ -4462,13 +4482,92 @@ impl Game {
         // would be reverted by the unconditional write-back below — which was a
         // client-reachable item duplication (Audit 04 A1).
         mirror_inventory(&mut session.menu, &session.player.inventory);
-        let outcome = match session.menu.apply_click(&click) {
+        let mut outcome = match session.menu.apply_click(&click) {
             Ok(outcome) => outcome,
             Err(error) => {
                 debug!(id = %id, %error, "container click refused");
                 return;
             }
         };
+
+        // P12-07: player crafting grid. The menu owns the grid/result slots but
+        // knows no recipes; the server recomputes the result from its table
+        // after every grid change and consumes the grid when the result is
+        // taken. A stale result take (no match) resyncs instead of duplicating.
+        if session.menu.window_id() == mc_container::PLAYER_WINDOW_ID {
+            let is_result_take =
+                raw.slot == 0 && raw.click_type == mc_container::ClickType::Pickup.id();
+            let touches_crafting =
+                outcome.changed_slots.iter().any(|s| (0..=4).contains(s)) || is_result_take;
+            if touches_crafting {
+                // Snapshot result/grid menu slots to extend the delta set below.
+                let before: Vec<mc_entity::stack::ItemStack> = (0..5)
+                    .map(|slot| session.menu.display_stack(slot))
+                    .collect();
+                let mut resync = false;
+                if is_result_take {
+                    // Consume one set from the grid; `None` means the result was
+                    // stale (no match), so the pickup must not stand.
+                    match take_craft_result(
+                        &mut session.menu,
+                        &self.crafting_registry,
+                        &self.registries.items,
+                    ) {
+                        Ok(consumed) => {
+                            if !consumed {
+                                resync = true;
+                            }
+                        }
+                        Err(error) => {
+                            debug!(id = %id, %error, "craft consumption refused");
+                            resync = true;
+                        }
+                    }
+                }
+                if !resync {
+                    match mc_entity::stack::StackSizeTable::resolve(&self.registries.items) {
+                        Ok(sizes) => {
+                            if let Err(error) = recompute_crafting_result(
+                                &mut session.menu,
+                                &self.crafting_registry,
+                                &self.registries.items,
+                                &sizes,
+                            ) {
+                                debug!(id = %id, %error, "craft recompute refused");
+                                resync = true;
+                            }
+                        }
+                        Err(error) => {
+                            debug!(id = %id, %error, "craft sizes refused");
+                            resync = true;
+                        }
+                    }
+                }
+                if resync {
+                    // Stale result: send the whole window again like a state
+                    // mismatch, so the client drops the duplicated stack.
+                    let contents = session.menu.full_contents();
+                    let state = session.menu.state_id();
+                    let wire_window = session.menu.window_id().cast_signed();
+                    let packet = ContainerSetContent {
+                        window_id: wire_window,
+                        state_id: state,
+                        slots: contents.iter().copied().map(wire_stack).collect(),
+                        carried: wire_stack(session.menu.cursor()),
+                    };
+                    if let Err(error) = self.send(id, &packet, report) {
+                        debug!(id = %id, %error, "could not send a craft resync");
+                    }
+                    return;
+                }
+                for (menu_slot, was) in before.iter().enumerate() {
+                    let now = session.menu.display_stack(menu_slot);
+                    if now != *was {
+                        outcome.changed_slots.insert(menu_slot as u16);
+                    }
+                }
+            }
+        }
 
         if outcome.full_resync {
             // The client's view is stale: send the whole window again. This is the
@@ -5477,6 +5576,28 @@ impl Game {
     #[must_use]
     pub const fn loot(&self) -> &mc_data::loot::LootTables {
         &self.loot
+    }
+
+    /// Install the pack-converted crafting table (P12-07).
+    pub fn set_crafting_registry(&mut self, registry: mc_container::RecipeRegistry) {
+        self.crafting_registry = registry;
+    }
+
+    /// The crafting table (baseline until packs load).
+    #[must_use]
+    pub const fn crafting_registry(&self) -> &mc_container::RecipeRegistry {
+        &self.crafting_registry
+    }
+
+    /// Install the pack-converted furnace table (P12-08).
+    pub fn set_smelting_furnace(&mut self, registry: mc_container::SmeltingRegistry) {
+        self.smelting_furnace = registry;
+    }
+
+    /// The furnace table (baseline until packs load).
+    #[must_use]
+    pub const fn smelting_furnace(&self) -> &mc_container::SmeltingRegistry {
+        &self.smelting_furnace
     }
 
     /// Roll a block's loot table and drop the stacks at the block centre.
@@ -6750,6 +6871,55 @@ fn write_back_block(menu: &mc_container::Menu, entity: &mut mc_container::BlockE
     for (index, slot) in items.iter_mut().enumerate() {
         *slot = container.get(index);
     }
+}
+
+/// Recompute the player menu's crafting result from the grid (P12-07).
+///
+/// Reads grid container 2 (4 slots at width 2), writes result container 1.
+/// Returns `Ok(true)` when the result slot changed.
+fn recompute_crafting_result(
+    menu: &mut mc_container::Menu,
+    registry: &mc_container::RecipeRegistry,
+    items: &mc_registry::ItemRegistry,
+    sizes: &mc_entity::stack::StackSizeTable,
+) -> mc_core::error::ServerResult<bool> {
+    let grid: Vec<mc_entity::stack::ItemStack> = match menu.container(2) {
+        Some(container) => (0..container.len()).map(|i| container.get(i)).collect(),
+        None => return Ok(false),
+    };
+    let result = registry.recompute_result(&grid, 2, items, sizes)?;
+    let changed = match menu.container(1) {
+        Some(container) => container.get(0) != result,
+        None => false,
+    };
+    if changed && let Some(container) = menu.container_mut(1) {
+        let _ = container.set(0, result);
+    }
+    Ok(changed)
+}
+
+/// Consume one craft from the player menu's grid (P12-07).
+///
+/// Returns `Ok(true)` when a recipe matched and the grid was consumed.
+/// `Ok(false)` means the grid matches nothing — the result take was stale.
+fn take_craft_result(
+    menu: &mut mc_container::Menu,
+    registry: &mc_container::RecipeRegistry,
+    items: &mc_registry::ItemRegistry,
+) -> mc_core::error::ServerResult<bool> {
+    let mut grid: Vec<mc_entity::stack::ItemStack> = match menu.container(2) {
+        Some(container) => (0..container.len()).map(|i| container.get(i)).collect(),
+        None => return Ok(false),
+    };
+    if registry.craft(&mut grid, 2, items)?.is_none() {
+        return Ok(false);
+    }
+    if let Some(container) = menu.container_mut(2) {
+        for (index, stack) in grid.iter().enumerate() {
+            let _ = container.set(index, *stack);
+        }
+    }
+    Ok(true)
 }
 
 fn wire_stack(stack: mc_entity::stack::ItemStack) -> mc_protocol::packets::play::ItemStack {
