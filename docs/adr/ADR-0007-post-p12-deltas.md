@@ -68,4 +68,4 @@ came after). No license change: MIT throughout.
 
 Redstone wiring (P13), the 0.2.0 milestone (P14), tag resolution, double-chest
 merge, and the remaining AUDIT-12 open findings keep their own rows in
-`PARITY-MATRIX.md` and their own tasks in `mc-rust-agent-prompts/tasks/`.
+`PARITY-MATRIX.md` and their own phase tasks in the agent task index.
