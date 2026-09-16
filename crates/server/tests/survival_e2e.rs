@@ -554,6 +554,73 @@ fn death_and_respawn_restore_the_player() {
     );
 }
 
+/// P11-10 remainder: `/tp` to `surface + 30` must not embed, and the death →
+/// respawn half must work from there.
+///
+/// The handoff's labelled experiment named `surface + 20` as lethal without
+/// embedding. Two corrections from the instrument:
+///
+/// - `teleport_source` resolves with `find_surface` (scan down for air/air/solid),
+///   so `/tp` to air lands *on the surface*, not in the sky — the position ends
+///   at `sy`, not `ty`. The not-embedding half holds, and this test pins it
+///   (feet and head are air).
+/// - Fall damage is per-tick (at most 8 − 3 = 5 through the 8-block move cap),
+///   so a 20-block fall spread over ticks cannot kill from full health. The `+30`
+///   figure would need a single-tick 30-block drop, which the move cap refuses.
+///   The test kills with `apply_damage` after proving the teleport landed in air —
+///   the physics gap is stated, not hidden. Live-client screen acceptance still
+///   needs an owner at the keyboard and is recorded as owed.
+#[test]
+#[allow(clippy::cast_possible_truncation)]
+fn tp_above_surface_does_not_embed_and_death_respawns_from_there() {
+    let mut harness = Harness::new("p11-tp-death");
+    let (sx, sy, sz) = harness.build_floor();
+    let mut out = harness.join("Mortal");
+
+    // Teleport 30 above the spawn floor through the real command path.
+    let ty = sy + 30;
+    harness.intent(PlayIntent::ChatCommand {
+        command: format!("tp Mortal {sx} {ty} {sz}"),
+    });
+    let pos = harness.game.player(harness.id).expect("player").position;
+    // `teleport_source` resolves into air: feet and head must both be empty.
+    // The 0.5 offsets are the teleport centering (`x + 0.5`, `z + 0.5`).
+    let feet_y = pos.y.floor() as i32;
+    let head_y = (pos.y + 1.8).floor() as i32;
+    let feet = harness.game.world().get_block_loaded(sx, feet_y, sz);
+    let head = harness.game.world().get_block_loaded(sx, head_y, sz);
+    for (label, slot) in [("feet", feet), ("head", head)] {
+        let Some(state) = slot else {
+            panic!("{label} chunk must be loaded after /tp");
+        };
+        assert!(
+            harness.game.registries().blocks.is_empty(state),
+            "{label} must be air after /tp to {sx} {ty} {sz}, got state {state}"
+        );
+    }
+    assert!(
+        (pos.y - f64::from(sy)).abs() < 1.0,
+        "teleport to air must resolve onto the surface ~{sy} (find_surface), got {}",
+        pos.y
+    );
+
+    // Lethal damage from there, then the same respawn path as the P04 test.
+    {
+        let player = harness.game.player_mut(harness.id).expect("player");
+        let outcome = player.apply_damage(100.0);
+        assert!(outcome.died, "100 damage must be lethal from the air");
+    }
+    let _ = Harness::drain_ids(&mut out);
+    harness.intent(PlayIntent::ClientCommand { action: 0 });
+    let player = harness.game.player(harness.id).expect("player");
+    assert!(player.is_alive(), "respawn restores the player");
+    let ids = Harness::drain_ids(&mut out);
+    assert!(
+        ids.contains(&clientbound::play::RESPAWN),
+        "the respawn packet must be sent after an air death, saw {ids:?}"
+    );
+}
+
 #[test]
 fn a_hostile_hotbar_index_is_rejected() {
     let mut harness = Harness::new("p04-hotbar");
