@@ -1723,6 +1723,10 @@ impl Game {
         // Collected first so the mutable walk over block entities ends before
         // any `&self` send below.
         let mut deltas: Vec<(mc_container::BlockPos, [i16; 4])> = Vec::new();
+        // Furnaces whose *items* changed need the hopper-style content resync
+        // below (data slots alone leave the open menu showing pre-tick stacks,
+        // which the next click would flush back over the smelted output).
+        let mut furnace_items_changed: Vec<mc_container::BlockPos> = Vec::new();
         let positions: Vec<mc_container::BlockPos> = self.block_entities.positions().collect();
         for pos in positions {
             let Some(entity) = self.block_entities.get_mut(pos) else {
@@ -1777,6 +1781,9 @@ impl Game {
             let after = [*burn_ticks, *burn_total, *cook_progress, *cook_total];
             if before != after || *items != before_items {
                 mark_block_dirty(&mut self.world, pos.x, pos.z);
+            }
+            if *items != before_items {
+                furnace_items_changed.push(pos);
             }
             if before != after {
                 let mut narrow = [0i16; 4];
@@ -1946,18 +1953,27 @@ impl Game {
                 }
             }
         }
-        // Hopper viewers get a full resync: the transfer moved items, not
-        // progress bars, so the window contents (not data slots) changed.
-        // Deduped because one transfer touches two positions that may share a
-        // viewer; each viewer gets one resync per tick at most. The menu's
-        // block half is refreshed from the entity first — otherwise the resync
-        // would replay the pre-transfer contents the menu still holds.
+        // Hopper and furnace-item viewers get a full resync: a transfer or a
+        // smelt moved items, not progress bars, so the window contents (not
+        // data slots) changed. Deduped because one transfer touches two
+        // positions that may share a viewer; each viewer gets one resync per
+        // tick at most. The menu's block half is refreshed from the entity
+        // first — otherwise the resync would replay the pre-transfer contents
+        // the menu still holds.
         hopper_touched.sort();
         hopper_touched.dedup();
+        furnace_items_changed.sort();
+        furnace_items_changed.dedup();
         for pos in &hopper_touched {
             mark_block_dirty(&mut self.world, pos.x, pos.z);
         }
-        for pos in hopper_touched {
+        let mut content_touched = hopper_touched;
+        for pos in furnace_items_changed {
+            if !content_touched.contains(&pos) {
+                content_touched.push(pos);
+            }
+        }
+        for pos in content_touched {
             let viewers: Vec<ConnectionId> = self
                 .sessions
                 .iter()
@@ -3339,6 +3355,14 @@ impl Game {
                     .map(|(id, s)| (*id, i32::from(s.menu.window_id())))
                     .collect();
                 for (id, window) in viewers {
+                    // Carry the old cursor across the rebuild: it lives only in
+                    // the discarded menu, and dropping it would lose the held
+                    // stack with no warn/drop (AUDIT-12). Returned below like a
+                    // close (inventory first, feet on overflow).
+                    let carried = self
+                        .sessions
+                        .get(&id)
+                        .map_or(mc_entity::stack::ItemStack::EMPTY, |s| s.menu.cursor());
                     // Rebuild the player menu first so the close below cannot
                     // strand the session without a window.
                     let rebuilt = self.new_player_menu();
@@ -3354,6 +3378,19 @@ impl Game {
                         Err(error) => {
                             debug!(id = %id, %error, "could not rebuild the player menu after a break");
                             continue;
+                        }
+                    }
+                    if !carried.is_empty() {
+                        let leftover = match self.sessions.get_mut(&id) {
+                            Some(session) => session.player.inventory.add_stack(carried),
+                            None => carried,
+                        };
+                        if !leftover.is_empty() {
+                            let position = self
+                                .sessions
+                                .get(&id)
+                                .map_or(mc_entity::player::Vec3::default(), |s| s.player.position);
+                            let _ = self.spawn_item(leftover, to_world(position));
                         }
                     }
                     let _ = self.send(
@@ -4495,8 +4532,11 @@ impl Game {
         // after every grid change and consumes the grid when the result is
         // taken. A stale result take (no match) resyncs instead of duplicating.
         if session.menu.window_id() == mc_container::PLAYER_WINDOW_ID {
-            let is_result_take =
-                raw.slot == 0 && raw.click_type == mc_container::ClickType::Pickup.id();
+            let is_result_take = raw.slot == 0
+                && raw.click_type == mc_container::ClickType::Pickup.id()
+                // A stale click applied nothing (`full_resync`): consuming the
+                // grid now would lose ingredients for no result (AUDIT-12 F2).
+                && !outcome.full_resync;
             let touches_crafting =
                 outcome.changed_slots.iter().any(|s| (0..=4).contains(s)) || is_result_take;
             if touches_crafting {

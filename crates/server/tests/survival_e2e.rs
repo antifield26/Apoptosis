@@ -718,6 +718,337 @@ fn crafting_grid_recomputes_and_taking_consumes() {
     let _ = Harness::drain_ids(&mut out);
 }
 
+/// AUDIT-12 F2: a stale result-take must not consume the grid.
+///
+/// Fills the 2x2 grid, bumps the state with a valid click, then replays a
+/// result-take with the now-stale state. The menu applies nothing on stale
+/// state — and the crafting hook must not consume behind its back.
+#[test]
+fn a_stale_result_take_consumes_nothing() {
+    let mut harness = Harness::new("p12-stale-craft");
+    harness.build_floor();
+    let mut out = harness.join("Stale");
+    let _ = Harness::drain_ids(&mut out);
+    let planks = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:oak_planks")
+        .expect("planks");
+    let stone = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:stone")
+        .expect("stone");
+    {
+        let player = harness.game.player_mut(harness.id).expect("player");
+        player
+            .inventory
+            .set_slot(
+                0,
+                mc_entity::stack::ItemStack::new(planks, 2).expect("stack"),
+            )
+            .expect("give planks");
+        player
+            .inventory
+            .set_slot(
+                1,
+                mc_entity::stack::ItemStack::new(stone, 4).expect("stack"),
+            )
+            .expect("give stones for the state bump");
+    }
+    // Planks into grid slots 1 and 3 (sticks pattern).
+    for slot in [36, 1, 3] {
+        let state = harness.game.menu_state_id(harness.id).expect("state");
+        let (slot, button, click_type) = if slot == 36 {
+            (36, 0, 0)
+        } else if slot == 1 {
+            (1, 1, 0)
+        } else {
+            (3, 0, 0)
+        };
+        harness.intent(PlayIntent::ContainerClick {
+            window_id: 0,
+            state_id: state,
+            slot,
+            button,
+            click_type,
+        });
+    }
+    let grid_before: i64 = [1, 2, 3, 4]
+        .iter()
+        .map(|slot| {
+            i64::from(
+                harness
+                    .game
+                    .menu_slot(harness.id, *slot)
+                    .expect("grid")
+                    .count(),
+            )
+        })
+        .sum();
+    assert_eq!(grid_before, 2);
+    // Bump the state with a real move: quick-move the stones in hotbar 1
+    // (menu 37) elsewhere in the player inventory. An empty-slot pickup is a
+    // no-op that does NOT bump state, which is why the first version of this
+    // test accidentally sent a fresh state and crafted for real.
+    let fresh = harness.game.menu_state_id(harness.id).expect("state");
+    harness.intent(PlayIntent::ContainerClick {
+        window_id: 0,
+        state_id: fresh,
+        slot: 37,
+        button: 0,
+        click_type: 1,
+    });
+    let bumped = harness.game.menu_state_id(harness.id).expect("state");
+    assert_ne!(
+        bumped, fresh,
+        "the quick-move must advance state, or the take below is not stale"
+    );
+    let stale = fresh;
+    // Stale result-take with the pre-bump state.
+    harness.intent(PlayIntent::ContainerClick {
+        window_id: 0,
+        state_id: stale,
+        slot: 0,
+        button: 0,
+        click_type: 0,
+    });
+    let grid_after: i64 = [1, 2, 3, 4]
+        .iter()
+        .map(|slot| {
+            i64::from(
+                harness
+                    .game
+                    .menu_slot(harness.id, *slot)
+                    .expect("grid")
+                    .count(),
+            )
+        })
+        .sum();
+    assert_eq!(grid_after, grid_before, "a stale take must consume nothing");
+    let _ = Harness::drain_ids(&mut out);
+}
+
+/// AUDIT-12: breaking a chest with a full cursor returns the cursor.
+///
+/// Picks 16 stones onto the cursor, breaks the chest before closing, and
+/// asserts the 16 survive in the inventory or as drops (previously lost with
+/// no warn/drop).
+#[test]
+fn breaking_a_chest_with_a_full_cursor_keeps_the_cursor() {
+    let mut harness = Harness::new("p12-break-cursor");
+    let (sx, sy, sz) = harness.build_floor();
+    let mut out = harness.join("Holder");
+    let chest = harness
+        .game
+        .registries()
+        .blocks
+        .default_state("minecraft:chest")
+        .expect("chest block");
+    let at = (sx + 1, sy, sz);
+    harness
+        .game
+        .world_mut()
+        .set_block(at.0, at.1, at.2, chest)
+        .expect("place chest");
+    let _ = Harness::drain_ids(&mut out);
+    harness.intent(PlayIntent::UseItemOn {
+        hand: 0,
+        position: block_position(at.0, at.1, at.2),
+        face: 1,
+        cursor_x: 0.5,
+        cursor_y: 1.0,
+        cursor_z: 0.5,
+        inside_block: false,
+        sequence: 51,
+    });
+    let window = i32::from(
+        harness
+            .game
+            .menu_window_id(harness.id)
+            .expect("a chest window"),
+    );
+    let stone = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:stone")
+        .expect("stone");
+    {
+        let player = harness.game.player_mut(harness.id).expect("player");
+        player
+            .inventory
+            .set_slot(
+                0,
+                mc_entity::stack::ItemStack::new(stone, 16).expect("stack"),
+            )
+            .expect("give stones");
+    }
+    // Into the chest, then back onto the cursor.
+    for slot in [54, 0] {
+        let state = harness.game.menu_state_id(harness.id).expect("state");
+        let click_type = i32::from(slot == 54);
+        harness.intent(PlayIntent::ContainerClick {
+            window_id: window,
+            state_id: state,
+            slot,
+            button: 0,
+            click_type,
+        });
+    }
+    assert!(
+        !harness
+            .game
+            .menu_cursor(harness.id)
+            .expect("cursor")
+            .is_empty(),
+        "the stack must be on the cursor before the break"
+    );
+    harness.intent(PlayIntent::PlayerAction {
+        status: 0,
+        position: block_position(at.0, at.1, at.2),
+        facing: 1,
+        sequence: 52,
+    });
+    harness.game.tick().expect("settle");
+    let in_inventory: i64 = (0..harness
+        .game
+        .player(harness.id)
+        .expect("player")
+        .inventory
+        .stored_slots())
+        .map(|i| {
+            i64::from(
+                harness
+                    .game
+                    .player(harness.id)
+                    .expect("player")
+                    .inventory
+                    .slot(i)
+                    .count(),
+            )
+        })
+        .sum();
+    let in_drops: i64 = harness
+        .game
+        .dropped_items()
+        .iter()
+        .filter(|(stack, _)| stack.item_id() == Some(stone))
+        .map(|(stack, _)| i64::from(stack.count()))
+        .sum();
+    assert!(
+        in_inventory + in_drops >= 16,
+        "cursor 16 must survive the break (inventory {in_inventory} + drops {in_drops})"
+    );
+    let _ = Harness::drain_ids(&mut out);
+}
+
+/// AUDIT-12: an open furnace shows the smelted output without reopening.
+///
+/// Seeds the entity near completion, ticks past it, and asserts the open
+/// menu's output slot (menu 2) holds the ingot — previously stale until
+/// reopen (entity cooked, menu showed pre-tick stacks).
+#[test]
+fn an_open_furnace_menu_shows_completed_output() {
+    let mut harness = Harness::new("p12-furnace-view");
+    let (sx, sy, sz) = harness.build_floor();
+    let mut out = harness.join("Watcher");
+    let furnace = harness
+        .game
+        .registries()
+        .blocks
+        .default_state("minecraft:furnace")
+        .expect("furnace block");
+    let at = (sx + 1, sy, sz);
+    harness
+        .game
+        .world_mut()
+        .set_block(at.0, at.1, at.2, furnace)
+        .expect("place furnace");
+    let _ = Harness::drain_ids(&mut out);
+    harness.intent(PlayIntent::UseItemOn {
+        hand: 0,
+        position: block_position(at.0, at.1, at.2),
+        face: 1,
+        cursor_x: 0.5,
+        cursor_y: 1.0,
+        cursor_z: 0.5,
+        inside_block: false,
+        sequence: 61,
+    });
+    let window = i32::from(
+        harness
+            .game
+            .menu_window_id(harness.id)
+            .expect("a furnace window"),
+    );
+    let items = &harness.game.registries().items;
+    let ore = items.id("minecraft:iron_ore").expect("ore");
+    let coal = items.id("minecraft:coal").expect("coal");
+    {
+        let player = harness.game.player_mut(harness.id).expect("player");
+        player
+            .inventory
+            .set_slot(0, mc_entity::stack::ItemStack::new(ore, 1).expect("stack"))
+            .expect("give ore");
+        player
+            .inventory
+            .set_slot(1, mc_entity::stack::ItemStack::new(coal, 1).expect("stack"))
+            .expect("give coal");
+    }
+    for slot in [30, 31] {
+        let state = harness.game.menu_state_id(harness.id).expect("state");
+        harness.intent(PlayIntent::ContainerClick {
+            window_id: window,
+            state_id: state,
+            slot,
+            button: 0,
+            click_type: 1,
+        });
+    }
+    // Seed near completion: 195/200 cooked, lit with 100 burn left.
+    {
+        let entity = harness
+            .game
+            .block_entities_mut()
+            .get_mut(mc_container::BlockPos::new(at.0, at.1, at.2))
+            .expect("furnace entity");
+        if let mc_container::BlockEntityData::Furnace {
+            burn_ticks,
+            burn_total,
+            cook_progress,
+            cook_total,
+            ..
+        } = &mut entity.data
+        {
+            *burn_ticks = 100;
+            *burn_total = 1600;
+            *cook_progress = 195;
+            *cook_total = 200;
+        } else {
+            panic!("a furnace entity");
+        }
+    }
+    for _ in 0..10 {
+        harness.game.tick().expect("tick");
+    }
+    let output = harness.game.menu_slot(harness.id, 2).expect("output");
+    let ingot = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:iron_ingot")
+        .expect("ingot");
+    assert_eq!(
+        output.item_id(),
+        Some(ingot),
+        "the open menu must show the smelted ingot, got {output:?}"
+    );
+    let _ = Harness::drain_ids(&mut out);
+}
+
 /// P12-09: closing a chest returns the cursor and restores the player menu.
 ///
 /// Picks up a chest stack onto the cursor, closes the window through the real
