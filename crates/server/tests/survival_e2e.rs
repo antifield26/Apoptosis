@@ -621,6 +621,115 @@ fn tp_above_surface_does_not_embed_and_death_respawns_from_there() {
     );
 }
 
+/// P12-02: chest transactions on a non-zero window conserve items.
+///
+/// Opens a chest, puts 64 stones in the player's hotbar, shift-clicks them
+/// into the chest (menu slot 54 = player storage 0), and asserts the block
+/// entity holds them, the player no longer does, and the total never changes —
+/// including across a 20-click hostile flood that shuttles the stack back and
+/// forth. The 2 000-click shape lives in `mc-container`'s unit tests; this
+/// proves the *server* half (mirror in, validate against the non-zero window,
+/// flush to both the inventory and the block entity).
+#[test]
+fn chest_transactions_conserve_across_a_flood() {
+    let mut harness = Harness::new("p12-chest-tx");
+    let (sx, sy, sz) = harness.build_floor();
+    let mut out = harness.join("Trader");
+    let chest = harness
+        .game
+        .registries()
+        .blocks
+        .default_state("minecraft:chest")
+        .expect("chest block");
+    let at = (sx + 1, sy, sz);
+    harness
+        .game
+        .world_mut()
+        .set_block(at.0, at.1, at.2, chest)
+        .expect("place chest");
+    let _ = Harness::drain_ids(&mut out);
+    harness.intent(PlayIntent::UseItemOn {
+        hand: 0,
+        position: block_position(at.0, at.1, at.2),
+        face: 1,
+        cursor_x: 0.5,
+        cursor_y: 1.0,
+        cursor_z: 0.5,
+        inside_block: false,
+        sequence: 11,
+    });
+    let window = i32::from(
+        harness
+            .game
+            .menu_window_id(harness.id)
+            .expect("a chest window"),
+    );
+    assert_ne!(window, 0, "chest transactions run on a non-zero window");
+
+    // 64 stones into hotbar slot 0 (player storage 0 = menu slot 54).
+    let stone = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:stone")
+        .expect("stone item");
+    {
+        let player = harness.game.player_mut(harness.id).expect("player");
+        player
+            .inventory
+            .set_slot(
+                0,
+                mc_entity::stack::ItemStack::new(stone, 64).expect("stack"),
+            )
+            .expect("give stones");
+    }
+    // The only items in play are those 64 stones.
+    let total_before = 64i64;
+
+    // Shift-click hotbar into the chest.
+    let mut state = harness.game.menu_state_id(harness.id).expect("state");
+    harness.intent(PlayIntent::ContainerClick {
+        window_id: window,
+        state_id: state,
+        slot: 54,
+        button: 0,
+        click_type: 1,
+    });
+    let entity_count: i64 = harness
+        .game
+        .block_entities()
+        .get(mc_container::BlockPos::new(at.0, at.1, at.2))
+        .expect("the chest entity")
+        .data
+        .total_items();
+    assert_eq!(entity_count, 64, "the shift-click must land in the chest");
+    assert_eq!(
+        harness.game.menu_total_items(harness.id).expect("total"),
+        total_before,
+        "a chest move must conserve"
+    );
+
+    // Hostile flood: shuttle the stack chest ↔ player 20 times.
+    for round in 0..20 {
+        state = harness.game.menu_state_id(harness.id).expect("state");
+        // Chest slot 0 on even rounds (back to player), player hotbar on odd.
+        let slot = if round % 2 == 0 { 0 } else { 54 };
+        harness.intent(PlayIntent::ContainerClick {
+            window_id: window,
+            state_id: state,
+            slot,
+            button: 0,
+            click_type: 1,
+        });
+        assert_eq!(
+            harness.game.menu_total_items(harness.id).expect("total"),
+            total_before,
+            "round {round}: a chest flood must conserve"
+        );
+    }
+    let _ = Harness::drain_ids(&mut out);
+}
+
 /// P12-01: right-clicking a chest opens a non-zero window.
 ///
 /// Places a real chest block, right-clicks it with an empty hand through the
