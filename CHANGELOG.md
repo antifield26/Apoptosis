@@ -303,8 +303,10 @@ fix is the shape `JoinGame` already sends and the client already accepts. The
 regression test decodes our bytes with a reader transcribed **from that bytecode**
 rather than a round trip through our own encoder — the round-trip-only trap is what
 let this and two other wire defects through — and a second test pins the old shape
-as unreadable. The death location is now real: `Session::last_death_location` is
-recorded where the player died and rides the packet.
+as an out-of-bytes read (a `#[should_panic]`), with a third naming which of our
+fields the client reads as which of its own. The death location is now real:
+`Session::last_death_location` is recorded where the player died and rides the
+packet.
 
 **M-2 — mining did not appear to break blocks. The diagnosis in the handoff was
 wrong, and the instrument says so.** The claim was that 95 `player_action` packets

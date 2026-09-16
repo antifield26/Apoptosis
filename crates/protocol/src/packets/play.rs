@@ -5175,14 +5175,12 @@ mod tests {
         assert!(!read_as_the_client_does(&without_body).7);
     }
 
-    /// **The falsification anchor for M-1.**
+    /// The body this packet used to produce: the dimension/seed/mode block, then
+    /// `data kept` where `sea level` belongs and the sea level after it.
     ///
-    /// The shape this packet used to have — ending at `is_flat`, then `data kept`
-    /// and `sea level` — must not be readable as a whole `CommonPlayerSpawnInfo`.
-    /// If someone reverts the encoder to that, the client-shaped reader runs out
-    /// of bytes (or leaves the trailing byte unconsumed) and this fails.
-    #[test]
-    fn respawn_rejects_the_old_truncated_spawn_info() {
+    /// Built here rather than reconstructed from the encoder, because the encoder
+    /// no longer produces it — that is the point of the two tests below.
+    fn old_truncated_respawn_body() -> Vec<u8> {
         let mut writer = crate::wire::PacketWriter::new();
         writer.write_varint(0);
         writer.write_string("minecraft:overworld").expect("writes");
@@ -5193,11 +5191,37 @@ mod tests {
         writer.write_bool(false);
         writer.write_u8(0); // `data kept`, in the old, wrong position
         writer.write_varint(63);
-        let old_shape = writer.finish();
+        writer.finish()
+    }
 
-        // The old body happens to be long enough, so the failure is not a panic:
-        // it is that the client's field boundaries land on the wrong values and
-        // the trailing byte is read from beyond the end.
+    /// **The falsification anchor for M-1, part one: the client is driven off the
+    /// rails rather than merely reaching the wrong values.**
+    ///
+    /// The old body is 35 bytes and the client's reader consumes all 35 before it
+    /// has finished: after reading what it takes for `portalCooldown`, it still
+    /// needs `seaLevel` **and** the packet's trailing `dataToKeep` byte, and there
+    /// are none left. A real client reports a decoder exception and refuses the
+    /// packet, which is what the owner saw as "cannot respawn".
+    ///
+    /// This is a `#[should_panic]` rather than an assertion because the failure
+    /// *is* an out-of-bytes read, and the test says so in its name.
+    #[test]
+    #[should_panic(expected = "out of range")]
+    fn respawn_rejects_the_old_truncated_spawn_info() {
+        read_as_the_client_does(&old_truncated_respawn_body());
+    }
+
+    /// **The falsification anchor for M-1, part two: where the misalignment lands.**
+    ///
+    /// Not a duplicate of the test above — that one stops at the point the client
+    /// runs out of bytes, this one names *which* of our fields the client reads as
+    /// which of its own before it does. Without that, "the packet was too short"
+    /// is a reader's inference; with it, the first wrong field is on the record:
+    /// the old `data kept` becomes "no death location", and the old `sea level`
+    /// becomes the portal cooldown.
+    #[test]
+    fn the_old_respawn_shape_misaligns_the_clients_fields() {
+        let old_shape = old_truncated_respawn_body();
         let mut reader = ClientReader {
             bytes: &old_shape,
             at: 0,
@@ -5209,17 +5233,22 @@ mod tests {
         let _previous = reader.i8();
         let _debug = reader.bool_byte();
         let _flat = reader.bool_byte();
-        let has_death_location = reader.bool_byte(); // reads our old `data kept` = false
-        assert!(!has_death_location);
-        let portal_cooldown = reader.varint(); // reads our old `sea level` = 63
+        let has_death_location = reader.bool_byte(); // our old `data kept` = 0
+        assert!(
+            !has_death_location,
+            "the old shape's `data kept` byte is read as the death-location flag"
+        );
+        let portal_cooldown = reader.varint(); // our old `sea level` = 63
         assert_eq!(
             portal_cooldown, 63,
             "the old shape's sea level is read as the portal cooldown"
         );
+        // And the two fields the client still wants are not there.
         assert_eq!(
-            reader.at,
-            old_shape.len(),
-            "the old shape has no sea level and no trailing byte left to read"
+            old_shape.len() - reader.at,
+            0,
+            "the client must still read a sea level and the trailing byte; \
+             the old shape has neither left"
         );
     }
 

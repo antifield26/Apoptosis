@@ -5,24 +5,25 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 357 passed, 0 failed, 33 ignored** across **106 suites**, re-derived from
+Totals: **1 358 passed, 0 failed, 33 ignored** across **106 suites**, re-derived from
 `cargo test --workspace --no-fail-fast` on the M-1..M-4 tree (the owner's P11-10
 acceptance round's four defects, fixed). The count has moved
-1 194 -> 1 196 -> 1 206 -> 1 207 -> 1 212 -> 1 325 -> 1 344 -> 1 346 -> 1 357: three from
+1 194 -> 1 196 -> 1 206 -> 1 207 -> 1 212 -> 1 325 -> 1 344 -> 1 346 -> 1 358: three from
 the Audit 07 remediation, two Audit 08 coverage tests, ten from the
 `mc-capture-rig` crate (P10-01), one regression test for the
 compression-transition defect (P10-02), the synced-registry work (P10-03), then
 P10-04..11 and P11-01..03, nineteen from the P11-04..09 landing, two from
-AUDIT-10 itself, and **eleven from the M-1..M-4 fixes**: two more respawn
-wire-shape tests (`mc-protocol` lib, one round trip replaced by three tests), the
-liquid predicate's own test (`mc-world` lib, +1), and two new server suites —
+AUDIT-10 itself, and **twelve from the M-1..M-4 fixes**: three more `respawn`
+wire-shape tests (`mc-protocol` lib — one round trip became four tests, one of them
+a `#[should_panic]` that drives the client's reader off the end of the old body),
+the liquid predicate's own test (`mc-world` lib, +1), and two new server suites —
 `block_change_ack` (4) and `mob_pathing` (4). The 33 ignored = the differential
 (jar-gated) suites listed in the last section, the three `vanilla_loot`
 differential tests, plus `pi_profile` 4 and `tick_baseline` 2 — all run on demand.
 
 **Every per-crate count below was re-measured with `cargo test -p <crate> --lib`**
-while updating this total. The 17 lib counts sum to **1 022**, the 5 doc-tests and
-the 330 named-suite tests complete the 1 357 (1 022 + 5 + 330 = 1 357, the third
+while updating this total. The 17 lib counts sum to **1 023**, the 5 doc-tests and
+the 330 named-suite tests complete the 1 358 (1 023 + 5 + 330 = 1 358, the third
 figure derived from the run total and the other two rather than counted
 independently). Both Audit 07's method and its lesson still apply: the figures must
 be re-measured per crate, because five of them once turned out to be **another
@@ -53,11 +54,11 @@ each suite proves, and the deduplicated defect history.
 
 Counts are from the P11-04..09 run, except the named-suite figures noted above as
 from the P10-03 round. Named integration suites are counted explicitly; the
-remaining per-crate lib binaries are itemised above and complete the 1 357 total.
+remaining per-crate lib binaries are itemised above and complete the 1 358 total.
 
 | Area | Named suites (lib count) | What they prove |
 |---|---|---|
-| Protocol | `packet_ids` (6), `fixtures` (4), `mc-protocol` lib (112) | every packet id matches the jar's registration bytecode (incl. the `chat_command`=7 regression, L7); **every constant in `ids.rs` is compared against the jar-extracted table, in its own state and direction** (105 of them, AUDIT-09 A-02 — the count grew with `block_changed_ack`); **the protocol version is compared against the jar's own `version.json`** (AUDIT-09 E-03); golden wire bytes for frames/handshake/NBT; hostile VarInt/frame corpora; compression bomb rejection; **`respawn` is decoded the way the client decodes it** — a reader transcribed from `CommonPlayerSpawnInfo`'s bytecode, not a round trip through our own encoder (M-1) |
+| Protocol | `packet_ids` (6), `fixtures` (4), `mc-protocol` lib (113) | every packet id matches the jar's registration bytecode (incl. the `chat_command`=7 regression, L7); **every constant in `ids.rs` is compared against the jar-extracted table, in its own state and direction** (105 of them, AUDIT-09 A-02 — the count grew with `block_changed_ack`); **the protocol version is compared against the jar's own `version.json`** (AUDIT-09 E-03); golden wire bytes for frames/handshake/NBT; hostile VarInt/frame corpora; compression bomb rejection; **`respawn` is decoded the way the client decodes it** — a reader transcribed from `CommonPlayerSpawnInfo`'s bytecode, not a round trip through our own encoder, with the old truncated shape pinned as an out-of-bytes read (M-1) |
 | Network | `mc-network` lib (18), `keepalive` (1), `login_tolerance` (2), `e2e_login_play` (6) | connection lifecycle, admission limits, keepalive timeout kick, malformed input drops only that connection, login-phase tolerance, full offline login over a real socket |
 | Persistence | `mc-persistence` lib (74), `anvil_fixture` (9), `corruption` (16), `restart` (7) | region/NBT codec edges, byte-identical palette repack, bit-flip → typed error with no partial publish, save→close→reopen semantics, atomic tmp→rename pinned by `a_failed_commit_leaves_the_live_file_untouched` (Audit 07 finding H1), dirty-flag retry on failure. **Gap, AUDIT-09 B-02**: `the_location_word_is_written_last` asserts the end state, so it passes under a reordered write — the ordering needs an instrument that observes the sequence |
 | Survival & world | `mc-world` lib (42), `light_cache` (8), `vanilla_chunk` (4), `survival_e2e` (7), `network_game_bridge` (4), **`block_change_ack` (4)** | collision/ray/hostile movement guards; a real vanilla chunk walks and round-trips losslessly; join/stream budgets, break/place validation, death/respawn, save-reload over real sockets; **light-cache invalidation drops the diagonal chunk at a corner**, compared against an oracle derived independently from the margin interval (AUDIT-09 B-05); **a fluid is non-solid *and* liquid, and an unknown id is neither** — the predicate M-4's lookahead reads; **a dig is acknowledged with the client's own sequence, once per tick at the high-water mark, after the block update and even when the dig was refused** (M-2) |
@@ -168,3 +169,20 @@ would have caught it. Two more were documents more confident than their code
 (the bypass comments, the cited-but-absent report sections). The rule these
 taught, now in [CONVENTIONS.md §3.1](../CONVENTIONS.md): a check that cannot
 fail is not evidence.
+
+**Two more from the M-1..M-4 landing, both caught by probes rather than by
+reading** — recorded here because the same shape will recur:
+
+- **A test that cannot tell two rules apart.** `block_change_ack.rs`'s
+  high-water-mark test first queued its two sequences *ascending* (3 then 11), so
+  "keep the maximum" and "keep the last" produced the same ack and the test passed
+  under either. `target/m_probes.py` probe M-2c perturbs the rule to "last" and
+  reported `*** PASSED -- TEST NOT LOAD-BEARING ***`. The order is now 11 then 3,
+  and the test says in its own doc why.
+- **A test whose name promises more than its body asserts.** The respawn
+  falsification anchor was called `respawn_rejects_the_old_truncated_spawn_info`
+  while its body asserted only that the client's reader *misaligns* on the old
+  shape — it consumed all 35 bytes and the test passed. It is now two tests: a
+  `#[should_panic(expected = "out of range")]` named for the rejection it really
+  performs, and a separate `the_old_respawn_shape_misaligns_the_clients_fields`
+  that names which field lands on which.
