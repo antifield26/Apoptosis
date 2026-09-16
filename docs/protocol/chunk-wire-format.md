@@ -126,11 +126,11 @@ VarInt block light array count, then per array: VarInt 2048, byte[2048]
 ```
 
 Bit `i` of a mask corresponds to section `i - 1` (section 0 maps to bit 1); the
-highest bit covers the layer above the world. Phase 04 sends **no** light arrays:
-`sky light mask = 0`, `block light mask = 0`, both empty masks = 0. The client
-then treats the whole chunk as dark until a `light_update` arrives, which is why
-the prototype must run with night vision or in daylight — recorded as a known
-limitation rather than papered over.
+highest bit covers the layer above the world. Phase 04 sent **no** light arrays:
+`sky light mask = 0`, `block light mask = 0`, both empty masks = 0. Since P10-05
+chunks carry the computed light (sky flood from the heightmaps, block-light BFS,
+incremental `light_update` on change — owner-confirmed on a real client; see
+`26.1.2-wire-notes.md` §2.3 and the lighting row in `PARITY-MATRIX.md`).
 
 ## 7. Follow-ups this creates
 

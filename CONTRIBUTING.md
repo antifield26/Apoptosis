@@ -39,8 +39,10 @@ and [docs/operations/RUNBOOK.md](docs/operations/RUNBOOK.md)).
 | Licences/deps | `cargo deny check licenses bans sources` | clean |
 
 The 34 ignored tests are on-demand: the benchmark harness (`pi_profile`,
-`tick_baseline`) and eight differential suites that need real 26.1.2 jar data
-(next section). CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs
+`tick_baseline`), the differential suites below, `vanilla_loot` (3),
+`vanilla_chunk_light` (2), the light suites (4) and `terrain_distribution`
+(3) — full breakdown in [docs/testing/TEST-MATRIX.md](docs/testing/TEST-MATRIX.md).
+CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs
 all of this on every push; a red CI is a stop for everything else.
 
 ### Differential tests (need a real vanilla 26.1.2 jar)
@@ -52,7 +54,7 @@ jar and its extracted data. They skip cleanly (as ignored) without the data.
 export MC_VANILLA_DATA="$PWD/target/vanilla-26.1.2/extract/data/minecraft"
 export MC_VANILLA_JAR="$PWD/target/vanilla-26.1.2/server.jar"
 export MC_VANILLA_WORLD="$PWD/target/vanilla-26.1.2/vanilla-world-26.1.2/world"
-cargo test -p mc-data -p mc-container -p mc-persistence -p mc-server -p mc-worldgen -- --ignored
+cargo test -p mc-data -p mc-container -p mc-persistence -p mc-protocol -p mc-server -p mc-worldgen -- --ignored
 ```
 
 `MC_VANILLA_DATA` feeds the pack/differential data suites;
@@ -77,7 +79,7 @@ extract the data pack) — the repository never vendors jar-derived data.
 [docs/CONVENTIONS.md](docs/CONVENTIONS.md) is the in-repo statement of the
 engineering contract: evidence before claims, no fake completeness,
 deterministic simulation, the error and security contracts, the test-level
-vocabulary (L1 unit … L6 differential), and the rule that compatibility claims
+vocabulary (L1 unit … L7 regression-per-bug), and the rule that compatibility claims
 cite a test, a measurement or a fixture. ADRs
 ([docs/adr/](docs/adr/)) record architectural decisions; new decisions get a
 new ADR rather than an edit to an accepted one.

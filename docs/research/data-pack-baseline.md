@@ -108,7 +108,9 @@ Precise **file** counts (see section 0a for why the first version was wrong):
 ## 2. Tags — the one format fully measured
 
 ```text
-tag files                    758   across 17 registries
+tag files                    758   across 17 registries (distinct first segments;
+                               `TAG_REGISTRIES` holds 20 longest-match paths —
+                               see §2.1, same files, finer split)
 nested (#other) references   384   ⇒ transitive resolution is the common case
 deepest nesting                4   (block/supports_crimson_fungus)
 cycles                         0   ⇒ the detector is exercised only by our tests
@@ -224,10 +226,14 @@ verified.
 
 - **`.zip` packs.** Directory packs only; a zip needs an archive reader (new dependency
   + licence review). No world on this machine uses one.
-- **The world's enabled-pack list.** `level.dat → DataPacks` is not read, so every
-  discovered pack loads rather than only the enabled ones.
-- **`data/minecraft/datapacks/`** (132 entries) — the built-in packs a new world gets.
+- **The world's enabled-pack list.** `level.dat → DataPacks` *is* read since P07-12:
+  only enabled packs load (`EnabledPacks`, last-wins overrides); the sentence this
+  replaces predates that work.
+- **`data/minecraft/datapacks/`** (132 zip entries, 106 files — entries count
+  directory headers, files do not; see §0a) — the built-in packs a new world gets.
   They are inside the jar and are loaded by the same mechanism when present on disk,
   but nothing extracts them.
-- **Loot tables, advancements, functions, predicates, item modifiers, worldgen.** Not
-  loaded; listed in `DATA_DIRECTORIES` as intent and absent from the parity claims.
+- **Advancements effects, predicates, item modifiers, worldgen.** Not loaded;
+  listed in `DATA_DIRECTORIES` as intent and absent from the parity claims. (Loot
+  tables, functions, tags and 7 recipe types load; recipes convert to the
+  crafting/furnace tables since P12-07/08.)

@@ -6683,11 +6683,12 @@ impl Game {
 
     /// Persist the world through a caller-supplied handle (shutdown path).
     ///
-    /// Persists: **dirty** chunks and `level.dat`. Does **not** persist per-player
+    /// Persists: **dirty** chunks (terrain plus their live entities and block
+    /// entities, P11-08/P12-05) and `level.dat`. Does **not** persist per-player
     /// data —`playerdata/<uuid>.dat` needs the player-file layout, which Phase 04
-    /// does not implement — nor entities: mob and item persistence arrives with the
-    /// entity chunk sections in P05-16, so a dropped item does not survive a
-    /// restart. Both gaps are listed in the phase reports rather than implied away.
+    /// does not implement. Only chunks the world reports as dirty are written,
+    /// so an entity in an otherwise-clean chunk still does not save (recorded
+    /// divergence).
     ///
     /// Only chunks the world reports as dirty are written. A chunk that was loaded
     /// from disk and then edited is dirty; a chunk that was only *streamed* to a

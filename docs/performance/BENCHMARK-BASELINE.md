@@ -73,6 +73,8 @@ Interpretation:
   a documented no-op (no goal decisions or pathfinding are paid), and nothing is
   encoded to clients because entity packets do not exist yet (P05-15). Physics,
   however, is real — items and mobs are integrated against the world every tick.
+  (Historical note, P05-18: AI drives goals since P11-02 and entity packets exist
+  since P10-06 — this paragraph describes the measurement as run, not the tree.)
 - `busiest_phase` is a **lifetime** mean and therefore reflects the join burst.
   It needs a windowed variant before it can answer "what dominates a settled
   server"; recorded as a P08-02 item rather than smoothed over.
@@ -95,7 +97,7 @@ Interpretation:
 | Wall time (200 ticks) | 2.1–4.2 s across runs (host noise dominates; see interpretation) |
 | MSPT mean | 10.5–21.2 ms across runs |
 | MSPT p50 / p95 / p99 | run A: 0.69 / 0.85 / 381.23 ms, max 386.08 ms; run B (workload test): 0.66 / 0.76 / 0.90 ms, max 1.01 ms |
-| Per-phase means | `network` 0.02, `scheduled_ticks` 0.00, `entities` 0.00, `players` 0.05–0.12, `block_entities` 0.00, `broadcast` 72–140 ms |
+| Per-phase means | `network` 0.02, `scheduled_ticks` 0.00, `entities` 0.00, `players` 0.05–0.12, `block_entities` 0.00 (pre-P12: furnaces/hoppers now tick there — re-measure before citing), `broadcast` 72–140 ms |
 | Overruns | 46 of 240 ticks (the join burst; settled ticks do not overrun) |
 | TPS | not measured as a rate — the test drives the loop synchronously; the printed "tps estimate" (57–114) is ticks/wall and is **not** a 20 TPS claim |
 | CPU / RSS | not captured on this host |
@@ -283,6 +285,9 @@ needs no re-derivation.
 6. **Record**: a dated `§P09-Pi` section in this file with every §13 field and
    the commit; update the parity matrix's 20 TPS row (KD-35) in the same
    pass. Until that section exists, no document may upgrade KD-35.
+   Note (P12): the §P09-Pi soak below predates furnace/hopper ticking,
+   block-entity persistence and viewer resyncs — re-soak before extending its
+   verdict to the current tick work.
 
 Until then, the aarch64 half of the story is the cross-build gate
 (`cargo check --target aarch64-unknown-linux-gnu`, green 2026-09-12) plus the

@@ -34,8 +34,11 @@ install -m 0755 target/release/mc-server /srv/mc-server/mc-server
 # the build tree):
 mkdir -p /srv/mc-server/fixtures/registry
 install -m 0644 crates/test-support/fixtures/registry/blocks.tsv \
-                crates/test-support/fixtures/registry/items.tsv \
-                /srv/mc-server/fixtures/registry/
+                 crates/test-support/fixtures/registry/items.tsv \
+                 crates/test-support/fixtures/registry/block_light.tsv \
+                 crates/test-support/fixtures/registry/entity_types.tsv \
+                 /srv/mc-server/fixtures/registry/
+install -m 0644 docs/operations/RUNBOOK.md /srv/mc-server/RUNBOOK.md
 install -m 0644 config.example.toml /srv/mc-server/config.toml
 # then edit /srv/mc-server/config.toml (bind, world_dir; see section 2 for
 #      the optional [datapacks] vanilla_data path, without which the server has
@@ -168,10 +171,13 @@ backup: it covers neither region files nor operator error.
 
 ## 6. Known gaps (not hidden)
 
-- No 20 TPS / production-ready claim: no Pi 5 run exists in this environment.
+- Pi 5 soak: one 30-minute 10-player run on record
+  (`docs/performance/BENCHMARK-BASELINE.md`); re-soak after P12 tick work.
 - Online mode: fail-fast boundary only; enabling it is an error, not auth.
 - `.zip` data packs unread; structure subset is single-chunk only; redstone not
-  wired into the tick loop; loot/advancements load but never fire; furnace
-  smelts from the hand-written baseline (see the parity matrix's smelting row).
+  wired into the tick loop; advancements load but never fire; loot fires as the
+  block/mob drop authority (P11-04); furnace recipes come from the loaded pack
+  once `vanilla_data` is set, else the hand-written baseline (P12-08; see the
+  parity matrix's smelting row).
 - Backup/restore are library calls awaiting a CLI; the unit file was reviewed
   by reading, never applied to a real Pi here.

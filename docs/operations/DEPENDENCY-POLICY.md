@@ -39,13 +39,12 @@ cargo deny --all-features check advisories   # informational
   added, and Audit 03 caught two stale figures. The `deny.toml` gate checks the
   licences themselves, which is the property that matters.)
 - No git dependencies; `Cargo.toml` requirements are caret-versioned and
-  `Cargo.lock` is intended to be committed once the repository gets its first
-  commit (ADR-0001 R-10).
+  `Cargo.lock` is committed (tracked since the first push; ADR-0001 R-10).
 - **Advisories are not enforced yet.** The CI job reports them and always
   passes. Reason: there is no triage process, and hard-failing on an unfixed
   upstream advisory would block unrelated work. This is a known gap, tracked in
   Audit 01 (git history, tag `phase-09-final`); closing it means assigning an owner and a
-  response window (P08 or P09).
+  response window (still open post-P12).
 
 ## 4. Data assets
 

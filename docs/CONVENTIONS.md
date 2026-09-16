@@ -126,7 +126,10 @@ every other decision:
 The crate layout is the logical boundary list in
 [ADR-0001](adr/ADR-0001-system-architecture.md) §D-01: `protocol`, `network`,
 `core`, `registry`, `nbt`, `persistence`, `world`, `entity`, `simulation`,
-`command`, `server`, `test-support` under `crates/`, plus `apps/server`. These
+`command`, `server`, `test-support` under `crates/`, plus `apps/server` — as
+amended by [ADR-0007](adr/ADR-0007-post-p12-deltas.md), which records the four
+grown boundaries (`container`, `redstone`, `worldgen`, `data`) and the second
+binary (`apps/capture-rig`). These
 are boundaries, not permission to create empty crates — a crate exists when it
 owns real behaviour. The one deliberate refinement (data loading split from
 the registry) is [ADR-0004](adr/ADR-0004-data-loading-and-registry-split.md).
@@ -189,7 +192,11 @@ Compare semantic state, not incidental implementation details. A differential
 trace identifies: initial world seed/state, player/entity inputs, tick count,
 captured outputs, normalized state, first divergence, and a classification —
 bug / missing feature / intentional divergence. Intentional divergences carry
-a note in the [parity matrix](vanilla-parity/PARITY-MATRIX.md).
+a note in the [parity matrix](vanilla-parity/PARITY-MATRIX.md). Since P10 the
+same contract covers real clients via `apps/capture-rig` (jar-gated
+`--ignored` suites), and since P11–12 the convertible-data joins
+(`RecipeBook`→crafting/smelting tables, loot refusal ladder) count skipped
+constructs instead of dropping them silently.
 
 ## 13. Performance contract
 

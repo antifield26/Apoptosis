@@ -10,7 +10,10 @@
 #        mkdir -p /srv/mc-server/fixtures/registry
 #        install -m 0644 crates/test-support/fixtures/registry/blocks.tsv \
 #                        crates/test-support/fixtures/registry/items.tsv \
+#                        crates/test-support/fixtures/registry/block_light.tsv \
+#                        crates/test-support/fixtures/registry/entity_types.tsv \
 #                        /srv/mc-server/fixtures/registry/
+#        install -m 0644 docs/operations/RUNBOOK.md /srv/mc-server/RUNBOOK.md
 #        install -m 0644 config.example.toml /srv/mc-server/config.toml
 #      then edit /srv/mc-server/config.toml (bind, world_dir).
 #   2. install the unit and start it:

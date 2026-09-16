@@ -86,13 +86,14 @@ restore.
 cargo test --workspace --no-fail-fast            # 1 384 passed / 0 failed / 34 ignored (108 suites)
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo check --target aarch64-unknown-linux-gnu
+cargo check --target aarch64-unknown-linux-gnu --workspace --all-targets
 cargo deny check licenses bans sources
 ```
 
-The 34 ignored tests are on-demand suites: 8 differential suites that need a
-real 26.1.2 server jar (three environment variables — see
-[CONTRIBUTING.md](CONTRIBUTING.md)) and the benchmark harness. Details and the
+The 34 ignored tests are on-demand suites: jar-gated differentials, light
+suites and terrain distribution (three environment variables — see
+[CONTRIBUTING.md](CONTRIBUTING.md)) and the benchmark harness. Full breakdown:
+[docs/testing/TEST-MATRIX.md](docs/testing/TEST-MATRIX.md). Details and the
 documentation-audit scripts: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Project documentation

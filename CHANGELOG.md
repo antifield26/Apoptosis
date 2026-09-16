@@ -26,9 +26,11 @@ sticks), furnace recipes come from the loaded pack while fuel stays the
 jar-verified baseline (P12-08), and closes return the cursor with
 `set_cursor_item` 96 (P12-09). The P11 remainder landed here too: `/tp` to air
 resolves onto the surface via `find_surface` (never embeds), and death→respawn
-is pinned from there — with the correction that fall damage is per-tick (max
-5 through the move cap), so the handoff's "surface+20 lethal" reads 17 damage
-and leaves 3 HP.
+is pinned from there — with the correction that fall damage is measured
+per-tick from the tick-start height (a single 8-block move deals at most 5,
+and a spread descent only bills the landing tick), so no `/tp`+fall route is
+lethal as the physics stands; the test kills via `apply_damage` and the gap
+is stated, not hidden.
 
 **P12-10 real-client acceptance: NOT RUN.** Chest/furnace/crafting/restart on
 screen needs an owner at the keyboard with a Java 26.1.2 client, like P11-10's

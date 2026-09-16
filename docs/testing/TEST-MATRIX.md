@@ -27,10 +27,11 @@ drops, close cursor return, crafting recompute+take), and one `block_entity_e2e`
 (chest restart)), and **four from the AUDIT-12 remediation**: the pack
 double-join regression (`pack_loading_e2e`, perturbation-verified), the stale
 craft-take guard (`survival_e2e`, perturbation-verified), the break-cursor
-return, and the furnace viewer-slot resync. The 34 ignored = the differential (jar-gated) suites listed
-in the last section, the three `vanilla_loot` differential tests, the
-`vanilla_crafting` differential test, plus `pi_profile` 4
-and `tick_baseline` 2 — all run on demand.
+return, and the furnace viewer-slot resync. The 34 ignored = the 8 differential
+suites in the last section (16 tests) + `vanilla_loot` 3 + `vanilla_chunk_light` 2
++ `vanilla_light_differential` 1 + `light_update_trigger` 1 + `sky_light_surface` 2
++ `terrain_distribution` 3 + `pi_profile` 4 + `tick_baseline` 2 (16+3+2+1+1+2+3+4+2
+= 34) — all run on demand.
 
 **Every per-crate count below was re-measured with `cargo test -p <crate> --lib`**
 while updating this total. The 17 lib counts sum to **1 029** (`mc-protocol` 113 ->
@@ -53,7 +54,7 @@ the server suites added since) are added. A re-measure of **every** named suite 
 outstanding, and the two obvious instruments both fail: `target/debug/deps`
 accumulates binaries from every past session (listing them summed to 6 385 against a
 real total of 1 344), and counting `#[test]` in the sources over-counts (348 against
-the derived 320, because some test files contain `#[test]` sequences inside template
+the derived 350, because some test files contain `#[test]` sequences inside template
 strings). The authoritative figures are the totals above and the per-crate lib
 counts; a per-suite figure without a note is from the P10-03 round.
 
@@ -67,7 +68,7 @@ each suite proves, and the deduplicated defect history.
 
 Counts are from the P11-04..09 run, except the named-suite figures noted above as
 from the P10-03 round. Named integration suites are counted explicitly; the
-remaining per-crate lib binaries are itemised above and complete the 1 365 total.
+remaining per-crate lib binaries are itemised above and complete the 1 384 total.
 
 | Area | Named suites (lib count) | What they prove |
 |---|---|---|

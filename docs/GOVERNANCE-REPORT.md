@@ -1,5 +1,11 @@
 # Governance Report — repository normalisation (2026-09-12)
 
+> Point-in-time snapshot: everything below describes the tree on 2026-09-12
+> (1 194–1 196 tests, 74 suites). For the current state see
+> [TEST-MATRIX.md](testing/TEST-MATRIX.md) (1 384 passed / 34 ignored / 108 suites),
+> [CHANGELOG.md](../CHANGELOG.md) (Phases 10–12 + AUDIT-09..12), and
+> [ADR-0007](adr/ADR-0007-post-p12-deltas.md) (what outgrew the architecture sketch).
+
 Scope: engineering governance only. No file under `crates/` or `apps/` was
 touched; the five quality gates and both documentation-audit scripts produce
 the same results before and after. The owner answered three decision questions
