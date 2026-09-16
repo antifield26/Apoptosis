@@ -360,3 +360,52 @@ fn a_configured_vanilla_data_path_that_does_not_exist_is_reported() {
         "{outcome:?}"
     );
 }
+
+/// A world pack's `recipe/` files reach the crafting table through `load_packs`.
+///
+/// Regression for the double-join defect (`root.join(namespace)` built
+/// `.../data/<ns>/<ns>`, which never exists, so every boot silently loaded
+/// zero recipes and kept the baseline). A shapeless stone→cobblestone recipe
+/// must load, convert, and be matchable — if the join regresses,
+/// `recipes_loaded` is 0 and the table lacks the test recipe.
+#[test]
+fn a_world_pack_recipe_reaches_the_crafting_table() {
+    let dir = TempDir::new("packs-recipe");
+    let world = dir.path().join("world");
+    let recipe_dir = world
+        .join("datapacks")
+        .join("testpack")
+        .join("data")
+        .join("testns")
+        .join("recipe");
+    std::fs::create_dir_all(&recipe_dir).expect("recipe dir");
+    std::fs::write(
+        recipe_dir.join("test_brick.json"),
+        r#"{
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": ["minecraft:stone"],
+  "result": {"id": "minecraft:cobblestone"}
+}"#,
+    )
+    .expect("write recipe");
+
+    let storage = WorldService::open(&mc_server::config::StorageConfig {
+        world_dir: world.clone(),
+        autosave_ticks: 0,
+    })
+    .expect("opens");
+    let mut game = Game::new(&storage, 3, game_channel(64).1).expect("game");
+    let enabled = EnabledPacks::from_level_dat(&["vanilla".to_owned(), "testpack".to_owned()], &[]);
+    let outcome = load_packs(&mut game, &PackRoots::new(&world), &enabled).expect("loads");
+    assert!(
+        outcome.recipes_loaded >= 1,
+        "the pack recipe must load, saw {outcome:?}"
+    );
+    assert!(
+        game.crafting_registry()
+            .by_name("testns:test_brick")
+            .is_some(),
+        "the converted table must contain the pack recipe"
+    );
+}

@@ -132,6 +132,16 @@ impl PackLoadOutcome {
                 self.structures_refused.len()
             );
         }
+        if self.recipes_loaded > 0 {
+            let _ = write!(
+                text,
+                "; {} recipe(s), {} crafting converted ({} skipped), {} smelting rows",
+                self.recipes_loaded,
+                self.crafting_converted,
+                self.crafting_skipped,
+                self.smelting_rows
+            );
+        }
         text
     }
 }
@@ -305,9 +315,13 @@ pub fn load_packs(
     // they could not represent rather than dropping it silently.
     let mut book = mc_data::RecipeBook::new();
     let mut recipe_report = mc_data::RecipeLoadReport::default();
+    // `load_plan` yields `(namespace, namespace_dir)` where the directory is
+    // already `.../data/<ns>` — the loot/function/structure loops use it
+    // directly, and recipes must too (`root.join(namespace)` would be
+    // `.../data/<ns>/<ns>`, which never exists and silently loads zero).
     for (namespace, root, _source) in set.load_plan() {
         // `load_directory` expects the namespace directory (`.../data/<ns>`).
-        let namespace_dir = root.join(&namespace);
+        let namespace_dir = root;
         if !namespace_dir.join("recipe").is_dir() {
             continue;
         }
