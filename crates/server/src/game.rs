@@ -1693,6 +1693,7 @@ impl Game {
     /// `FurnaceMenu` data slots) are sent on its window. Hopper ticking lives
     /// here too (see `tick_hoppers`); the phase stays deterministic by walking
     /// block positions ascending.
+    #[allow(clippy::too_many_lines)]
     fn tick_block_entities(&mut self, report: &mut TickReport) -> ServerResult<()> {
         // Resolve once per tick: the tables are small and furnaces are few.
         let stack_sizes = mc_entity::stack::StackSizeTable::resolve(&self.registries.items)?;
@@ -1770,6 +1771,134 @@ impl Game {
             }
         }
 
+        // Phase 1b: hoppers transfer every 8 game ticks when busy (P12-04).
+        //
+        // Vanilla pulls from above then pushes below in the same tick; this does
+        // push-then-pull with one item per side so a hopper chain advances one
+        // slot per cooldown. Only `Container`/`Hopper` payloads participate —
+        // furnace input/output routing is a recorded gap. Positions ascend for
+        // determinism; mutations go through temp containers so two map entries
+        // are never borrowed together.
+        let mut hopper_touched: Vec<mc_container::BlockPos> = Vec::new();
+        let hopper_positions: Vec<mc_container::BlockPos> = self
+            .block_entities
+            .positions()
+            .filter(|pos| {
+                self.block_entities
+                    .get(*pos)
+                    .is_some_and(|e| e.kind() == mc_container::BlockEntityKind::Hopper)
+            })
+            .collect();
+        for pos in hopper_positions {
+            // Cooldown gate.
+            let cooled = match self.block_entities.get_mut(pos) {
+                Some(entity) => match &mut entity.data {
+                    mc_container::BlockEntityData::Hopper { cooldown, .. } => {
+                        if *cooldown > 0 {
+                            *cooldown -= 1;
+                            false
+                        } else {
+                            true
+                        }
+                    }
+                    _ => continue,
+                },
+                None => continue,
+            };
+            if !cooled {
+                continue;
+            }
+            let below = mc_container::BlockPos::new(pos.x, pos.y - 1, pos.z);
+            let above = mc_container::BlockPos::new(pos.x, pos.y + 1, pos.z);
+            let mut moved = false;
+            // Push below first, then pull from above.
+            for (source_pos, dest_pos) in [(pos, below), (above, pos)] {
+                let (Some(source_items), Some(dest_items)) = (
+                    self.block_entities
+                        .get(source_pos)
+                        .and_then(|e| e.data.items())
+                        .map(<[mc_entity::stack::ItemStack]>::to_vec),
+                    self.block_entities
+                        .get(dest_pos)
+                        .and_then(|e| e.data.items())
+                        .map(<[mc_entity::stack::ItemStack]>::to_vec),
+                ) else {
+                    continue;
+                };
+                // Furnaces are skipped: their slot roles need input/output
+                // routing that this phase does not model.
+                let source_is_furnace = self
+                    .block_entities
+                    .get(source_pos)
+                    .is_some_and(|e| e.kind() == mc_container::BlockEntityKind::Furnace);
+                let dest_is_furnace = self
+                    .block_entities
+                    .get(dest_pos)
+                    .is_some_and(|e| e.kind() == mc_container::BlockEntityKind::Furnace);
+                if source_is_furnace || dest_is_furnace {
+                    continue;
+                }
+                let Ok(mut source) = mc_container::Container::new(
+                    mc_container::ContainerKind::Generic,
+                    source_items.len(),
+                ) else {
+                    continue;
+                };
+                let Ok(mut dest) = mc_container::Container::new(
+                    mc_container::ContainerKind::Generic,
+                    dest_items.len(),
+                ) else {
+                    continue;
+                };
+                for (index, stack) in source_items.iter().enumerate() {
+                    let _ = source.set(index, *stack);
+                }
+                for (index, stack) in dest_items.iter().enumerate() {
+                    let _ = dest.set(index, *stack);
+                }
+                let source_roles = vec![mc_container::SlotRole::Storage; source.len()];
+                let dest_roles = vec![mc_container::SlotRole::Storage; dest.len()];
+                let Ok(transfer) = mc_container::Hopper::transfer(
+                    &mut source,
+                    &source_roles,
+                    &mut dest,
+                    &dest_roles,
+                    1,
+                ) else {
+                    continue;
+                };
+                if transfer.moved == 0 {
+                    continue;
+                }
+                // Write both halves back through sequential map borrows.
+                if let Some(entity) = self.block_entities.get_mut(source_pos)
+                    && let Some(items) = entity.data.items_mut()
+                {
+                    for (index, slot) in items.iter_mut().enumerate() {
+                        *slot = source.get(index);
+                    }
+                }
+                if let Some(entity) = self.block_entities.get_mut(dest_pos)
+                    && let Some(items) = entity.data.items_mut()
+                {
+                    for (index, slot) in items.iter_mut().enumerate() {
+                        *slot = dest.get(index);
+                    }
+                }
+                moved = true;
+                hopper_touched.push(source_pos);
+                hopper_touched.push(dest_pos);
+                // One side per cooldown, like vanilla's single transfer per wake.
+                break;
+            }
+            if moved
+                && let Some(entity) = self.block_entities.get_mut(pos)
+                && let mc_container::BlockEntityData::Hopper { cooldown, .. } = &mut entity.data
+            {
+                *cooldown = mc_container::HOPPER_TRANSFER_COOLDOWN_TICKS;
+            }
+        }
+
         // Phase two: send deltas to whoever holds the matching window.
         for (pos, values) in deltas {
             // Find sessions before sending so `&self` sends do not borrow
@@ -1792,6 +1921,80 @@ impl Game {
                         report,
                     );
                 }
+            }
+        }
+        // Hopper viewers get a full resync: the transfer moved items, not
+        // progress bars, so the window contents (not data slots) changed.
+        // Deduped because one transfer touches two positions that may share a
+        // viewer; each viewer gets one resync per tick at most. The menu's
+        // block half is refreshed from the entity first — otherwise the resync
+        // would replay the pre-transfer contents the menu still holds.
+        hopper_touched.sort();
+        hopper_touched.dedup();
+        for pos in hopper_touched {
+            let viewers: Vec<ConnectionId> = self
+                .sessions
+                .iter()
+                .filter(|(_, s)| s.open_block == Some(pos))
+                .map(|(id, _)| *id)
+                .collect();
+            for id in viewers {
+                // Refresh the block half from the entity.
+                let refreshed = {
+                    let (entity_items, menu_len) = match (
+                        self.block_entities.get(pos).and_then(|e| e.data.items()),
+                        self.sessions
+                            .get(&id)
+                            .and_then(|s| s.menu.container(0).map(mc_container::Container::len)),
+                    ) {
+                        (Some(items), Some(len)) if items.len() == len => (items.to_vec(), true),
+                        _ => (Vec::new(), false),
+                    };
+                    if menu_len {
+                        match self.sessions.get_mut(&id) {
+                            Some(session) => match session.menu.container_mut(0) {
+                                Some(container) => {
+                                    for (index, stack) in entity_items.iter().enumerate() {
+                                        let _ = container.set(index, *stack);
+                                    }
+                                    true
+                                }
+                                None => false,
+                            },
+                            None => false,
+                        }
+                    } else {
+                        false
+                    }
+                };
+                if !refreshed {
+                    continue;
+                }
+                let (contents, state, cursor, window) = match self.sessions.get(&id) {
+                    Some(session) => (
+                        session
+                            .menu
+                            .full_contents()
+                            .iter()
+                            .copied()
+                            .map(wire_stack)
+                            .collect::<Vec<_>>(),
+                        session.menu.state_id(),
+                        session.menu.cursor(),
+                        session.menu.window_id() as i8,
+                    ),
+                    None => continue,
+                };
+                let _ = self.send(
+                    id,
+                    &ContainerSetContent {
+                        window_id: window,
+                        state_id: state,
+                        slots: contents,
+                        carried: wire_stack(cursor),
+                    },
+                    report,
+                );
             }
         }
         Ok(())

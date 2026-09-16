@@ -730,6 +730,111 @@ fn chest_transactions_conserve_across_a_flood() {
     let _ = Harness::drain_ids(&mut out);
 }
 
+/// P12-04: hoppers pull from above and push below on the 8-tick cooldown.
+///
+/// A chest with stones sits above an empty hopper; after 20 ticks the hopper
+/// must hold stones (pulled, one per 8 ticks). Then a second hopper with
+/// stones sits above an empty chest; after 20 ticks the chest must hold them
+/// (pushed). Furnace routing is a recorded gap — only `Container`/`Hopper`
+/// payloads participate.
+#[test]
+fn hoppers_pull_from_above_and_push_below() {
+    let mut harness = Harness::new("p12-hopper");
+    let (sx, sy, sz) = harness.build_floor();
+    let _out = harness.join("Hopper");
+    let blocks = &harness.game.registries().blocks;
+    let chest_id = blocks.default_state("minecraft:chest").expect("chest");
+    let hopper_id = blocks.default_state("minecraft:hopper").expect("hopper");
+    let stone_item = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:stone")
+        .expect("stone");
+
+    // Pull: chest (sy+1) with 4 stones above hopper (sy).
+    let chest_pos = (sx + 1, sy + 1, sz);
+    let hopper_pos = (sx + 1, sy, sz);
+    harness
+        .game
+        .world_mut()
+        .set_block(chest_pos.0, chest_pos.1, chest_pos.2, chest_id)
+        .expect("chest");
+    harness
+        .game
+        .world_mut()
+        .set_block(hopper_pos.0, hopper_pos.1, hopper_pos.2, hopper_id)
+        .expect("hopper");
+    harness.game.tick().expect("create entities");
+    {
+        let store = harness.game.block_entities_mut();
+        let chest = store
+            .get_mut(mc_container::BlockPos::new(
+                chest_pos.0,
+                chest_pos.1,
+                chest_pos.2,
+            ))
+            .expect("chest entity");
+        let items = chest.data.items_mut().expect("chest items");
+        items[0] = mc_entity::stack::ItemStack::new(stone_item, 4).expect("stack");
+    }
+    for _ in 0..20 {
+        harness.game.tick().expect("tick");
+    }
+    let hopper_count: i64 = harness
+        .game
+        .block_entities()
+        .get(mc_container::BlockPos::new(
+            hopper_pos.0,
+            hopper_pos.1,
+            hopper_pos.2,
+        ))
+        .expect("hopper entity")
+        .data
+        .total_items();
+    assert!(
+        hopper_count > 0,
+        "a hopper must pull stones from the chest above within 20 ticks"
+    );
+
+    // Push: hopper (sy+3) with 4 stones above an empty chest (sy+2).
+    let chest2 = (sx + 3, sy + 2, sz);
+    let hopper2 = (sx + 3, sy + 3, sz);
+    harness
+        .game
+        .world_mut()
+        .set_block(chest2.0, chest2.1, chest2.2, chest_id)
+        .expect("chest2");
+    harness
+        .game
+        .world_mut()
+        .set_block(hopper2.0, hopper2.1, hopper2.2, hopper_id)
+        .expect("hopper2");
+    harness.game.tick().expect("create entities 2");
+    {
+        let store = harness.game.block_entities_mut();
+        let hopper = store
+            .get_mut(mc_container::BlockPos::new(hopper2.0, hopper2.1, hopper2.2))
+            .expect("hopper2 entity");
+        let items = hopper.data.items_mut().expect("hopper items");
+        items[0] = mc_entity::stack::ItemStack::new(stone_item, 4).expect("stack");
+    }
+    for _ in 0..20 {
+        harness.game.tick().expect("tick");
+    }
+    let chest2_count: i64 = harness
+        .game
+        .block_entities()
+        .get(mc_container::BlockPos::new(chest2.0, chest2.1, chest2.2))
+        .expect("chest2 entity")
+        .data
+        .total_items();
+    assert!(
+        chest2_count > 0,
+        "a hopper must push stones into the chest below within 20 ticks"
+    );
+}
+
 /// P12-03: an open furnace ticks and reports progress via `container_set_data`.
 ///
 /// Opens a real furnace, shift-clicks iron ore + coal into it, runs five ticks,
