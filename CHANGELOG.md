@@ -11,6 +11,42 @@ entry is the release candidate matching the workspace version (`0.1.0` in
 [Cargo.toml](Cargo.toml)); it is **published** as tag `v0.1.0-rc.1` with built
 artifacts, and no later version has been released.
 
+## Unreleased — Phase 12 (Containers & the Survival Loop)
+
+P12 closes the survival loop around storage: chests, furnaces and hoppers open
+as windows a real client can transact with (P12-01/02: `open_screen` 59 with
+jar-verified `MenuType` 2/14/16, `Menu::chest/furnace/hopper`, non-zero windows,
+20-click conservation flood), furnaces cook with `container_set_data` progress
+(P12-03), hoppers transfer on the 8-tick cooldown with viewer resync (P12-04),
+block entities persist across restart through chunk NBT (P12-05: second-`Game`
+proof, 17 stones), breaks drop contents and close viewers (P12-06: no item
+loss), crafting recomputes from the table and consumes on take (P12-07: pack
+conversion for item-only shaped/shapeless, tags counted; hook verified with
+sticks), furnace recipes come from the loaded pack while fuel stays the
+jar-verified baseline (P12-08), and closes return the cursor with
+`set_cursor_item` 96 (P12-09). The P11 remainder landed here too: `/tp` to air
+resolves onto the surface via `find_surface` (never embeds), and death→respawn
+is pinned from there — with the correction that fall damage is per-tick (max
+5 through the move cap), so the handoff's "surface+20 lethal" reads 17 damage
+and leaves 3 HP.
+
+**P12-10 real-client acceptance: NOT RUN.** Chest/furnace/crafting/restart on
+screen needs an owner at the keyboard with a Java 26.1.2 client, like P11-10's
+four unverified claims before it. What the automated suites cover instead: open,
+transact+conserve, cook+progress, pull+push, persist+reload, break+drops,
+craft+consume, close+cursor-return — each with the instrument named in its test.
+Gate: `python tools/gates/run.py --quick` → **1 380 passed / 0 failed /
+34 ignored / 108 suites** (was 1 365/0/33/107: +3 protocol, +3 container lib,
++8 survival_e2e, +1 block_entity_e2e, +1 ignored `vanilla_crafting` suite).
+
+Recorded gaps, not fixed: double chests open single 27; barrel opens as chest;
+furnace progress resets on vanilla boot (custom NBT names); tag-ingredient
+recipes never convert (no resolver); hopper↔furnace routing skipped; static
+lighting, no redstone tick wiring, and the P11 divergences (instant dig, zombie
+`FOLLOW_RANGE` 16, no XP orbs) are unchanged. `PARITY-MATRIX.md` moves KD-03,
+KD-20/21/22/26 and the crafting row to `partial` with this evidence; P12-10 and
+the P11-10 screen claims stay `gap`.
+
 ## Unreleased — Phase 11 (Living World)
 
 P11 is the phase where the world starts moving on its own: mobs spawn, walk, chase
