@@ -120,6 +120,24 @@ impl Aabb {
         }
     }
 
+    /// Squared distance from a point to the box's **nearest point** (zero inside).
+    ///
+    /// Vanilla's `AABB.distanceToSqr(Vec3)`, bytecode for bytecode
+    /// (`javap -c -p net.minecraft.world.phys.AABB`): each axis takes
+    /// `max(max(min - v, v - max), 0)` and the three are squared and summed. It is
+    /// the primitive both reach checks are written against —
+    /// `Player.isWithinBlockInteractionRange` and
+    /// `Player.isWithinEntityInteractionRange` — and they compare **squares**
+    /// against `(range + buffer)^2` rather than taking a root, so the shape of this
+    /// function is part of the rule and not an optimisation.
+    #[must_use]
+    pub fn distance_to_sqr(self, point: Vec3) -> f64 {
+        let dx = (self.min_x - point.x).max(point.x - self.max_x).max(0.0);
+        let dy = (self.min_y - point.y).max(point.y - self.max_y).max(0.0);
+        let dz = (self.min_z - point.z).max(point.z - self.max_z).max(0.0);
+        dx * dx + dy * dy + dz * dz
+    }
+
     /// Translate.
     #[must_use]
     pub fn offset(self, delta: Vec3) -> Self {

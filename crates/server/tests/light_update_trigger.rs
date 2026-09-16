@@ -59,7 +59,8 @@ async fn break_a_block_so_a_real_client_receives_a_light_update() {
     println!("logged in as {}", joined.login.name);
 
     // The player's position is sent **after** `join_game`, which `login_join` stops at, so it is read here.
-    // Without it there is nothing to reach: the server refuses a break further than 4.5 blocks away.
+    // Without it there is nothing to reach: the server refuses a break beyond the jar's buffered block reach
+    // (4.5 attribute + 1.0 verification buffer = 5.5 blocks from the eye, `Game::block_reach`).
     let (x, y, z) = tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let packet = client.recv().await.expect("a packet arrives");

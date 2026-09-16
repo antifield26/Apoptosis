@@ -257,31 +257,44 @@ fn a_dig_is_acknowledged_with_the_sequence_the_client_sent() {
     );
 }
 
-/// The high-water mark, not one ack per packet — and not "the last one seen".
+/// The high-water mark: one ack per tick, carrying the **maximum** sequence.
 ///
 /// Vanilla keeps `Math.max` and sends one packet per tick, which is what bounds a
-/// client that spams `player_action`. Two digs in one tick must produce **one**
-/// ack, carrying the larger sequence.
+/// client that spams `player_action`. Three digs in one tick must produce **one**
+/// ack, carrying the largest sequence.
 ///
-/// **The order here is deliberately the wrong way round.** The higher sequence is
-/// sent first, so "keep the maximum" (11) and "keep the last" (3) disagree;
-/// sending them ascending would let this test pass under either rule, which is how
-/// its first version was written and what `target/m_probes.py` probe M-2c caught.
+/// **The sequences are ordered so that every candidate rule gives a different
+/// answer**, which is the whole design of this test:
+///
+/// | rule | ack it would send |
+/// |---|---|
+/// | `Math.max` (vanilla, and what this server does) | **11** |
+/// | keep the first | 3 |
+/// | keep the last | 7 |
+///
+/// Two earlier versions were weaker and both were caught rather than reasoned
+/// about. Sending 3 then 11 made "max" and "last" agree, which `target/m_probes.py`
+/// probe M-2c reported as `*** PASSED -- TEST NOT LOAD-BEARING ***`; sending 11 then
+/// 3 (the second version) made "max" and "first" agree, which AUDIT-11 §4.1 found by
+/// reading. Ascending-then-descending is the shape that separates all three.
 #[test]
-fn two_digs_in_one_tick_collapse_into_one_ack_carrying_the_higher_sequence() {
+fn three_digs_in_one_tick_collapse_into_one_ack_carrying_the_highest_sequence() {
     let mut harness = Harness::new("m2-ack-max");
     let mut out = harness.join("Miner");
     let _ = Harness::drain(&mut out);
 
     let (fx, fy, fz) = harness.feet();
-    let higher = (fx, fy - 1, fz);
-    let lower = (fx, fy - 2, fz);
-    harness.place(higher.0, higher.1, higher.2, "minecraft:stone");
-    harness.place(lower.0, lower.1, lower.2, "minecraft:stone");
+    // Three separate blocks, so each dig is its own action rather than a repeat.
+    let first = (fx, fy - 1, fz);
+    let highest = (fx, fy - 2, fz);
+    let last = (fx, fy - 3, fz);
+    for target in [first, highest, last] {
+        harness.place(target.0, target.1, target.2, "minecraft:stone");
+    }
 
-    // Two intents queued before the tick that applies them (`intent` would tick
-    // after each, which would ack them separately). 11 first, then 3.
-    for (target, sequence) in [(higher, 11), (lower, 3)] {
+    // Queued before the tick that applies them (`intent` would tick after each,
+    // which would ack them separately): 3, then 11, then 7.
+    for (target, sequence) in [(first, 3), (highest, 11), (last, 7)] {
         harness
             .events
             .try_send(ClientEvent {
@@ -301,7 +314,8 @@ fn two_digs_in_one_tick_collapse_into_one_ack_carrying_the_higher_sequence() {
     assert_eq!(
         Harness::ack_sequences(&packets),
         vec![11],
-        "one ack per tick at the high-water mark -- 11, not the 3 that arrived last"
+        "one ack per tick at the high-water mark: 11 (the max), not 3 (the first) \
+         and not 7 (the last)"
     );
 
     // A second consecutive ack-less tick must not repeat it: the mark resets.

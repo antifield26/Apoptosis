@@ -413,8 +413,80 @@ pub const GAME_EVENT_LEVEL_CHUNKS_LOAD_START: u8 = 13;
 /// same tick, and small enough that a burst cannot stall the server.
 pub const LIGHT_UPDATES_PER_TICK: usize = 4;
 
-/// How far a player can reach to break or place a block (Vanilla survival).
-pub const REACH: f64 = 4.5;
+/// The player's eye height above the feet, in blocks.
+///
+/// Every reach check vanilla makes is measured from `getEyePosition()`, which for a
+/// standing player is the feet plus this. 1.62 is the standing eye height in the
+/// jar's own entity dimensions (the same figure `mc_world::collision`'s module doc
+/// records for the player hitbox, 0.6 x 1.8 x 0.6). It is **not** modelled as
+/// varying with pose: a sneaking or swimming player's eye is lower in vanilla, and
+/// this build has no pose.
+pub const EYE_HEIGHT: f64 = 1.62;
+
+/// Base block-interaction range, from the jar's own attribute default.
+///
+/// `net.minecraft.world.entity.player.Player.DEFAULT_BLOCK_INTERACTION_RANGE = 4.5f`
+/// (`javap -constants` on the Mojang-mapped 26.1.2 server jar). The live value is
+/// the `minecraft:block_interaction_range` **attribute**, which this build does not
+/// model beyond the creative modifier below; `Player.blockInteractionRange()`
+/// returns `getAttributeValue(Attributes.BLOCK_INTERACTION_RANGE)`.
+pub const BLOCK_INTERACTION_RANGE: f64 = 4.5;
+
+/// Block-interaction range for a creative player: the base plus the jar's modifier.
+///
+/// `ServerPlayer`'s static initialiser builds
+/// `AttributeModifier(Identifier.withDefaultNamespace("creative_mode_block_range"),
+/// 0.5d, Operation.ADD_VALUE)` and `ServerPlayer.setGameMode` adds it while
+/// `isCreative()` — so 4.5 + 0.5 = 5.0, bytecode-read rather than assumed.
+pub const CREATIVE_BLOCK_INTERACTION_RANGE: f64 = 5.0;
+
+/// The tolerance vanilla adds to every **block** reach check.
+///
+/// `ServerPlayer.BLOCK_INTERACTION_DISTANCE_VERIFICATION_BUFFER = 1.0d`, passed by
+/// both callers that matter here: `ServerPlayerGameMode.handleBlockBreakAction`
+/// (`dconst_1`) and `ServerGamePacketListenerImpl.handleUseItemOn` (`dconst_1`).
+/// The effective survival reach is therefore **5.5** blocks from the eye, not the
+/// attribute's 4.5 — the server is deliberately more permissive than the client's
+/// own raycast, because the two compute the player's position at slightly
+/// different moments.
+pub const BLOCK_INTERACTION_DISTANCE_VERIFICATION_BUFFER: f64 = 1.0;
+
+/// Base entity-interaction range: `Entity`'s `DEFAULT_ENTITY_INTERACTION_RANGE`
+/// (3.0), read from the jar's own `Avatar`/`Player` attribute defaults.
+pub const ENTITY_INTERACTION_RANGE: f64 = 3.0;
+
+/// The tolerance vanilla adds to every **entity** reach check.
+///
+/// `ServerPlayer.ENTITY_INTERACTION_DISTANCE_VERIFICATION_BUFFER = 3.0d`, passed by
+/// `ServerGamePacketListenerImpl.handleInteract` (`ldc2_w 3.0d` →
+/// `isWithinEntityInteractionRange(aabb, 3.0)`, taken **before** the packet's
+/// action is branched on, so it covers a swing and a use alike). Effective reach
+/// 6.0 from the eye.
+pub const ENTITY_INTERACTION_DISTANCE_VERIFICATION_BUFFER: f64 = 3.0;
+
+/// The effective block reach for a game mode, in blocks from the eye.
+///
+/// [`BLOCK_INTERACTION_RANGE`] (or [`CREATIVE_BLOCK_INTERACTION_RANGE`]) plus
+/// [`BLOCK_INTERACTION_DISTANCE_VERIFICATION_BUFFER`].
+///
+/// Before AUDIT-11 the server used the bare 4.5 for everyone, so a survival dig
+/// between 4.5 and 5.5 blocks from the eye was refused even though the jar accepts
+/// it.
+#[must_use]
+pub const fn block_reach(creative: bool) -> f64 {
+    let base = if creative {
+        CREATIVE_BLOCK_INTERACTION_RANGE
+    } else {
+        BLOCK_INTERACTION_RANGE
+    };
+    base + BLOCK_INTERACTION_DISTANCE_VERIFICATION_BUFFER
+}
+
+/// The effective entity reach, in blocks from the eye.
+#[must_use]
+pub const fn entity_reach() -> f64 {
+    ENTITY_INTERACTION_RANGE + ENTITY_INTERACTION_DISTANCE_VERIFICATION_BUFFER
+}
 
 /// Seed used when a caller does not pick one ([`Game::new`]).
 ///
@@ -3284,6 +3356,16 @@ impl Game {
                     // server's own `add_entity`, so an invalid one is a hostile
                     // packet, refused rather than reconstructed.
                     if let Ok(target) = EntityId::new(entity) {
+                        // Vanilla gates `handleInteract` on
+                        // `isWithinEntityInteractionRange(aabb, 3.0)` **before** it
+                        // branches on the packet's action, so a swing from across
+                        // the map is refused there and must be refused here. This
+                        // closes the recorded divergence "a swing outside the
+                        // interaction range is not refused" (AUDIT-09).
+                        if !self.within_entity_reach(id, target) {
+                            debug!(id = %id, target = %target, "rejected attack outside entity reach");
+                            return Ok(());
+                        }
                         let damage = FIST_ATTACK_DAMAGE;
                         let died = self.damage_entity(target, damage);
                         debug!(id = %id, target = %target, damage, died, "player attack");
@@ -4414,26 +4496,73 @@ impl Game {
     }
 
     /// Whether a block position is within the player's reach.
+    ///
+    /// The rule is vanilla's, bytecode-read from the Mojang-mapped 26.1.2 server
+    /// jar rather than adapted:
+    ///
+    /// ```text
+    /// Player.isWithinBlockInteractionRange(BlockPos pos, double buffer):
+    ///     double range = this.blockInteractionRange() + buffer;   // attribute + buffer
+    ///     AABB box = new AABB(pos);                               // the block's unit cube
+    ///     return box.distanceToSqr(this.getEyePosition()) < range * range;   // STRICT <
+    /// ServerPlayerGameMode.handleBlockBreakAction:  isWithinBlockInteractionRange(pos, 1.0)
+    /// ServerGamePacketListenerImpl.handleUseItemOn: isWithinBlockInteractionRange(pos, 1.0)
+    /// ```
+    ///
+    /// Three details are load-bearing and each was wrong or absent before AUDIT-11:
+    ///
+    /// * **the buffer.** The check is `range + 1.0`, so a survival player reaches
+    ///   5.5 blocks, not the 4.5 the attribute alone names. Measuring from the
+    ///   *closest point of the block's box* (which is what `AABB.distanceToSqr`
+    ///   does, and what this method did already) is correct — the box, not the
+    ///   centre, is what vanilla uses;
+    /// * **strict `<`**, so exactly at the boundary is refused;
+    /// * **the creative modifier**, `+0.5` (`creative_mode_block_range`), giving a
+    ///   creative player 6.0.
+    ///
+    /// What this is *for*: without it any client can break any block anywhere, which
+    /// is what AUDIT-11's N-1 was about. The check has been here since Phase 04 —
+    /// AUDIT-11's claim that the path had none was refuted by reading this call site
+    /// and the 40-block refusal test — but it refused the 4.5-to-5.5 band a real
+    /// client is entitled to, so the landings' own acceptance rounds could hit it.
     fn within_reach(&self, id: ConnectionId, x: i32, y: i32, z: i32) -> bool {
         let Some(session) = self.sessions.get(&id) else {
             return false;
         };
-        // Vanilla measures from the eye (feet + 1.62) to the *closest point* of the
-        // target block's box, so a straight-line distance is the right test. Using
-        // per-axis comparisons instead would accept a block far away on two axes
-        // when it is close on the third.
         let eye = Vec3::new(
             session.player.position.x,
-            session.player.position.y + 1.62,
+            session.player.position.y + EYE_HEIGHT,
             session.player.position.z,
         );
-        let block = Aabb::block(x, y, z);
-        // Per-axis distance from the eye to the box (0 when the eye is inside that
-        // axis' span).
-        let dx = (block.min_x - eye.x).max(0.0).max(eye.x - block.max_x);
-        let dy = (block.min_y - eye.y).max(0.0).max(eye.y - block.max_y);
-        let dz = (block.min_z - eye.z).max(0.0).max(eye.z - block.max_z);
-        (dx * dx + dy * dy + dz * dz).sqrt() <= REACH
+        let reach = block_reach(session.player.game_mode.is_creative());
+        Aabb::block(x, y, z).distance_to_sqr(eye) < reach * reach
+    }
+
+    /// Whether an entity is within the player's entity reach.
+    ///
+    /// [`Player.isWithinEntityInteractionRange(AABB, double)`] with the buffer
+    /// `ServerGamePacketListenerImpl.handleInteract` passes (`ldc2_w 3.0d`):
+    /// `AABB(entity).distanceToSqr(eye) < (3.0 + 3.0)^2`. The check sits **before**
+    /// the packet's action is branched on in vanilla, so it covers a swing and a
+    /// use alike; this build only acts on the swing, and applies the same gate.
+    ///
+    /// This closed a recorded open divergence — "a swing outside the interaction
+    /// range is not refused" — which was the same hostile-client class as N-1's
+    /// concern: the attack path applied damage at any distance at all.
+    fn within_entity_reach(&self, id: ConnectionId, target: EntityId) -> bool {
+        let Some(session) = self.sessions.get(&id) else {
+            return false;
+        };
+        let Some(entity) = self.entities.get(target) else {
+            return false;
+        };
+        let eye = Vec3::new(
+            session.player.position.x,
+            session.player.position.y + EYE_HEIGHT,
+            session.player.position.z,
+        );
+        let reach = entity_reach();
+        entity.hitbox().distance_to_sqr(eye) < reach * reach
     }
 
     // ------------------------------------------------------------- streaming

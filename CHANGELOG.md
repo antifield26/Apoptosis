@@ -140,6 +140,12 @@ after it. A held item's damage is **not** used (the fist figure applies whatever
 held) and a swing outside the interaction range is **not** refused; both are named
 gaps in the parity matrix rather than implied by silence.
 
+**Annotated, not rewritten (AUDIT-11 remediation).** The second of those two gaps is
+now closed — the attack path applies vanilla's `isWithinEntityInteractionRange`
+gate (effective 6.0 blocks from the eye) — so this paragraph records what P11-06
+shipped, not what the tree does now. The first (a held item's damage) is still open.
+See "AUDIT-11 remediation" below.
+
 ### P11-07 — a death leaves the inventory on the ground
 
 `after_damage` drains the dead player's inventory with `PlayerInventory::drain_all`
@@ -386,6 +392,110 @@ has yet decoded our new `respawn` body or applied a `block_update` through a
 `block_changed_ack` we sent. The re-acceptance round is the step that would say so,
 it needs a person at the keyboard, and it has **not been run** — so this section
 claims the bytecode and the tests, and nothing about a screen.
+
+### AUDIT-11 remediation: the reach rule, and a finding refuted
+
+AUDIT-11 audited the M-1..M-4 landing. The landing survived, its refutation of the
+previous handoff's misdiagnosis was **confirmed independently** (the rig's
+`body_bytes` does include the packet-id byte; the id-0 packets are teleport acks;
+the digs are id 41; the id tables agree 69/69 — once the auditor's own extraction
+regex was broadened across all four `PacketTypes` holders, which was the audit's
+own tool bug). One new High finding came back as **N-1**, and a set of smaller ones
+that were the builder's own self-reports.
+
+**N-1 is refuted, on both its evidence and its conclusion**, and the refutation is
+an instrument rather than an argument:
+
+- it reported that all 24 of the owner's digs were `BlockPos.ZERO` and that the
+  server broke deep-underground block (0,0,0) twelve times. **No trace under
+  `target/` contains a zero-position dig.** `target/verify/trace_summary.py` counts
+  them: the preserved owner session has 24 digs at **12 distinct real positions**
+  (`(-12, 66, -6)`, `(-11, 63, 27)`, `(-6, 78, 45)` …), zero at `BlockPos.ZERO`,
+  each answered by a `block_update` at exactly that position; the later 41 MB
+  session has **258 digs, zero at `BlockPos.ZERO`**, plus 154 `block_changed_ack`
+  packets — the M-2 fix working live;
+- it concluded that "the dig path has no reach check: any client can break any
+  block anywhere". The check has existed since Phase 04: `Game::within_reach` is
+  called from `apply_player_action` (statuses 0/1/2) and from the place path, and
+  `survival_e2e` has pinned a 40-block refusal since P04-09.
+
+**Underneath the wrong evidence there was a real defect, in the opposite
+direction**, and it is fixed. The check used the bare `block_interaction_range`
+attribute — 4.5 — for every game mode, so a survival dig between 4.5 and 5.5 blocks
+from the eye was **refused although a real client is entitled to make it**. The
+rule is now vanilla's own, bytecode-read from the Mojang-mapped server jar:
+
+```text
+Player.DEFAULT_BLOCK_INTERACTION_RANGE                       = 4.5f
+ServerPlayer.CREATIVE_BLOCK_INTERACTION_RANGE_MODIFIER        = +0.5 (ADD_VALUE)
+ServerPlayer.BLOCK_INTERACTION_DISTANCE_VERIFICATION_BUFFER   = 1.0d
+Player.isWithinBlockInteractionRange(pos, buffer):
+    AABB(pos).distanceToSqr(getEyePosition()) < (blockInteractionRange() + buffer)^2
+ServerPlayerGameMode.handleBlockBreakAction  /  …handleUseItemOn  ->  buffer 1.0
+```
+
+So the effective reach is **5.5** in survival and **6.0** in creative, the
+comparison is a **strict `<`**, and the geometry is the eye to the block's *box*
+(which the old code already had right). The `<=` versus `<` distinction and the
+buffer are each pinned by a test whose perturbation the probe script confirms.
+
+**A second real gap closed in the same pass, which is what N-1 was right to be
+worried about.** `PlayIntent::Interact` never checked reach at all — a swing damaged
+any entity from any distance, a divergence recorded since AUDIT-09. It now applies
+the gate vanilla takes in `handleInteract` *before* it branches on the action,
+`isWithinEntityInteractionRange(aabb, 3.0)` (effective 6.0 from the eye). Two
+existing suites then failed, and the tests were wrong rather than the feature:
+`player_attack`'s kill test and `loot_and_pickup`'s mob-death test stood still and
+swung at a chicken across a 10-tick window, so they had been measuring whether a
+wandering chicken stays put. Both now walk the player into range first, with the
+reason in the comment; relaxing the check instead would have been fixing a test by
+breaking a feature.
+
+**The ZERO-dig root cause is not reproduced, and the honest answer is that it does
+not exist in any surviving evidence.** What *is* on the wire, in both traces, and
+is worth recording: the client sends `START_DESTROY_BLOCK` and then
+`ABORT_DESTROY_BLOCK` — **never `STOP_DESTROY_BLOCK`** — for every dig in both
+sessions (12 START (sequences 1-12) + 12 ABORT in the owner session; 129 + 129 in
+the later one). That is consistent with this server breaking instantly on `START`
+rather than accumulating vanilla's destroy progress, and it is the same recorded
+divergence from the M-2 section, now with wire evidence behind it. The experiment
+that would settle whether a *respawn* corrupts the client's dig state is named
+below.
+
+**Three instrument defects, found by using the instruments:**
+
+- **`m_probes.py` could not tell that it had already corrupted the tree.** It
+  restored in a `finally`, which covers an exception but not a kill. A foreground
+  run was killed with a perturbation still applied; the next run snapshotted the
+  corrupted file as its *baseline*, restored to the corruption, and reported the
+  tree clean. It now writes originals to `target/probe-backup/` first and restores
+  from them on startup, so a killed run is self-healing and visible. A probe's
+  restore step is itself an instrument, and this one had never been tested by
+  killing it.
+- **Two of the new reach tests were not load-bearing, because they computed their
+  own geometry wrongly** — twice the same way. They placed the target at the
+  player's *feet* level and called the horizontal offset "the distance", but the eye
+  is 0.62 blocks above such a block's top face, so the boundary case sat at 5.53
+  rather than 5.5 and the eye-versus-feet case was out of range under *both*
+  readings. Probes N-1c and N-1e reported `NOT LOAD-BEARING`; every distance in the
+  file now goes through the same public primitive the server calls.
+- **AUDIT-11 §4.1 confirmed**: the ack high-water-mark test sent sequences 11 then
+  3, so "keep the maximum" and "keep the first" agreed. It now sends **3, 11, 7**,
+  where max, first and last each give a different answer, and two probes (M-2c
+  "last", M-2d "first") confirm both alternatives fail it.
+
+**Still owed, and named rather than implied:**
+
+- **the live death → respawn round.** The protocol half is pinned (M-1's bytecode
+  and probes); no running client has yet accepted the new `respawn` body. The
+  `/tp`-to-kill route failed last round because the destination was inside terrain;
+  the named experiment is to read the generator's surface height for a chosen
+  column first (`TerrainGenerator::surface_height`) and teleport to
+  `surface + 20`, which is lethal without embedding the player. A real client at a
+  keyboard is required, and the owner has assigned it to the audit agent.
+- **the M-3 speed anchor.** 30.41 keeps the zombie at its measured speed and leaves
+  pigs and skeletons about 8% slow; the constant is a single linear conversion and
+  the choice between 30.41 and 33.05 is the owner's to make, not the builder's.
 
 ## Unreleased — Phase 10 (client compatibility and rendering)
 

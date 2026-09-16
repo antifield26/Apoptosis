@@ -436,9 +436,21 @@ fn a_mob_death_rolls_its_entity_loot_table() {
     // A chicken has 4 health and the fist does 1.0, so four swings land it — but
     // a second swing inside the 10-tick hurt window is refused, so the swings
     // have to be spaced. The loop is bounded and reports which half failed.
+    //
+    // **Each swing is taken from inside the entity reach.** Since AUDIT-11 the
+    // attack path applies vanilla's `isWithinEntityInteractionRange` gate (6.0
+    // blocks from the eye), and a chicken wanders several blocks during the 12
+    // ticks a window takes — so a fixed standing position would measure the
+    // chicken's walk rather than the loot roll. The reach rule is
+    // `reach_validation.rs`'s subject; this test is about what a killed mob drops.
     let mut swings = 0;
     let mut killed = false;
     for _ in 0..20 {
+        if let Some(at) = harness.game.entity_store().get(chicken).map(|e| e.position)
+            && let Some(player) = harness.game.player_mut(harness.id)
+        {
+            player.position = mc_entity::player::Vec3::new(at.x - 2.0, at.y, at.z);
+        }
         harness.intent(PlayIntent::Interact {
             entity: chicken.get(),
             kind: 1,

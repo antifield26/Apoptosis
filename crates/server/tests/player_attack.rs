@@ -15,11 +15,15 @@
 //!   (`INVULNERABLE_TICKS`), which is vanilla's `invulnerableTime`;
 //! - a **non-living** entity is immune rather than silently damaged.
 //!
+//! Since AUDIT-11 the attack path also gates on entity reach
+//! (`Player.isWithinEntityInteractionRange`, effective 6.0 blocks from the eye),
+//! which closed the second of the two gaps named below; `reach_validation.rs` owns
+//! that rule and its tests.
+//!
 //! ## What these do not prove
 //!
 //! That a held item's damage is used (it is not: the fist figure is applied
-//! whatever is held — a named gap), that a swing outside the interaction range
-//! is refused (it is not — a named gap, see the parity matrix), and that a real
+//! whatever is held — a named gap, see the parity matrix), and that a real
 //! client's knockback or animation matches (P11-10).
 
 // Health is compared exactly on purpose: every value here is reached by adding or
@@ -100,7 +104,26 @@ impl Harness {
     }
 
     /// One attack swing at `entity`, the way the client sends it (`kind` 1).
+    ///
+    /// **The player is moved into the target's reach first.** Since AUDIT-11 the
+    /// attack path applies vanilla's `isWithinEntityInteractionRange` gate
+    /// (effective 6.0 blocks from the eye), so a swing at a mob that has wandered
+    /// off is refused — correct behaviour, and it would otherwise make this suite
+    /// measure *wandering* rather than damage: a passive mob walks out of range
+    /// during the 10 ticks a hurt window takes, and the first version of these
+    /// tests then failed with "the chicken is gone after 20 spaced swings". The
+    /// reach rule has its own tests in `reach_validation.rs`; this suite is about
+    /// damage and the hurt window, so it removes the distance from the experiment.
+    ///
+    /// An id that is not a real entity is left alone and still sent, which is what
+    /// the hostile-id tests below need.
     fn swing(&mut self, entity: i32) {
+        if let Ok(target) = mc_entity::EntityId::new(entity)
+            && let Some(at) = self.game.entity_store().get(target).map(|e| e.position)
+            && let Some(player) = self.game.player_mut(self.id)
+        {
+            player.position = mc_entity::player::Vec3::new(at.x - 2.0, at.y, at.z);
+        }
         self.intent(PlayIntent::Interact { entity, kind: 1 });
     }
 
