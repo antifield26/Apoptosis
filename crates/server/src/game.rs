@@ -12,7 +12,7 @@
 //! | Phase | This crate's work | Status |
 //! |---|---|---|
 //! | [`TickPhase::Network`] | drain the inbound channel (bounded) and *queue* the work: player intents go to a pending buffer, joins/leaves apply inline | implemented |
-//! | [`TickPhase::ScheduledTicks`] | none — block/fluid scheduled ticks are P05-05/P05-06 | **documented no-op** |
+//! | [`TickPhase::ScheduledTicks`] | drain due block scheduled ticks from the redstone update queue (P13-01; fluids out of scope, no producers yet) | implemented (queue wired) |
 //! | [`TickPhase::Entities`] | the natural spawn cycle, then per-entity AI, despawn, timers, gravity + swept collision, landing/fall damage | implemented (AI live as of P11-02) |
 //! | [`TickPhase::Players`] | apply the queued intents in arrival order, then player timers and physics | implemented |
 //! | [`TickPhase::BlockEntities`] | furnaces cook (`container_set_data`), hoppers transfer on the 8-tick cooldown, viewers resync | implemented (P12-03/04) |
@@ -127,10 +127,10 @@
 //! `add_entity`/`remove_entities`/`set_entity_data` packets that make entities
 //! visible to a client. World *generation* lives in `mc-worldgen` and is wired.
 //!
-//! **Not** simulated, and therefore not claimed: block and fluid scheduled
-//! ticks, block-entity behaviour, redstone, fluids, item pickup and merging,
-//! entity persistence, per-player data persistence, and the projectile and
-//! explosion attack styles. Each is recorded in
+//! **Not** simulated, and therefore not claimed: fluid scheduled ticks,
+//! redstone (model only — block scheduled ticks drain since P13-01, with no
+//! producers or mechanism reactions yet), per-player data persistence, and the
+//! projectile and explosion attack styles. Each is recorded in
 //! `docs/vanilla-parity/PARITY-MATRIX.md`, and every no-op in this file says so
 //! at its definition.
 
@@ -896,6 +896,13 @@ pub struct TickReport {
     /// in this server's logs or state changes when it is missing, and the only
     /// symptom is on a real client's screen (M-2).
     pub block_change_acks: usize,
+    /// Block scheduled ticks that came due this tick (P13-01).
+    ///
+    /// Counted because a tick that stops draining is silent: the queue keeps the
+    /// work, so nothing errors, and circuits just freeze.
+    pub scheduled_ticks_fired: usize,
+    /// Scheduled ticks still queued for later ticks after this tick's drain.
+    pub scheduled_ticks_pending: usize,
 }
 
 /// The simulation.
@@ -1027,6 +1034,15 @@ pub struct Game {
     /// geometry: the world answers "what block is at x,y,z", this answers "what does
     /// that block hold". `mc-container` owns the model, this owns the instance.
     block_entities: mc_container::BlockEntityStore,
+    /// Block scheduled ticks keyed by due tick, then position (P13-01).
+    ///
+    /// Owned here, drained every tick by the `ScheduledTicks` phase. `mc-redstone`
+    /// owns the queue mechanics (caps, dedup, budget, order); the game owns when
+    /// it drains. P13-02 attaches the world feed (what schedules) and P13-03 the
+    /// mechanism reactions (what a due tick does) — until then a drained tick is
+    /// counted on the report and has no other effect, and nothing in production
+    /// schedules, so nothing is dropped in practice.
+    scheduled_ticks: mc_redstone::UpdateQueue,
     /// Chunks that became placeholders while this game could not read storage.
     ///
     /// A game with a borrowed `WorldService` cannot tell "nothing stored" from "I
@@ -1242,6 +1258,7 @@ impl Game {
             time_offset: 0,
             shutdown_requested: false,
             block_entities: mc_container::BlockEntityStore::new(),
+            scheduled_ticks: mc_redstone::UpdateQueue::new(),
             placeholder_without_storage: BTreeSet::new(),
         })
     }
@@ -1582,7 +1599,7 @@ impl Game {
         match phase {
             TickPhase::Network => self.phase_network(report),
             TickPhase::ScheduledTicks => {
-                self.tick_scheduled();
+                self.tick_scheduled(tick, report);
                 Ok(())
             }
             TickPhase::Entities => {
@@ -1697,10 +1714,44 @@ impl Game {
     /// them: an empty tick list and a missing scheduler look identical from the
     /// outside, so the absence is stated rather than stubbed with a placeholder
     /// that would make [`Game::metrics`] look busy.
-    // Takes `&mut self` because that is the phase's shape, not because this body
-    // needs it: the queue it will drain lives on `Game`.
-    #[allow(clippy::unused_self)]
-    fn tick_scheduled(&mut self) {}
+    /// Phase 2: drain the block scheduled ticks due this tick (P13-01).
+    ///
+    /// The queue drains in `(due, position)` order under the nominal budget, so
+    /// a burst is deferred, never dropped; the report carries what fired and
+    /// what is still queued. Drained positions have no consumer yet — P13-02
+    /// feeds the queue from placed blocks and P13-03 reacts to due ticks — so
+    /// they are counted and nothing else happens to them here.
+    fn tick_scheduled(&mut self, tick: Tick, report: &mut TickReport) {
+        let drain = self
+            .scheduled_ticks
+            .drain_due_block_ticks(tick, mc_redstone::UpdateBudget::nominal());
+        report.scheduled_ticks_fired = drain.len();
+        report.scheduled_ticks_pending = drain.scheduled_later;
+    }
+
+    /// Schedule a block tick for `(x, y, z)`, `delay` ticks from now (P13-01).
+    ///
+    /// The scheduling half of the queue the `ScheduledTicks` phase drains; the
+    /// world feed of P13-02 calls this when a placed block needs one. Delays
+    /// past [`mc_redstone::MAX_SCHEDULE_DELAY`] or overflowing the tick counter
+    /// are refused as hostile input, never clamped silently — use
+    /// `schedule_clamped` on the queue for wire/file values.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::InvalidAction`] when the delay is out of range or the due
+    /// tick overflows.
+    pub fn schedule_block_tick(
+        &mut self,
+        x: i32,
+        y: i32,
+        z: i32,
+        delay: u32,
+    ) -> ServerResult<mc_redstone::Inserted> {
+        let now = self.tick;
+        self.scheduled_ticks
+            .schedule(now, mc_redstone::BlockPos::new(x, y, z), delay)
+    }
 
     /// Phase 5: furnaces cook, hoppers transfer (P12-03/04).
     ///

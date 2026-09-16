@@ -11,6 +11,21 @@ entry is the release candidate matching the workspace version (`0.1.0` in
 [Cargo.toml](Cargo.toml)); it is **published** as tag `v0.1.0-rc.1` with built
 artifacts, and no later version has been released.
 
+## Unreleased — Phase 13 (World Systems & Redstone)
+
+### P13-01 — the scheduled-tick queue is wired into the tick
+
+`TickPhase::ScheduledTicks` is no longer a no-op. The game owns an
+`UpdateQueue` drained every tick in `(due, position)` order under the nominal
+256 budget (a burst is deferred, never dropped); the report carries what fired
+and what is still queued. Drained ticks have no consumers yet and nothing in
+production schedules — the world feed is P13-02, mechanism reactions P13-03 —
+so this retires the no-op without changing any observable behaviour except
+the two new counters. Fluids stay out of the phase by the stated scope
+boundary. `scheduled_ticks.rs` pins due-once timing and the budget (a no-drain
+perturbation fails both); `PARITY-MATRIX.md` moves the scheduled-ticks row to
+`partial (queue wired, no producers/consumers)`.
+
 ## Unreleased — Phase 12 (Containers & the Survival Loop)
 
 P12 closes the survival loop around storage: chests, furnaces and hoppers open

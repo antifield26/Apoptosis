@@ -342,6 +342,7 @@ dependencies = [
  "mc-network",
  "mc-persistence",
  "mc-protocol",
+ "mc-redstone",
  "mc-registry",
  "mc-simulation",
  "mc-test-support",

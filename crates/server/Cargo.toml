@@ -25,6 +25,10 @@ mc-nbt = { path = "../nbt" }
 mc-persistence = { path = "../persistence" }
 mc-protocol = { path = "../protocol" }
 mc-registry = { path = "../registry" }
+# The redstone update/scheduled-tick queue (P13-01). `mc-redstone` owns the
+# queue mechanics; the server owns when it drains (ScheduledTicks phase) and,
+# from P13-02, what feeds it.
+mc-redstone = { path = "../redstone" }
 # The tick scheduler and phase order (P05-01/P05-02). `mc-simulation` owns the
 # shape of a tick and depends on nothing but `mc-core`, so the dependency runs
 # server → simulation and never the other way.
