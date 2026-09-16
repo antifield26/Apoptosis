@@ -870,3 +870,89 @@ fn an_out_of_range_write_is_refused() {
     menu.set_cursor(ItemStack::EMPTY);
     assert!(menu.cursor().is_empty());
 }
+
+/// P12-01: the block-menu constructors build the jar's window shapes.
+///
+/// Single chest 27 + 36 player = 63; double 54 + 36 = 90; furnace 3 + 36 = 39;
+/// hopper 5 + 36 = 41. The player container is index 1 (container 0 is the
+/// block), which is what `player_container_index` reports and what the
+/// server's mirror/write-back must use instead of hard-coding 0.
+#[test]
+fn block_menus_have_the_vanilla_slot_counts_and_player_container() {
+    let player = || Container::new(ContainerKind::Player, 41).expect("player");
+    let chest27 = Menu::chest(
+        1,
+        Container::new(ContainerKind::Generic, 27).expect("c"),
+        player(),
+        sizes(),
+    )
+    .expect("single chest");
+    assert_eq!(chest27.slot_count(), 63);
+    assert_eq!(chest27.player_container_index(), 1);
+    let chest54 = Menu::chest(
+        1,
+        Container::new(ContainerKind::Generic, 54).expect("c"),
+        player(),
+        sizes(),
+    )
+    .expect("double chest");
+    assert_eq!(chest54.slot_count(), 90);
+    let furnace = Menu::furnace(
+        2,
+        Container::new(ContainerKind::Furnace, 3).expect("f"),
+        player(),
+        sizes(),
+    )
+    .expect("furnace");
+    assert_eq!(furnace.slot_count(), 39);
+    // Furnace output (menu slot 2) refuses placement.
+    assert!(!furnace.mapping(2).expect("output").may_place());
+    assert!(furnace.mapping(0).expect("input").may_place());
+    let hopper = Menu::hopper(
+        3,
+        Container::new(ContainerKind::Generic, 5).expect("h"),
+        player(),
+        sizes(),
+    )
+    .expect("hopper");
+    assert_eq!(hopper.slot_count(), 41);
+    // Wrong sizes are invariants, not hostile input.
+    assert!(
+        Menu::chest(
+            1,
+            Container::new(ContainerKind::Generic, 9).expect("c"),
+            player(),
+            sizes()
+        )
+        .is_err()
+    );
+    assert!(
+        Menu::furnace(
+            2,
+            Container::new(ContainerKind::Generic, 3).expect("f"),
+            player(),
+            sizes()
+        )
+        .is_err()
+    );
+}
+
+/// P12-01: a click in a chest menu conserves items across block + player.
+#[test]
+fn a_chest_menu_click_conserves_items() {
+    let mut menu = Menu::chest(
+        1,
+        Container::new(ContainerKind::Generic, 27).expect("chest"),
+        Container::new(ContainerKind::Player, 41).expect("player"),
+        sizes(),
+    )
+    .expect("chest menu");
+    menu.set_slot(0, stack(stone(), 64))
+        .expect("fill chest slot");
+    let before = menu.total_items();
+    // Pick up the chest stack (menu slot 0), then place it into the first
+    // player slot (menu slot 27 = player storage 9).
+    apply(&mut menu, 0, 0, ClickType::Pickup);
+    apply(&mut menu, 27, 0, ClickType::Pickup);
+    assert_eq!(menu.total_items(), before, "a chest move must conserve");
+}

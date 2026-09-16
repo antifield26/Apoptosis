@@ -398,6 +398,169 @@ impl Menu {
         self.window_id
     }
 
+    /// Which container holds the player's own storage (0 for the player menu,
+    /// 1 for a block menu where container 0 is the block).
+    #[must_use]
+    pub const fn player_container_index(&self) -> usize {
+        self.layout.player_container as usize
+    }
+
+    /// Build a chest menu: `block_slots` (27 single, 54 double) plus the
+    /// player's main rows and hotbar (36 slots).
+    ///
+    /// The player container is the full 41-slot `Player` container, but only
+    /// main (`9..=35`) and hotbar (`0..=8`) are exposed — armour, crafting and
+    /// offhand are not part of a vanilla chest window. Shift-click routes
+    /// block ↔ player via [`MenuLayout::container_and_player`].
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Invariant`] when `block_slots` is not 27 or 54, when
+    /// `player_slots` is not 41, or when [`Menu::new`] rejects the layout.
+    pub fn chest(
+        window_id: u8,
+        block_slots: Container,
+        player_slots: Container,
+        stack_sizes: StackSizeTable,
+    ) -> ServerResult<Self> {
+        let n = block_slots.len();
+        if n != 27 && n != 54 {
+            return Err(ServerError::Invariant(format!(
+                "a chest container needs 27 or 54 slots, got {n}"
+            )));
+        }
+        if block_slots.kind() != ContainerKind::Generic {
+            return Err(ServerError::Invariant(format!(
+                "a chest container must be Generic, got {}",
+                block_slots.kind()
+            )));
+        }
+        if player_slots.len() != 41 {
+            return Err(ServerError::Invariant(format!(
+                "a chest menu needs 41 player slots, got {}",
+                player_slots.len()
+            )));
+        }
+        let mut slots = Vec::with_capacity(n + 36);
+        for slot in 0..n as u16 {
+            slots.push(SlotMapping::storage(0, slot));
+        }
+        // Player main 9..=35, then hotbar 0..=8 (storage order, not menu order).
+        for slot in 9..36u16 {
+            slots.push(SlotMapping::storage(1, slot));
+        }
+        for slot in 0..9u16 {
+            slots.push(SlotMapping::storage(1, slot));
+        }
+        let layout = MenuLayout::container_and_player(n);
+        Self::new(
+            window_id,
+            vec![block_slots, player_slots],
+            slots,
+            layout,
+            stack_sizes,
+        )
+    }
+
+    /// Build a furnace menu: 3 block slots (input, fuel, output) plus 36 player
+    /// slots. The output refuses placement via [`SlotRole::FurnaceOutput`].
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Invariant`] on the same shape mismatches as [`Menu::chest`].
+    pub fn furnace(
+        window_id: u8,
+        block_slots: Container,
+        player_slots: Container,
+        stack_sizes: StackSizeTable,
+    ) -> ServerResult<Self> {
+        if block_slots.len() != 3 {
+            return Err(ServerError::Invariant(format!(
+                "a furnace container needs 3 slots, got {}",
+                block_slots.len()
+            )));
+        }
+        if block_slots.kind() != ContainerKind::Furnace {
+            return Err(ServerError::Invariant(format!(
+                "a furnace container must be Furnace, got {}",
+                block_slots.kind()
+            )));
+        }
+        if player_slots.len() != 41 {
+            return Err(ServerError::Invariant(format!(
+                "a furnace menu needs 41 player slots, got {}",
+                player_slots.len()
+            )));
+        }
+        let mut slots = Vec::with_capacity(39);
+        slots.push(SlotMapping::with_role(0, 0, SlotRole::FurnaceInput));
+        slots.push(SlotMapping::with_role(0, 1, SlotRole::FurnaceFuel));
+        slots.push(SlotMapping::with_role(0, 2, SlotRole::FurnaceOutput));
+        for slot in 9..36u16 {
+            slots.push(SlotMapping::storage(1, slot));
+        }
+        for slot in 0..9u16 {
+            slots.push(SlotMapping::storage(1, slot));
+        }
+        let layout = MenuLayout::container_and_player(3);
+        Self::new(
+            window_id,
+            vec![block_slots, player_slots],
+            slots,
+            layout,
+            stack_sizes,
+        )
+    }
+
+    /// Build a hopper menu: 5 block slots plus 36 player slots.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Invariant`] on the same shape mismatches as [`Menu::chest`].
+    pub fn hopper(
+        window_id: u8,
+        block_slots: Container,
+        player_slots: Container,
+        stack_sizes: StackSizeTable,
+    ) -> ServerResult<Self> {
+        if block_slots.len() != 5 {
+            return Err(ServerError::Invariant(format!(
+                "a hopper container needs 5 slots, got {}",
+                block_slots.len()
+            )));
+        }
+        if block_slots.kind() != ContainerKind::Generic {
+            return Err(ServerError::Invariant(format!(
+                "a hopper container must be Generic, got {}",
+                block_slots.kind()
+            )));
+        }
+        if player_slots.len() != 41 {
+            return Err(ServerError::Invariant(format!(
+                "a hopper menu needs 41 player slots, got {}",
+                player_slots.len()
+            )));
+        }
+        let mut slots = Vec::with_capacity(41);
+        for slot in 0..5u16 {
+            slots.push(SlotMapping::storage(0, slot));
+        }
+        for slot in 9..36u16 {
+            slots.push(SlotMapping::storage(1, slot));
+        }
+        for slot in 0..9u16 {
+            slots.push(SlotMapping::storage(1, slot));
+        }
+        let layout = MenuLayout::container_and_player(5);
+        Self::new(
+            window_id,
+            vec![block_slots, player_slots],
+            slots,
+            layout,
+            stack_sizes,
+        )
+    }
+
     /// The current state id, which the client must echo back.
     #[must_use]
     pub const fn state_id(&self) -> i32 {
