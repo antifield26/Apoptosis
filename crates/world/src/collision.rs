@@ -269,6 +269,32 @@ pub fn is_solid_or_unknown(registry: &BlockRegistry, id: i32) -> bool {
     is_solid(registry, id).unwrap_or(true)
 }
 
+/// Blocks that are fluids, by registry name.
+///
+/// Short because 26.x has no separate `flowing_water`/`flowing_lava` block: a
+/// fluid's level is a **block state** of the one fluid block, exactly as the
+/// registry row shows (`minecraft:water` with `level=0..15`).
+pub const LIQUIDS: &[&str] = &["minecraft:water", "minecraft:lava"];
+
+/// Whether a block-state id is a fluid.
+///
+/// Both fluids are also in [`NON_SOLID`] — you can walk *into* water — so
+/// solidity alone cannot answer "may a mob walk here?". A land mob that walks
+/// into an ocean and keeps walking is the visible symptom this separates out
+/// (M-4: the AI's one-cell passability lookahead uses it).
+///
+/// An unknown id is **not** a fluid: [`is_solid_or_unknown`] already refuses
+/// those, and reporting them as liquid as well would tell a caller two different
+/// stories about the same block.
+#[must_use]
+pub fn is_liquid(registry: &BlockRegistry, id: i32) -> bool {
+    // An id outside the registry fails this lookup and is reported as "not a
+    // fluid" — the caller's solidity check is what refuses it.
+    registry
+        .block_name(id)
+        .is_ok_and(|name| LIQUIDS.contains(&name))
+}
+
 /// Result of a ray cast against blocks.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BlockHit {
@@ -312,7 +338,8 @@ pub fn look_vector(yaw: f32, pitch: f32) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::{
-        Aabb, FACE_DOWN, FACE_UP, NON_SOLID, Vec3, is_solid, is_solid_or_unknown, look_vector,
+        Aabb, FACE_DOWN, FACE_UP, LIQUIDS, NON_SOLID, Vec3, is_liquid, is_solid,
+        is_solid_or_unknown, look_vector,
     };
     use mc_registry::Registries;
 
@@ -330,6 +357,43 @@ mod tests {
                 "NON_SOLID lists {name:?}, which is not in the block registry"
             );
         }
+    }
+
+    /// The same guard for [`LIQUIDS`], plus the two facts a caller relies on:
+    /// a fluid is non-solid *and* liquid, and an unknown id is neither reported as
+    /// liquid nor allowed to move through.
+    #[test]
+    fn liquids_are_non_solid_and_unknown_ids_are_not_liquid() {
+        let registries = registry();
+        assert!(!LIQUIDS.is_empty(), "the list must not be trivially empty");
+        for name in LIQUIDS {
+            assert!(
+                registries.blocks.contains(name),
+                "LIQUIDS lists {name:?}, which is not in the block registry"
+            );
+            let id = registries.blocks.default_state(name).expect(name);
+            assert!(is_liquid(&registries.blocks, id), "{name} is a fluid");
+            assert!(
+                !is_solid(&registries.blocks, id).expect("solidity"),
+                "{name} is a fluid, so it must not be solid: you can walk into it"
+            );
+        }
+        // A solid block is not a fluid, and neither is air.
+        let stone = registries
+            .blocks
+            .default_state("minecraft:stone")
+            .expect("stone");
+        assert!(!is_liquid(&registries.blocks, stone));
+        assert!(!is_liquid(&registries.blocks, registries.blocks.air_id()));
+        // An id outside the registry is not called liquid; `is_solid_or_unknown`
+        // is the function that refuses it.
+        let unknown = registries.blocks.state_count() as i32;
+        assert!(
+            registries.blocks.block_name(unknown).is_err(),
+            "the probe id must be outside the registry"
+        );
+        assert!(!is_liquid(&registries.blocks, unknown));
+        assert!(is_solid_or_unknown(&registries.blocks, unknown));
     }
 
     #[test]

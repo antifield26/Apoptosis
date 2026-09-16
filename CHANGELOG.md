@@ -284,6 +284,96 @@ divergences it names — an unmodified chunk's entities are not persisted, a swi
 outside the interaction range is not refused, a held item's damage is not used, and
 the zombie's follow range is the jar's default rather than its override.
 
+### The owner's acceptance round: four defects, fixed (M-1..M-4)
+
+The owner played the P11-10 build on a real 26.1.2 client. **Two things were
+confirmed on screen for the first time**: mobs spawn and **render** (pig, cow,
+creeper, spider, zombie; `entities=17` in the metrics), and the client renders
+**nightfall** — so 26.1's clock works further than the P10-03 record claims. Four
+defects came back with it. Each is fixed here with an instrument, and each fix is
+re-broken by `target/m_probes.py` to prove its test can fail.
+
+**M-1 — the client could not decode `respawn`, so a dead player could not respawn.**
+Our body stopped at `is_flat` and then wrote the data-retention byte and the sea
+level. The 26.1.2 client reads a whole `CommonPlayerSpawnInfo` — ten fields,
+including `Optional<GlobalPos>` and `portalCooldown` — and *then* the retention byte,
+so it ran off the end of ours. Both halves are bytecode-read from the client jar
+(`javap -c -p` on `CommonPlayerSpawnInfo` and `ClientboundRespawnPacket`), and the
+fix is the shape `JoinGame` already sends and the client already accepts. The
+regression test decodes our bytes with a reader transcribed **from that bytecode**
+rather than a round trip through our own encoder — the round-trip-only trap is what
+let this and two other wire defects through — and a second test pins the old shape
+as unreadable. The death location is now real: `Session::last_death_location` is
+recorded where the player died and rides the packet.
+
+**M-2 — mining did not appear to break blocks. The diagnosis in the handoff was
+wrong, and the instrument says so.** The claim was that 95 `player_action` packets
+with 2-3-byte bodies were dropped by a decoder expecting 11 bytes. `body_bytes` in
+the rig trace **includes the packet-id byte**, so those are 1-2-byte
+`serverbound:accept_teleportation` bodies — 95 of them, matching the 96
+`player_position` teleports the server sent, every one parsing as a VarInt teleport
+id with zero bytes left over. The real digs are on **id 41**, and there are 24 of
+them in 12 start/finish pairs, each matched by a `block_update` at exactly that
+position. Nor had the id moved: a fresh extraction from the **client** jar's
+`GameProtocols` registration order agrees with the repository's server-jar table on
+**all 210 play ids** (69 serverbound, 141 clientbound, zero mismatches), and its
+ids 13/30/31/63 are exactly where the trace shows the tick-ends, the move flood and
+the swings.
+
+The defect was on the client's side of the wire, and it is a missing packet. A 26.x
+client does not apply a `block_update` directly while it has a **prediction** open
+at that position: `ClientLevel.setServerVerifiedBlockState` calls
+`BlockStatePredictionHandler.updateKnownServerState`, which returns `true` when a
+prediction is pending and then only *stores* the state. Mining opens one
+(`startDestroyBlock` → `startPrediction`, which sends `player_action` carrying the
+new sequence). The only thing that clears it is `endPredictionsUpTo(sequence)`,
+called from `handleBlockChangedAck` — i.e. from `block_changed_ack`, which this
+server never sent. So the block the player mined stayed stone on screen, and every
+later change at that position was swallowed with it. Vanilla's rule is
+`ServerGamePacketListenerImpl`: a `Math.max` high-water mark fed by
+`handlePlayerAction`, `handleUseItemOn` and `handleUseItem`, sent once per tick when
+it is `> -1`, then reset. That is what `block_change_ack.rs` now pins — the value,
+the one-per-tick collapse, the ordering after the block update, and the case of a
+dig the server *refused*, which vanilla also acknowledges.
+
+**M-3 — mobs moved too fast.** `SPEED_BLOCKS_PER_SECOND_PER_ATTRIBUTE` was 43.17:
+the walking-player figure (4.317 blocks/s) over a player's attribute (0.1),
+extrapolated to every mob. The module doc called that unverified and "probably too
+generous", and said movement built on it had to be measured on a real server first;
+it was used anyway, and a zombie walked at 9.9 blocks/s. It is now **measured** from
+`target/entity-capture/trace.jsonl` — a vanilla server driving real mobs, with the
+client's own `client_tick_end` packets as the tick clock and each entity's
+*sustained ceiling* as the statistic: the zombie's is 0.3497 blocks/tick (21
+entities agreeing within 0.2%, six runs of 5-14 consecutive ticks), the pig's and
+skeleton's 0.4131. The constant is 30.41, anchored on the zombie — the mob the
+complaint was about, the largest sample, and the one attribute row that is
+externally verified rather than task-supplied. **The residual is named rather than
+smoothed**: the pig and skeleton share attribute 0.25 and an identical ceiling,
+which implies 33.05, so one linear constant walks them ~8% slowly; vanilla does not
+have this because a mob's speed is `speedModifier × attribute` and the goal supplies
+the modifier, which this AI has no concept of.
+
+**M-4 — mobs walked into water and walls.** Direct steering wrote a velocity at the
+target without looking at what was in the way. For water that was not even a
+collision failure — water is non-solid, so the mob had simply decided to swim. The
+AI now checks the next cell (feet and head) before steering: a solid block or a
+fluid refuses the step, a blocked wander abandons its destination so it re-rolls
+instead of pressing on, and a blocked chase halts. This is **not pathfinding** and
+the row says so: no route around an obstacle, no ledge or fall handling (refusing
+unsupported steps would stop mobs walking down any hill), no swept-body check. The
+new `mc_world::collision::is_liquid` is the predicate, and `mob_pathing.rs` pins the
+water and lava refusals **plus the negative control** — the same course with nothing
+in the way must still let the zombie reach the player — because a lookahead that
+refused every step would pass the other two tests.
+
+**What the fixes did not change**, so the gaps do not read as closed: mining still
+breaks instantly on `START_DESTROY_BLOCK` rather than accumulating vanilla's destroy
+progress, entities in unmodified chunks are still not persisted, the zombie's
+`FOLLOW_RANGE` is still the jar-measured default 16 rather than its 35 override, and
+the four claims the acceptance round was meant to settle — a real client seeing a
+*picked-up* item leave the ground, a death and its respawn, and a re-join after a
+restart — are still the reason P11-10 exists.
+
 ## Unreleased — Phase 10 (client compatibility and rendering)
 
 ### P10-01 — client-capture rig

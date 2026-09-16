@@ -239,6 +239,15 @@ pub mod clientbound {
         /// from the config payload — where `minecraft:entity_type` is a tag directory in `update_tags` rather
         /// than a registry. See P10-06.
         pub const ADD_ENTITY: i32 = 1;
+        /// `minecraft:block_changed_ack` — close the client's block prediction for
+        /// a sequence it sent.
+        ///
+        /// **Omitting this packet is not a no-op.** The client stores a server
+        /// block change instead of applying it while a prediction is pending at
+        /// that position, and only this packet flushes it; see
+        /// [`crate::packets::play::BlockChangedAck`] for the bytecode. Its absence
+        /// was M-2 of the owner's P11-10 acceptance round.
+        pub const BLOCK_CHANGED_ACK: i32 = 4;
         /// `minecraft:block_entity_data` — the contents of a block entity, on placement and on
         /// change.
         ///

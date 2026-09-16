@@ -66,7 +66,7 @@
 //! they are "verified" only in the sense that an external source states them — they
 //! are **not** a 26.1.2 measurement.
 //!
-//! ## How movement speed is derived, and why it is still unverified
+//! ## How movement speed is derived, and what it is now measured against
 //!
 //! [`MobKind::movement_speed`] is expressed as blocks per **tick**, because that
 //! is the unit the simulation integrates in, but the constant behind it is
@@ -74,22 +74,28 @@
 //! tick conversion applied at the point of use:
 //!
 //! ```text
-//! blocks/tick = MovementSpeedAttribute × 43.17 ÷ 20
+//! blocks/tick = MovementSpeedAttribute × SPEED_BLOCKS_PER_SECOND_PER_ATTRIBUTE ÷ 20
 //! ```
 //!
-//! 43.17 is the one documented anchor available: the wiki records a walking
-//! player at 4.317 blocks/s, and a player's `MovementSpeedAttribute` base is 0.1,
-//! so 4.317 ÷ 0.1 = 43.17 blocks/s per attribute unit.
+//! That constant was **43.17** — the wiki's walking-player figure (4.317 blocks/s)
+//! divided by a player's `MovementSpeedAttribute` base (0.1) — and this module used
+//! to say, correctly, that extrapolating it linearly to mobs was unverified and
+//! "probably too generous", landing a zombie at 9.9 blocks/s. It was used anyway,
+//! and the owner's P11-10 acceptance round saw the result (M-3: mobs move too
+//! fast).
 //!
-//! **That extrapolation is not verified and is probably too generous.** It
-//! assumes mob speed scales linearly with the attribute, and it lands a zombie
-//! (attribute 0.23) at 9.9 blocks/s, far above what a zombie actually achieves in
-//! play — Vanilla derives movement inside `LivingEntity.travel`, and a mob only
-//! approaches its steady-state speed on a long straight run with a live
-//! navigation path. The number is therefore a *conversion*, not a measurement:
-//! **any movement built on it must be measured on a real 26.1.2 server first.**
-//! [`MobKind::movement_speed_attribute`] exposes the raw Vanilla attribute so the
-//! conversion can be replaced without touching the table.
+//! It is now **30.41**, measured from a vanilla capture: a real 26.1.2 server
+//! driving real mobs, with the client's own `client_tick_end` packets as the tick
+//! clock, taking each entity's sustained speed ceiling. The full table, the
+//! method, the reason the zombie is the anchor and the ~8% residual on the pig and
+//! skeleton are all on the constant's own documentation. The measurement script is
+//! `target/verify/mob_speed_ceiling.py` and it reruns against any capture.
+//!
+//! [`MobKind::movement_speed_attribute`] still exposes the raw Vanilla attribute,
+//! so the table and the conversion stay separable; **most of the attributes
+//! themselves remain task-supplied** (only the zombie's 0.23 is externally
+//! verified and only the cow's is jar-measured), which is why the conversion is
+//! anchored on the one row whose input is trustworthy too.
 //!
 //! ## Known gaps and deliberate approximations (AGENTS.md §3.3)
 //!
@@ -130,15 +136,63 @@ pub const TICKS_PER_SECOND: f64 = 20.0;
 
 /// Blocks per second per unit of `MovementSpeedAttribute`.
 ///
-/// **Derived, not Vanilla-published, and unverified for mobs.** A walking player
-/// moves at 4.317 blocks/s (wiki-documented) with a `MovementSpeedAttribute` base
-/// of 0.1, giving `4.317 ÷ 0.1 = 43.17`. The linear extrapolation from that one
-/// player data point to other mobs is this crate's assumption; see the module
-/// documentation before using it to move anything.
-pub const SPEED_BLOCKS_PER_SECOND_PER_ATTRIBUTE: f64 = 43.17;
-// Pinned by `the_speed_constant_is_the_documented_player_derivation` in the
-// tests module below: changing it is a deliberate recalibration, not an
-// accident (Audit 08, L1).
+/// # Measured, not derived (M-3)
+///
+/// This constant used to be **43.17**: the wiki's walking-player figure
+/// (4.317 blocks/s) divided by a player's `MovementSpeedAttribute` base (0.1),
+/// extrapolated linearly to every mob. The module documentation called that
+/// extrapolation unverified and "probably too generous", and said any movement
+/// built on it had to be measured on a real 26.1.2 server first. It was used
+/// anyway, and the result was the owner's M-3: a zombie (attribute 0.23) walked at
+/// 9.9 blocks/s instead of the ~7.0 a vanilla zombie actually achieves.
+///
+/// The measurement now exists. `target/verify/mob_speed_ceiling.py` reads the
+/// vanilla capture at `target/entity-capture/trace.jsonl` — a real 26.1.2 server
+/// driving real mobs, with the client's own `client_tick_end` packets as the tick
+/// clock — and takes each entity's **sustained ceiling**: the longest run of
+/// consecutive ticks at or above 97% of that entity's maximum per-tick horizontal
+/// movement. A knockback or a step is one tick; walking is a run.
+///
+/// ```text
+/// mob        attribute  entities  ceiling (blocks/tick)  blocks/s  blk/s per unit
+/// zombie     0.23       21        0.3497 (1432/4096)     6.994     30.411
+/// pig        0.25        8        0.4131 (1692/4096)     8.262     33.049
+/// skeleton   0.25       17        0.4131                 8.262     33.047
+/// spider     0.30       12        0.3807                 7.614     25.381
+/// creeper    0.25       54        0.2644                 5.288     21.153
+/// cow        0.20        5        0.2644                 5.288     26.4
+/// ```
+///
+/// **The constant is anchored on the zombie**, and that choice is deliberate:
+///
+/// * it is the mob the owner's acceptance round was about, and the one this
+///   crate's AI drives hardest (`Chase` is a zombie's job);
+/// * it has the largest and tightest sample — 21 entities whose ceilings agree to
+///   within 0.2%, with six runs of 5-14 consecutive ticks;
+/// * its attribute (0.23) is the one row of [`MobKind::movement_speed_attribute`]
+///   that is externally verified rather than task-supplied, so the anchor is the
+///   only one whose *input* is trustworthy as well as its output.
+///
+/// # What this does not fix (named, not implied)
+///
+/// The pig and the skeleton share attribute 0.25 and share a ceiling exactly
+/// (0.4131 blocks/tick), which is good evidence that the law really is a function
+/// of the attribute — but that ceiling implies **33.05**, not 30.41, so a single
+/// linear constant mis-fits one of the two by about 8%, and this value therefore
+/// walks a pig and a skeleton ~8% slowly. Vanilla does not have this problem
+/// because a mob's speed is `speedModifier × attribute` and the *goal* supplies
+/// the modifier; this crate's AI has one speed per kind. Per-goal speed modifiers
+/// are the experiment that would close it, and the spider (+20%) and creeper
+/// (+44%) rows above are the same gap seen from the other side: their measured
+/// ceilings are *lower* than their attribute implies, which means the capture
+/// never caught them at full input — not that they are slow mobs.
+///
+/// Erring slow is the deliberate direction. The defect being fixed was 42% too
+/// fast; the residual is at most ~8% slow for the mobs measured at full input.
+pub const SPEED_BLOCKS_PER_SECOND_PER_ATTRIBUTE: f64 = 30.41;
+// Pinned by `the_speed_constant_is_the_measured_zombie_ceiling` in the tests
+// module below: changing it is a deliberate recalibration, not an accident
+// (Audit 08, L1), and the measurement behind it is rerunnable on any capture.
 
 /// Distance in blocks at which a hostile mob acquires a player as its target.
 ///
@@ -456,9 +510,9 @@ impl MobKind {
     /// Horizontal walking speed in **blocks per second**.
     ///
     /// [`MobKind::movement_speed_attribute`] ×
-    /// [`SPEED_BLOCKS_PER_SECOND_PER_ATTRIBUTE`]. The constant is derived from the
-    /// documented player figure; the extrapolation to mobs is unverified (module
-    /// documentation).
+    /// [`SPEED_BLOCKS_PER_SECOND_PER_ATTRIBUTE`]. The constant is a **measurement**
+    /// from a vanilla capture (M-3); the attributes themselves are mostly
+    /// task-supplied — see the module documentation.
     #[must_use]
     pub const fn movement_speed_blocks_per_second(self) -> f64 {
         self.movement_speed_attribute() * SPEED_BLOCKS_PER_SECOND_PER_ATTRIBUTE
@@ -990,16 +1044,45 @@ mod tests {
         AGGRO_RADIUS, ATTACK_COOLDOWN_TICKS, ATTACK_RANGE, DECISION_INTERVAL_TICKS,
         FLEE_HEALTH_FRACTION, FLEE_RADIUS, Mob, MobAi, MobAttackStyle, MobBehaviour, MobGoal,
         MobGoalKind, MobKind, MobObservation, MobSighting, Rng,
-        SPEED_BLOCKS_PER_SECOND_PER_ATTRIBUTE, TARGET_LOSE_RADIUS, WALK_DURATION_TICKS,
-        WANDER_RADIUS,
+        SPEED_BLOCKS_PER_SECOND_PER_ATTRIBUTE, TARGET_LOSE_RADIUS, TICKS_PER_SECOND,
+        WALK_DURATION_TICKS, WANDER_RADIUS,
     };
 
-    // Audit 08 (L1): the constant is a derivation from the documented player
-    // figure, unverified against vanilla (module table). Pinning it here makes
-    // any change a deliberate, reviewable recalibration.
+    // Audit 08 (L1): the constant was a derivation from the documented player
+    // figure. M-3 replaced it with a measurement, and pinning it here keeps any
+    // change a deliberate, reviewable recalibration rather than an accident.
+    //
+    // The numbers below are the ones the doc comment on the constant carries, and
+    // the arithmetic is asserted rather than restated: if a future recalibration
+    // moves the constant, this test says which measurement it must be re-derived
+    // from.
     #[test]
-    fn the_speed_constant_is_the_documented_player_derivation() {
-        assert_eq!(SPEED_BLOCKS_PER_SECOND_PER_ATTRIBUTE, 43.17);
+    fn the_speed_constant_is_the_measured_zombie_ceiling() {
+        // The measured anchor: a vanilla zombie's sustained per-tick horizontal
+        // movement, from target/entity-capture/trace.jsonl.
+        const ZOMBIE_BLOCKS_PER_TICK: f64 = 0.3497;
+        assert_eq!(SPEED_BLOCKS_PER_SECOND_PER_ATTRIBUTE, 30.41);
+        let derived =
+            ZOMBIE_BLOCKS_PER_TICK * TICKS_PER_SECOND / MobKind::Zombie.movement_speed_attribute();
+        assert!(
+            (derived - SPEED_BLOCKS_PER_SECOND_PER_ATTRIBUTE).abs() < 0.02,
+            "the constant must still be the measured zombie ceiling: \
+             {ZOMBIE_BLOCKS_PER_TICK} blocks/tick at attribute {} implies {derived:.3}, \
+             not {SPEED_BLOCKS_PER_SECOND_PER_ATTRIBUTE}",
+            MobKind::Zombie.movement_speed_attribute()
+        );
+        // The defect this replaced: the player extrapolation put a zombie at 9.9
+        // blocks/s, which the measurement refutes. A guard, not a comment.
+        let zombie_blocks_per_second = MobKind::Zombie.movement_speed_blocks_per_second();
+        assert!(
+            zombie_blocks_per_second < 7.5,
+            "a zombie must not walk faster than the measured ~7.0 blocks/s \
+             (was 9.93 before M-3); got {zombie_blocks_per_second:.3}"
+        );
+        assert!(
+            zombie_blocks_per_second > 6.5,
+            "and not slower either; got {zombie_blocks_per_second:.3}"
+        );
         // and the derived table really is attribute x constant:
         for kind in [
             MobKind::Zombie,

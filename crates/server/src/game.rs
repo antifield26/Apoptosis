@@ -187,11 +187,11 @@ use mc_persistence::dimension::Dimension;
 use mc_protocol::RawPacket;
 use mc_protocol::packets::Packet;
 use mc_protocol::packets::play::{
-    BIOMES_PER_SECTION, BlockUpdate, ChunkSection, ContainerSetContent, ContainerSetSlot,
-    GameEvent, HEIGHTMAP_WORLD_SURFACE, Heightmap, LevelChunkWithLight, LightUpdate,
-    NETWORK_BIOME_MIN_BITS, PalettedContainer as WireContainer, PlayDisconnect, PlayIntent,
-    PlayerPosition, Respawn, SetDefaultSpawnPosition, SetExperience, SetHealth, SetHeldSlot,
-    SetTime, block_position, unpack_block_position,
+    BIOMES_PER_SECTION, BlockChangedAck, BlockUpdate, ChunkSection, ContainerSetContent,
+    ContainerSetSlot, GameEvent, HEIGHTMAP_WORLD_SURFACE, Heightmap, LevelChunkWithLight,
+    LightUpdate, NETWORK_BIOME_MIN_BITS, PalettedContainer as WireContainer, PlayDisconnect,
+    PlayIntent, PlayerPosition, Respawn, SetDefaultSpawnPosition, SetExperience, SetHealth,
+    SetHeldSlot, SetTime, block_position, unpack_block_position,
 };
 use mc_protocol::text::TextComponent;
 use mc_registry::Registries;
@@ -488,6 +488,23 @@ const ACTION_SWAP_ITEM_WITH_OFFHAND: i32 = 6;
 /// `client_command` action: perform respawn.
 const CLIENT_COMMAND_RESPAWN: i32 = 0;
 
+/// "No block-change sequence is waiting to be acknowledged."
+///
+/// Vanilla's `ServerGamePacketListenerImpl` initialises `ackBlockChangesUpTo` to
+/// `-1` and uses `> -1` as the "there is something to send" test, which is also
+/// what keeps `0` — a perfectly legal sequence — from being read as "nothing".
+const NO_BLOCK_CHANGE_SEQUENCE: i32 = -1;
+
+/// How far ahead of a mob's centre the step check looks, in blocks (M-4).
+///
+/// One block puts the probe in the next cell along the heading whenever the mob is
+/// more than half a block from the far edge, and — because a mob's centre is what
+/// is tested — it never looks past the cell the mob's own body would enter. Longer
+/// lookaheads start refusing steps a mob could still legally take (a diagonal
+/// approach clips a corner the body does not touch), which turns "do not walk into
+/// walls" into "do not walk near them".
+const MOB_LOOKAHEAD_BLOCKS: f64 = 1.0;
+
 /// Blocks a player (or any other entity) falls before damage starts (Vanilla: 3).
 const FALL_DAMAGE_THRESHOLD: f64 = 3.0;
 
@@ -643,6 +660,25 @@ pub(crate) struct Session {
     /// window is refused, exactly like `Entity::invulnerable_ticks` for
     /// non-players, which the authoritative `Player` does not carry.
     hurt_invuln_ticks: u32,
+    /// Where this player last died, as `(dimension key, packed block position)`.
+    ///
+    /// Recorded in [`Game::after_damage`] and sent in [`Respawn`]'s
+    /// `lastDeathLocation` field, which is what vanilla's `ServerPlayer` carries
+    /// for the same purpose. Without it the packet would have to claim "no death
+    /// location" for a player who plainly died somewhere. What the 26.1.2 client
+    /// *does* with the field is not verified on this build; the death screen's own
+    /// buttons do not read it (`javap` on `DeathScreen` shows no reference), so
+    /// this is fidelity to the wire contract rather than a feature.
+    last_death_location: Option<(String, i64)>,
+    /// Highest client block-prediction sequence this connection has sent, or `-1`
+    /// for "nothing to acknowledge yet".
+    ///
+    /// Vanilla's `ServerGamePacketListenerImpl.ackBlockChangesUpTo` is the same
+    /// high-water mark, sent once per tick as `block_changed_ack` and then reset to
+    /// `-1`. It is not an optimisation: until the client receives this, its
+    /// pending prediction at that position swallows every server block change
+    /// there (see [`mc_protocol::packets::play::BlockChangedAck`]).
+    ack_block_changes_up_to: i32,
 }
 
 impl Session {
@@ -777,6 +813,12 @@ pub struct TickReport {
     /// Carried so tests can name what disappeared; the Broadcast phase turns
     /// the batch into the `remove_entities` packet clients see.
     pub removed_ids: Vec<EntityId>,
+    /// `block_changed_ack` packets queued this tick.
+    ///
+    /// Counted because the packet is invisible in every other instrument: nothing
+    /// in this server's logs or state changes when it is missing, and the only
+    /// symptom is on a real client's screen (M-2).
+    pub block_change_acks: usize,
 }
 
 /// The simulation.
@@ -2117,9 +2159,36 @@ impl Game {
     /// goal — the meaning P11-01's despawn pass documented for it once goal
     /// activity existed. Movement is **direct steering**: the horizontal
     /// velocity points at the goal at the kind's walk speed and the yaw faces
-    /// it, with the existing physics phase integrating and colliding. There is
-    /// no pathfinding — a mob walks into walls — which is a named
-    /// simplification of P11-02, not a bug.
+    /// it, with the existing physics phase integrating and colliding.
+    ///
+    /// ## The one-cell lookahead (M-4)
+    ///
+    /// Steering is still direct — **this is not pathfinding** — but it is no longer
+    /// blind. Before a steer is applied, the cell the mob's centre would reach after
+    /// [`MOB_LOOKAHEAD_BLOCKS`] at that heading is checked for passability
+    /// ([`Self::mob_step_is_passable`]): a solid block at the mob's feet or head, or
+    /// a fluid, refuses the step. The owner's acceptance round saw mobs walk into
+    /// water and grind through walls, and this is the cheap half of that
+    /// complaint —
+    ///
+    /// * a **blocked wander stops and re-targets**: the walk is abandoned, so the
+    ///   AI rolls a new destination at its next decision boundary instead of
+    ///   pressing into the same wall until the walk's timer expires;
+    /// * a **blocked chase or flee just stops**: it has nothing to re-target
+    ///   towards, and grinding at a wall while facing the player is worse than
+    ///   standing still.
+    ///
+    /// What it deliberately does **not** do, so that the gap does not read as
+    /// solved:
+    ///
+    /// * no path around an obstacle — a wall between a mob and its target stops the
+    ///   mob, it does not route it;
+    /// * no ledge or fall handling. Refusing a step with no ground under it would
+    ///   stop mobs walking down any hill, which vanilla mobs do constantly, so the
+    ///   check only refuses *occupancy*, not *support*;
+    /// * no step-up assist beyond what the collision pass already does, and no
+    ///   diagonal corner negotiation (the check is one cell at the heading, not the
+    ///   swept body).
     fn resolve_mob_goal(
         &mut self,
         id: EntityId,
@@ -2175,10 +2244,34 @@ impl Game {
                 // Vanilla's yaw convention: 0 faces +Z, increasing clockwise,
                 // so `yaw = degrees(atan2(-x, z))` — pinned by a unit test.
                 let yaw = (-dir_x).atan2(dir_z).to_degrees();
-                if let Some(entity) = self.entities.get_mut(id) {
-                    entity.velocity.x = dir_x * speed;
-                    entity.velocity.z = dir_z * speed;
-                    entity.yaw = yaw as f32;
+                if self.mob_step_is_passable(position, dir_x, dir_z) {
+                    if let Some(entity) = self.entities.get_mut(id) {
+                        entity.velocity.x = dir_x * speed;
+                        entity.velocity.z = dir_z * speed;
+                        entity.yaw = yaw as f32;
+                    }
+                } else {
+                    // M-4: the step is refused, so the mob stops this tick. A
+                    // wander additionally abandons its destination, which is what
+                    // makes "re-target" happen rather than "stand still for the
+                    // rest of the walk's timer".
+                    debug!(%id, %kind, "mob step blocked; stopping");
+                    let re_target = matches!(goal, MobGoal::Wander { .. });
+                    if let Some(entity) = self.entities.get_mut(id) {
+                        entity.velocity.x = 0.0;
+                        entity.velocity.z = 0.0;
+                        if re_target && let EntityBody::Mob(mob) = &mut entity.body {
+                            mob.ai.wander_target = None;
+                            mob.ai.cooldown = 0;
+                            mob.ai.goal = MobGoal::Idle;
+                        }
+                    }
+                    if re_target {
+                        // Nothing to swing at: the goal the caller would act on is
+                        // the walk the AI just gave up on, so the attack arm below
+                        // must not fire for it.
+                        return;
+                    }
                 }
             }
         } else if matches!(goal, MobGoal::Idle) {
@@ -2195,6 +2288,68 @@ impl Game {
         {
             self.resolve_mob_melee(id, kind, target, position);
         }
+    }
+
+    /// Whether a mob standing at `position` and heading `(dir_x, dir_z)` may take
+    /// this tick's step (M-4).
+    ///
+    /// The probe is **one cell at the heading**: the block position the mob's
+    /// centre would occupy after [`MOB_LOOKAHEAD_BLOCKS`], tested at the mob's feet
+    /// and at head height. A step is refused when either level is a solid block or
+    /// a fluid.
+    ///
+    /// Three deliberate properties:
+    ///
+    /// * **The mob's own cell is not a verdict.** When the lookahead lands in the
+    ///   cell the mob already occupies there is no information in it — and a mob
+    ///   that has already waded into water would otherwise be frozen there for
+    ///   ever. A same-cell probe returns `true` and the check simply applies once
+    ///   the mob has moved far enough to look into the next cell.
+    /// * **An unloaded chunk is impassable.** [`mc_world::World::get_block_loaded`]
+    ///   returns `None` for a chunk nobody has loaded; treating that as air would
+    ///   walk mobs into a void the collision pass cannot resolve.
+    /// * **A fluid is impassable, not fatal.** Nothing here pushes a mob *out* of
+    ///   water it is already in: this refuses to *enter*, which is the whole of
+    ///   M-4's water half.
+    fn mob_step_is_passable(
+        &self,
+        position: mc_entity::player::Vec3,
+        dir_x: f64,
+        dir_z: f64,
+    ) -> bool {
+        let here = (
+            position.x.floor() as i32,
+            position.y.floor() as i32,
+            position.z.floor() as i32,
+        );
+        let ahead = (
+            (position.x + dir_x * MOB_LOOKAHEAD_BLOCKS).floor() as i32,
+            here.1,
+            (position.z + dir_z * MOB_LOOKAHEAD_BLOCKS).floor() as i32,
+        );
+        if (ahead.0, ahead.2) == (here.0, here.2) {
+            // Nothing ahead of us yet.
+            return true;
+        }
+        for y in [ahead.1, ahead.1 + 1] {
+            let Some(block) = self.world.get_block_loaded(ahead.0, y, ahead.2) else {
+                debug!(
+                    x = ahead.0,
+                    y,
+                    z = ahead.2,
+                    "mob step blocked by an unloaded chunk"
+                );
+                return false;
+            };
+            if mc_world::collision::is_solid_or_unknown(&self.registries.blocks, block) {
+                return false;
+            }
+            if mc_world::collision::is_liquid(&self.registries.blocks, block) {
+                debug!(x = ahead.0, y, z = ahead.2, "mob step blocked by a fluid");
+                return false;
+            }
+        }
+        true
     }
 
     /// Resolve one melee swing against a player.
@@ -2465,11 +2620,61 @@ impl Game {
         self.broadcast_block_changes(report)?;
         self.broadcast_light_updates(report)?;
         self.broadcast_entity_spawns(report)?;
+        self.send_block_change_acks(report)?;
         self.stream_all(report)?;
         self.send_world_time(report, tick)?;
         self.sweep_entity_removals(report)?;
         self.unload_distant_chunks();
         Ok(())
+    }
+
+    /// Tell each player whose block prediction is still open how far the server
+    /// has got, then close it.
+    ///
+    /// This runs **after** the block changes of the same tick have been queued, and
+    /// in the same per-connection order, so a client sees `block_update` and then
+    /// the ack that lets it apply. That ordering is the whole reason this is a
+    /// broadcast-phase step rather than part of the Players phase: acking before
+    /// the update would have the client close its prediction on the *old* state and
+    /// re-apply the old block.
+    ///
+    /// One packet per player per tick at most, exactly like vanilla's
+    /// `ServerGamePacketListenerImpl.tick`, which sends and then resets the
+    /// high-water mark to `-1`.
+    fn send_block_change_acks(&mut self, report: &mut TickReport) -> ServerResult<()> {
+        let pending: Vec<(ConnectionId, i32)> = self
+            .sessions
+            .iter_mut()
+            .filter_map(|(id, session)| {
+                let sequence = std::mem::replace(
+                    &mut session.ack_block_changes_up_to,
+                    NO_BLOCK_CHANGE_SEQUENCE,
+                );
+                (sequence > NO_BLOCK_CHANGE_SEQUENCE).then_some((*id, sequence))
+            })
+            .collect();
+        for (id, sequence) in pending {
+            self.send(id, &BlockChangedAck { sequence }, report)?;
+            report.block_change_acks += 1;
+        }
+        Ok(())
+    }
+
+    /// Raise the pending block-change acknowledgement for `id` to at least
+    /// `sequence`, ignoring anything that is not a sequence.
+    ///
+    /// Vanilla throws on a negative sequence; a hostile client must not be able to
+    /// do that here, so a negative value is dropped. The high-water mark is what
+    /// vanilla keeps (`Math.max`), not a queue: the client only needs to learn how
+    /// far the server has processed.
+    fn note_block_change_sequence(&mut self, id: ConnectionId, sequence: i32) {
+        if sequence < 0 {
+            debug!(id = %id, sequence, "ignored a negative block-change sequence");
+            return;
+        }
+        if let Some(session) = self.sessions.get_mut(&id) {
+            session.ack_block_changes_up_to = session.ack_block_changes_up_to.max(sequence);
+        }
     }
 
     /// Take every entity flagged for removal out of the store, recording the batch
@@ -2906,6 +3111,8 @@ impl Game {
                 menu,
                 ready: false,
                 hurt_invuln_ticks: 0,
+                last_death_location: None,
+                ack_block_changes_up_to: NO_BLOCK_CHANGE_SEQUENCE,
             },
         );
 
@@ -3087,14 +3294,27 @@ impl Game {
                 status,
                 position,
                 facing,
-                ..
-            } => self.apply_player_action(id, status, position, facing, report)?,
+                sequence,
+            } => self.apply_player_action(id, status, position, facing, sequence, report)?,
             PlayIntent::UseItemOn {
                 position,
                 face,
                 hand,
+                sequence,
                 ..
-            } => self.apply_use_item_on(id, position, face, hand, report),
+            } => {
+                self.note_block_change_sequence(id, sequence);
+                self.apply_use_item_on(id, position, face, hand, report);
+            }
+            PlayIntent::UseItem { sequence, .. } => {
+                // The item use itself stays the no-op it was (no consumable, no
+                // projectile, no bucket is modelled). Its **sequence** is not a
+                // no-op, though: vanilla feeds it into the same high-water mark
+                // from `handleUseItem`, because the client may have predicted a
+                // block change the use caused, and an unacked prediction freezes
+                // that position on the client.
+                self.note_block_change_sequence(id, sequence);
+            }
             PlayIntent::SetCarriedItem { slot } => self.apply_hotbar(id, slot, report)?,
             PlayIntent::ClientCommand { action } => {
                 self.apply_client_command(id, action, report)?;
@@ -3160,7 +3380,6 @@ impl Game {
             // The three arms beside it are silent for their own reasons.
             PlayIntent::Swing { .. }
             | PlayIntent::AcceptTeleportation { .. }
-            | PlayIntent::UseItem { .. }
             | PlayIntent::ClientTickEnd => {}
         }
         Ok(())
@@ -3770,8 +3989,15 @@ impl Game {
         status: i32,
         position: i64,
         _facing: u8,
+        sequence: i32,
         report: &mut TickReport,
     ) -> ServerResult<()> {
+        // Before any validation: vanilla acknowledges the sequence the client sent
+        // even when the action itself is refused (`handlePlayerAction` calls
+        // `ackBlockChangesUpTo` on the way in). A client whose prediction is never
+        // closed is stuck with a stale block on screen, and *that* is a worse
+        // failure than a refused dig.
+        self.note_block_change_sequence(id, sequence);
         let (x, y, z) = unpack_block_position(position);
         // Only the block-targeting statuses carry a position that means anything.
         // Vanilla sends `BlockPos.ZERO` for drop, swap and release, so applying the
@@ -4024,7 +4250,7 @@ impl Game {
             return Ok(());
         }
         let (sx, sy, sz) = self.world.spawn();
-        let (game_mode, dropped) = {
+        let (game_mode, dropped, death_location) = {
             let Some(session) = self.sessions.get_mut(&id) else {
                 return Ok(());
             };
@@ -4041,7 +4267,11 @@ impl Game {
             );
             session.tick_start_y = f64::from(sy);
             session.sent_chunks.clear();
-            (session.player.game_mode.id(), dropped.len())
+            (
+                session.player.game_mode.id(),
+                dropped.len(),
+                session.last_death_location.clone(),
+            )
         };
         if dropped > 0 {
             debug!(id = %id, dropped, "death drops discarded (item entities land in P05)");
@@ -4057,8 +4287,12 @@ impl Game {
                 previous_game_mode: -1,
                 is_debug: false,
                 is_flat: false,
-                data_kept: 0,
+                death_location,
+                // No respawn anchors yet: the cooldown field exists, and 0 is the
+                // truthful value for a player who has never charged one.
+                portal_cooldown: 0,
                 sea_level: 63,
+                data_kept: 0,
             },
             report,
         )?;
@@ -4143,6 +4377,17 @@ impl Game {
                 Some(session) => {
                     let p = session.player.position;
                     let position = mc_world::Vec3::new(p.x, p.y, p.z);
+                    // M-1: the death point rides `Respawn`'s `lastDeathLocation`.
+                    // Rounded down to the block the player died in, which is what a
+                    // `GlobalPos` is.
+                    session.last_death_location = Some((
+                        mc_network::registry_data::OVERWORLD.to_owned(),
+                        mc_protocol::packets::play::block_position(
+                            p.x.floor() as i32,
+                            p.y.floor() as i32,
+                            p.z.floor() as i32,
+                        ),
+                    ));
                     (position, session.player.inventory.drain_all())
                 }
                 None => return,

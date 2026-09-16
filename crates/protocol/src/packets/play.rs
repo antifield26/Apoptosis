@@ -1907,6 +1907,89 @@ impl Packet for LightUpdate {
     }
 }
 
+/// Acknowledge the client's predicted block changes up to a sequence
+/// (`minecraft:block_changed_ack`, clientbound play 4).
+///
+/// # Why this packet exists, and what its absence cost
+///
+/// A 26.x client does not apply a `block_update` straight to its level. Mining
+/// opens a **prediction**: `MultiPlayerGameMode.startDestroyBlock` calls
+/// `startPrediction`, which raises `BlockStatePredictionHandler.currentSequenceNr`
+/// and sends `player_action` carrying that number, having first retained the
+/// server-known state for the position.
+///
+/// The client then routes every server block change through
+/// `ClientLevel.setServerVerifiedBlockState`, which is (bytecode, client jar):
+///
+/// ```text
+/// if (!this.blockStatePredictionHandler.updateKnownServerState(pos, state)) {
+///     super.setBlock(pos, state, flags, 512);
+/// }
+/// ```
+///
+/// `updateKnownServerState` **returns true whenever a prediction is pending at
+/// that position** — and then the state is only *stored*, never applied. The
+/// pending entry is cleared by exactly one thing: `endPredictionsUpTo(sequence)`,
+/// which `ClientPacketListener.handleBlockChangedAck` calls with the sequence
+/// from this packet.
+///
+/// So a server that never sends `block_changed_ack` never lets the client finish a
+/// prediction. The block the player mined stays stone on screen, and **every later
+/// server change at that position is swallowed too** — a permanent, per-position
+/// freeze. That was the real cause of the owner's "survival mining does not break
+/// blocks" report; the earlier reading of the capture (that the dig packets were
+/// malformed) was an artefact of counting the packet-id byte as part of the body.
+///
+/// The vanilla server's rule, from `javap -c -p` on
+/// `net.minecraft.server.network.ServerGamePacketListenerImpl`:
+///
+/// ```text
+/// ackBlockChangesUpTo(int sequence):
+///     if (sequence < 0) throw new IllegalArgumentException("Expected packet sequence nr >= 0");
+///     this.ackBlockChangesUpTo = Math.max(sequence, this.ackBlockChangesUpTo);
+/// tick():
+///     if (this.ackBlockChangesUpTo > -1) {
+///         send(new ClientboundBlockChangedAckPacket(this.ackBlockChangesUpTo));
+///         this.ackBlockChangesUpTo = -1;
+///     }
+/// ```
+///
+/// and it is fed from `handlePlayerAction`, `handleUseItemOn` and `handleUseItem` —
+/// the three serverbound packets that carry a sequence. Hence the high-water mark
+/// rather than "ack each": the client only ever needs to know how far the server
+/// has got.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockChangedAck {
+    /// Highest prediction sequence the server has processed for this connection.
+    pub sequence: i32,
+}
+
+impl Packet for BlockChangedAck {
+    /// The clientbound play id, cross-checked against the shipped table: the
+    /// client jar's registration order and `docs/protocol/packet-ids-775.tsv`
+    /// both put `block_changed_ack` at **4**.
+    const ID: i32 = clientbound::play::BLOCK_CHANGED_ACK;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let sequence = reader.read_varint()?;
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "block_changed_ack has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self { sequence })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        // A single VarInt, and nothing else: the packet is one field wide.
+        writer.write_varint(self.sequence);
+        Ok(writer.finish())
+    }
+}
+
 /// A single block change (`minecraft:block_update`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockUpdate {
@@ -2270,23 +2353,49 @@ impl Packet for GameEvent {
 
 /// `minecraft:respawn` (clientbound play).
 ///
-/// Body, mirroring the dimension/game-mode part of [`JoinGame`] so the two
-/// cannot disagree:
+/// Body: a whole `CommonPlayerSpawnInfo`, then one trailing byte.
 ///
 /// ```text
-/// VarInt      dimension type id      (index into minecraft:dimension_type)
-/// Identifier  dimension name
-/// i64         hashed seed
-/// u8          game mode
-/// i8          previous game mode     (-1 for none)
-/// bool        is debug
-/// bool        is flat
-/// u8          data kept flags        (0 = keep metadata, the vanilla default)
-/// VarInt      sea level
+/// CommonPlayerSpawnInfo:
+///   VarInt      dimension type id      (registry-friendly holder)
+///   Identifier  dimension name         (ResourceKey)
+///   i64         hashed seed
+///   u8          game mode
+///   i8          previous game mode     (-1 for none)
+///   bool        is debug
+///   bool        is flat
+///   Optional    last death location    (bool + Identifier + i64 packed BlockPos)
+///   VarInt      portal cooldown
+///   VarInt      sea level
+/// u8            data kept flags        <- AFTER the spawn info, not inside it
 /// ```
 ///
-/// The trailing `data kept` byte and `sea level` are what distinguish this from
-/// the older respawn shape; both are sent even when a client would ignore them.
+/// # Why this shape, and what it replaced
+///
+/// An earlier version ended the body at `is_flat`, then wrote `data kept` and
+/// `sea level`. That is not the 26.1.2 shape: the client's
+/// `CommonPlayerSpawnInfo` read constructor consumes **ten** fields and the
+/// packet's own reader consumes an eleventh byte after them, so the client read
+/// past the end of our body and refused the packet — a real client could not
+/// respawn after dying (owner's P11-10 acceptance round; `AUDIT-10-FINDINGS.md`
+/// M-1).
+///
+/// Both halves are bytecode-verified against the client jar (`javap -c -p`):
+///
+/// * `CommonPlayerSpawnInfo`'s read constructor is
+///   `DimensionType.STREAM_CODEC.decode`, `readResourceKey(Registries.DIMENSION)`,
+///   `readLong`, `readByte`, `readByte`, `readBoolean`, `readBoolean`,
+///   `readOptional(<GlobalPos codec>)`, `readVarInt`, `readVarInt`, and it calls
+///   `<init>(Holder, ResourceKey, J, GameType, GameType, Z, Z, Optional, I, I)`;
+///   the optional's codec is `FriendlyByteBuf.readGlobalPos`, i.e.
+///   `readResourceKey` + `readBlockPos`;
+/// * `ClientboundRespawnPacket.write` is
+///   `commonPlayerSpawnInfo.write(buf)` then `buf.writeByte(dataToKeep)`.
+///
+/// These are **the same ten fields the client already accepts in [`JoinGame`]**,
+/// which is why the two packets are written by the same code shape: the bug was
+/// never the field *layout*, it was that `Respawn` stopped early and put the
+/// trailing byte in the middle.
 #[allow(clippy::struct_excessive_bools)] // Mirrors JoinGame, which is genuinely boolean-heavy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Respawn {
@@ -2304,11 +2413,21 @@ pub struct Respawn {
     pub is_debug: bool,
     /// Flat world flag.
     pub is_flat: bool,
-    /// Which player metadata the client keeps across the respawn; `0` is
-    /// "keep metadata", which is what a normal death respawn sends.
-    pub data_kept: u8,
+    /// Where the player last died, as `(dimension key, packed block position)`.
+    ///
+    /// `Optional<GlobalPos>` on the wire: written as `false` when `None`. Vanilla
+    /// sends the death position here so the client can offer "respawn at the death
+    /// point" and place the death-screen locator.
+    pub death_location: Option<(String, i64)>,
+    /// Respawn-anchor cooldown in ticks; `0` when no charged anchor is held.
+    pub portal_cooldown: i32,
     /// Sea level used for rendering.
     pub sea_level: i32,
+    /// Which player metadata the client keeps across the respawn.
+    ///
+    /// The client reads it as a bit mask (`ClientboundRespawnPacket.shouldKeep`),
+    /// so `0` keeps nothing — what a plain death respawn sends.
+    pub data_kept: u8,
 }
 
 impl Packet for Respawn {
@@ -2323,8 +2442,18 @@ impl Packet for Respawn {
         let previous_game_mode = reader.read_i8()?;
         let is_debug = reader.read_bool()?;
         let is_flat = reader.read_bool()?;
-        let data_kept = reader.read_u8()?;
+        // `Optional<GlobalPos>`: a presence flag, then the dimension key and the
+        // packed block position only when present.
+        let death_location = if reader.read_bool()? {
+            let dimension = reader.read_string(crate::MAX_IDENTIFIER_LEN)?;
+            let position = reader.read_i64()?;
+            Some((dimension, position))
+        } else {
+            None
+        };
+        let portal_cooldown = reader.read_varint()?;
         let sea_level = reader.read_varint()?;
+        let data_kept = reader.read_u8()?;
         if !reader.is_empty() {
             return Err(ServerError::Protocol(format!(
                 "respawn has {} trailing bytes",
@@ -2339,8 +2468,10 @@ impl Packet for Respawn {
             previous_game_mode,
             is_debug,
             is_flat,
-            data_kept,
+            death_location,
+            portal_cooldown,
             sea_level,
+            data_kept,
         })
     }
 
@@ -2353,8 +2484,20 @@ impl Packet for Respawn {
         writer.write_i8(self.previous_game_mode);
         writer.write_bool(self.is_debug);
         writer.write_bool(self.is_flat);
-        writer.write_u8(self.data_kept);
+        // Absent death location is a single `false` byte, which is what a player
+        // who has not died yet (or who died in another dimension) sends.
+        match &self.death_location {
+            Some((dimension, position)) => {
+                writer.write_bool(true);
+                writer.write_string(dimension)?;
+                writer.write_i64(*position);
+            }
+            None => writer.write_bool(false),
+        }
+        writer.write_varint(self.portal_cooldown);
         writer.write_varint(self.sea_level);
+        // The packet's own trailing byte, after the whole spawn info.
+        writer.write_u8(self.data_kept);
         Ok(writer.finish())
     }
 }
@@ -4830,31 +4973,254 @@ mod tests {
 
     #[test]
     fn respawn_round_trip_and_rejects_truncation() {
+        for death_location in [
+            None,
+            Some((
+                "minecraft:overworld".to_owned(),
+                block_position(-12, 66, -6),
+            )),
+        ] {
+            let packet = Respawn {
+                dimension_type_id: 0,
+                dimension_name: "minecraft:overworld".to_owned(),
+                hashed_seed: -4_242_424_242,
+                game_mode: 0,
+                previous_game_mode: -1,
+                is_debug: false,
+                is_flat: false,
+                death_location,
+                portal_cooldown: 0,
+                sea_level: 63,
+                data_kept: 0,
+            };
+            let body = packet.encode().expect("encodes");
+            assert_eq!(Respawn::decode(&body).expect("decodes"), packet);
+
+            for len in 0..body.len() {
+                assert!(
+                    Respawn::decode(&body[..len]).is_err(),
+                    "truncation at {len} bytes must be rejected"
+                );
+            }
+        }
+    }
+
+    /// The client's own reader for `ClientboundRespawnPacket`, transcribed from
+    /// the 26.1.2 client jar's bytecode rather than from our encoder.
+    ///
+    /// This is the test that would have caught M-1. A round trip through
+    /// [`Respawn::decode`] cannot: both halves were wrong in the same way, so
+    /// they agreed. This reader is derived from the *client's* instructions, so
+    /// it fails when our bytes stop matching what a real client consumes.
+    ///
+    /// `javap -c -p net.minecraft.network.protocol.game.CommonPlayerSpawnInfo`
+    /// (read constructor) and `…ClientboundRespawnPacket` (`write`), both on
+    /// `26.1.2.jar`:
+    ///
+    /// ```text
+    /// CommonPlayerSpawnInfo(RegistryFriendlyByteBuf):
+    ///   DimensionType.STREAM_CODEC.decode(buf)          -> Holder
+    ///   buf.readResourceKey(Registries.DIMENSION)       -> ResourceKey
+    ///   buf.readLong()                                  -> seed
+    ///   buf.readByte()  -> GameType.byId
+    ///   buf.readByte()  -> GameType.getNullableId
+    ///   buf.readBoolean()                               -> isDebug
+    ///   buf.readBoolean()                               -> isFlat
+    ///   buf.readOptional(FriendlyByteBuf::readGlobalPos) -> lastDeathLocation
+    ///   buf.readVarInt()                                -> portalCooldown
+    ///   buf.readVarInt()                                -> seaLevel
+    /// ClientboundRespawnPacket(RegistryFriendlyByteBuf):
+    ///   new CommonPlayerSpawnInfo(buf); buf.readByte()  -> dataToKeep
+    /// ```
+    struct ClientReader<'a> {
+        bytes: &'a [u8],
+        at: usize,
+    }
+
+    impl ClientReader<'_> {
+        fn take(&mut self, n: usize) -> &[u8] {
+            let slice = &self.bytes[self.at..self.at + n];
+            self.at += n;
+            slice
+        }
+
+        fn varint(&mut self) -> i32 {
+            let mut value = 0i32;
+            let mut shift = 0;
+            loop {
+                let byte = self.take(1)[0];
+                value |= i32::from(byte & 0x7F) << shift;
+                if byte & 0x80 == 0 {
+                    return value;
+                }
+                shift += 7;
+            }
+        }
+
+        /// `FriendlyByteBuf.readIdentifier`: a `VarInt` length then UTF-8 bytes.
+        fn identifier(&mut self) -> String {
+            let len = self.varint() as usize;
+            String::from_utf8(self.take(len).to_vec()).expect("identifier is UTF-8")
+        }
+
+        fn bool_byte(&mut self) -> bool {
+            self.take(1)[0] != 0
+        }
+
+        fn i64(&mut self) -> i64 {
+            i64::from_be_bytes(self.take(8).try_into().expect("8 bytes"))
+        }
+
+        fn u8(&mut self) -> u8 {
+            self.take(1)[0]
+        }
+
+        fn i8(&mut self) -> i8 {
+            self.take(1)[0] as i8
+        }
+    }
+
+    /// Drive the client-shaped reader over our bytes and report the ten spawn-info
+    /// fields plus the trailing byte, asserting the reader consumed everything.
+    fn read_as_the_client_does(
+        body: &[u8],
+    ) -> (i32, String, i64, u8, i8, bool, bool, bool, i32, i32, u8) {
+        let mut reader = ClientReader { bytes: body, at: 0 };
+        // 1. dimension type: the registry-friendly holder writes a VarInt id.
+        let dimension_type_id = reader.varint();
+        // 2. dimension: `readResourceKey` -> `writeResourceKey` -> `writeIdentifier`.
+        let dimension_name = reader.identifier();
+        // 3-7.
+        let hashed_seed = reader.i64();
+        let game_mode = reader.u8();
+        let previous_game_mode = reader.i8();
+        let is_debug = reader.bool_byte();
+        let is_flat = reader.bool_byte();
+        // 8. `readOptional(readGlobalPos)`: presence bool, then a ResourceKey and
+        //    a packed BlockPos long when present.
+        let has_death_location = reader.bool_byte();
+        if has_death_location {
+            let _dimension = reader.identifier();
+            let _position = reader.i64();
+        }
+        // 9-10.
+        let portal_cooldown = reader.varint();
+        let sea_level = reader.varint();
+        // The packet's own trailing byte.
+        let data_kept = reader.u8();
+        assert_eq!(
+            reader.at,
+            body.len(),
+            "the client read {} bytes of a {}-byte body",
+            reader.at,
+            body.len()
+        );
+        (
+            dimension_type_id,
+            dimension_name,
+            hashed_seed,
+            game_mode,
+            previous_game_mode,
+            is_debug,
+            is_flat,
+            has_death_location,
+            portal_cooldown,
+            sea_level,
+            data_kept,
+        )
+    }
+
+    #[test]
+    fn respawn_is_exactly_what_the_client_reads() {
+        let death_position = block_position(-12, 66, -6);
         let packet = Respawn {
-            dimension_type_id: 0,
+            dimension_type_id: 7,
             dimension_name: "minecraft:overworld".to_owned(),
-            hashed_seed: -4_242_424_242,
+            hashed_seed: 12_345,
             game_mode: 0,
             previous_game_mode: -1,
             is_debug: false,
             is_flat: false,
-            data_kept: 0,
+            death_location: Some(("minecraft:overworld".to_owned(), death_position)),
+            portal_cooldown: 0,
             sea_level: 63,
+            data_kept: 3,
         };
         let body = packet.encode().expect("encodes");
-        // Mirror of JoinGame's dimension/seed/mode block: VarInt 0, the 19-byte
-        // identifier, then the seed, modes, flags, data-kept byte and sea level.
-        assert_eq!(body[0], 0x00);
-        assert_eq!(body[1], 0x13);
-        assert_eq!(body.len(), 1 + 1 + 19 + 8 + 1 + 1 + 1 + 1 + 1 + 1);
-        assert_eq!(Respawn::decode(&body).expect("decodes"), packet);
+        assert_eq!(
+            read_as_the_client_does(&body),
+            (
+                7,
+                "minecraft:overworld".to_owned(),
+                12_345,
+                0,
+                -1,
+                false,
+                false,
+                true,
+                0,
+                63,
+                3
+            ),
+            "the client's read order must land on exactly our field values"
+        );
 
-        for len in 0..body.len() {
-            assert!(
-                Respawn::decode(&body[..len]).is_err(),
-                "truncation at {len} bytes must be rejected"
-            );
-        }
+        // And the absent case stays one byte shorter, with the flag false.
+        let without = Respawn {
+            death_location: None,
+            ..packet.clone()
+        };
+        let without_body = without.encode().expect("encodes");
+        assert_eq!(without_body.len() + 1 + 19 + 8, body.len());
+        assert!(!read_as_the_client_does(&without_body).7);
+    }
+
+    /// **The falsification anchor for M-1.**
+    ///
+    /// The shape this packet used to have — ending at `is_flat`, then `data kept`
+    /// and `sea level` — must not be readable as a whole `CommonPlayerSpawnInfo`.
+    /// If someone reverts the encoder to that, the client-shaped reader runs out
+    /// of bytes (or leaves the trailing byte unconsumed) and this fails.
+    #[test]
+    fn respawn_rejects_the_old_truncated_spawn_info() {
+        let mut writer = crate::wire::PacketWriter::new();
+        writer.write_varint(0);
+        writer.write_string("minecraft:overworld").expect("writes");
+        writer.write_i64(0);
+        writer.write_u8(0);
+        writer.write_i8(-1);
+        writer.write_bool(false);
+        writer.write_bool(false);
+        writer.write_u8(0); // `data kept`, in the old, wrong position
+        writer.write_varint(63);
+        let old_shape = writer.finish();
+
+        // The old body happens to be long enough, so the failure is not a panic:
+        // it is that the client's field boundaries land on the wrong values and
+        // the trailing byte is read from beyond the end.
+        let mut reader = ClientReader {
+            bytes: &old_shape,
+            at: 0,
+        };
+        let _dimension_type_id = reader.varint();
+        let _dimension_name = reader.identifier();
+        let _seed = reader.i64();
+        let _game_mode = reader.u8();
+        let _previous = reader.i8();
+        let _debug = reader.bool_byte();
+        let _flat = reader.bool_byte();
+        let has_death_location = reader.bool_byte(); // reads our old `data kept` = false
+        assert!(!has_death_location);
+        let portal_cooldown = reader.varint(); // reads our old `sea level` = 63
+        assert_eq!(
+            portal_cooldown, 63,
+            "the old shape's sea level is read as the portal cooldown"
+        );
+        assert_eq!(
+            reader.at,
+            old_shape.len(),
+            "the old shape has no sea level and no trailing byte left to read"
+        );
     }
 
     #[test]

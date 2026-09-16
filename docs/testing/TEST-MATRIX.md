@@ -5,22 +5,24 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 346 passed, 0 failed, 33 ignored** across **104 suites**, re-derived from
-`cargo test --workspace --no-fail-fast` on the AUDIT-10 tree. The count has moved
-1 194 -> 1 196 -> 1 206 -> 1 207 -> 1 212 -> 1 325 -> 1 344 -> 1 346: three from the
-Audit 07 remediation, two Audit 08 coverage tests, ten from the `mc-capture-rig`
-crate (P10-01), one regression test for the compression-transition defect (P10-02),
-the synced-registry work (P10-03), then P10-04..11 and P11-01..03, nineteen from the
-P11-04..09 landing, and two from AUDIT-10 itself — the session hurt window's
-distinguishing test (`two_simultaneous_attackers_land_one_hit_per_window`, ai_wiring
-6) and the unreadable-chunk guard's regression test (`unreadable_chunk`, B-01). The
-33 ignored = the differential (jar-gated) suites listed in the last section, the
-three new `vanilla_loot` differential tests, plus `pi_profile` 4 and `tick_baseline`
-2 — all run on demand.
+Totals: **1 357 passed, 0 failed, 33 ignored** across **106 suites**, re-derived from
+`cargo test --workspace --no-fail-fast` on the M-1..M-4 tree (the owner's P11-10
+acceptance round's four defects, fixed). The count has moved
+1 194 -> 1 196 -> 1 206 -> 1 207 -> 1 212 -> 1 325 -> 1 344 -> 1 346 -> 1 357: three from
+the Audit 07 remediation, two Audit 08 coverage tests, ten from the
+`mc-capture-rig` crate (P10-01), one regression test for the
+compression-transition defect (P10-02), the synced-registry work (P10-03), then
+P10-04..11 and P11-01..03, nineteen from the P11-04..09 landing, two from
+AUDIT-10 itself, and **eleven from the M-1..M-4 fixes**: two more respawn
+wire-shape tests (`mc-protocol` lib, one round trip replaced by three tests), the
+liquid predicate's own test (`mc-world` lib, +1), and two new server suites —
+`block_change_ack` (4) and `mob_pathing` (4). The 33 ignored = the differential
+(jar-gated) suites listed in the last section, the three `vanilla_loot`
+differential tests, plus `pi_profile` 4 and `tick_baseline` 2 — all run on demand.
 
 **Every per-crate count below was re-measured with `cargo test -p <crate> --lib`**
-while updating this total. The 17 lib counts sum to **1 019**, the 5 doc-tests and
-the 322 named-suite tests complete the 1 346 (1 019 + 5 + 322 = 1 346, the third
+while updating this total. The 17 lib counts sum to **1 022**, the 5 doc-tests and
+the 330 named-suite tests complete the 1 357 (1 022 + 5 + 330 = 1 357, the third
 figure derived from the run total and the other two rather than counted
 independently). Both Audit 07's method and its lesson still apply: the figures must
 be re-measured per crate, because five of them once turned out to be **another
@@ -29,17 +31,17 @@ crate's** count with the names rotated (`docs/audits/AUDIT-07-REMEDIATION.md`
 
 **Limitation, stated rather than left as a trap.** The per-*area* lib counts below
 are measured and current. The named-suite counts in the middle column were measured
-in the P10-03 round; the suites this landing touched are updated
+in the P10-03 round; the suites the later landings touched are updated
 (`packet_ids` 4 -> 6, `light_cache` 8, `loot_and_pickup` 8, `entity_persistence` 2,
 `player_attack` 5, `entity_lifecycle` 9), and the P10/P11 suites the old table never
-listed (`natural_spawn` 4, `ai_wiring` 6, and the server suites added since) are
-added. A re-measure of **every** named suite is outstanding, and the two obvious
-instruments both fail: `target/debug/deps` accumulates binaries from every past
-session (listing them summed to 6 385 against a real total of 1 344), and counting
-`#[test]` in the sources over-counts (348 against the derived 320, because some test
-files contain `#[test]` sequences inside template strings). The authoritative figures
-are the totals above and the per-crate lib counts; a per-suite figure without a note
-is from the P10-03 round.
+listed (`natural_spawn` 4, `ai_wiring` 6, `block_change_ack` 4, `mob_pathing` 4, and
+the server suites added since) are added. A re-measure of **every** named suite is
+outstanding, and the two obvious instruments both fail: `target/debug/deps`
+accumulates binaries from every past session (listing them summed to 6 385 against a
+real total of 1 344), and counting `#[test]` in the sources over-counts (348 against
+the derived 320, because some test files contain `#[test]` sequences inside template
+strings). The authoritative figures are the totals above and the per-crate lib
+counts; a per-suite figure without a note is from the P10-03 round.
 
 This file replaced an accumulator that had grown one per-phase section per
 phase (255 rows, six duplicated "Bugs found" tables). The per-phase historical
@@ -51,15 +53,15 @@ each suite proves, and the deduplicated defect history.
 
 Counts are from the P11-04..09 run, except the named-suite figures noted above as
 from the P10-03 round. Named integration suites are counted explicitly; the
-remaining per-crate lib binaries are itemised above and complete the 1 344 total.
+remaining per-crate lib binaries are itemised above and complete the 1 357 total.
 
 | Area | Named suites (lib count) | What they prove |
 |---|---|---|
-| Protocol | `packet_ids` (6), `fixtures` (4), `mc-protocol` lib (110) | every packet id matches the jar's registration bytecode (incl. the `chat_command`=7 regression, L7); **every constant in `ids.rs` is compared against the jar-extracted table, in its own state and direction** (104 of them, AUDIT-09 A-02); **the protocol version is compared against the jar's own `version.json`** (AUDIT-09 E-03); golden wire bytes for frames/handshake/NBT; hostile VarInt/frame corpora; compression bomb rejection |
+| Protocol | `packet_ids` (6), `fixtures` (4), `mc-protocol` lib (112) | every packet id matches the jar's registration bytecode (incl. the `chat_command`=7 regression, L7); **every constant in `ids.rs` is compared against the jar-extracted table, in its own state and direction** (105 of them, AUDIT-09 A-02 — the count grew with `block_changed_ack`); **the protocol version is compared against the jar's own `version.json`** (AUDIT-09 E-03); golden wire bytes for frames/handshake/NBT; hostile VarInt/frame corpora; compression bomb rejection; **`respawn` is decoded the way the client decodes it** — a reader transcribed from `CommonPlayerSpawnInfo`'s bytecode, not a round trip through our own encoder (M-1) |
 | Network | `mc-network` lib (18), `keepalive` (1), `login_tolerance` (2), `e2e_login_play` (6) | connection lifecycle, admission limits, keepalive timeout kick, malformed input drops only that connection, login-phase tolerance, full offline login over a real socket |
 | Persistence | `mc-persistence` lib (74), `anvil_fixture` (9), `corruption` (16), `restart` (7) | region/NBT codec edges, byte-identical palette repack, bit-flip → typed error with no partial publish, save→close→reopen semantics, atomic tmp→rename pinned by `a_failed_commit_leaves_the_live_file_untouched` (Audit 07 finding H1), dirty-flag retry on failure. **Gap, AUDIT-09 B-02**: `the_location_word_is_written_last` asserts the end state, so it passes under a reordered write — the ordering needs an instrument that observes the sequence |
-| Survival & world | `mc-world` lib (41), `light_cache` (8), `vanilla_chunk` (4), `survival_e2e` (7), `network_game_bridge` (4) | collision/ray/hostile movement guards; a real vanilla chunk walks and round-trips losslessly; join/stream budgets, break/place validation, death/respawn, save-reload over real sockets; **light-cache invalidation drops the diagonal chunk at a corner**, compared against an oracle derived independently from the margin interval (AUDIT-09 B-05) |
-| Entities & simulation | `mc-entity` lib (135 + 4 doc), `entity_lifecycle` (9), `entity_persistence` (2), `player_attack` (5), `natural_spawn` (4), `ai_wiring` (5) | ids never reused, timers/effects/projectiles/pathfinding invariants, JDK-25-verified RNG, phase ordering, determinism replays, spawn/despawn/chunk-unload lifecycle; **a second `Game` on the same `world_dir` gets the saved mobs and drops back**, and a joining player is told about a resident entity on the join tick (P11-08); **one swing takes exactly the fist damage, a second inside the 10-tick window is refused** (P11-06); day/night spawn rules and the 24-block minimum (P11-01) |
+| Survival & world | `mc-world` lib (42), `light_cache` (8), `vanilla_chunk` (4), `survival_e2e` (7), `network_game_bridge` (4), **`block_change_ack` (4)** | collision/ray/hostile movement guards; a real vanilla chunk walks and round-trips losslessly; join/stream budgets, break/place validation, death/respawn, save-reload over real sockets; **light-cache invalidation drops the diagonal chunk at a corner**, compared against an oracle derived independently from the margin interval (AUDIT-09 B-05); **a fluid is non-solid *and* liquid, and an unknown id is neither** — the predicate M-4's lookahead reads; **a dig is acknowledged with the client's own sequence, once per tick at the high-water mark, after the block update and even when the dig was refused** (M-2) |
+| Entities & simulation | `mc-entity` lib (135 + 4 doc), `entity_lifecycle` (9), `entity_persistence` (2), `player_attack` (5), `natural_spawn` (4), `ai_wiring` (6), **`mob_pathing` (4)** | ids never reused, timers/effects/projectiles/pathfinding invariants, JDK-25-verified RNG, phase ordering, determinism replays, spawn/despawn/chunk-unload lifecycle; **a second `Game` on the same `world_dir` gets the saved mobs and drops back**, and a joining player is told about a resident entity on the join tick (P11-08); **one swing takes exactly the fist damage, a second inside the 10-tick window is refused** (P11-06); day/night spawn rules and the 24-block minimum (P11-01); **the walk-speed constant is the measured zombie ceiling, not the player extrapolation, and a zombie is pinned below 7.5 blocks/s** (M-3); **a mob walks up to water and stops at its edge, and a clear course still lets it reach the player** — the negative control that keeps the two refusal tests from being satisfied by a lookahead that refuses everything (M-4) |
 | Inventory & containers | `mc-container` lib (130), `container_e2e` (6), `block_entity_e2e` (6), `inventory_duplication` (5), `loot_and_pickup` (8) | click/swap/drag conservation, stale-state resync, computed slots, retirement reporting; real-socket click round trips; 2 000-click floods cannot create or destroy items — the flood over a **capped slot** reaches the over-limit path the chest flood cannot, so a discarded overflow is caught (Audit 07 finding M1); **the loot table is the drop authority** — a survival break drops the table's item (the fixture names cobblestone for stone, so a block-echoing path fails), creative and table-less blocks drop nothing, a mob death rolls `entities/<kind>`, a ready stack is collected, nearby stacks merge into the older one, and a full inventory leaves the leftover on the ground (P11-04/05/09) |
 | Redstone | `propagation` (17), `budget_exhaustion` (7), `determinism` (6), `golden_circuits` (5), `power_model` (8), `world_integration` (4) | budgeted propagation reaches unbounded-run state, full change-vector determinism, golden circuits, power bounds; the model is complete and (deliberately) not tick-wired |
 | Commands & data | `mc-command` lib (89), `command_e2e` (11), `execute_e2e` (9), `function_e2e` (14), `mc-data` lib (127), `pack_discovery` (10), `pack_loading_e2e` (8) | permission-before-grammar, every declared command reachable, malformed commands never disconnect, execute modifier chains, function recursion/privilege bounds, pack discovery and world-pack loading |
@@ -152,6 +154,10 @@ of the pre-governance matrix — 49 entries, none duplicated.
 | 08 | `PHASE-08-REPORT.md` cited sections that did not exist | the P08 verification cluster | wrote the missing sections; fixed the pointer |
 | 09 | **Metrics-test flake (1 in 4 full runs)**: three tests shared a `TempDir` tag whose `pid+nanos` uniqueness collapsed under parallel I/O (probe: duplicate paths in 160 000 same-tag constructions), so one test's `level.dat` rename raced another's `remove_dir_all` | PHASE-08-REPORT §2.1 observation, root-caused in P09 with a probe | distinct tag per test; 10 green repeats + three full-workspace runs after the fix |
 | 09 | `pi_profile` printed `build profile: dev` from a hardcoded string, so the first release run's log contradicted the document citing it | the P09 audit | derive from `cfg!(debug_assertions)`; release suite re-run after the fix |
+| 11 | **The real client could not decode `respawn`** — our body ended at `is_flat`, then wrote the data-retention byte and the sea level, so the client read `Optional<GlobalPos>` + `portalCooldown` + `seaLevel` + a trailing byte past the end of it and refused. The owner died and could not respawn | the owner's acceptance round; bytecode-read from the client jar's `CommonPlayerSpawnInfo` and `ClientboundRespawnPacket` | the encoder writes the whole spawn info in the client's own order and the retention byte **after** it; `respawn_is_exactly_what_the_client_reads` decodes our bytes with a reader transcribed from that bytecode, and `respawn_rejects_the_old_truncated_spawn_info` pins the old shape as unreadable (M-1) |
+| 11 | **Mining did not appear to break blocks** — the server broke them and told the client, and the client could not apply it. A 26.x client routes a server block change through `ClientLevel.setServerVerifiedBlockState`, which stores it instead of applying it while a prediction is open at that position, and only `block_changed_ack` closes the prediction. We never sent one, so the mined block stayed stone and every later change there was swallowed | the owner's acceptance round; the trace's 12 digs each matched by a `block_update`, then the client jar's `BlockStatePredictionHandler`/`MultiplayerGameMode` bytecode | `block_changed_ack` (clientbound play 4) added, fed by a per-session high-water mark of the sequence in `player_action`/`use_item_on`/`use_item` and sent once per tick after the block changes; `block_change_ack.rs` pins the value, the one-per-tick collapse and the refused-dig case (M-2). **The first version of the collapse test passed under "keep the last sequence" too**, which `target/m_probes.py` probe M-2c caught by perturbation — the test now sends the higher sequence first |
+| 11 | **Mobs walked at 9.9 blocks/s** — `SPEED_BLOCKS_PER_SECOND_PER_ATTRIBUTE` was the walking *player* figure (4.317 ÷ 0.1 = 43.17) extrapolated to every mob, a value its own module doc called unverified and "probably too generous". A zombie's attribute is 0.23 | the owner's acceptance round, then measured from the vanilla capture: the zombie ceiling is 0.3497 blocks/tick over 21 entities | the constant is now the measurement (30.41), the living-world capture is the instrument and `mob_speed_ceiling.py` reruns it; the test pins both the value and the "a zombie is under 7.5 blocks/s" guard (M-3) |
+| 11 | **Mobs walked into water and walls** — direct steering wrote a velocity at the target with no look at what was in the way. For water this was not even a collision failure: water is non-solid, so the mob had simply decided to swim | the owner's acceptance round | the AI checks the next cell (feet and head) before steering: solid or fluid refuses the step, a blocked wander abandons its destination and re-rolls. `mob_pathing.rs` pins the water and lava refusals **and** the clear-course arrival that stops them being vacuous (M-4) |
 
 ## Known-false-assertion lessons
 
