@@ -32,14 +32,14 @@ and [docs/operations/RUNBOOK.md](docs/operations/RUNBOOK.md)).
 
 | Gate | Command | Current state (2026-09-15) |
 |---|---|---|
-| Tests | `cargo test --workspace --no-fail-fast` | 1 380 passed / 0 failed / 34 ignored, 108 suites |
+| Tests | `cargo test --workspace --no-fail-fast` | 1 384 passed / 0 failed / 34 ignored, 108 suites |
 | Formatting | `cargo fmt --all -- --check` | clean |
 | Lints | `cargo clippy --workspace --all-targets -- -D warnings` | clean |
 | aarch64 | `cargo check --target aarch64-unknown-linux-gnu --workspace --all-targets` | clean |
 | Licences/deps | `cargo deny check licenses bans sources` | clean |
 
-The 21 ignored tests are on-demand: the benchmark harness (`pi_profile`,
-`tick_baseline`) and seven differential suites that need real 26.1.2 jar data
+The 34 ignored tests are on-demand: the benchmark harness (`pi_profile`,
+`tick_baseline`) and eight differential suites that need real 26.1.2 jar data
 (next section). CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs
 all of this on every push; a red CI is a stop for everything else.
 

@@ -15,7 +15,7 @@
 //! | [`TickPhase::ScheduledTicks`] | none — block/fluid scheduled ticks are P05-05/P05-06 | **documented no-op** |
 //! | [`TickPhase::Entities`] | the natural spawn cycle, then per-entity AI, despawn, timers, gravity + swept collision, landing/fall damage | implemented (AI live as of P11-02) |
 //! | [`TickPhase::Players`] | apply the queued intents in arrival order, then player timers and physics | implemented |
-//! | [`TickPhase::BlockEntities`] | none — block-entity behaviour is P06 | **documented no-op** |
+//! | [`TickPhase::BlockEntities`] | furnaces cook (`container_set_data`), hoppers transfer on the 8-tick cooldown, viewers resync | implemented (P12-03/04) |
 //! | [`TickPhase::Broadcast`] | block changes, chunk streaming, world time, entity-removal sweep, chunk unloading | implemented |
 //!
 //! ### Why intents are queued instead of applied in the Network phase
@@ -4202,7 +4202,12 @@ impl Game {
     #[must_use]
     pub fn menu_inventory_divergence(&self, id: ConnectionId) -> Option<usize> {
         let session = self.sessions.get(&id)?;
-        let Some(container) = session.menu.container(0) else {
+        // The player container is index 1 in block menus (0 is the block);
+        // hard-coding 0 compares the chest against the inventory (AUDIT-12).
+        let Some(container) = session
+            .menu
+            .container(session.menu.player_container_index())
+        else {
             // No player container, so there is nothing to compare; reporting a
             // divergence would be wrong, so this is a distinct answer.
             return None;

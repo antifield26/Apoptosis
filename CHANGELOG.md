@@ -47,6 +47,23 @@ lighting, no redstone tick wiring, and the P11 divergences (instant dig, zombie
 KD-20/21/22/26 and the crafting row to `partial` with this evidence; P12-10 and
 the P11-10 screen claims stay `gap`.
 
+### AUDIT-12 — six lanes over P00~P12, weighted by the holes
+
+`docs/audits/AUDIT-12-FINDINGS.md` (basis `c274050`, lanes read-only). Four High
+findings came back, all fixed with the instrument that pins them: pack recipes
+silently loaded zero on every boot (double join — `74ea53c` + regression test,
+perturbation-verified), stale result-takes consumed the grid (guard on
+`!full_resync` + test, perturbation-verified), breaks discarded viewer cursors
+(return-like-close + test), and furnace item changes never reached open menus
+(merged into the hopper resync + test). Falsification: 13 legacy + 9 new P12
+probes, **22/22 fail as they should**, tree restored byte-exact. Remediation also
+closed the divergence diagnostic, six stale doc sites, the README gaps, and the
+`//!`-blind scanners. Left open with named experiments: masked VarInt/`u8`
+windows, two-viewer last-writer-wins, kind-drift, sign asymmetry, NBT count
+widths, hopper cooldown/dirty corners, idle-hopper retries, close-rebuild
+theory, join observability remainders, B-02, C-08, D-07, E-02, E-05. Gate after
+remediation: **1 384 passed / 0 failed / 34 ignored / 108 suites**.
+
 ## Unreleased — Phase 11 (Living World)
 
 P11 is the phase where the world starts moving on its own: mobs spawn, walk, chase

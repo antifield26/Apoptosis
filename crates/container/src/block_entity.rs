@@ -12,8 +12,8 @@
 //!   round-trips `block_entities` opaquely — see `ChunkData`), because a block entity
 //!   payload is NBT and this crate must not depend on the NBT encoding;
 //! - deciding *when* a block entity ticks is the caller's, using
-//!   [`mc_simulation::TickPhase::BlockEntities`], which exists for exactly that and
-//!   is currently a documented no-op;
+//!   [`mc_simulation::TickPhase::BlockEntities`], which the server drives for
+//!   furnaces and hoppers (P12-03/04);
 //! - sending `block_entity_data` to clients is not implemented (see the gap list).
 //!
 //! So this module is the part that is testable in isolation and that the game loop
@@ -22,11 +22,12 @@
 //!
 //! ## What is not implemented, explicitly (AGENTS.md section 3.3)
 //!
-//! - **No persistence**: nothing writes a block entity to a chunk or reads one back.
-//!   The payload type is kept NBT-free on purpose; P06-07's storage half is blocked
-//!   on a decision about where the NBT conversion lives (recorded in the report).
-//! - **No ticking**: a hopper does not move items on a schedule (P06-08's transfer
-//!   primitive exists; the schedule does not).
+//! - **Persistence lives in the server**: the payload type stays NBT-free on
+//!   purpose; `Game::serialize/load_chunk_block_entities` (P12-05) converts at
+//!   the storage boundary.
+//! - **Ticking lives in the server**: furnaces cook and hoppers transfer on the
+//!   8-tick cooldown (P12-03/04); this crate holds the transfer primitive and
+//!   the tick pure functions.
 //! - **No client sync**: no `block_entity_data`, so a chest's contents are invisible
 //!   to a client even though the server holds them.
 //! - **No `remove` on block break**: the caller must call [`BlockEntityStore::remove`]

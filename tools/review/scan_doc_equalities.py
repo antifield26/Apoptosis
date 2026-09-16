@@ -29,7 +29,8 @@ with io.open(OUT, 'w', encoding='utf-8', newline='') as out:
             short = path.relative_to(ROOT).as_posix().replace('crates/', '').replace('/src/', '/')
             lines = path.read_text(encoding='utf-8', errors='ignore').splitlines()
             for index, line in enumerate(lines):
-                if not line.strip().startswith('///'):
+                stripped = line.strip()
+                if not (stripped.startswith('///') or stripped.startswith('//!')):
                     continue
                 lowered = line.lower()
                 if not any(needle in lowered for needle in needles):

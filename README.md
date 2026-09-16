@@ -49,13 +49,15 @@ This project records gaps instead of papering over them. The headline items
 
 - **No lighting propagation** — chunks are sent with zero light masks, so
   clients render them dark.
-- **Entities are not persisted or synced** — mobs and dropped items vanish on
-  restart; clients never see entities.
+- **Entities persist and sync as drops/mobs** (P11-08, P12-05 for block
+  entities); mobs still lack per-kind follow ranges, XP orbs, and paths.
 - **Redstone is a tested model, not wired into the tick loop.**
-- **8 of ~90 commands**; only the player inventory can open as a window.
-- **No real-client acceptance yet** — the protocol test client and scripted
-  soak clients are the partners; a Java client may disagree somewhere the
-  fixtures cannot see.
+- **8 of ~90 commands**; chests, furnaces and hoppers open as windows a real
+  client can transact with (P12), but no real-client container session has
+  been run yet.
+- **No full real-client acceptance yet** — a Java 26.1.2 client has joined,
+  rendered night, mobs and drops (P10-11/P11 acceptance), but container,
+  death→respawn and restart screens are still unverified on a live client.
 - Offline mode only: enabling `online_mode` refuses to start (no Mojang
   session flow is implemented).
 
@@ -81,14 +83,14 @@ restore.
 ## Testing
 
 ```sh
-cargo test --workspace --no-fail-fast            # 1 380 passed / 0 failed / 34 ignored (108 suites)
+cargo test --workspace --no-fail-fast            # 1 384 passed / 0 failed / 34 ignored (108 suites)
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo check --target aarch64-unknown-linux-gnu
 cargo deny check licenses bans sources
 ```
 
-The 21 ignored tests are on-demand suites: 7 differential suites that need a
+The 34 ignored tests are on-demand suites: 8 differential suites that need a
 real 26.1.2 server jar (three environment variables — see
 [CONTRIBUTING.md](CONTRIBUTING.md)) and the benchmark harness. Details and the
 documentation-audit scripts: [CONTRIBUTING.md](CONTRIBUTING.md).

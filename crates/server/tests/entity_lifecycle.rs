@@ -456,9 +456,9 @@ fn the_six_phases_run_and_the_metrics_show_their_cost() {
         metrics.busiest_phase().is_some(),
         "some phase must have cost something"
     );
-    // The two documented no-op phases (ScheduledTicks, BlockEntities) are still
-    // *run and timed* — their means may legitimately round to zero, which is why
-    // they are not asserted non-zero here. What is asserted is that every phase's
+    // The documented no-op phase (ScheduledTicks) is still *run and timed* —
+    // its mean may legitimately round to zero, which is why it is not asserted
+    // non-zero here. (BlockEntities ticks furnaces/hoppers since P12-03/04.) What is asserted is that every phase's
     // mean is within the whole-tick mean times six plus a tick, i.e. no phase is
     // reporting a fabricated cost.
     let budget = metrics.mean().saturating_mul(6) + Duration::from_millis(1);

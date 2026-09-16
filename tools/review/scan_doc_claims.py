@@ -46,7 +46,9 @@ for path in sorted(list(ROOT.glob('crates/**/*.rs')) + list(ROOT.glob('apps/**/*
         continue  # test prose is not a contract the product must keep
     for index, line in enumerate(path.read_text(encoding='utf-8', errors='ignore').splitlines(), start=1):
         stripped = line.strip()
-        if not stripped.startswith('///'):
+        # Module docs (`//!`) carry this repo's most load-bearing prose
+        # (AUDIT-09 B-04, AUDIT-12 lane 6); skipping them blinds the scanner.
+        if not (stripped.startswith('///') or stripped.startswith('//!')):
             continue
         match = CLAIM.search(stripped)
         if match:

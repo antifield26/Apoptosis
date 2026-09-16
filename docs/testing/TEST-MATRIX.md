@@ -5,11 +5,11 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 380 passed, 0 failed, 34 ignored** across **108 suites**, re-derived from
-`cargo test --workspace --no-fail-fast` on the P12 landing tree (`python
+Totals: **1 384 passed, 0 failed, 34 ignored** across **108 suites**, re-derived from
+`cargo test --workspace --no-fail-fast` on the AUDIT-12 remediation tree (`python
 tools/gates/run.py --quick`: every gate passed). The count has
 moved 1 194 -> 1 196 -> 1 206 -> 1 207 -> 1 212 -> 1 325 -> 1 344 -> 1 346 -> 1 358 ->
-1 365 -> **1 380**: three from the Audit 07 remediation, two Audit 08 coverage tests, ten from the
+1 365 -> 1 380 -> **1 384**: three from the Audit 07 remediation, two Audit 08 coverage tests, ten from the
 `mc-capture-rig` crate (P10-01), one regression test for the
 compression-transition defect (P10-02), the synced-registry work (P10-03), then
 P10-04..11 and P11-01..03, nineteen from the P11-04..09 landing, two from
@@ -18,21 +18,24 @@ tests in the `mc-protocol` lib — one round trip became four tests, one of them
 `#[should_panic]` that drives the client's reader off the end of the old body — the
 liquid predicate's own test in `mc-world`, and the server suites `block_change_ack`
 (4) and `mob_pathing` (4)), seven from the AUDIT-11 remediation (the
-`reach_validation` suite), and **fifteen from P12**: three `mc-protocol` lib
+`reach_validation` suite), fifteen from P12 (three `mc-protocol` lib
 round-trips (`open_screen`, `container_set_data`, `container_close`+`set_cursor_item`),
 three `mc-container` lib (`block_menus` slot counts, chest-click conservation,
 pack-book conversion), eight `survival_e2e` (`/tp`-to-air death→respawn, chest
 open, chest-transaction flood, furnace progress, hopper pull+push, chest-break
 drops, close cursor return, crafting recompute+take), and one `block_entity_e2e`
-(chest restart). The 34 ignored = the differential (jar-gated) suites listed
-in the last section, the three `vanilla_loot` differential tests, the new
+(chest restart)), and **four from the AUDIT-12 remediation**: the pack
+double-join regression (`pack_loading_e2e`, perturbation-verified), the stale
+craft-take guard (`survival_e2e`, perturbation-verified), the break-cursor
+return, and the furnace viewer-slot resync. The 34 ignored = the differential (jar-gated) suites listed
+in the last section, the three `vanilla_loot` differential tests, the
 `vanilla_crafting` differential test, plus `pi_profile` 4
 and `tick_baseline` 2 — all run on demand.
 
 **Every per-crate count below was re-measured with `cargo test -p <crate> --lib`**
 while updating this total. The 17 lib counts sum to **1 029** (`mc-protocol` 113 ->
 **116**, `mc-container` 130 -> **133**, rest unchanged), the 5 doc-tests and
-the **346** named-suite tests complete the 1 380 (1 029 + 5 + 346 = 1 380, the third
+the **350** named-suite tests complete the 1 384 (1 029 + 5 + 350 = 1 384, the third
 figure derived from the run total and the other two rather than counted
 independently). Both Audit 07's method and its lesson still apply: the figures must
 be re-measured per crate, because five of them once turned out to be **another
@@ -71,11 +74,11 @@ remaining per-crate lib binaries are itemised above and complete the 1 365 total
 | Protocol | `packet_ids` (6), `fixtures` (4), `mc-protocol` lib (**116**) | every packet id matches the jar's registration bytecode (incl. the `chat_command`=7 regression, L7); **every constant in `ids.rs` is compared against the jar-extracted table, in its own state and direction** (109 of them: 105 + P12 `open_screen`/`container_set_data`/`container_close`/`set_cursor_item`); **the protocol version is compared against the jar's own `version.json`** (AUDIT-09 E-03); golden wire bytes for frames/handshake/NBT; hostile VarInt/frame corpora; compression bomb rejection; **`respawn` is decoded the way the client decodes it** — a reader transcribed from `CommonPlayerSpawnInfo`'s bytecode, not a round trip through our own encoder, with the old truncated shape pinned as an out-of-bytes read (M-1); **P12 window packets round-trip with jar-verified shapes** (`open_screen` VarInt+MENU+Component, `container_set_data` VarInt+short+short, `container_close` VarInt, `set_cursor_item` single stack) |
 | Network | `mc-network` lib (18), `keepalive` (1), `login_tolerance` (2), `e2e_login_play` (6) | connection lifecycle, admission limits, keepalive timeout kick, malformed input drops only that connection, login-phase tolerance, full offline login over a real socket |
 | Persistence | `mc-persistence` lib (74), `anvil_fixture` (9), `corruption` (16), `restart` (7) | region/NBT codec edges, byte-identical palette repack, bit-flip → typed error with no partial publish, save→close→reopen semantics, atomic tmp→rename pinned by `a_failed_commit_leaves_the_live_file_untouched` (Audit 07 finding H1), dirty-flag retry on failure. **Gap, AUDIT-09 B-02**: `the_location_word_is_written_last` asserts the end state, so it passes under a reordered write — the ordering needs an instrument that observes the sequence |
-| Survival & world | `mc-world` lib (42), `light_cache` (8), `vanilla_chunk` (4), `survival_e2e` (**19**: 11 + P11 `/tp`-to-air + P12 open/tx/furnace/hopper/break/close/crafting), `network_game_bridge` (4), **`block_change_ack` (4)**, **`reach_validation` (7)** | collision/ray/hostile movement guards; a real vanilla chunk walks and round-trips losslessly; join/stream budgets, break/place validation, death/respawn, save-reload over real sockets; **light-cache invalidation drops the diagonal chunk at a corner**, compared against an oracle derived independently from the margin interval (AUDIT-09 B-05); **a fluid is non-solid *and* liquid, and an unknown id is neither** — the predicate M-4's lookahead reads; **a dig is acknowledged with the client's own sequence, once per tick at the high-water mark, after the block update and even when the dig was refused** (M-2); **the reach rule is the jar's arithmetic** — the survival buffer case (4.5 < d < 5.5 accepted, which the pre-AUDIT-11 constant refused), the creative `+0.5`, the strict `<` boundary, the 3-D eye measurement, and the entity gate that stops a swing landing from anywhere (AUDIT-11 N-1) |
+| Survival & world | `mc-world` lib (42), `light_cache` (8), `vanilla_chunk` (4), `survival_e2e` (**22**: 11 + P11 `/tp`-to-air + P12 open/tx/furnace/hopper/break/close/crafting + AUDIT-12 stale-take/break-cursor/furnace-view), `network_game_bridge` (4), **`block_change_ack` (4)**, **`reach_validation` (7)** | collision/ray/hostile movement guards; a real vanilla chunk walks and round-trips losslessly; join/stream budgets, break/place validation, death/respawn, save-reload over real sockets; **light-cache invalidation drops the diagonal chunk at a corner**, compared against an oracle derived independently from the margin interval (AUDIT-09 B-05); **a fluid is non-solid *and* liquid, and an unknown id is neither** — the predicate M-4's lookahead reads; **a dig is acknowledged with the client's own sequence, once per tick at the high-water mark, after the block update and even when the dig was refused** (M-2); **the reach rule is the jar's arithmetic** — the survival buffer case (4.5 < d < 5.5 accepted, which the pre-AUDIT-11 constant refused), the creative `+0.5`, the strict `<` boundary, the 3-D eye measurement, and the entity gate that stops a swing landing from anywhere (AUDIT-11 N-1) |
 | Entities & simulation | `mc-entity` lib (135 + 4 doc), `entity_lifecycle` (9), `entity_persistence` (2), `player_attack` (5), `natural_spawn` (4), `ai_wiring` (6), **`mob_pathing` (4)** | ids never reused, timers/effects/projectiles/pathfinding invariants, JDK-25-verified RNG, phase ordering, determinism replays, spawn/despawn/chunk-unload lifecycle; **a second `Game` on the same `world_dir` gets the saved mobs and drops back**, and a joining player is told about a resident entity on the join tick (P11-08); **one swing takes exactly the fist damage, a second inside the 10-tick window is refused** (P11-06); day/night spawn rules and the 24-block minimum (P11-01); **the walk-speed constant is the measured zombie ceiling, not the player extrapolation, and a zombie is pinned below 7.5 blocks/s** (M-3); **a mob walks up to water and stops at its edge, and a clear course still lets it reach the player** — the negative control that keeps the two refusal tests from being satisfied by a lookahead that refuses everything (M-4) |
 | Inventory & containers | `mc-container` lib (**133**), `container_e2e` (6), `block_entity_e2e` (**7**), `inventory_duplication` (5), `loot_and_pickup` (8) | click/swap/drag conservation, stale-state resync, computed slots, retirement reporting; real-socket click round trips; 2 000-click floods cannot create or destroy items — the flood over a **capped slot** reaches the over-limit path the chest flood cannot, so a discarded overflow is caught (Audit 07 finding M1); **the loot table is the drop authority** — a survival break drops the table's item (the fixture names cobblestone for stone, so a block-echoing path fails), creative and table-less blocks drop nothing, a mob death rolls `entities/<kind>`, a ready stack is collected, nearby stacks merge into the older one, and a full inventory leaves the leftover on the ground (P11-04/05/09); **P12**: chest/furnace/hopper menus open on non-zero windows and transact with conservation (20-click flood), furnaces cook with `container_set_data` progress, hoppers transfer on the 8-tick cooldown, block entities persist across restart, breaks drop contents, crafting recomputes from the table, closes return the cursor |
 | Redstone | `propagation` (17), `budget_exhaustion` (7), `determinism` (6), `golden_circuits` (5), `power_model` (8), `world_integration` (4) | budgeted propagation reaches unbounded-run state, full change-vector determinism, golden circuits, power bounds; the model is complete and (deliberately) not tick-wired |
-| Commands & data | `mc-command` lib (89), `command_e2e` (11), `execute_e2e` (9), `function_e2e` (14), `mc-data` lib (127), `pack_discovery` (10), `pack_loading_e2e` (8) | permission-before-grammar, every declared command reachable, malformed commands never disconnect, execute modifier chains, function recursion/privilege bounds, pack discovery and world-pack loading |
+| Commands & data | `mc-command` lib (89), `command_e2e` (11), `execute_e2e` (9), `function_e2e` (14), `mc-data` lib (127), `pack_discovery` (10), `pack_loading_e2e` (**9**: 8 + AUDIT-12 recipe join regression) | permission-before-grammar, every declared command reachable, malformed commands never disconnect, execute modifier chains, function recursion/privilege bounds, pack discovery and world-pack loading (P12-07/08 recipe load + conversions) |
 | World generation | `mc-worldgen` lib (81), `worldgen_e2e` (7), `structure_golden` (9), `seed_derivation` (8), `golden` (6), `determinism` (7) | seed determinism, terrain invariants, structure placement goldens, existing-world-first generation |
 | Server foundations | `mc-server` lib (61), `mc-core` (10), `mc-nbt` (16 + 1 doc), `mc-registry` (21), `mc-simulation` (27), `mc-redstone` (64), `mc-test-support` (4), `mc-capture-rig` (11) | config guardrails, backup/verify/restore, shutdown barrier, operational metrics snapshot, error taxonomy, NBT vectors, the registry table itself (including the `MC_FIXTURE_DIR` precedence half), fixture helpers, the tick scheduler, the redstone model's own invariants, the client-capture rig |
 | Security (cross-cutting) | classes live inside the suites above | hostile VarInt/frames + random-byte connections (protocol/network libs), slow-drip bound, registry reservation cap, 300-command flood (`command_e2e`), hostile op paths (`ops_e2e`, 7), 2 000-click conservation (`inventory_duplication`), hostile disk state (`corruption`, 16), config bounds (`mc-server` lib), **a decoded packet body with trailing bytes is accepted** (AUDIT-09 A-03, open) |
@@ -83,9 +86,9 @@ remaining per-crate lib binaries are itemised above and complete the 1 365 total
 ## Differential suites (jar-gated, `--ignored`)
 
 Need the three environment variables below; they skip cleanly without them.
-Evidence as of 2026-09-12: **15 passed / 0 failed across the 7 suites** (P12 adds
-`vanilla_crafting`, verified 2026-09-16 with real data: hundreds of item-only
-recipes convert, sticks present).
+Evidence as of 2026-09-12: **15 passed / 0 failed across the 7 suites**, plus
+P12's `vanilla_crafting` (verified 2026-09-16 with real data: hundreds of
+item-only recipes convert, sticks present).
 
 ```sh
 export MC_VANILLA_DATA="$PWD/target/vanilla-26.1.2/extract/data/minecraft"

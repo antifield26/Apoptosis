@@ -53,12 +53,12 @@
 //! and it is deliberately constructed so the reader can see exactly what it does
 //! and does not cover:
 //!
-//! - mobs are inserted directly through `EntityStore::spawn`, because **nothing in
-//!   the server spawns them yet** (P05-11 has no spawn rule). The scenario
-//!   therefore measures entity bookkeeping and per-tick iteration, not a spawn
-//!   cycle that does not exist;
-//! - `Game::tick_entity_ai` is a documented no-op, so the mob AI cost measured here
-//!   is the *store walk*, not goal decisions or pathfinding;
+//! - mobs are inserted directly through `EntityStore::spawn`, alongside the
+//!   natural spawn cycle (P11-01) which is disabled here for determinism. The
+//!   scenario therefore measures entity bookkeeping and per-tick iteration,
+//!   not the spawn cycle;
+//! - `Game::tick_entity_ai` drives goals since P11-02, so the cost measured here
+//!   includes goal decisions (direct steering, no pathfinding);
 //! - items and mobs are never sent to clients (P05-15), so a real entity-heavy
 //!   server would also pay packet encoding this figure excludes.
 //!

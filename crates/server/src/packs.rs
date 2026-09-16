@@ -24,11 +24,11 @@
 //!
 //! ## What this does **not** load, stated because the earlier wording claimed otherwise
 //!
-//! **Recipes and tags.** `mc-data` parses both and the differential suites assert their census against
-//! the real pack, but nothing here installs them: a server loads no recipes whether or not `vanilla_data`
-//! is set, and no tag lookup is reachable from gameplay. The consequence is concrete — **a furnace
-//! smelts from the hand-written Phase 06 baseline, not from the pack**, which is why P07-09's status is
-//! "the table is built and tested" rather than "the server smelts from data".
+//! **Tags.** `mc-data` parses tags and the differential suites assert their census
+//! against the real pack, but no tag lookup is reachable from gameplay (recipe
+//! tag ingredients are counted and skipped). Recipes **do** load since P12-07/08:
+//! the crafting table converts item-only shaped/shapeless and the furnace table
+//! converts smelting rows; fuel stays the jar-verified baseline.
 //!
 //! An earlier version of this comment said the loader handled "functions, recipes or tags". It handled
 //! functions. That is the same failure this project keeps finding — a description of an intention, three

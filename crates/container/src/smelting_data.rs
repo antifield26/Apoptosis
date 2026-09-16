@@ -2,7 +2,7 @@
 //!
 //! ## What this replaces
 //!
-//! `furnace.rs` ships a hand-written `SmeltingRegistry::baseline` — six recipes from
+//! `furnace.rs` ships a hand-written `SmeltingRegistry::baseline` — seven recipes from
 //! community knowledge, which the Phase 06 review recorded as unverified (CHANGELOG.md). The
 //! 26.1.2 jar ships **73 `smelting` recipes**, 25 `blasting`, 9 `smoking` and 9
 //! `campfire_cooking`, and `mc-data` loads them.
