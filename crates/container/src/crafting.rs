@@ -814,6 +814,28 @@ pub struct RecipeRegistry {
     recipes: Vec<Recipe>,
 }
 
+/// What a pack-to-table conversion did, including what it could not represent.
+///
+/// Counted rather than logged so a caller loading the real pack knows how much
+/// of it became craftable and why the rest did not.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CraftingConversion {
+    /// Shaped recipes read.
+    pub shaped_seen: usize,
+    /// Shapeless recipes read.
+    pub shapeless_seen: usize,
+    /// Recipes that converted.
+    pub converted: usize,
+    /// Recipes skipped for a tag/unknown ingredient (no tag resolver here).
+    pub tag_or_unknown: usize,
+    /// Recipes whose result name is not in the item registry.
+    pub unknown_results: Vec<String>,
+    /// Malformed recipes (bad counts, patterns, duplicate names at build).
+    pub malformed: Vec<String>,
+    /// Non-crafting recipes (cooking, stonecutting, smithing, special, …).
+    pub other_kinds: usize,
+}
+
 impl RecipeRegistry {
     /// A registry over an explicit recipe list, in matching order.
     ///
@@ -1020,6 +1042,169 @@ impl RecipeRegistry {
         )?);
 
         Self::new(recipes)
+    }
+
+    /// Build the table from a loaded data-pack [`mc_data::RecipeBook`] (P12-07).
+    ///
+    /// Only item-ingredient `crafting_shaped`/`crafting_shapeless` recipes with
+    /// registry-known ids convert; tag ingredients, unknown items, and other
+    /// recipe types are counted and skipped (same refusal-ladder honesty as the
+    /// loot and smelting joins). Order is the book's load order, so pack
+    /// overrides win by position like they do on disk.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Invariant`] when two converted recipes share a name.
+    #[allow(clippy::too_many_lines)]
+    pub fn from_book(
+        book: &mc_data::RecipeBook,
+        items: &ItemRegistry,
+    ) -> ServerResult<(Self, CraftingConversion)> {
+        use mc_data::{Ingredient as DataIngredient, Recipe as DataRecipe};
+
+        fn full_name(id: &mc_core::ids::ResourceId) -> String {
+            format!("{}:{}", id.namespace(), id.value())
+        }
+
+        fn container_ingredient(
+            alternatives: &[DataIngredient],
+            items: &ItemRegistry,
+        ) -> Option<Ingredient> {
+            let mut ids = Vec::new();
+            for alternative in alternatives {
+                match alternative {
+                    DataIngredient::Item(id) => {
+                        let Ok(item_id) = items.id(&full_name(id)) else {
+                            return None;
+                        };
+                        ids.push(item_id);
+                    }
+                    DataIngredient::Tag(_) => return None,
+                }
+            }
+            if ids.is_empty() {
+                return None;
+            }
+            ids.sort_unstable();
+            ids.dedup();
+            if ids.len() == 1 {
+                Some(Ingredient::item(ids[0]))
+            } else {
+                Ingredient::any_of(&ids).ok()
+            }
+        }
+
+        let mut report = CraftingConversion::default();
+        let mut recipes: Vec<Recipe> = Vec::new();
+        for data in book.recipes() {
+            match data {
+                DataRecipe::Shaped(shaped) => {
+                    report.shaped_seen += 1;
+                    let Ok(result) = items.id(&full_name(&shaped.result)) else {
+                        report.unknown_results.push(shaped.result.to_string());
+                        continue;
+                    };
+                    if !(1..=mc_entity::stack::HARD_MAX_STACK_SIZE).contains(&shaped.result_count) {
+                        report.malformed.push(shaped.name.to_string());
+                        continue;
+                    }
+                    // Build rows of container ingredients; any tag/unknown cell
+                    // refuses the whole recipe (counted, not guessed).
+                    let mut rows: Vec<Vec<Option<Ingredient>>> = Vec::new();
+                    let mut refused = false;
+                    for row in 0..shaped.height() {
+                        let mut cells = Vec::new();
+                        for col in 0..shaped.width() {
+                            let alternatives = match shaped.ingredient_at(row, col) {
+                                Ok(Some(alternatives)) => alternatives,
+                                Ok(None) => {
+                                    cells.push(None);
+                                    continue;
+                                }
+                                Err(_) => {
+                                    refused = true;
+                                    break;
+                                }
+                            };
+                            if let Some(ingredient) = container_ingredient(alternatives, items) {
+                                cells.push(Some(ingredient));
+                            } else {
+                                refused = true;
+                                break;
+                            }
+                        }
+                        if refused {
+                            break;
+                        }
+                        rows.push(cells);
+                    }
+                    if refused {
+                        report.tag_or_unknown += 1;
+                        continue;
+                    }
+                    let row_refs: Vec<&[Option<Ingredient>]> =
+                        rows.iter().map(Vec::as_slice).collect();
+                    let Ok(pattern) = ShapedPattern::from_rows(&row_refs) else {
+                        report.malformed.push(shaped.name.to_string());
+                        continue;
+                    };
+                    let Ok(recipe) = ShapedRecipe::new(
+                        &shaped.name.to_string(),
+                        pattern,
+                        result,
+                        shaped.result_count,
+                    ) else {
+                        report.malformed.push(shaped.name.to_string());
+                        continue;
+                    };
+                    recipes.push(Recipe::Shaped(Box::new(recipe)));
+                    report.converted += 1;
+                }
+                DataRecipe::Shapeless(shapeless) => {
+                    report.shapeless_seen += 1;
+                    let Ok(result) = items.id(&full_name(&shapeless.result)) else {
+                        report.unknown_results.push(shapeless.result.to_string());
+                        continue;
+                    };
+                    if !(1..=mc_entity::stack::HARD_MAX_STACK_SIZE)
+                        .contains(&shapeless.result_count)
+                    {
+                        report.malformed.push(shapeless.name.to_string());
+                        continue;
+                    }
+                    let mut ingredients = Vec::new();
+                    let mut refused = false;
+                    for entry in &shapeless.ingredients {
+                        if let Some(ingredient) = container_ingredient(entry, items) {
+                            ingredients.push(ingredient);
+                        } else {
+                            refused = true;
+                            break;
+                        }
+                    }
+                    if refused {
+                        report.tag_or_unknown += 1;
+                        continue;
+                    }
+                    let Ok(recipe) = ShapelessRecipe::new(
+                        &shapeless.name.to_string(),
+                        ingredients,
+                        result,
+                        shapeless.result_count,
+                    ) else {
+                        report.malformed.push(shapeless.name.to_string());
+                        continue;
+                    };
+                    recipes.push(Recipe::Shapeless(Box::new(recipe)));
+                    report.converted += 1;
+                }
+                _ => {
+                    report.other_kinds += 1;
+                }
+            }
+        }
+        let registry = Self::new(recipes)?;
+        Ok((registry, report))
     }
 
     /// The recipes, in matching order.

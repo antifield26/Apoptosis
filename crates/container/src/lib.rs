@@ -71,8 +71,9 @@ pub use container::{Container, ContainerKind, MAX_CONTAINER_SLOTS, SlotRole};
 // **not** the Vanilla data: see each module's docs for exactly what is missing and
 // which phase (P07-03) loads the real thing.
 pub use crafting::{
-    Ingredient, MAX_ALTERNATIVES_PER_KEY, MAX_GRID_SLOTS, MAX_GRID_WIDTH, Recipe, RecipeKind,
-    RecipeMatch, RecipeRegistry, Shape, ShapedPattern, ShapedRecipe, ShapelessRecipe,
+    CraftingConversion, Ingredient, MAX_ALTERNATIVES_PER_KEY, MAX_GRID_SLOTS, MAX_GRID_WIDTH,
+    Recipe, RecipeKind, RecipeMatch, RecipeRegistry, Shape, ShapedPattern, ShapedRecipe,
+    ShapelessRecipe,
 };
 pub use furnace::{
     Evidence, FUEL_BURST_TICKS, FuelValue, Furnace, FurnaceSlots, FurnaceState, FurnaceTickReport,

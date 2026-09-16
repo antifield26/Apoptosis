@@ -1143,3 +1143,75 @@ fn crafted_items_are_consumed_from_a_container_backed_grid() {
         "nothing was consumed by the refusal"
     );
 }
+
+/// P12-07: a pack book converts to a matching table (item-only).
+///
+/// A hand-built book with one shaped (sticks) and one shapeless (planks)
+/// recipe converts to two table entries that match and craft; a tag-ingredient
+/// recipe and a cooking recipe are counted and skipped, not guessed.
+#[test]
+fn a_pack_book_converts_item_recipes_and_counts_the_rest() {
+    use mc_core::ids::ResourceId;
+    use mc_data::{Ingredient as DataIngredient, Recipe as DataRecipe, RecipeBook};
+    use std::collections::BTreeMap;
+
+    fn id(text: &str) -> ResourceId {
+        ResourceId::parse(text).expect("a valid id")
+    }
+    let mut book = RecipeBook::new();
+    // Shaped sticks: two oak planks stacked (pattern 1x2).
+    book.insert(DataRecipe::Shaped(mc_data::ShapedRecipe {
+        name: id("minecraft:test_sticks"),
+        pattern: vec!["#".to_owned(), "#".to_owned()],
+        key: BTreeMap::from([('#', vec![DataIngredient::Item(id("minecraft:oak_planks"))])]),
+        result: id("minecraft:stick"),
+        result_count: 4,
+        group: None,
+    }));
+    // Shapeless planks: one oak log.
+    book.insert(DataRecipe::Shapeless(mc_data::ShapelessRecipe {
+        name: id("minecraft:test_planks"),
+        ingredients: vec![vec![DataIngredient::Item(id("minecraft:oak_log"))]],
+        result: id("minecraft:oak_planks"),
+        result_count: 4,
+        group: None,
+    }));
+    // Tag recipe: skipped, counted.
+    book.insert(DataRecipe::Shapeless(mc_data::ShapelessRecipe {
+        name: id("minecraft:test_tag"),
+        ingredients: vec![vec![DataIngredient::Tag(id("minecraft:planks"))]],
+        result: id("minecraft:stick"),
+        result_count: 1,
+        group: None,
+    }));
+    // Cooking recipe: other kind, counted.
+    book.insert(DataRecipe::Cooking(mc_data::CookingRecipe {
+        name: id("minecraft:test_cooking"),
+        kind: mc_data::SmeltingKind::Smelting,
+        ingredient: vec![DataIngredient::Item(id("minecraft:raw_iron"))],
+        result: id("minecraft:iron_ingot"),
+        result_count: 1,
+        cooking_time: 200,
+        experience: 0.7,
+    }));
+
+    let (table, report) = RecipeRegistry::from_book(&book, &items()).expect("converts");
+    assert_eq!(report.converted, 2, "{report:?}");
+    assert_eq!(report.tag_or_unknown, 1, "{report:?}");
+    assert_eq!(report.other_kinds, 1, "{report:?}");
+    assert_eq!(table.len(), 2);
+
+    // The converted sticks match in a 2x2 grid and craft.
+    let planks = item("minecraft:oak_planks");
+    let mut grid = vec![ItemStack::EMPTY; 4];
+    grid[0] = stack(planks, 1);
+    grid[2] = stack(planks, 1);
+    assert!(table.matches(&grid, 2), "pack sticks must match");
+    let mut crafting = grid.clone();
+    let result = table
+        .craft(&mut crafting, 2, &items())
+        .expect("crafts")
+        .expect("a result");
+    assert_eq!(result.item_id(), Some(item("minecraft:stick")));
+    assert_eq!(result.count(), 4);
+}
