@@ -189,9 +189,10 @@ use mc_protocol::packets::Packet;
 use mc_protocol::packets::play::{
     BIOMES_PER_SECTION, BlockChangedAck, BlockUpdate, ChunkSection, ContainerSetContent,
     ContainerSetSlot, GameEvent, HEIGHTMAP_WORLD_SURFACE, Heightmap, LevelChunkWithLight,
-    LightUpdate, NETWORK_BIOME_MIN_BITS, PalettedContainer as WireContainer, PlayDisconnect,
-    PlayIntent, PlayerPosition, Respawn, SetDefaultSpawnPosition, SetExperience, SetHealth,
-    SetHeldSlot, SetTime, block_position, unpack_block_position,
+    LightUpdate, MENU_FURNACE, MENU_GENERIC_9X3, MENU_HOPPER, NETWORK_BIOME_MIN_BITS, OpenScreen,
+    PalettedContainer as WireContainer, PlayDisconnect, PlayIntent, PlayerPosition, Respawn,
+    SetDefaultSpawnPosition, SetExperience, SetHealth, SetHeldSlot, SetTime, block_position,
+    unpack_block_position,
 };
 use mc_protocol::text::TextComponent;
 use mc_registry::Registries;
@@ -721,11 +722,15 @@ pub(crate) struct Session {
     pub(crate) name: String,
     /// The container window this player has open.
     ///
-    /// Every player always has the player-inventory menu (`window 0`) open; other
-    /// menus (chests, furnaces) are P06-03's job. The menu is the **authority** for
-    /// item placement: `container_click` is decoded, validated against this state
-    /// and applied here, never trusted.
+    /// Window 0 is always the player inventory; opening a chest, furnace or
+    /// hopper replaces it with a block menu on a non-zero window (P12-01).
+    /// The menu is the **authority** for item placement: `container_click` is
+    /// decoded, validated against this state and applied here, never trusted.
     menu: mc_container::Menu,
+    /// Next non-zero window id to hand out (1..=127, wrapping, never 0).
+    next_window: u8,
+    /// Which block entity the open window belongs to, when it is a block menu.
+    open_block: Option<mc_container::BlockPos>,
     /// Whether this player may receive world packets.
     ready: bool,
     /// Ticks of shared hurt invulnerability left (P11-06): a mob hit inside the
@@ -2951,7 +2956,32 @@ impl Game {
         let changes = self.world.take_block_changes();
         for change in changes {
             let pos = mc_container::BlockPos::new(change.x, change.y, change.z);
-            if let Some(retired) = self.block_entities.remove(pos) {
+            // A change *into* a container (placing a chest) must not retire the
+            // entity the open path just created in the same tick: the placement
+            // queues first, the open runs in the Network phase, and this
+            // broadcast runs last. Only a change *away* from containers retires.
+            let new_is_container = self
+                .registries
+                .blocks
+                .block_name(change.new_id)
+                .is_ok_and(is_container_block);
+            if new_is_container
+                && self.block_entities.get(pos).is_none()
+                && let Some(kind) = self
+                    .registries
+                    .blocks
+                    .block_name(change.new_id)
+                    .ok()
+                    .and_then(open_kind_for)
+            {
+                let entity_kind = match kind {
+                    OpenKind::Chest => mc_container::BlockEntityKind::Container,
+                    OpenKind::Furnace => mc_container::BlockEntityKind::Furnace,
+                    OpenKind::Hopper => mc_container::BlockEntityKind::Hopper,
+                };
+                self.block_entities
+                    .insert(mc_container::BlockEntity::new(pos, entity_kind));
+            } else if !new_is_container && let Some(retired) = self.block_entities.remove(pos) {
                 let dropped = retired.data.total_items();
                 if dropped > 0 {
                     // The items themselves are not spawned one-by-one here: doing so
@@ -3181,6 +3211,8 @@ impl Game {
                 permission: self.operators.level_for(&profile.id.to_string()),
                 name: profile.name.clone(),
                 menu,
+                next_window: 1,
+                open_block: None,
                 ready: false,
                 hurt_invuln_ticks: 0,
                 last_death_location: None,
@@ -3774,6 +3806,207 @@ impl Game {
         mc_container::Menu::player(mc_container::PLAYER_WINDOW_ID, container, stack_sizes)
     }
 
+    /// Block name at a loaded position, for the container-open check.
+    fn clicked_block_name(&self, x: i32, y: i32, z: i32) -> Option<String> {
+        let state = self.world.get_block_loaded(x, y, z)?;
+        self.registries
+            .blocks
+            .block_name(state)
+            .ok()
+            .map(str::to_owned)
+    }
+
+    /// Open the container at `(x, y, z)` for `id`: ensure its block entity,
+    /// build a block menu on a fresh non-zero window, and send `open_screen`
+    /// plus the full contents. A second open replaces the first window's menu
+    /// (the old block half was already flushed on every click).
+    #[allow(clippy::too_many_lines)]
+    fn open_container(
+        &mut self,
+        id: ConnectionId,
+        x: i32,
+        y: i32,
+        z: i32,
+        report: &mut TickReport,
+    ) {
+        let Some(name) = self.clicked_block_name(x, y, z) else {
+            return;
+        };
+        let Some(kind) = open_kind_for(&name) else {
+            return;
+        };
+        let pos = mc_container::BlockPos::new(x, y, z);
+        // Ensure the block entity exists so the menu has somewhere to flush to.
+        if self.block_entities.get(pos).is_none() {
+            let entity_kind = match kind {
+                OpenKind::Chest => mc_container::BlockEntityKind::Container,
+                OpenKind::Furnace => mc_container::BlockEntityKind::Furnace,
+                OpenKind::Hopper => mc_container::BlockEntityKind::Hopper,
+            };
+            self.block_entities
+                .insert(mc_container::BlockEntity::new(pos, entity_kind));
+        }
+        let items: Vec<mc_entity::stack::ItemStack> = self
+            .block_entities
+            .get(pos)
+            .and_then(|e| e.data.items())
+            .map_or(Vec::new(), <[mc_entity::stack::ItemStack]>::to_vec);
+
+        // Window ids 1..=127 stay positive in the legacy `i8` window fields of
+        // `container_set_content/slot`; `open_screen` itself is a `VarInt`.
+        let window = {
+            let Some(session) = self.sessions.get_mut(&id) else {
+                return;
+            };
+            let window = session.next_window;
+            session.next_window = if window >= 127 { 1 } else { window + 1 };
+            window
+        };
+        let stack_sizes = match mc_entity::stack::StackSizeTable::resolve(&self.registries.items) {
+            Ok(sizes) => sizes,
+            Err(error) => {
+                debug!(id = %id, %error, "could not resolve stack sizes for a container");
+                return;
+            }
+        };
+        let player_inventory_slots = match self.sessions.get(&id) {
+            Some(session) => session.player.inventory.stored_slots(),
+            None => return,
+        };
+        let player_container = match mc_container::Container::new(
+            mc_container::ContainerKind::Player,
+            player_inventory_slots,
+        ) {
+            Ok(container) => container,
+            Err(error) => {
+                debug!(id = %id, %error, "could not build the player half of a container");
+                return;
+            }
+        };
+        let (mut menu, menu_type, title) = match kind {
+            OpenKind::Chest => {
+                let mut block =
+                    match mc_container::Container::new(mc_container::ContainerKind::Generic, 27) {
+                        Ok(container) => container,
+                        Err(error) => {
+                            debug!(id = %id, %error, "could not build a chest container");
+                            return;
+                        }
+                    };
+                for (index, stack) in items.iter().enumerate().take(27) {
+                    let _ = block.set(index, *stack);
+                }
+                let menu =
+                    match mc_container::Menu::chest(window, block, player_container, stack_sizes) {
+                        Ok(menu) => menu,
+                        Err(error) => {
+                            debug!(id = %id, %error, "could not build a chest menu");
+                            return;
+                        }
+                    };
+                (menu, MENU_GENERIC_9X3, "Chest")
+            }
+            OpenKind::Furnace => {
+                let mut block =
+                    match mc_container::Container::new(mc_container::ContainerKind::Furnace, 3) {
+                        Ok(container) => container,
+                        Err(error) => {
+                            debug!(id = %id, %error, "could not build a furnace container");
+                            return;
+                        }
+                    };
+                for (index, stack) in items.iter().enumerate().take(3) {
+                    let _ = block.set(index, *stack);
+                }
+                let menu =
+                    match mc_container::Menu::furnace(window, block, player_container, stack_sizes)
+                    {
+                        Ok(menu) => menu,
+                        Err(error) => {
+                            debug!(id = %id, %error, "could not build a furnace menu");
+                            return;
+                        }
+                    };
+                (menu, MENU_FURNACE, "Furnace")
+            }
+            OpenKind::Hopper => {
+                let mut block =
+                    match mc_container::Container::new(mc_container::ContainerKind::Generic, 5) {
+                        Ok(container) => container,
+                        Err(error) => {
+                            debug!(id = %id, %error, "could not build a hopper container");
+                            return;
+                        }
+                    };
+                for (index, stack) in items.iter().enumerate().take(5) {
+                    let _ = block.set(index, *stack);
+                }
+                let menu = match mc_container::Menu::hopper(
+                    window,
+                    block,
+                    player_container,
+                    stack_sizes,
+                ) {
+                    Ok(menu) => menu,
+                    Err(error) => {
+                        debug!(id = %id, %error, "could not build a hopper menu");
+                        return;
+                    }
+                };
+                (menu, MENU_HOPPER, "Hopper")
+            }
+        };
+
+        let (contents, state, cursor, wire_window, content_window) = {
+            let Some(session) = self.sessions.get_mut(&id) else {
+                return;
+            };
+            // Mirror the authoritative inventory into the player half before showing.
+            mirror_inventory(&mut menu, &session.player.inventory);
+            session.menu = menu;
+            session.open_block = Some(pos);
+
+            let contents: Vec<mc_protocol::packets::play::ItemStack> = session
+                .menu
+                .full_contents()
+                .iter()
+                .copied()
+                .map(wire_stack)
+                .collect();
+            (
+                contents,
+                session.menu.state_id(),
+                session.menu.cursor(),
+                i32::from(session.menu.window_id()),
+                session.menu.window_id() as i8,
+            )
+        };
+        if let Err(error) = self.send(
+            id,
+            &OpenScreen {
+                window_id: wire_window,
+                menu_type,
+                title: TextComponent::literal(title),
+            },
+            report,
+        ) {
+            debug!(id = %id, %error, "could not send open_screen");
+            return;
+        }
+        if let Err(error) = self.send(
+            id,
+            &ContainerSetContent {
+                window_id: content_window,
+                state_id: state,
+                slots: contents,
+                carried: wire_stack(cursor),
+            },
+            report,
+        ) {
+            debug!(id = %id, %error, "could not send the opened window contents");
+        }
+    }
+
     /// Decode, validate and apply a `container_click`.
     ///
     /// Every step can refuse without mutating: a bad window id, an unknown click
@@ -3875,9 +4108,16 @@ impl Game {
         // Flush the accepted transaction back onto the authoritative inventory.
         // This is the other half of the pair: the menu was mirrored *in* at the top of
         // this function, so the two can only disagree for the duration of one click,
-        // during which nothing else runs.
+        // during which nothing else runs. When a block window is open its block
+        // half is flushed into the block entity the same way.
         if let Some(session) = self.sessions.get_mut(&id) {
             write_back_inventory(&session.menu, &mut session.player.inventory);
+        }
+        if let Some(pos) = self.sessions.get(&id).and_then(|s| s.open_block) {
+            let menu = &self.sessions.get(&id).expect("session").menu;
+            if let Some(entity) = self.block_entities.get_mut(pos) {
+                write_back_block(menu, entity);
+            }
         }
 
         // The cursor is not part of the window payload, so a change to it needs its
@@ -4186,7 +4426,8 @@ impl Game {
         (min_y..max_y).contains(&y)
     }
 
-    /// Right-click a block: place the held block item if the target is legal.
+    /// Right-click a block: open a container when the target is one, otherwise
+    /// place the held block item if the target is legal.
     fn apply_use_item_on(
         &mut self,
         id: ConnectionId,
@@ -4198,6 +4439,17 @@ impl Game {
         let (x, y, z) = unpack_block_position(position);
         if !self.within_reach(id, x, y, z) {
             debug!(id = %id, "rejected placement outside reach");
+            return;
+        }
+        // Containers open on right-click before any placement: a chest does
+        // something even with an empty hand, and holding a placeable block
+        // must not place *through* a chest (vanilla opens unless sneaking,
+        // and sneaking is not modelled — opening wins).
+        if self
+            .clicked_block_name(x, y, z)
+            .is_some_and(|n| is_container_block(&n))
+        {
+            self.open_container(id, x, y, z, report);
             return;
         }
         let hand = Hand::from_id(u8::try_from(hand).unwrap_or(0)).unwrap_or(Hand::Main);
@@ -5838,7 +6090,8 @@ fn mirror_inventory(
     menu: &mut mc_container::Menu,
     inventory: &mc_entity::inventory::PlayerInventory,
 ) {
-    let Some(container) = menu.container_mut(0) else {
+    let player_idx = menu.player_container_index();
+    let Some(container) = menu.container_mut(player_idx) else {
         return;
     };
     let slots = container.len().min(inventory.stored_slots());
@@ -5856,12 +6109,33 @@ fn write_back_inventory(
     menu: &mc_container::Menu,
     inventory: &mut mc_entity::inventory::PlayerInventory,
 ) {
-    let Some(container) = menu.container(0) else {
+    let player_idx = menu.player_container_index();
+    let Some(container) = menu.container(player_idx) else {
         return;
     };
     let slots = container.len().min(inventory.stored_slots());
     for index in 0..slots {
         let _ = inventory.set_slot(index, container.get(index));
+    }
+}
+
+/// Copy a block menu's block container (index 0) back into its block entity.
+///
+/// The player half goes through [`write_back_inventory`]; this is the block
+/// half. A missing entity or a size mismatch is a no-op rather than a panic:
+/// the menu still holds the items, so the next open replays them.
+fn write_back_block(menu: &mc_container::Menu, entity: &mut mc_container::BlockEntity) {
+    let Some(container) = menu.container(0) else {
+        return;
+    };
+    let Some(items) = entity.data.items_mut() else {
+        return;
+    };
+    if items.len() != container.len() {
+        return;
+    }
+    for (index, slot) in items.iter_mut().enumerate() {
+        *slot = container.get(index);
     }
 }
 
@@ -5889,6 +6163,30 @@ pub fn face_offset(face: i32) -> (i32, i32, i32) {
         // the action, matching how the client sends 0..5 only.
         _ => (0, 1, 0),
     }
+}
+
+/// Which block window to open. Double chests are deliberately a single 27-slot
+/// window here: merging two block entities is recorded as a gap, not guessed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpenKind {
+    Chest,
+    Furnace,
+    Hopper,
+}
+
+/// Classify a block name for the right-click-open path, or `None` to place.
+fn open_kind_for(name: &str) -> Option<OpenKind> {
+    match name {
+        "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:barrel" => Some(OpenKind::Chest),
+        "minecraft:furnace" => Some(OpenKind::Furnace),
+        "minecraft:hopper" => Some(OpenKind::Hopper),
+        _ => None,
+    }
+}
+
+/// Whether right-click opens rather than places.
+fn is_container_block(name: &str) -> bool {
+    open_kind_for(name).is_some()
 }
 
 /// Degrees to the wire's 1/256 of a degree, signed.

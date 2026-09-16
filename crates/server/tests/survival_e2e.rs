@@ -621,6 +621,65 @@ fn tp_above_surface_does_not_embed_and_death_respawns_from_there() {
     );
 }
 
+/// P12-01: right-clicking a chest opens a non-zero window.
+///
+/// Places a real chest block, right-clicks it with an empty hand through the
+/// real `use_item_on` path, and asserts the server sends `open_screen` (59)
+/// plus the window contents, tracks a non-zero window, and creates the block
+/// entity. Double chests are still a single 27-slot window (recorded gap).
+#[test]
+fn right_clicking_a_chest_opens_a_window() {
+    let mut harness = Harness::new("p12-open");
+    let (sx, sy, sz) = harness.build_floor();
+    let mut out = harness.join("Opener");
+    let chest = harness
+        .game
+        .registries()
+        .blocks
+        .default_state("minecraft:chest")
+        .expect("chest block");
+    let at = (sx + 1, sy, sz);
+    harness
+        .game
+        .world_mut()
+        .set_block(at.0, at.1, at.2, chest)
+        .expect("place chest");
+
+    let _ = Harness::drain_ids(&mut out);
+    harness.intent(PlayIntent::UseItemOn {
+        hand: 0,
+        position: block_position(at.0, at.1, at.2),
+        face: 1,
+        cursor_x: 0.5,
+        cursor_y: 1.0,
+        cursor_z: 0.5,
+        inside_block: false,
+        sequence: 7,
+    });
+    let ids = Harness::drain_ids(&mut out);
+    assert!(
+        ids.contains(&clientbound::play::OPEN_SCREEN),
+        "opening a chest must send open_screen (59), saw {ids:?}"
+    );
+    assert!(
+        ids.contains(&clientbound::play::CONTAINER_SET_CONTENT),
+        "opening a chest must send its contents, saw {ids:?}"
+    );
+    let window = harness
+        .game
+        .menu_window_id(harness.id)
+        .expect("a window id");
+    assert_ne!(window, 0, "a chest must open on a non-zero window");
+    assert!(
+        harness
+            .game
+            .block_entities()
+            .get(mc_container::BlockPos::new(at.0, at.1, at.2))
+            .is_some(),
+        "opening a chest must create its block entity"
+    );
+}
+
 #[test]
 fn a_hostile_hotbar_index_is_rejected() {
     let mut harness = Harness::new("p04-hotbar");
