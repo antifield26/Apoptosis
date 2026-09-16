@@ -214,3 +214,83 @@ fn a_sign_entity_round_trips_through_the_store() {
     }
     assert_eq!(entity.data.total_items(), 0);
 }
+
+/// P12-05: a chest's contents survive a restart through the chunk save.
+///
+/// Builds two games on the same directory (the only honest restart): the
+/// first places a chest block, fills it, saves; the second loads the chunk
+/// and must find the same items. Proves the payload↔NBT path, not the encoder
+/// agreeing with itself.
+#[test]
+fn a_chest_survives_a_restart_with_its_contents() {
+    use mc_network::bridge::game_channel;
+    use mc_server::config::StorageConfig;
+    use mc_server::game::{DEFAULT_RANDOM_SEED, Game};
+
+    let dir = TempDir::new("p12-be-restart");
+    let config = StorageConfig {
+        world_dir: dir.path().join("world"),
+        autosave_ticks: 0,
+    };
+    let stone_item = {
+        let storage = WorldService::open(&config).expect("world opens");
+        let (_tx, rx) = game_channel(64);
+        let mut first =
+            Game::with_seed_and_storage(storage, 3, rx, DEFAULT_RANDOM_SEED).expect("game builds");
+        let (bx, by, bz) = first.spawn();
+        let chest = first
+            .registries()
+            .blocks
+            .default_state("minecraft:chest")
+            .expect("chest");
+        first
+            .world_mut()
+            .set_block(bx + 1, by, bz, chest)
+            .expect("place chest");
+        // Run a tick so the broadcast creates the block entity for the placed
+        // chest (placing queues, broadcast retires-into-existence).
+        first.tick().expect("tick");
+        let pos = BlockPos::new(bx + 1, by, bz);
+        assert!(
+            first.block_entities().get(pos).is_some(),
+            "the placed chest must have an entity before filling"
+        );
+        let stone = first
+            .registries()
+            .items
+            .id("minecraft:stone")
+            .expect("stone");
+        if let Some(items) = first
+            .block_entities_mut()
+            .get_mut(pos)
+            .and_then(|e| e.data.items_mut())
+        {
+            items[0] = mc_entity::stack::ItemStack::new(stone, 17).expect("stack");
+        }
+        // Mark dirty is automatic on set_block; the entity write-back also
+        // marks, so the save must include this chunk.
+        first.save_all_owned().expect("saves");
+        first.close_storage().expect("closes");
+        (
+            stone,
+            mc_persistence::chunk::ChunkPos::new((bx + 1) >> 4, bz >> 4),
+        )
+    };
+
+    let (stone, chunk) = stone_item;
+    let storage = WorldService::open(&config).expect("world reopens");
+    let (_tx, rx) = game_channel(64);
+    let mut second =
+        Game::with_seed_and_storage(storage, 3, rx, DEFAULT_RANDOM_SEED).expect("game builds");
+    assert!(second.load_chunk(chunk), "the saved chunk loads");
+    let total: i64 = second.block_entities().total_items();
+    assert_eq!(total, 17, "the chest contents must survive, saw {total}");
+    let entity = second
+        .block_entities()
+        .iter()
+        .find(|e| e.kind() == BlockEntityKind::Container)
+        .expect("a chest entity");
+    let first_stack = entity.data.items().expect("items")[0];
+    assert_eq!(first_stack.item_id(), Some(stone));
+    assert_eq!(first_stack.count(), 17);
+}

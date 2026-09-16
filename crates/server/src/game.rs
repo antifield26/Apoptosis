@@ -1720,6 +1720,7 @@ impl Game {
                 continue;
             };
             let before = [*burn_ticks, *burn_total, *cook_progress, *cook_total];
+            let before_items = items.clone();
             // Bridge the NBT-free payload into the tick's container + state.
             let Ok(mut container) =
                 mc_container::Container::new(mc_container::ContainerKind::Furnace, 3)
@@ -1755,6 +1756,9 @@ impl Game {
             *cook_progress = state.cook_progress;
             *cook_total = state.cook_total;
             let after = [*burn_ticks, *burn_total, *cook_progress, *cook_total];
+            if before != after || *items != before_items {
+                mark_block_dirty(&mut self.world, pos.x, pos.z);
+            }
             if before != after {
                 let mut narrow = [0i16; 4];
                 let mut changed = false;
@@ -1931,6 +1935,9 @@ impl Game {
         // would replay the pre-transfer contents the menu still holds.
         hopper_touched.sort();
         hopper_touched.dedup();
+        for pos in &hopper_touched {
+            mark_block_dirty(&mut self.world, pos.x, pos.z);
+        }
         for pos in hopper_touched {
             let viewers: Vec<ConnectionId> = self
                 .sessions
@@ -4148,6 +4155,7 @@ impl Game {
             };
             self.block_entities
                 .insert(mc_container::BlockEntity::new(pos, entity_kind));
+            mark_block_dirty(&mut self.world, x, z);
         }
         let items: Vec<mc_entity::stack::ItemStack> = self
             .block_entities
@@ -4420,6 +4428,7 @@ impl Game {
             let menu = &self.sessions.get(&id).expect("session").menu;
             if let Some(entity) = self.block_entities.get_mut(pos) {
                 write_back_block(menu, entity);
+                mark_block_dirty(&mut self.world, pos.x, pos.z);
             }
         }
 
@@ -5150,14 +5159,16 @@ impl Game {
         match self.read_stored_chunk(pos) {
             Ok(Some(data)) => {
                 let entities = data.entities.clone();
+                let block_entities = data.block_entities.clone();
                 match Chunk::from_chunk_data(&data, &self.registries.blocks) {
                     Ok(chunk) => {
                         self.world.load_chunk(chunk);
                         loaded = true;
                         // P11-08: the chunk's saved entities come back as live
                         // entities; the Broadcast phase announces them like any
-                        // other spawn.
+                        // other spawn. P12-05: block entities ride the same path.
                         self.load_chunk_entities(&entities);
+                        self.load_chunk_block_entities(&block_entities);
                     }
                     Err(error) => {
                         warn!(?pos, %error, "stored chunk could not be converted; using a placeholder");
@@ -5541,6 +5552,188 @@ impl Game {
             if self.spawn_mob(kind, to_entity(position)).is_err() {
                 warn!("a saved mob could not be spawned");
             }
+        }
+    }
+
+    /// The saved block entities of one chunk as NBT (P12-05).
+    ///
+    /// Shape: `id` (`minecraft:chest`/`minecraft:furnace`/`minecraft:hopper`),
+    /// `x`/`y`/`z` ints, `Items` list of `{Slot byte, id string, Count int}`,
+    /// plus furnace `BurnTicks`/`BurnTotal`/`CookProgress`/`CookTotal` ints and
+    /// hopper `Cooldown` int. Vanilla reads `id`/`x`/`y`/`z`/`Items` and ignores
+    /// the rest, so a vanilla boot sees chests with contents and furnaces with
+    /// items but reset progress — the honest direction for the progress gap.
+    fn serialize_chunk_block_entities(&self, pos: ChunkPos) -> Vec<mc_nbt::NbtTag> {
+        self.block_entities
+            .iter()
+            .filter(|entity| {
+                let (ex, ez) = (entity.pos.x >> 4, entity.pos.z >> 4);
+                ex == pos.x && ez == pos.z
+            })
+            .map(|entity| {
+                let mut fields: Vec<(String, mc_nbt::NbtTag)> = Vec::new();
+                let id = match entity.kind() {
+                    mc_container::BlockEntityKind::Container => "minecraft:chest",
+                    mc_container::BlockEntityKind::Furnace => "minecraft:furnace",
+                    mc_container::BlockEntityKind::Hopper => "minecraft:hopper",
+                    mc_container::BlockEntityKind::Sign => "minecraft:sign",
+                };
+                fields.push(("id".to_owned(), mc_nbt::NbtTag::String(id.to_owned())));
+                fields.push(("x".to_owned(), mc_nbt::NbtTag::Int(entity.pos.x)));
+                fields.push(("y".to_owned(), mc_nbt::NbtTag::Int(entity.pos.y)));
+                fields.push(("z".to_owned(), mc_nbt::NbtTag::Int(entity.pos.z)));
+                if let Some(items) = entity.data.items() {
+                    let list = items
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, s)| !s.is_empty())
+                        .filter_map(|(slot, stack)| {
+                            let name = stack
+                                .item_id()
+                                .and_then(|item_id| self.registries.items.name(item_id).ok())?;
+                            let byte_slot = i8::try_from(slot).ok()?;
+                            Some(mc_nbt::NbtTag::Compound(vec![
+                                ("Slot".to_owned(), mc_nbt::NbtTag::Byte(byte_slot)),
+                                ("id".to_owned(), mc_nbt::NbtTag::String(name.to_owned())),
+                                ("Count".to_owned(), mc_nbt::NbtTag::Int(stack.count())),
+                            ]))
+                        })
+                        .collect();
+                    fields.push(("Items".to_owned(), mc_nbt::NbtTag::List(list)));
+                }
+                match &entity.data {
+                    mc_container::BlockEntityData::Furnace {
+                        burn_ticks,
+                        burn_total,
+                        cook_progress,
+                        cook_total,
+                        ..
+                    } => {
+                        fields.push((
+                            "BurnTicks".to_owned(),
+                            mc_nbt::NbtTag::Int(*burn_ticks as i32),
+                        ));
+                        fields.push((
+                            "BurnTotal".to_owned(),
+                            mc_nbt::NbtTag::Int(*burn_total as i32),
+                        ));
+                        fields.push((
+                            "CookProgress".to_owned(),
+                            mc_nbt::NbtTag::Int(*cook_progress as i32),
+                        ));
+                        fields.push((
+                            "CookTotal".to_owned(),
+                            mc_nbt::NbtTag::Int(*cook_total as i32),
+                        ));
+                    }
+                    mc_container::BlockEntityData::Hopper { cooldown, .. } => {
+                        fields.push(("Cooldown".to_owned(), mc_nbt::NbtTag::Int(*cooldown as i32)));
+                    }
+                    _ => {}
+                }
+                mc_nbt::NbtTag::Compound(fields)
+            })
+            .collect()
+    }
+
+    /// Restore the block entities a saved chunk carries (P12-05).
+    ///
+    /// Malformed entries are logged and skipped like entities: one bad chest
+    /// must not stop the chunk. Signs are skipped (no payload this build
+    /// persists for them).
+    fn load_chunk_block_entities(&mut self, tags: &[mc_nbt::NbtTag]) {
+        for tag in tags {
+            let mc_nbt::NbtTag::Compound(fields) = tag else {
+                warn!("a saved block entity was not a compound; skipped");
+                continue;
+            };
+            let get = |name: &str| {
+                fields
+                    .iter()
+                    .find(|(key, _)| key == name)
+                    .map(|(_, value)| value)
+            };
+            let Some(mc_nbt::NbtTag::String(id)) = get("id") else {
+                warn!("a saved block entity has no string `id`; skipped");
+                continue;
+            };
+            let (Some(x), Some(y), Some(z)) =
+                (nbt_int(get("x")), nbt_int(get("y")), nbt_int(get("z")))
+            else {
+                warn!(%id, "a saved block entity has no int x/y/z; skipped");
+                continue;
+            };
+            let pos = mc_container::BlockPos::new(x, y, z);
+            let kind = match id.as_str() {
+                "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:barrel" => {
+                    mc_container::BlockEntityKind::Container
+                }
+                "minecraft:furnace" => mc_container::BlockEntityKind::Furnace,
+                "minecraft:hopper" => mc_container::BlockEntityKind::Hopper,
+                _ => {
+                    warn!(%id, "a saved block entity names an unmodelled kind; skipped");
+                    continue;
+                }
+            };
+            let mut entity = mc_container::BlockEntity::new(pos, kind);
+            // Items list, tolerant of Byte/Short/Int slots and counts.
+            if let Some(mc_nbt::NbtTag::List(entries)) = get("Items")
+                && let Some(items) = entity.data.items_mut()
+            {
+                for entry in entries {
+                    let mc_nbt::NbtTag::Compound(entry_fields) = entry else {
+                        continue;
+                    };
+                    let find = |name: &str| {
+                        entry_fields
+                            .iter()
+                            .find(|(key, _)| key == name)
+                            .map(|(_, value)| value)
+                    };
+                    let (Some(slot), Some(item_name), Some(count)) = (
+                        find("Slot").and_then(|t| nbt_int(Some(t))),
+                        match find("id") {
+                            Some(mc_nbt::NbtTag::String(name)) => Some(name),
+                            _ => None,
+                        },
+                        find("Count").and_then(|t| nbt_int(Some(t))),
+                    ) else {
+                        continue;
+                    };
+                    let Ok(slot) = usize::try_from(slot) else {
+                        continue;
+                    };
+                    let Ok(item_id) = self.registries.items.id(item_name) else {
+                        warn!(item = %item_name, "a saved block item is unknown; skipped");
+                        continue;
+                    };
+                    let Ok(stack) = mc_entity::stack::ItemStack::new(item_id, count) else {
+                        continue;
+                    };
+                    if slot < items.len() && !stack.is_empty() {
+                        items[slot] = stack;
+                    }
+                }
+            }
+            match &mut entity.data {
+                mc_container::BlockEntityData::Furnace {
+                    burn_ticks,
+                    burn_total,
+                    cook_progress,
+                    cook_total,
+                    ..
+                } => {
+                    *burn_ticks = nbt_int(get("BurnTicks")).map_or(0, |v| v.max(0) as u32);
+                    *burn_total = nbt_int(get("BurnTotal")).map_or(0, |v| v.max(0) as u32);
+                    *cook_progress = nbt_int(get("CookProgress")).map_or(0, |v| v.max(0) as u32);
+                    *cook_total = nbt_int(get("CookTotal")).map_or(0, |v| v.max(0) as u32);
+                }
+                mc_container::BlockEntityData::Hopper { cooldown, .. } => {
+                    *cooldown = nbt_int(get("Cooldown")).map_or(0, |v| v.max(0) as u32);
+                }
+                _ => {}
+            }
+            self.block_entities.insert(entity);
         }
     }
 
@@ -6299,8 +6492,10 @@ impl Game {
             if let Some(chunk) = self.world.chunk(pos) {
                 let mut data = chunk.to_chunk_data(&self.registries.blocks)?;
                 // P11-08: the chunk's live entities ride the save, so a
-                // restart puts the world back the way it was left.
+                // restart puts the world back the way it was left. P12-05: the
+                // block entities ride the same save.
                 data.entities = self.serialize_chunk_entities(pos);
+                data.block_entities = self.serialize_chunk_block_entities(pos);
                 storage
                     .storage_mut()
                     .queue_chunk_save(&Dimension::Overworld, &data)?;
@@ -6448,6 +6643,34 @@ fn wire_stack(stack: mc_entity::stack::ItemStack) -> mc_protocol::packets::play:
             mc_protocol::packets::play::ItemStack::simple(id, stack.count())
         }
         _ => mc_protocol::packets::play::ItemStack::empty(),
+    }
+}
+
+/// An NBT int field that tolerates Byte/Short/Int/Long (vanilla writes Short
+/// for some of these; our writer uses Int/Byte). Returns `None` for anything
+/// else, so the caller logs and skips rather than guessing.
+fn nbt_int(tag: Option<&mc_nbt::NbtTag>) -> Option<i32> {
+    match tag {
+        Some(mc_nbt::NbtTag::Byte(v)) => Some(i32::from(*v)),
+        Some(mc_nbt::NbtTag::Short(v)) => Some(i32::from(*v)),
+        Some(mc_nbt::NbtTag::Int(v)) => Some(*v),
+        Some(mc_nbt::NbtTag::Long(v)) => i32::try_from(*v).ok(),
+        _ => None,
+    }
+}
+
+/// Mark the chunk holding `(x, z)` dirty so the next autosave persists the
+/// block-entity change there. World edits mark through `set_block`; container
+/// transactions, furnace cooks and hopper moves do not touch the world, so
+/// without this an entity in an otherwise clean chunk would never save —
+/// the same divergence P11-08 records for entities.
+fn mark_block_dirty(world: &mut World, x: i32, z: i32) {
+    let pos = mc_world::ChunkPos {
+        x: x >> 4,
+        z: z >> 4,
+    };
+    if let Some(chunk) = world.chunk_mut(pos) {
+        chunk.dirty = true;
     }
 }
 
