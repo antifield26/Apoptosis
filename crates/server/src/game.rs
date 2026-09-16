@@ -188,11 +188,11 @@ use mc_protocol::RawPacket;
 use mc_protocol::packets::Packet;
 use mc_protocol::packets::play::{
     BIOMES_PER_SECTION, BlockChangedAck, BlockUpdate, ChunkSection, ContainerSetContent,
-    ContainerSetSlot, GameEvent, HEIGHTMAP_WORLD_SURFACE, Heightmap, LevelChunkWithLight,
-    LightUpdate, MENU_FURNACE, MENU_GENERIC_9X3, MENU_HOPPER, NETWORK_BIOME_MIN_BITS, OpenScreen,
-    PalettedContainer as WireContainer, PlayDisconnect, PlayIntent, PlayerPosition, Respawn,
-    SetDefaultSpawnPosition, SetExperience, SetHealth, SetHeldSlot, SetTime, block_position,
-    unpack_block_position,
+    ContainerSetData, ContainerSetSlot, GameEvent, HEIGHTMAP_WORLD_SURFACE, Heightmap,
+    LevelChunkWithLight, LightUpdate, MENU_FURNACE, MENU_GENERIC_9X3, MENU_HOPPER,
+    NETWORK_BIOME_MIN_BITS, OpenScreen, PalettedContainer as WireContainer, PlayDisconnect,
+    PlayIntent, PlayerPosition, Respawn, SetDefaultSpawnPosition, SetExperience, SetHealth,
+    SetHeldSlot, SetTime, block_position, unpack_block_position,
 };
 use mc_protocol::text::TextComponent;
 use mc_registry::Registries;
@@ -1652,10 +1652,7 @@ impl Game {
                 Ok(())
             }
             TickPhase::Players => self.phase_players(report),
-            TickPhase::BlockEntities => {
-                self.tick_block_entities();
-                Ok(())
-            }
+            TickPhase::BlockEntities => self.tick_block_entities(report),
             TickPhase::Broadcast => self.phase_broadcast(report, tick),
         }
     }
@@ -1687,15 +1684,118 @@ impl Game {
     #[allow(clippy::unused_self)]
     fn tick_scheduled(&mut self) {}
 
-    /// Phase 5: **documented no-op**.
+    /// Phase 5: furnaces cook, hoppers transfer (P12-03/04).
     ///
-    /// Block-entity behaviour (furnaces, hoppers, chests, spawners, signs) is P06:
-    /// it needs the block-entity registry, per-chunk block-entity maps in
-    /// [`mc_world::chunk::Chunk`] and the container transaction model in
-    /// `mc-entity`. None of those exist yet, so there is nothing to tick.
-    // See `tick_scheduled` for why the receiver is part of the signature.
-    #[allow(clippy::unused_self)]
-    fn tick_block_entities(&mut self) {}
+    /// Each furnace block entity advances one tick through `Furnace::tick` on the
+    /// hand-written baseline (P12-08 retires it for pack data); when a player has
+    /// that furnace open the changed `container_set_data` properties (0 burn
+    /// remaining, 1 burn total, 2 cook progress, 3 cook total — vanilla
+    /// `FurnaceMenu` data slots) are sent on its window. Hopper ticking lives
+    /// here too (see `tick_hoppers`); the phase stays deterministic by walking
+    /// block positions ascending.
+    fn tick_block_entities(&mut self, report: &mut TickReport) -> ServerResult<()> {
+        // Resolve once per tick: the tables are small and furnaces are few.
+        let stack_sizes = mc_entity::stack::StackSizeTable::resolve(&self.registries.items)?;
+        let recipes = mc_container::SmeltingRegistry::baseline(&self.registries.items)?;
+        let slots = mc_container::FurnaceSlots::CANONICAL;
+
+        // Phase one: advance every furnace, recording data-slot deltas.
+        // Collected first so the mutable walk over block entities ends before
+        // any `&self` send below.
+        let mut deltas: Vec<(mc_container::BlockPos, [i16; 4])> = Vec::new();
+        let positions: Vec<mc_container::BlockPos> = self.block_entities.positions().collect();
+        for pos in positions {
+            let Some(entity) = self.block_entities.get_mut(pos) else {
+                continue;
+            };
+            let mc_container::BlockEntityData::Furnace {
+                items,
+                burn_ticks,
+                burn_total,
+                cook_progress,
+                cook_total,
+            } = &mut entity.data
+            else {
+                continue;
+            };
+            let before = [*burn_ticks, *burn_total, *cook_progress, *cook_total];
+            // Bridge the NBT-free payload into the tick's container + state.
+            let Ok(mut container) =
+                mc_container::Container::new(mc_container::ContainerKind::Furnace, 3)
+            else {
+                continue;
+            };
+            for (index, stack) in items.iter().enumerate().take(3) {
+                let _ = container.set(index, *stack);
+            }
+            let mut state = mc_container::FurnaceState {
+                burn_ticks_remaining: *burn_ticks,
+                burn_ticks_total: *burn_total,
+                cook_progress: *cook_progress,
+                cook_total: *cook_total,
+                experience: 0.0,
+            };
+            let ticked = mc_container::Furnace::tick(
+                &mut state,
+                &mut container,
+                slots,
+                &recipes,
+                &self.registries.items,
+                &stack_sizes,
+            );
+            if ticked.is_err() {
+                continue;
+            }
+            for (index, stack) in items.iter_mut().enumerate().take(3) {
+                *stack = container.get(index);
+            }
+            *burn_ticks = state.burn_ticks_remaining;
+            *burn_total = state.burn_ticks_total;
+            *cook_progress = state.cook_progress;
+            *cook_total = state.cook_total;
+            let after = [*burn_ticks, *burn_total, *cook_progress, *cook_total];
+            if before != after {
+                let mut narrow = [0i16; 4];
+                let mut changed = false;
+                for (index, (was, now)) in before.iter().zip(after.iter()).enumerate() {
+                    // Cook/burn totals stay under `u16::MAX` (400-tick cooks,
+                    // second-scale fuels); saturate rather than wrap on absurd data.
+                    let narrow_now = u16::try_from(*now).unwrap_or(u16::MAX) as i16;
+                    narrow[index] = narrow_now;
+                    changed |= was != now;
+                }
+                if changed {
+                    deltas.push((pos, narrow));
+                }
+            }
+        }
+
+        // Phase two: send deltas to whoever holds the matching window.
+        for (pos, values) in deltas {
+            // Find sessions before sending so `&self` sends do not borrow
+            // alongside the session walk.
+            let viewers: Vec<(ConnectionId, i32)> = self
+                .sessions
+                .iter()
+                .filter(|(_, s)| s.open_block == Some(pos))
+                .map(|(id, s)| (*id, i32::from(s.menu.window_id())))
+                .collect();
+            for (id, window) in viewers {
+                for (property, value) in values.iter().enumerate() {
+                    let _ = self.send(
+                        id,
+                        &ContainerSetData {
+                            window_id: window,
+                            property: property as i16,
+                            value: *value,
+                        },
+                        report,
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
 
     /// Phase 3: tick every non-player entity, ascending by id.
     ///

@@ -730,6 +730,99 @@ fn chest_transactions_conserve_across_a_flood() {
     let _ = Harness::drain_ids(&mut out);
 }
 
+/// P12-03: an open furnace ticks and reports progress via `container_set_data`.
+///
+/// Opens a real furnace, shift-clicks iron ore + coal into it, runs five ticks,
+/// and asserts the block entity's cook progress advanced and the server sent
+/// `container_set_data` (19) on the furnace window. Properties are vanilla's
+/// `FurnaceMenu` data slots: 0 burn remaining, 1 burn total, 2 cook progress,
+/// 3 cook total.
+#[test]
+fn an_open_furnace_cooks_and_reports_progress() {
+    let mut harness = Harness::new("p12-furnace");
+    let (sx, sy, sz) = harness.build_floor();
+    let mut out = harness.join("Smelter");
+    let furnace = harness
+        .game
+        .registries()
+        .blocks
+        .default_state("minecraft:furnace")
+        .expect("furnace block");
+    let at = (sx + 1, sy, sz);
+    harness
+        .game
+        .world_mut()
+        .set_block(at.0, at.1, at.2, furnace)
+        .expect("place furnace");
+    let _ = Harness::drain_ids(&mut out);
+    harness.intent(PlayIntent::UseItemOn {
+        hand: 0,
+        position: block_position(at.0, at.1, at.2),
+        face: 1,
+        cursor_x: 0.5,
+        cursor_y: 1.0,
+        cursor_z: 0.5,
+        inside_block: false,
+        sequence: 21,
+    });
+    let window = i32::from(
+        harness
+            .game
+            .menu_window_id(harness.id)
+            .expect("a furnace window"),
+    );
+    assert_ne!(window, 0);
+
+    let items = &harness.game.registries().items;
+    let ore = items.id("minecraft:iron_ore").expect("ore");
+    let coal = items.id("minecraft:coal").expect("coal");
+    {
+        let player = harness.game.player_mut(harness.id).expect("player");
+        player
+            .inventory
+            .set_slot(0, mc_entity::stack::ItemStack::new(ore, 3).expect("stack"))
+            .expect("give ore");
+        player
+            .inventory
+            .set_slot(1, mc_entity::stack::ItemStack::new(coal, 2).expect("stack"))
+            .expect("give coal");
+    }
+    // Furnace menu: 0 input, 1 fuel, 2 output, 3..29 main, 30..38 hotbar.
+    // Hotbar 0 = menu 30, hotbar 1 = menu 31.
+    for (slot, _name) in [(30, "ore"), (31, "coal")] {
+        let state = harness.game.menu_state_id(harness.id).expect("state");
+        harness.intent(PlayIntent::ContainerClick {
+            window_id: window,
+            state_id: state,
+            slot,
+            button: 0,
+            click_type: 1,
+        });
+    }
+    let _ = Harness::drain_ids(&mut out);
+    for _ in 0..5 {
+        harness.game.tick().expect("tick");
+    }
+    let progress = harness
+        .game
+        .block_entities()
+        .get(mc_container::BlockPos::new(at.0, at.1, at.2))
+        .and_then(|e| match &e.data {
+            mc_container::BlockEntityData::Furnace { cook_progress, .. } => Some(*cook_progress),
+            _ => None,
+        })
+        .expect("a furnace entity");
+    assert!(
+        progress > 0,
+        "a lit furnace must advance cook progress within 5 ticks"
+    );
+    let ids = Harness::drain_ids(&mut out);
+    assert!(
+        ids.contains(&clientbound::play::CONTAINER_SET_DATA),
+        "an open furnace must send container_set_data (19), saw {ids:?}"
+    );
+}
+
 /// P12-01: right-clicking a chest opens a non-zero window.
 ///
 /// Places a real chest block, right-clicks it with an empty hand through the
