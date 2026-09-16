@@ -713,6 +713,32 @@ fn every_constant_we_use_matches_the_vanilla_jar() {
         "player_chat",
         clientbound::play::PLAYER_CHAT,
     );
+    // P12-01: the four window packets. Ids from the jar-extracted table;
+    // wire shapes are pinned by round-trip tests in `packets::play`.
+    check(
+        "game",
+        "clientbound",
+        "open_screen",
+        clientbound::play::OPEN_SCREEN,
+    );
+    check(
+        "game",
+        "clientbound",
+        "container_set_data",
+        clientbound::play::CONTAINER_SET_DATA,
+    );
+    check(
+        "game",
+        "clientbound",
+        "container_close",
+        clientbound::play::CONTAINER_CLOSE,
+    );
+    check(
+        "game",
+        "clientbound",
+        "set_cursor_item",
+        clientbound::play::SET_CURSOR_ITEM,
+    );
 }
 
 /// One packet-id constant as the source scan found it:

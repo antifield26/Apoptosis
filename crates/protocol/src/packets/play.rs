@@ -3267,6 +3267,199 @@ impl Packet for ContainerSetContent {
     }
 }
 
+/// Vanilla `MenuType` registry ids for the windows P12 opens.
+///
+/// Source: `javap -c -p` on `net.minecraft.world.inventory.MenuType` from the
+/// official 26.1.2 server jar — the static initialiser registers in this order,
+/// and `BuiltInRegistries.MENU` assigns 0..N in registration order:
+///
+/// ```text
+/// 0 generic_9x1, 1 generic_9x2, 2 generic_9x3, 3 generic_9x4, 4 generic_9x5,
+/// 5 generic_9x6, 6 generic_3x3, 7 crafter_3x3, 8 anvil, 9 beacon,
+/// 10 blast_furnace, 11 brewing_stand, 12 crafting, 13 enchantment, 14 furnace,
+/// 15 grindstone, 16 hopper, 17 lectern, 18 loom, 19 merchant, 20 shulker_box,
+/// 21 smithing, 22 smoker, 23 cartography_table, 24 stonecutter
+/// ```
+///
+/// Only the four P12 needs are named here; adding a fifth menu is adding a
+/// constant, not re-deriving the table.
+pub const MENU_GENERIC_9X3: i32 = 2;
+/// Double chest (54 slots).
+pub const MENU_GENERIC_9X6: i32 = 5;
+/// Furnace (3 slots: input, fuel, output).
+pub const MENU_FURNACE: i32 = 14;
+/// Hopper (5 slots).
+pub const MENU_HOPPER: i32 = 16;
+
+/// `minecraft:open_screen` (clientbound play 59).
+///
+/// Body, from `javap -c -p` on
+/// `net.minecraft.network.protocol.game.ClientboundOpenScreenPacket` (26.1.2):
+/// `containerId` via `ByteBufCodecs.CONTAINER_ID` (a `VarInt`), then `type` via
+/// `ByteBufCodecs.registry(Registries.MENU)` (a `VarInt` registry id), then
+/// `title` via `ComponentSerialization.TRUSTED_STREAM_CODEC` (network NBT —
+/// the same encoding [`SystemChat`] uses).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenScreen {
+    /// Window id the client will use in `container_click` (non-zero).
+    pub window_id: i32,
+    /// Vanilla `MenuType` registry id (see `MENU_*` above).
+    pub menu_type: i32,
+    /// Window title.
+    pub title: TextComponent,
+}
+
+impl Packet for OpenScreen {
+    const ID: i32 = clientbound::play::OPEN_SCREEN;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let window_id = reader.read_varint()?;
+        let menu_type = reader.read_varint()?;
+        let rest = reader.take_remaining();
+        let mut rest = rest;
+        let nbt = Nbt::read_network(&mut rest)?;
+        if !rest.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "open_screen has {} trailing bytes",
+                rest.len()
+            )));
+        }
+        let title = super::config::text_from_nbt(&nbt)?;
+        Ok(Self {
+            window_id,
+            menu_type,
+            title,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.window_id);
+        writer.write_varint(self.menu_type);
+        let mut bytes = Vec::new();
+        self.title.to_nbt().write_network(&mut bytes)?;
+        writer.write_bytes(&bytes);
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:container_set_data` (clientbound play 19).
+///
+/// Body, from `javap -c -p` on
+/// `net.minecraft.network.protocol.game.ClientboundContainerSetDataPacket`:
+/// `readContainerId` (`VarInt`), then `readShort` property, then `readShort`
+/// value. Furnace progress rides this: property 0 = burn remaining,
+/// 1 = burn total, 2 = cook progress, 3 = cook total (vanilla
+/// `FurnaceMenu` data slots, asserted by the furnace tests).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContainerSetData {
+    /// Window id.
+    pub window_id: i32,
+    /// Property id.
+    pub property: i16,
+    /// Property value.
+    pub value: i16,
+}
+
+impl Packet for ContainerSetData {
+    const ID: i32 = clientbound::play::CONTAINER_SET_DATA;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let window_id = reader.read_varint()?;
+        let property = reader.read_i16()?;
+        let value = reader.read_i16()?;
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "container_set_data has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self {
+            window_id,
+            property,
+            value,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.window_id);
+        writer.write_i16(self.property);
+        writer.write_i16(self.value);
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:container_close` (clientbound play 17).
+///
+/// Body, from `javap -c -p` on
+/// `net.minecraft.network.protocol.game.ClientboundContainerClosePacket`:
+/// a single `readContainerId` (`VarInt`). Tells the client to close a window
+/// the server no longer tracks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContainerClose {
+    /// Window id to close.
+    pub window_id: i32,
+}
+
+impl Packet for ContainerClose {
+    const ID: i32 = clientbound::play::CONTAINER_CLOSE;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let window_id = reader.read_varint()?;
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "container_close has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self { window_id })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.window_id);
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:set_cursor_item` (clientbound play 96).
+///
+/// Body, from `javap -c -p` on
+/// `net.minecraft.network.protocol.game.ClientboundSetCursorItemPacket`:
+/// a single `ItemStack.OPTIONAL_STREAM_CODEC` — the same optional stack
+/// encoding [`ItemStack`] already implements.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetCursorItem {
+    /// Stack on the cursor.
+    pub item: ItemStack,
+}
+
+impl Packet for SetCursorItem {
+    const ID: i32 = clientbound::play::SET_CURSOR_ITEM;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let item = ItemStack::decode(&mut reader)?;
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "set_cursor_item has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self { item })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        self.item.encode(&mut writer)?;
+        Ok(writer.finish())
+    }
+}
+
 /// Longest chat message Vanilla accepts (`writeUtf(message, 256)` in
 /// `ServerboundChatPacket.write`, verified from the 26.1.2 jar).
 pub const CHAT_MAX_CHARS: usize = 256;
@@ -3629,9 +3822,10 @@ impl PlayIntent {
 #[cfg(test)]
 mod tests {
     use super::{
-        COMMAND_MAX_CHARS, ConfigurationAcknowledged, JoinGame, KeepAlive, LightData, LightUpdate,
-        PlayDisconnect, PlayIntent, PlayPingRequest, PlayPong, PlayerPosition, SIGNATURE_LEN,
-        SetChunkCacheCenter, SetChunkCacheRadius,
+        COMMAND_MAX_CHARS, ConfigurationAcknowledged, ContainerClose, ContainerSetData, JoinGame,
+        KeepAlive, LightData, LightUpdate, MENU_FURNACE, MENU_GENERIC_9X3, MENU_GENERIC_9X6,
+        MENU_HOPPER, OpenScreen, PlayDisconnect, PlayIntent, PlayPingRequest, PlayPong,
+        PlayerPosition, SIGNATURE_LEN, SetChunkCacheCenter, SetChunkCacheRadius, SetCursorItem,
     };
     use crate::packets::Packet;
     use crate::text::TextComponent;
@@ -5433,5 +5627,63 @@ mod tests {
         assert!(ContainerSetContent::decode(&body[..6]).is_err());
         // And a count that exceeds the frame is refused before allocating.
         assert!(ContainerSetContent::decode(&[0x00, 0x02, 0xFF, 0xFF, 0x7F]).is_err());
+    }
+
+    #[test]
+    fn open_screen_round_trip_and_menu_type_is_a_varint_registry_id() {
+        // Single chest: window 1, menu 2 (generic_9x3), title "Chest".
+        // Wire: VarInt 1, VarInt 2, then network NBT TAG_String "Chest"
+        // (0x08 tag, 0x00 0x05 length, bytes) — the same Component encoding
+        // SystemChat uses, verified against the jar's TRUSTED_STREAM_CODEC slot.
+        let packet = OpenScreen {
+            window_id: 1,
+            menu_type: MENU_GENERIC_9X3,
+            title: TextComponent::literal("Chest"),
+        };
+        assert_eq!(MENU_GENERIC_9X3, 2);
+        assert_eq!(MENU_GENERIC_9X6, 5);
+        assert_eq!(MENU_FURNACE, 14);
+        assert_eq!(MENU_HOPPER, 16);
+        let body = packet.encode().expect("encodes");
+        assert_eq!(
+            body,
+            [0x01, 0x02, 0x08, 0x00, 0x05, b'C', b'h', b'e', b's', b't']
+        );
+        assert_eq!(OpenScreen::decode(&body).expect("decodes"), packet);
+        assert!(OpenScreen::decode(&[0x01]).is_err());
+        assert!(OpenScreen::decode(&[0x01, 0x02]).is_err());
+    }
+
+    #[test]
+    fn container_set_data_round_trip_and_short_widths() {
+        // Furnace cook progress: window 1, property 2, value 100.
+        // Wire: VarInt 1, i16-be 2, i16-be 100 — readShort/writeShort in the jar.
+        let packet = ContainerSetData {
+            window_id: 1,
+            property: 2,
+            value: 100,
+        };
+        let body = packet.encode().expect("encodes");
+        assert_eq!(body, [0x01, 0x00, 0x02, 0x00, 0x64]);
+        assert_eq!(ContainerSetData::decode(&body).expect("decodes"), packet);
+        assert!(ContainerSetData::decode(&[0x01, 0x00]).is_err());
+        assert!(ContainerSetData::decode(&[0x01, 0x00, 0x02, 0x00]).is_err());
+    }
+
+    #[test]
+    fn container_close_and_set_cursor_round_trip() {
+        let close = ContainerClose { window_id: 1 };
+        let body = close.encode().expect("encodes");
+        assert_eq!(body, [0x01]);
+        assert_eq!(ContainerClose::decode(&body).expect("decodes"), close);
+        assert!(ContainerClose::decode(&[]).is_err());
+
+        let cursor = SetCursorItem {
+            item: ItemStack::simple(5, 3),
+        };
+        let body = cursor.encode().expect("encodes");
+        assert_eq!(body, [0x05, 0x03, 0x00]);
+        assert_eq!(SetCursorItem::decode(&body).expect("decodes"), cursor);
+        assert!(SetCursorItem::decode(&[0x05]).is_err());
     }
 }

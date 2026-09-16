@@ -263,8 +263,16 @@ pub mod clientbound {
         pub const CHUNK_BATCH_START: i32 = 12;
         /// `minecraft:container_set_content`
         pub const CONTAINER_SET_CONTENT: i32 = 18;
+        /// `minecraft:container_set_data` — furnace progress (property/value as shorts).
+        pub const CONTAINER_SET_DATA: i32 = 19;
         /// `minecraft:container_set_slot`
         pub const CONTAINER_SET_SLOT: i32 = 20;
+        /// `minecraft:container_close` (clientbound: ask the client to close a window).
+        pub const CONTAINER_CLOSE: i32 = 17;
+        /// `minecraft:open_screen` — open a non-zero window (container id, menu type, title).
+        pub const OPEN_SCREEN: i32 = 59;
+        /// `minecraft:set_cursor_item` — the cursor stack outside any window payload.
+        pub const SET_CURSOR_ITEM: i32 = 96;
         /// `minecraft:disconnect`
         pub const DISCONNECT: i32 = 32;
         /// `minecraft:game_event` (weather, gamemode, …)
