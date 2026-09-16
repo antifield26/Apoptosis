@@ -370,9 +370,20 @@ refused every step would pass the other two tests.
 breaks instantly on `START_DESTROY_BLOCK` rather than accumulating vanilla's destroy
 progress, entities in unmodified chunks are still not persisted, the zombie's
 `FOLLOW_RANGE` is still the jar-measured default 16 rather than its 35 override, and
-the four claims the acceptance round was meant to settle — a real client seeing a
+the claims the acceptance round was meant to settle — a real client seeing a
 *picked-up* item leave the ground, a death and its respawn, and a re-join after a
 restart — are still the reason P11-10 exists.
+
+**And the standard of proof for M-1 and M-2 is named, because it is not the
+strongest one available.** Both were settled against the client's *bytecode* —
+`javap -c -p` on `CommonPlayerSpawnInfo`, `ClientboundRespawnPacket`,
+`BlockStatePredictionHandler` and `ServerGamePacketListenerImpl` — and pinned by
+tests that fail when the fix is reverted. That is a real instrument, and it is the
+instrument that found both defects. It is **not** a running client: no 26.1.2 client
+has yet decoded our new `respawn` body or applied a `block_update` through a
+`block_changed_ack` we sent. The re-acceptance round is the step that would say so,
+it needs a person at the keyboard, and it has **not been run** — so this section
+claims the bytecode and the tests, and nothing about a screen.
 
 ## Unreleased — Phase 10 (client compatibility and rendering)
 
