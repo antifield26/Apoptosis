@@ -621,6 +621,128 @@ fn tp_above_surface_does_not_embed_and_death_respawns_from_there() {
     );
 }
 
+/// P12-09: closing a chest returns the cursor and restores the player menu.
+///
+/// Picks up a chest stack onto the cursor, closes the window through the real
+/// `container_close` path, and asserts the cursor lands back in the inventory
+/// (nothing is lost), the window is 0 again, and the cursor is empty.
+#[test]
+fn closing_a_chest_returns_the_cursor() {
+    let mut harness = Harness::new("p12-close");
+    let (sx, sy, sz) = harness.build_floor();
+    let mut out = harness.join("Closer");
+    let chest = harness
+        .game
+        .registries()
+        .blocks
+        .default_state("minecraft:chest")
+        .expect("chest block");
+    let at = (sx + 1, sy, sz);
+    harness
+        .game
+        .world_mut()
+        .set_block(at.0, at.1, at.2, chest)
+        .expect("place chest");
+    let _ = Harness::drain_ids(&mut out);
+    harness.intent(PlayIntent::UseItemOn {
+        hand: 0,
+        position: block_position(at.0, at.1, at.2),
+        face: 1,
+        cursor_x: 0.5,
+        cursor_y: 1.0,
+        cursor_z: 0.5,
+        inside_block: false,
+        sequence: 41,
+    });
+    let window = i32::from(
+        harness
+            .game
+            .menu_window_id(harness.id)
+            .expect("a chest window"),
+    );
+    let stone = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:stone")
+        .expect("stone");
+    {
+        let player = harness.game.player_mut(harness.id).expect("player");
+        player
+            .inventory
+            .set_slot(
+                0,
+                mc_entity::stack::ItemStack::new(stone, 16).expect("stack"),
+            )
+            .expect("give stones");
+    }
+    // Move into the chest, then pick one stack back onto the cursor.
+    for slot in [54, 0] {
+        let state = harness.game.menu_state_id(harness.id).expect("state");
+        let click_type = i32::from(slot == 54);
+        harness.intent(PlayIntent::ContainerClick {
+            window_id: window,
+            state_id: state,
+            slot,
+            button: 0,
+            click_type,
+        });
+    }
+    assert!(
+        !harness
+            .game
+            .menu_cursor(harness.id)
+            .expect("a cursor")
+            .is_empty(),
+        "picking up from the chest must leave the stack on the cursor"
+    );
+    let state = harness.game.menu_state_id(harness.id).expect("state");
+    let window_u8 = harness
+        .game
+        .menu_window_id(harness.id)
+        .expect("a chest window");
+    harness.intent(PlayIntent::ContainerClose {
+        window_id: window_u8,
+    });
+    assert_eq!(
+        harness.game.menu_window_id(harness.id),
+        Some(0),
+        "closing must restore window 0"
+    );
+    assert!(
+        harness
+            .game
+            .menu_cursor(harness.id)
+            .expect("a cursor")
+            .is_empty(),
+        "closing must empty the cursor"
+    );
+    let total: i64 = (0..harness
+        .game
+        .player(harness.id)
+        .expect("player")
+        .inventory
+        .stored_slots())
+        .map(|i| {
+            i64::from(
+                harness
+                    .game
+                    .player(harness.id)
+                    .expect("player")
+                    .inventory
+                    .slot(i)
+                    .count(),
+            )
+        })
+        .sum();
+    assert_eq!(
+        total, 16,
+        "the cursor stack must return to the inventory, saw {total}"
+    );
+    let _ = state;
+    let _ = Harness::drain_ids(&mut out);
+}
+
 /// P12-06: breaking a chest drops its contents instead of destroying them.
 ///
 /// Fills a chest with stones through its block entity (the honest setup: the

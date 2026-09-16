@@ -3853,10 +3853,66 @@ impl Game {
                 );
             }
             PlayIntent::ContainerClose { window_id } => {
-                // Closing the player's own inventory is a no-op: it cannot be
-                // closed. Closing anything else is P06-03's job (other menus do not
-                // exist yet), and saying so beats a silent success.
-                debug!(id = %id, window_id, "container close (only the player menu exists)");
+                // Closing window 0 is a no-op (the player inventory cannot be
+                // closed). Closing a block window flushes its block half,
+                // returns the cursor to the inventory (dropping what does not
+                // fit at the player's feet), and restores the player menu.
+                // A stale or foreign window id is ignored after the flush
+                // check: the close is idempotent, like vanilla's.
+                let open = self.sessions.get(&id).and_then(|s| s.open_block);
+                let current_window = self.sessions.get(&id).map(|s| s.menu.window_id());
+                if open.is_none() || current_window == Some(0) {
+                    return Ok(());
+                }
+                if let Some(expected) = current_window
+                    && window_id != expected
+                {
+                    debug!(id = %id, window_id, "ignoring a close for a stale window");
+                    return Ok(());
+                }
+                // Flush the block half before discarding the menu.
+                if let Some(pos) = open {
+                    let menu = &self.sessions.get(&id).expect("session").menu;
+                    if let Some(entity) = self.block_entities.get_mut(pos) {
+                        write_back_block(menu, entity);
+                        mark_block_dirty(&mut self.world, pos.x, pos.z);
+                    }
+                }
+                // Cursor first, so a failed inventory write can still drop it.
+                let cursor = self
+                    .sessions
+                    .get(&id)
+                    .map_or(mc_entity::stack::ItemStack::EMPTY, |s| s.menu.cursor());
+                let leftover = if cursor.is_empty() {
+                    mc_entity::stack::ItemStack::EMPTY
+                } else if let Some(session) = self.sessions.get_mut(&id) {
+                    session.player.inventory.add_stack(cursor)
+                } else {
+                    cursor
+                };
+                if !leftover.is_empty() {
+                    let position = self
+                        .sessions
+                        .get(&id)
+                        .map_or(mc_entity::player::Vec3::default(), |s| s.player.position);
+                    let _ = self.spawn_item(leftover, to_world(position));
+                }
+                // Restore the player menu.
+                match self.new_player_menu() {
+                    Ok(mut menu) => {
+                        if let Some(session) = self.sessions.get_mut(&id) {
+                            mirror_inventory(&mut menu, &session.player.inventory);
+                            menu.set_creative(session.player.game_mode.is_creative());
+                            // The cursor lived outside the window; it is empty now.
+                            menu.set_cursor(mc_entity::stack::ItemStack::EMPTY);
+                            session.menu = menu;
+                            session.open_block = None;
+                        }
+                    }
+                    Err(error) => {
+                        debug!(id = %id, %error, "could not restore the player menu on close");
+                    }
+                }
             }
             // A real client closes each of its own ticks with `client_tick_end`
             // (911 captured bodies, all empty). The server's tick is its own
@@ -4493,13 +4549,11 @@ impl Game {
             }
         }
 
-        // The cursor is not part of the window payload, so a change to it needs its
-        // own update: Vanilla sends it as slot -1 in the player window.
+        // The cursor is not part of the window payload, so a change to it needs
+        // its own update: vanilla's `set_cursor_item` (clientbound 96, a single
+        // optional stack — jar-verified). The old slot -1 form is not sent.
         if outcome.cursor_changed {
-            let packet = ContainerSetSlot {
-                window_id: window,
-                state_id: state,
-                slot: -1,
+            let packet = mc_protocol::packets::play::SetCursorItem {
                 item: wire_stack(cursor),
             };
             if let Err(error) = self.send(id, &packet, report) {
