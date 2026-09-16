@@ -621,6 +621,76 @@ fn tp_above_surface_does_not_embed_and_death_respawns_from_there() {
     );
 }
 
+/// P12-06: breaking a chest drops its contents instead of destroying them.
+///
+/// Fills a chest with stones through its block entity (the honest setup: the
+/// chest was opened and transacted in P12-02), digs it, and asserts the stones
+/// come back as ground items and the entity is gone. Closes the P06 "items
+/// lost on break" gap.
+#[test]
+fn breaking_a_chest_drops_its_contents() {
+    let mut harness = Harness::new("p12-break");
+    let (sx, sy, sz) = harness.build_floor();
+    let mut out = harness.join("Breaker");
+    let chest = harness
+        .game
+        .registries()
+        .blocks
+        .default_state("minecraft:chest")
+        .expect("chest block");
+    let at = (sx + 1, sy, sz);
+    harness
+        .game
+        .world_mut()
+        .set_block(at.0, at.1, at.2, chest)
+        .expect("place chest");
+    harness.game.tick().expect("create entity");
+    let stone = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:stone")
+        .expect("stone");
+    {
+        let entity = harness
+            .game
+            .block_entities_mut()
+            .get_mut(mc_container::BlockPos::new(at.0, at.1, at.2))
+            .expect("chest entity");
+        let items = entity.data.items_mut().expect("chest items");
+        items[0] = mc_entity::stack::ItemStack::new(stone, 12).expect("stack");
+    }
+    let _ = Harness::drain_ids(&mut out);
+    // Instant survival dig (P04 rule): START_DESTROY_BLOCK breaks at once.
+    harness.intent(PlayIntent::PlayerAction {
+        status: 0,
+        position: block_position(at.0, at.1, at.2),
+        facing: 1,
+        sequence: 31,
+    });
+    // One more tick so drops spawned during the broadcast are announced.
+    harness.game.tick().expect("settle");
+    assert!(
+        harness
+            .game
+            .block_entities()
+            .get(mc_container::BlockPos::new(at.0, at.1, at.2))
+            .is_none(),
+        "breaking a chest must retire its entity"
+    );
+    let stone_drops: i64 = harness
+        .game
+        .dropped_items()
+        .iter()
+        .filter(|(stack, _)| stack.item_id() == Some(stone))
+        .map(|(stack, _)| i64::from(stack.count()))
+        .sum();
+    assert!(
+        stone_drops >= 12,
+        "the chest's 12 stones must drop (alongside loot), saw {stone_drops}"
+    );
+}
+
 /// P12-02: chest transactions on a non-zero window conserve items.
 ///
 /// Opens a chest, puts 64 stones in the player's hotbar, shift-clicks them

@@ -3262,6 +3262,7 @@ impl Game {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn broadcast_block_changes(&mut self, report: &mut TickReport) -> ServerResult<()> {
         let changes = self.world.take_block_changes();
         for change in changes {
@@ -3292,19 +3293,79 @@ impl Game {
                 self.block_entities
                     .insert(mc_container::BlockEntity::new(pos, entity_kind));
             } else if !new_is_container && let Some(retired) = self.block_entities.remove(pos) {
-                let dropped = retired.data.total_items();
-                if dropped > 0 {
-                    // The items themselves are not spawned one-by-one here: doing so
-                    // needs a per-item position and is P06-08's hopper/drop work.
-                    // Reporting the count keeps the loss visible rather than silent.
-                    info!(
-                        %pos,
-                        kind = retired.kind().name(),
-                        items = dropped,
-                        "block entity retired with contents; they are not yet dropped"
+                // P12-06: breaking a container drops its contents (closes the P06
+                // "items lost on break" gap). Each non-empty stack becomes a ground
+                // item at the block centre, alongside the loot-table drops the
+                // break path already spawned.
+                if let Some(items) = retired.data.items() {
+                    let centre = Vec3::new(
+                        f64::from(change.x) + 0.5,
+                        f64::from(change.y) + 0.5,
+                        f64::from(change.z) + 0.5,
                     );
+                    for stack in items.iter().filter(|s| !s.is_empty()) {
+                        if let Err(error) = self.spawn_item(*stack, centre) {
+                            warn!(%pos, %error, "a broken container's item could not be spawned");
+                        }
+                    }
                 }
                 report.block_entities_changed += 1;
+                // Viewers of the broken block get their window closed and their
+                // player menu restored: the block half they were transacting
+                // against no longer exists.
+                let viewers: Vec<(ConnectionId, i32)> = self
+                    .sessions
+                    .iter()
+                    .filter(|(_, s)| s.open_block == Some(pos))
+                    .map(|(id, s)| (*id, i32::from(s.menu.window_id())))
+                    .collect();
+                for (id, window) in viewers {
+                    // Rebuild the player menu first so the close below cannot
+                    // strand the session without a window.
+                    let rebuilt = self.new_player_menu();
+                    match rebuilt {
+                        Ok(mut menu) => {
+                            if let Some(session) = self.sessions.get_mut(&id) {
+                                mirror_inventory(&mut menu, &session.player.inventory);
+                                menu.set_creative(session.player.game_mode.is_creative());
+                                session.menu = menu;
+                                session.open_block = None;
+                            }
+                        }
+                        Err(error) => {
+                            debug!(id = %id, %error, "could not rebuild the player menu after a break");
+                            continue;
+                        }
+                    }
+                    let _ = self.send(
+                        id,
+                        &mc_protocol::packets::play::ContainerClose { window_id: window },
+                        report,
+                    );
+                    // And the restored player contents, so the client is not left
+                    // showing the chest it just lost.
+                    if let Some(session) = self.sessions.get(&id) {
+                        let contents: Vec<mc_protocol::packets::play::ItemStack> = session
+                            .menu
+                            .full_contents()
+                            .iter()
+                            .copied()
+                            .map(wire_stack)
+                            .collect();
+                        let state = session.menu.state_id();
+                        let cursor = session.menu.cursor();
+                        let _ = self.send(
+                            id,
+                            &ContainerSetContent {
+                                window_id: 0,
+                                state_id: state,
+                                slots: contents,
+                                carried: wire_stack(cursor),
+                            },
+                            report,
+                        );
+                    }
+                }
             }
             let packet = BlockUpdate {
                 position: block_position(change.x, change.y, change.z),
