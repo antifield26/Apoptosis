@@ -82,6 +82,19 @@ pub fn torch(registry: &BlockRegistry, lit: bool) -> i32 {
         .unwrap_or_else(|error| panic!("torch lit={lit} must resolve: {error}"))
 }
 
+/// The state id of a wall torch facing `facing`, lit or not.
+pub fn wall_torch(registry: &BlockRegistry, facing: &str, lit: bool) -> i32 {
+    registry
+        .state_id(
+            "minecraft:redstone_wall_torch",
+            &[
+                ("facing".to_owned(), facing.to_owned()),
+                ("lit".to_owned(), lit.to_string()),
+            ],
+        )
+        .unwrap_or_else(|error| panic!("wall torch {facing}/{lit} must resolve: {error}"))
+}
+
 /// The state id of a redstone wire at `power`.
 pub fn wire(registry: &BlockRegistry, power: PowerLevel) -> i32 {
     table(registry)
