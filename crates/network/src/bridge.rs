@@ -221,6 +221,15 @@ pub enum ClientEventKind {
         /// Packet id.
         packet_id: i32,
     },
+    /// The client's view-distance setting changed (P14-04).
+    ///
+    /// Carried as an event rather than an intent because it configures the
+    /// connection's streaming, not the simulation: the game clamps it to the
+    /// server maximum and confirms with `set_chunk_cache_radius`.
+    ViewDistance {
+        /// The client's requested radius, in chunks.
+        distance: i8,
+    },
     /// The connection ended.
     Left,
 }

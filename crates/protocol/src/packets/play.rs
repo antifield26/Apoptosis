@@ -387,7 +387,6 @@ pub struct SetChunkCacheRadius {
     /// View distance in chunks.
     pub radius: i32,
 }
-
 impl Packet for SetChunkCacheRadius {
     const ID: i32 = clientbound::play::SET_CHUNK_CACHE_RADIUS;
 
@@ -400,6 +399,45 @@ impl Packet for SetChunkCacheRadius {
     fn encode(&self) -> ServerResult<Vec<u8>> {
         let mut writer = PacketWriter::new();
         writer.write_varint(self.radius);
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:forget_level_chunk` (clientbound 37).
+///
+/// One packed long, big-endian: the chunk x in the low 32 bits, z in the
+/// high 32 (`ChunkPos.pack`, bytecode-read from the 26.1.2 jar, P14-04).
+/// Tells the client to drop a chunk the server unloaded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ForgetLevelChunk {
+    /// Chunk x.
+    pub x: i32,
+    /// Chunk z.
+    pub z: i32,
+}
+
+impl ForgetLevelChunk {
+    /// Pack chunk coordinates the way the jar's `ChunkPos.pack` does.
+    #[must_use]
+    pub const fn pack(x: i32, z: i32) -> i64 {
+        ((x as u64 & 0xFFFF_FFFF) | ((z as u64 & 0xFFFF_FFFF) << 32)) as i64
+    }
+}
+
+impl Packet for ForgetLevelChunk {
+    const ID: i32 = clientbound::play::FORGET_LEVEL_CHUNK;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let packed = PacketReader::new(payload).read_i64()?;
+        Ok(Self {
+            x: packed as i32,
+            z: (packed >> 32) as i32,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_i64(Self::pack(self.x, self.z));
         Ok(writer.finish())
     }
 }
@@ -3822,10 +3860,11 @@ impl PlayIntent {
 #[cfg(test)]
 mod tests {
     use super::{
-        COMMAND_MAX_CHARS, ConfigurationAcknowledged, ContainerClose, ContainerSetData, JoinGame,
-        KeepAlive, LightData, LightUpdate, MENU_FURNACE, MENU_GENERIC_9X3, MENU_GENERIC_9X6,
-        MENU_HOPPER, OpenScreen, PlayDisconnect, PlayIntent, PlayPingRequest, PlayPong,
-        PlayerPosition, SIGNATURE_LEN, SetChunkCacheCenter, SetChunkCacheRadius, SetCursorItem,
+        COMMAND_MAX_CHARS, ConfigurationAcknowledged, ContainerClose, ContainerSetData,
+        ForgetLevelChunk, JoinGame, KeepAlive, LightData, LightUpdate, MENU_FURNACE,
+        MENU_GENERIC_9X3, MENU_GENERIC_9X6, MENU_HOPPER, OpenScreen, PlayDisconnect, PlayIntent,
+        PlayPingRequest, PlayPong, PlayerPosition, SIGNATURE_LEN, SetChunkCacheCenter,
+        SetChunkCacheRadius, SetCursorItem,
     };
     use crate::packets::Packet;
     use crate::text::TextComponent;
@@ -4174,6 +4213,37 @@ mod tests {
             SetChunkCacheRadius::decode(&radius.encode().expect("encodes")).expect("decodes"),
             radius
         );
+    }
+
+    #[test]
+    fn forget_level_chunk_packs_x_low_z_high() {
+        use crate::ids::clientbound;
+        assert_eq!(
+            ForgetLevelChunk::ID,
+            37,
+            "jar game_clientbound table row 37"
+        );
+        assert_eq!(ForgetLevelChunk::ID, clientbound::play::FORGET_LEVEL_CHUNK);
+        // Bytecode-read `ChunkPos.pack`: x in the low 32 bits, z in the high
+        // 32, one big-endian long. (1, 2) -> 00 00 00 02 00 00 00 01.
+        let packet = ForgetLevelChunk { x: 1, z: 2 };
+        assert_eq!(
+            packet.encode().expect("encodes"),
+            vec![0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01]
+        );
+        assert_eq!(
+            ForgetLevelChunk::decode(&packet.encode().expect("encodes")).expect("decodes"),
+            packet
+        );
+        // Negative coordinates survive the pack (sign-extended halves).
+        for (x, z) in [(-1, -1), (-33, 17), (i32::MIN, i32::MAX)] {
+            let packet = ForgetLevelChunk { x, z };
+            assert_eq!(
+                ForgetLevelChunk::decode(&packet.encode().expect("encodes")).expect("decodes"),
+                packet,
+                "({x}, {z}) must round-trip"
+            );
+        }
     }
 
     #[test]

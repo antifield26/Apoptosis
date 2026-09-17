@@ -189,11 +189,11 @@ use mc_protocol::RawPacket;
 use mc_protocol::packets::Packet;
 use mc_protocol::packets::play::{
     BIOMES_PER_SECTION, BlockChangedAck, BlockUpdate, ChunkSection, ContainerSetContent,
-    ContainerSetData, ContainerSetSlot, GameEvent, HEIGHTMAP_WORLD_SURFACE, Heightmap,
-    LevelChunkWithLight, LightUpdate, MENU_FURNACE, MENU_GENERIC_9X3, MENU_HOPPER,
+    ContainerSetData, ContainerSetSlot, ForgetLevelChunk, GameEvent, HEIGHTMAP_WORLD_SURFACE,
+    Heightmap, LevelChunkWithLight, LightUpdate, MENU_FURNACE, MENU_GENERIC_9X3, MENU_HOPPER,
     NETWORK_BIOME_MIN_BITS, OpenScreen, PalettedContainer as WireContainer, PlayDisconnect,
-    PlayIntent, PlayerPosition, Respawn, SetDefaultSpawnPosition, SetExperience, SetHealth,
-    SetHeldSlot, SetTime, block_position, unpack_block_position,
+    PlayIntent, PlayerPosition, Respawn, SetChunkCacheRadius, SetDefaultSpawnPosition,
+    SetExperience, SetHealth, SetHeldSlot, SetTime, block_position, unpack_block_position,
 };
 use mc_protocol::text::TextComponent;
 use mc_registry::Registries;
@@ -706,6 +706,14 @@ pub(crate) struct Session {
     outbound: OutboundSender,
     /// Chunks already sent, so streaming is incremental.
     sent_chunks: BTreeSet<ChunkPos>,
+    /// The view distance this session streams at (P14-04).
+    ///
+    /// Starts at the server maximum and follows the client's
+    /// `client_information` setting down from there (never up: the server
+    /// maximum caps it, like Vanilla). Streaming and unloading both read
+    /// this, so a client that turns its distance down stops receiving far
+    /// chunks and is told to forget the ones it had.
+    view_distance: i32,
     /// Position at the start of this tick, for fall-damage accounting.
     tick_start_y: f64,
     /// What this connection is permitted to do.
@@ -3214,7 +3222,7 @@ impl Game {
         self.stream_all(report)?;
         self.send_world_time(report, tick)?;
         self.sweep_entity_removals(report)?;
-        self.unload_distant_chunks();
+        self.unload_distant_chunks(report)?;
         Ok(())
     }
 
@@ -3675,6 +3683,9 @@ impl Game {
             ClientEventKind::Unmodelled { packet_id } => {
                 debug!(id = %event.id, packet_id, "unmodelled play packet");
             }
+            ClientEventKind::ViewDistance { distance } => {
+                self.apply_view_distance(event.id, distance, report)?;
+            }
             ClientEventKind::Left => self.leave(event.id),
         }
         Ok(())
@@ -3806,6 +3817,7 @@ impl Game {
                 permission: self.operators.level_for(&profile.id.to_string()),
                 name: profile.name.clone(),
                 uuid: profile.id.to_string(),
+                view_distance: self.view_distance,
                 menu,
                 next_window: 1,
                 open_block: None,
@@ -6636,7 +6648,7 @@ impl Game {
             return Ok(());
         };
         let centre = session.chunk();
-        let radius = self.view_distance;
+        let radius = session.view_distance;
         let mut wanted: Vec<ChunkPos> = Vec::new();
         for dx in -radius..=radius {
             for dz in -radius..=radius {
@@ -6801,33 +6813,42 @@ impl Game {
     /// ~384 KiB), so a long walk is an unbounded memory leak. The rule is simple and
     /// deliberately conservative:
     ///
-    /// - keep anything within `view_distance + UNLOAD_MARGIN_CHUNKS` of any player;
+    /// - keep anything within `view_distance + UNLOAD_MARGIN_CHUNKS` of any player
+    ///   (each session's own radius, since P14-04);
     /// - never unload a **dirty** chunk — it holds edits that are not on disk yet,
     ///   and only [`Game::save_all`] persists those;
-    /// - drop the position from every player's `sent_chunks`, so walking back
-    ///   re-streams the chunk instead of leaving a hole in the client's view.
+    /// - tell every player that had the chunk to forget it
+    ///   (`forget_level_chunk`, P14-04), and drop it from their `sent_chunks`,
+    ///   so walking back re-streams the chunk instead of leaving the client's
+    ///   stale copy — or a hole — in the view.
     ///
     /// Nothing else holds a chunk index, so unloading cannot dangle: block changes
     /// carry their own coordinates and are re-resolved when broadcast.
-    fn unload_distant_chunks(&mut self) {
+    fn unload_distant_chunks(&mut self, report: &mut TickReport) -> ServerResult<()> {
         if self.sessions.is_empty() {
             // Nobody to keep chunks for. This is the headless/test shape, where
             // unloading would silently discard the world a test just built.
-            return;
+            return Ok(());
         }
-        let radius = self.view_distance.saturating_add(UNLOAD_MARGIN_CHUNKS);
-        // Player chunk centres, collected before the loop so the sessions can be
-        // mutated (their `sent_chunks`) inside it.
-        let centres: Vec<(i32, i32)> = self
+        // Player chunk centres with their own radii, collected before the loop
+        // so the sessions can be mutated (their `sent_chunks`) inside it.
+        let centres: Vec<(i32, i32, i32)> = self
             .sessions
             .values()
             .map(|session| {
                 let centre = session.chunk();
-                (centre.x, centre.z)
+                (
+                    centre.x,
+                    centre.z,
+                    session.view_distance.saturating_add(UNLOAD_MARGIN_CHUNKS),
+                )
             })
             .collect();
         let loaded: Vec<ChunkPos> = self.world.chunk_positions().collect();
         let mut removed = 0usize;
+        // (session, chunk) pairs the client must forget, collected before any
+        // send borrows the sessions.
+        let mut forgets: Vec<(ConnectionId, ChunkPos)> = Vec::new();
         for pos in loaded {
             if self.world.chunk(pos).is_some_and(|chunk| chunk.dirty) {
                 trace!(?pos, "keeping a dirty chunk outside the view distance");
@@ -6835,7 +6856,7 @@ impl Game {
             }
             let wanted = centres
                 .iter()
-                .any(|(x, z)| (pos.x - x).abs() <= radius && (pos.z - z).abs() <= radius);
+                .any(|(x, z, radius)| (pos.x - x).abs() <= *radius && (pos.z - z).abs() <= *radius);
             if wanted {
                 continue;
             }
@@ -6852,12 +6873,51 @@ impl Game {
                 self.placeholder_without_storage.remove(&pos);
             }
             for session in self.sessions.values_mut() {
-                session.sent_chunks.remove(&pos);
+                if session.sent_chunks.remove(&pos) {
+                    forgets.push((session.id, pos));
+                }
             }
+        }
+        for (id, pos) in forgets {
+            let packet = ForgetLevelChunk { x: pos.x, z: pos.z };
+            self.send(id, &packet, report)?;
         }
         if removed > 0 {
             trace!(removed, "unloaded chunks outside the view distance");
         }
+        Ok(())
+    }
+
+    /// Apply a client's view-distance setting (P14-04).
+    ///
+    /// Clamped to `2..=server maximum`: Vanilla lets the client ask for less
+    /// than the server runs, never more. A change is confirmed with
+    /// `set_chunk_cache_radius` (the client renders to the confirmed radius)
+    /// and takes effect on the next stream/unload pass, which both read the
+    /// session radius. An unknown session is ignored — settings can arrive
+    /// before the join is applied.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Invariant`] when the confirm packet cannot be encoded,
+    /// like every other send path.
+    fn apply_view_distance(
+        &mut self,
+        id: ConnectionId,
+        distance: i8,
+        report: &mut TickReport,
+    ) -> ServerResult<()> {
+        let radius = i32::from(distance).clamp(2, self.view_distance);
+        let Some(session) = self.sessions.get_mut(&id) else {
+            return Ok(());
+        };
+        if session.view_distance == radius {
+            return Ok(());
+        }
+        session.view_distance = radius;
+        let packet = SetChunkCacheRadius { radius };
+        self.send(id, &packet, report)?;
+        Ok(())
     }
 
     /// Build the `level_chunk_with_light` packet for a runtime chunk.

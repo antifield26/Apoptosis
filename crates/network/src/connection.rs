@@ -576,6 +576,12 @@ impl Session {
                 let info = ClientInformation::decode(&packet.payload)?;
                 self.client_locale = Some(info.locale);
                 self.client_view_distance = Some(info.view_distance);
+                // P14-04: the game owns streaming, so a settings change is an
+                // event, not a local field. Unknown sessions are ignored
+                // there; an unattached loop drops it here.
+                self.report(crate::bridge::ClientEventKind::ViewDistance {
+                    distance: info.view_distance,
+                });
             }
             serverbound::play::CONFIGURATION_ACKNOWLEDGED => {
                 ConfigurationAcknowledged::decode(&packet.payload)?;
@@ -618,6 +624,14 @@ impl Session {
             tracing::warn!(%id, "game loop queue is full; the player cannot be served");
         }
         self.event_sender = Some(sender);
+        // P14-04: the configuration-phase settings arrived before play, so
+        // the game never saw them. Forward the view distance now that reports
+        // have somewhere to go (this assignment is why the forward sits after
+        // it, not before); play-phase changes arrive through the
+        // CLIENT_INFORMATION arm above.
+        if let Some(distance) = self.client_view_distance {
+            self.report(crate::bridge::ClientEventKind::ViewDistance { distance });
+        }
         self.joined = true;
         Some(receiver)
     }

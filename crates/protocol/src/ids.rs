@@ -281,6 +281,8 @@ pub mod clientbound {
         pub const KEEP_ALIVE: i32 = 44;
         /// `minecraft:level_chunk_with_light`
         pub const LEVEL_CHUNK_WITH_LIGHT: i32 = 45;
+        /// `minecraft:forget_level_chunk` — drop one chunk (packed long: x low, z high).
+        pub const FORGET_LEVEL_CHUNK: i32 = 37;
         /// `minecraft:light_update`
         ///
         /// Carries the same light data as the tail of `level_chunk_with_light`, but with **`VarInt`**
