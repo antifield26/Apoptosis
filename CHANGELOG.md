@@ -3,13 +3,124 @@
 All notable changes to this project are documented here. The project keeps a
 linear history on `main`; this file distills it per phase. The complete
 per-phase reports and five adversarial audits that this file condenses live in
-git history — the pre-governance snapshot (which still contains them as files)
+git history —the pre-governance snapshot (which still contains them as files)
 is the tag **`phase-09-final`** (`git show phase-09-final:docs/phases/…`).
 
 Format follows [Keep a Changelog](https://keepachangelog.com/) in spirit. The first
 entry is the release candidate matching the workspace version (`0.1.0` in
 [Cargo.toml](Cargo.toml)); it is **published** as tag `v0.1.0-rc.1` with built
 artifacts, and no later version has been released.
+
+## Unreleased — Phase 14 (Usability & 0.2.0)
+
+### P14-01 — the admin command set
+
+`/gamemode`, `/give`, `/kill`, `/seed` and `/difficulty`, all operator-only
+like Vanilla's level 2. `/gamemode` takes full names plus the `s`/`c`/`a`/`sp`
+shortcuts and mirrors the mode into the menu's creative flag the way join and
+respawn do; `/give` caps at one stack and drops overflow at the player's feet
+(Vanilla's rule); `/kill` bypasses creative invulnerability through a new
+`Player::kill` and runs the normal death path (drops + message); `/seed`
+reports the simulation seed; `/difficulty` queries and sets (persisted to
+`level.dat`, honoured by the monster-spawn gate — peaceful nights spawn
+nothing over 300 cycles — while damage numbers stay the hardcoded Normal
+values). Targets are self-only, sharing `/tp`'s limitation and its refusal.
+`admin_commands.rs` proves all five end to end (mode field, inventory counts,
+death in creative, seed text, level.dat round-trip through a reopen).
+
+### P14-02 — `/op` and `/deop` persist `ops.json` (closes KD-33)
+
+Both require level 3, matching Vanilla (`/op` sat at level 2, which let a
+level-2 holder mint level-4 operators). Grants land at level 4 (Vanilla's
+default), apply to the live session, and write the file beside the world;
+a failed write rolls the in-memory change back, so the two never disagree.
+Only online players (uuid from the session, never name matching); re-op is
+idempotent. Proven end to end: live grant, file uuid+level, reload grants
+from the file alone, revoke demotes, level-2 denied, no-directory reports
+instead of granting.
+
+### P14-03 — collision axis order measured and aligned (closes KD-10)
+
+Bytecode-read from the 26.1.2 jar: `Entity.collideWithShapes` resolves axes
+in `Direction.axisStepOrder` order — Y first, then the longer horizontal axis
+(`YXZ=[Y,X,Z]` when `|x|>=|z|`, else `YZX=[Y,Z,X]`). The old parity row
+("Y, then X, then Z") held only on ties. `World::move_with_collision`
+resolves in that order now; two tests pin the observable cells (falling
+diagonally lands before a wall instead of flying over it; the longer axis
+slips past a short wall), both verified to fail on the old order.
+Step-up assist is **deferred with reason**, not skipped silently: with
+full-cube collision a grounded player's feet are always at an integer
+height, so a 0.6 step would never fire, and wiring it now would be
+untestable dead code. Vanilla's `STEP_HEIGHT` default (0.6, jar-read) and
+the candidate-heights loop shape are already on the record for the revisit
+with partial shapes. `maxUpStep` for a self-controlled player is the plain
+attribute (the `max(1.0)` arm is for vehicles' controlling passengers).
+
+### P14-04 — chunk forget packets and runtime view distance
+
+Unloading now sends `forget_level_chunk` 37 (packed long, bytecode-read:
+x low, z high) naming every departed chunk the session had — before, the
+server dropped them from `sent_chunks` silently and the client kept ghosts.
+The client's `client_information` view distance reaches the game as an event
+(it died in the connection before): clamped to the server maximum,
+confirmed with `set_chunk_cache_radius`, honoured per-session by streaming
+and unloading. `chunk_streaming.rs` proves it: teleport-away forgets name
+the spawn chunk, and a radius-2 client receives nothing beyond 2.
+
+### P14-05 — reconnect robustness, server side
+
+Leave removes the session and the broadcast sweep tells every watcher with
+`remove_entities`; rejoin works, including after a full restart (`reconnect`
+e2e). Death and respawn with a real client, and a rejoin finding
+pre-restart state on screen, stay on KD-38's open list: they need a real
+client at a keyboard.
+
+### P14-06 — Pi acceptance soak: NOT RUN
+
+No Raspberry Pi is reachable from this environment and no real Java client
+is at hand, so the mixed real+scripted 10-client soak did not run. The
+`BENCHMARK-BASELINE.md` record stands untouched; nothing here claims the
+verdict.
+
+### P14-07 — release 0.2.0: pending the Pi verdict
+
+No tag is cut: tagging would claim a milestone whose Pi demonstration (P14-06)
+and real-client acceptance have not run. The release workflow is unchanged
+(tag-triggered, x86_64 artifact + checksums, aarch64 built on-device); the
+workspace version stays `0.1.0` until the verdict lands.
+
+### P14-08 — usable-milestone verdict, clause by clause
+
+Against the Phase 14 prompt's milestone definition ("Usability and the 0.2.0
+Milestone": join, loot, mobs, death, chest, chat, ops, Pi soak); anything not
+demonstrated is recorded as not demonstrated.
+
+- Join and see a correctly lit world: **partial**. Join completes (login_play
+  e2e; a real client entered play per KD-38). Correct rendering, including
+  whether the lighting *looks* right, needs a real client: NOT RUN.
+- Break blocks and receive the loot: **demonstrated server-side**
+  (break validation, `loot_and_pickup` drops and pickup). A picked-up item
+  leaving the ground on screen: NOT RUN (KD-38 open).
+- Meet visible hostile mobs at night and fight them: **demonstrated
+  server-side** (`natural_spawn` night hostiles, melee resolution, damage
+  path). Mob rendering and movement on screen stands on KD-38's earlier
+  acceptance round (pig, cow, creeper, spider, zombie); not re-run here.
+- Die and recover drops: **demonstrated server-side** (death drains to
+  ground entities, respawn, `/kill` e2e, pickup mechanics). The full
+  die-respawn-pickup arc on screen: NOT RUN (KD-38 open).
+- Store items in a chest that survives restart: **demonstrated**
+  (`block_entity_e2e` chest restart, P12).
+- Chat with other players: **demonstrated** (chat relay e2e).
+- Operator runs `/gamemode`, `/give`, `/op` and friends: **demonstrated**
+  (`admin_commands` 11 tests: modes, counts, overflow drops, creative kill,
+  seed text, difficulty persist + peaceful gate, grant/revoke/persist/reload,
+  ladder, no-dir fallback).
+- Performance under a mixed real+scripted soak: **NOT RUN** (P14-06).
+- KD-10 collision axis order: **closed** (bytecode + aligned + tests).
+- KD-33 ops.json write path: **closed** (persist + reload + ladder tests).
+
+**Phase verdict: usable except where a real client or a Pi is the
+instrument — five clauses need them, and all five say so above.**
 
 ## Unreleased — Phase 13 (World Systems & Redstone)
 
