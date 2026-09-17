@@ -5,11 +5,11 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 431 passed, 0 failed, 34 ignored** across **112 suites**, re-derived from
-`cargo test --workspace --no-fail-fast` on the P14-04 tree (`python
+Totals: **1 433 passed, 0 failed, 34 ignored** across **113 suites**, re-derived from
+`cargo test --workspace --no-fail-fast` on the P14-05 tree (`python
 tools/gates/run.py --quick`: every gate passed). The count has
 moved 1 194 -> 1 196 -> 1 206 -> 1 207 -> 1 212 -> 1 325 -> 1 344 -> 1 346 -> 1 358 ->
-1 365 -> 1 380 -> 1 384 -> 1 386 -> 1 388 -> 1 389 -> 1 392 -> 1 399 -> 1 412 -> 1 426 -> 1 428 -> **1 431**: three from the Audit 07 remediation, two Audit 08 coverage tests, ten from the
+1 365 -> 1 380 -> 1 384 -> 1 386 -> 1 388 -> 1 389 -> 1 392 -> 1 399 -> 1 412 -> 1 426 -> 1 428 -> 1 431 -> **1 433**: three from the Audit 07 remediation, two Audit 08 coverage tests, ten from the
 `mc-capture-rig` crate (P10-01), one regression test for the
 compression-transition defect (P10-02), the synced-registry work (P10-03), then
 P10-04..11 and P11-01..03, nineteen from the P11-04..09 landing, two from
@@ -52,8 +52,10 @@ world) through the model row by row, and **fourteen from P14-01/02**: eleven
 Y-first landing and the longer-axis-first slip-past (`mc-world` collision,
 both verified to fail on the old X-first order), and **three from P14-04**: the
 `forget_level_chunk` packed-long round trip (`mc-protocol`) plus teleport-away
-forget-by-name and view-distance clamp/confirm/honour (`chunk_streaming` e2e).
-The 34 ignored = the 8 differential
+forget-by-name and view-distance clamp/confirm/honour (`chunk_streaming` e2e),
+and **two from P14-05**: leave-then-rejoin with the entity sweep, and rejoin
+after a full restart (`reconnect` e2e; death/respawn with a real client stays
+on KD-38's open list). The 34 ignored = the 8 differential
 suites in the last section (16 tests) + `vanilla_loot` 3 + `vanilla_chunk_light` 2
 + `vanilla_light_differential` 1 + `light_update_trigger` 1 + `sky_light_surface` 2
 + `terrain_distribution` 3 + `pi_profile` 4 + `tick_baseline` 2 (16+3+2+1+1+2+3+4+2
@@ -63,7 +65,7 @@ suites in the last section (16 tests) + `vanilla_loot` 3 + `vanilla_chunk_light`
 while updating this total. The 17 lib counts sum to **1 037** (`mc-protocol` 113 ->
 **117**, `mc-container` 130 -> **133**, `mc-redstone` 64 -> **66**, `mc-entity` 135 ->
 **136**, `mc-server` 61 -> **63**, `mc-world` 42 -> **44**, rest unchanged), the 5 doc-tests and
-the **389** named-suite tests complete the 1 431 (1 037 + 5 + 389 = 1 431, the third
+the **391** named-suite tests complete the 1 433 (1 037 + 5 + 391 = 1 433, the third
 figure derived from the run total and the other two rather than counted
 independently). Both Audit 07's method and its lesson still apply: the figures must
 be re-measured per crate, because five of them once turned out to be **another
