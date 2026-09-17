@@ -66,7 +66,7 @@ pub fn wire_power_at(world: &FlatWorld, registry: &BlockRegistry, pos: BlockPos)
     // any block that happens to have one.
     match table(registry).classify(id) {
         BlockRole::Wire { stored } => Some(stored.get()),
-        BlockRole::Emitter { .. } | BlockRole::Passive => None,
+        BlockRole::Emitter { .. } | BlockRole::Passive | BlockRole::Mechanism => None,
     }
 }
 

@@ -37,6 +37,19 @@ raw world writes bypass the feed by design (the feed lives on the
 player-action path). Neighbour updates wait for the P13-03 propagation call;
 `redstone_pending` exposes the queue depth.
 
+### P13-03 — the model drives the world: lamps react, changes broadcast
+
+`tick_scheduled` now runs `propagate` after the drain (mirroring
+`run_block_tick`'s orchestration with the drain count retained for the report)
+and reschedules live wires; the report gains `redstone_updates`/
+`redstone_changed`, and every change rides the normal block-change broadcast
+as a `block_update`. A new `BlockRole::Mechanism` drives the redstone lamp —
+lit from any side, emitting nothing — while every other mechanism stays
+`Passive`. End to end (`survival_e2e`): lever—wire—wire—lamp built through
+real placements lights 14/13/lit on flip and goes dark on flip-off, with
+`block_update`s observed. The golden lever—wire—lamp circuit now asserts the
+lit state instead of the old passive pin.
+
 ## Unreleased — Phase 12 (Containers & the Survival Loop)
 
 P12 closes the survival loop around storage: chests, furnaces and hoppers open

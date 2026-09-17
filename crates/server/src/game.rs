@@ -896,6 +896,13 @@ pub struct TickReport {
     /// in this server's logs or state changes when it is missing, and the only
     /// symptom is on a real client's screen (M-2).
     pub block_change_acks: usize,
+    /// Neighbour updates processed by the redstone propagation this tick (P13-03).
+    pub redstone_updates: usize,
+    /// Blocks whose state the redstone propagation changed this tick (P13-03).
+    ///
+    /// Each one rides the normal block-change broadcast, so a powered wire or a
+    /// lit lamp reaches clients as a `block_update` like any other edit.
+    pub redstone_changed: usize,
     /// Block scheduled ticks that came due this tick (P13-01).
     ///
     /// Counted because a tick that stops draining is silent: the queue keeps the
@@ -1714,19 +1721,46 @@ impl Game {
     /// them: an empty tick list and a missing scheduler look identical from the
     /// outside, so the absence is stated rather than stubbed with a placeholder
     /// that would make [`Game::metrics`] look busy.
-    /// Phase 2: drain the block scheduled ticks due this tick (P13-01).
+    /// Phase 2: drain due block ticks, then drive the redstone model (P13-01/03).
     ///
-    /// The queue drains in `(due, position)` order under the nominal budget, so
-    /// a burst is deferred, never dropped; the report carries what fired and
-    /// what is still queued. Drained positions have no consumer yet — P13-02
-    /// feeds the queue from placed blocks and P13-03 reacts to due ticks — so
-    /// they are counted and nothing else happens to them here.
+    /// The drain keeps P13-01's counting (fired/pending on the report). The
+    /// drive mirrors `run_block_tick`'s orchestration — prepare each due
+    /// position, run `propagate` under the nominal budget, reschedule live
+    /// wires — with the drain count retained for the report, which the library
+    /// body does not return. `World::set_block` writes land in the world's
+    /// change list, so the Broadcast phase sends them as `block_update`s with
+    /// no redstone-specific packet path.
     fn tick_scheduled(&mut self, tick: Tick, report: &mut TickReport) {
-        let drain = self
-            .scheduled_ticks
-            .drain_due_block_ticks(tick, mc_redstone::UpdateBudget::nominal());
+        let budget = mc_redstone::UpdateBudget::nominal();
+        let drain = self.scheduled_ticks.drain_due_block_ticks(tick, budget);
         report.scheduled_ticks_fired = drain.len();
         report.scheduled_ticks_pending = drain.scheduled_later;
+        for pos in &drain.positions {
+            mc_redstone::propagation::prepare(&mut self.scheduled_ticks, *pos);
+            mc_redstone::propagation::prepare_self(&mut self.scheduled_ticks, *pos);
+        }
+        let table = mc_redstone::EmitterTable::new(&self.registries.blocks);
+        let propagation = mc_redstone::propagation::propagate(
+            &mut self.world,
+            &mut self.scheduled_ticks,
+            table,
+            budget,
+        );
+        report.redstone_updates = propagation.updates_processed;
+        report.redstone_changed = propagation.blocks_changed;
+        let changed: Vec<mc_redstone::BlockPos> = propagation
+            .changes
+            .iter()
+            .map(|change| change.pos)
+            .chain(drain.positions)
+            .collect();
+        mc_redstone::propagation::schedule_wire_recheck(
+            &self.world,
+            table,
+            &mut self.scheduled_ticks,
+            tick,
+            &changed,
+        );
     }
 
     /// Schedule a block tick for `(x, y, z)`, `delay` ticks from now (P13-01).

@@ -69,10 +69,10 @@
 //!   [`schedule_wire_recheck`].
 //! - **Conductivity.** A solid block never becomes powered here, so a circuit that
 //!   relies on powering a block rather than dust does not work. See [`BlockRole`].
-//! - **Quasi-connectivity** (a piston activated by the space above it), and the entire
-//!   mechanism component set (pistons, lamps, doors, dispensers, ...). A mechanism
-//!   block is [`BlockRole::Passive`] and therefore never reacts - it is absent, not
-//!   silently substituted.
+//! - **Quasi-connectivity** (a piston activated by the space above it), and the
+//!   mechanism component set (pistons, doors, dispensers, ...) other than the
+//!   redstone lamp. An unimplemented mechanism block is [`BlockRole::Passive`]
+//!   and therefore never reacts - it is absent, not silently substituted.
 //! - **Wire burn-out, wire re-orientation when unsupported, and wire breaking when its
 //!   support is removed.** A dangling wire here is simply wire.
 //! - **Ordering across chunk and dimension boundaries.** An update for an unloaded
@@ -80,7 +80,7 @@
 //!   load, so a circuit that spans a chunk boundary behaves as if the far side were
 //!   absent - and a redstone update can never make the server generate terrain.
 
-use crate::blocks::{REDSTONE_WIRE, source_for_name};
+use crate::blocks::{REDSTONE_LAMP, REDSTONE_WIRE, source_for_name};
 use crate::components::{
     Comparator, ComparatorMode, ComponentState, Lever, RedstoneTorch, Repeater,
 };
@@ -178,6 +178,12 @@ pub enum BlockRole {
     /// on. One visible consequence: "lever attached to a block, dust on the far side"
     /// does not work here, while "lever next to dust" does.
     Passive,
+    /// A mechanism the circuit drives (P13-03).
+    ///
+    /// Only the redstone lamp so far: it lights when powered from any side, which
+    /// needs no facing. A mechanism emits nothing itself — neighbours read it as
+    /// dark either way — so this role exists for the *reaction*, not the emission.
+    Mechanism,
 }
 
 /// The power one block emits, attributed to its kind.
@@ -326,9 +332,10 @@ impl<'a> EmitterTable<'a> {
     ///   else, so the "cut" and "connect vertically" rules of *Conductivity* do not
     ///   exist here;
     /// - **emitter** is any block named in [`crate::blocks::SOURCE_BLOCKS`];
-    /// - **passive** is everything else, *including* mechanism blocks this pass does not
-    ///   implement. A redstone lamp is passive and therefore never lights: it is not
-    ///   silently treated as something that works.
+    /// - **mechanism** is [`crate::blocks::REDSTONE_LAMP`], the one driven block;
+    /// - **passive** is everything else, *excluding* the implemented mechanism: other
+    ///   mechanisms (pistons, doors, dispensers, …) stay passive and never react —
+    ///   they are not silently treated as something that works.
     ///
     /// An unreadable id, an id with unreadable properties, or a wire whose `power`
     /// property cannot be parsed is passive: an unreadable state is not guessed at.
@@ -348,6 +355,9 @@ impl<'a> EmitterTable<'a> {
                 Some(stored) => BlockRole::Wire { stored },
                 None => BlockRole::Passive,
             };
+        }
+        if name == REDSTONE_LAMP {
+            return BlockRole::Mechanism;
         }
         match source_for_name(name) {
             Some(source) => BlockRole::Emitter { source },
@@ -420,7 +430,7 @@ impl<'a> EmitterTable<'a> {
     pub fn component_of(&self, id: i32) -> ServerResult<ComponentState> {
         let source = match self.classify(id) {
             BlockRole::Emitter { source } => source,
-            BlockRole::Wire { .. } | BlockRole::Passive => {
+            BlockRole::Wire { .. } | BlockRole::Passive | BlockRole::Mechanism => {
                 return Err(mc_core::error::ServerError::CorruptData(format!(
                     "block state {id} is not a modelled redstone component"
                 )));
@@ -514,7 +524,9 @@ impl<'a> EmitterTable<'a> {
                 };
                 EmitterOutput::of(state)
             }
-            BlockRole::Passive => EmitterOutput::OFF,
+            // A mechanism emits nothing itself; its reaction lives in
+            // [`EmitterTable::new_state`].
+            BlockRole::Mechanism | BlockRole::Passive => EmitterOutput::OFF,
         }
     }
 
@@ -535,7 +547,7 @@ impl<'a> EmitterTable<'a> {
     pub fn emitted_for_id(&self, id: i32, inputs: &BlockInputs) -> EmitterOutput {
         let role = self.classify(id);
         match role {
-            BlockRole::Passive => EmitterOutput::OFF,
+            BlockRole::Passive | BlockRole::Mechanism => EmitterOutput::OFF,
             BlockRole::Wire { .. } => self.emitted(role, inputs),
             BlockRole::Emitter { .. } => match self.component_of(id) {
                 Ok(component) => {
@@ -549,17 +561,37 @@ impl<'a> EmitterTable<'a> {
     /// The new block-state id for a block with `role`, or `None` when the block cannot
     /// be recomputed.
     ///
-    /// A wire's new state encodes the power this algorithm computed. Every other block
-    /// keeps its id: this pass does not write `powered`/`lit` back into the world, because
-    /// nothing in it *drives* those properties from a circuit yet. That is a real gap,
-    /// stated here rather than implied: the model's computed power values live in wire
-    /// states only.
+    /// A wire's new state encodes the power this algorithm computed. A mechanism's
+    /// new state encodes its reaction: the lamp lights when any neighbour emits
+    /// (lamps are side-agnostic, so no facing is needed). Every other block
+    /// keeps its id: this pass does not write `powered`/`lit` back into
+    /// emitters, because nothing in it *drives* those properties from a circuit
+    /// yet — lever flips arrive as player actions, torch/repeater/comparator
+    /// state changes need P13-04's orientation work. The model's computed power
+    /// values otherwise live in wire states only.
     #[must_use]
     pub fn new_state(&self, role: BlockRole, inputs: &BlockInputs, current_id: i32) -> Option<i32> {
         match role {
             BlockRole::Wire { .. } => {
                 let power = self.emitted(role, inputs).effective();
                 self.wire_state(power).ok()
+            }
+            BlockRole::Mechanism => {
+                let lit = inputs.strongest_state().is_powered();
+                let properties = self.registry.properties_of(current_id).ok()?;
+                let current = properties
+                    .iter()
+                    .find(|(name, _)| name == "lit")
+                    .is_some_and(|(_, value)| value == "true");
+                if lit == current {
+                    return Some(current_id);
+                }
+                self.registry
+                    .state_id(
+                        crate::blocks::REDSTONE_LAMP,
+                        &[("lit".to_owned(), lit.to_string())],
+                    )
+                    .ok()
             }
             BlockRole::Emitter { .. } | BlockRole::Passive => Some(current_id),
         }
@@ -617,7 +649,8 @@ pub fn gather_inputs<V: BlockView + ?Sized>(
             // A component's emission is read from its own state, which is why this goes
             // through the id: an unlit torch must emit nothing here.
             BlockRole::Emitter { .. } => table.emitted_for_id(neighbour_id, &BlockInputs::NONE),
-            BlockRole::Passive => EmitterOutput::OFF,
+            // Mechanisms emit nothing (a lit lamp does not power neighbours).
+            BlockRole::Mechanism | BlockRole::Passive => EmitterOutput::OFF,
         };
     }
     BlockInputs { faces }
@@ -639,7 +672,7 @@ fn gather_wire_inputs<V: BlockView + ?Sized>(
             // dust loop reads its own previous state rather than recursing forever.
             BlockRole::Wire { stored } => EmitterOutput::of(PowerState::weak_only(stored)),
             BlockRole::Emitter { .. } => table.emitted_for_id(neighbour_id, &BlockInputs::NONE),
-            BlockRole::Passive => EmitterOutput::OFF,
+            BlockRole::Mechanism | BlockRole::Passive => EmitterOutput::OFF,
         };
     }
     BlockInputs { faces }
@@ -1237,11 +1270,27 @@ mod tests {
         assert_eq!(table.classify(-1), BlockRole::Passive, "negative id");
         assert_eq!(
             table.classify(lamp),
-            BlockRole::Passive,
-            "an unimplemented mechanism is absent, not approximated"
+            BlockRole::Mechanism,
+            "the lamp is the one driven mechanism (P13-03)"
         );
         let mut inputs = BlockInputs::NONE;
         inputs.faces[0] = EmitterOutput::of(PowerState::strong_at(PowerLevel::MAX));
+        assert_eq!(
+            table.emitted(BlockRole::Mechanism, &inputs),
+            EmitterOutput::OFF,
+            "a mechanism emits nothing itself; its reaction is the state write"
+        );
+        assert_eq!(
+            table.new_state(BlockRole::Mechanism, &inputs, lamp),
+            table
+                .registry()
+                .state_id(
+                    "minecraft:redstone_lamp",
+                    &[("lit".to_owned(), "true".to_owned())]
+                )
+                .ok(),
+            "a powered lamp lights"
+        );
         assert_eq!(
             table.emitted(BlockRole::Passive, &inputs),
             EmitterOutput::OFF,

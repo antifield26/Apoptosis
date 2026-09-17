@@ -29,6 +29,20 @@ fn w(registry: &mc_registry::BlockRegistry, power: u8) -> i32 {
     wire(registry, level(power))
 }
 
+/// Whether the lamp at `pos` is lit, read through the registry.
+fn is_lit(
+    world: &mc_redstone::propagation::FlatWorld,
+    registry: &mc_registry::BlockRegistry,
+    pos: BlockPos,
+) -> bool {
+    let id = world.get(pos).expect("lamp must be in the box");
+    registry
+        .properties_of(id)
+        .expect("lamp state resolves")
+        .into_iter()
+        .any(|(name, value)| name == "lit" && value == "true")
+}
+
 #[test]
 fn golden_lever_fifteen_blocks_of_wire_and_a_lamp() {
     // Layout, all on y = 0 with the wire resting on nothing this model cares about:
@@ -96,8 +110,12 @@ fn golden_lever_fifteen_blocks_of_wire_and_a_lamp() {
     );
     assert_eq!(
         table.classify(world.get(BlockPos::new(16, 0, 0)).expect("lamp")),
-        BlockRole::Passive,
-        "an unimplemented mechanism is passive: it never lights in this pass"
+        BlockRole::Mechanism,
+        "the lamp is the driven mechanism (P13-03)"
+    );
+    assert!(
+        !is_lit(&world, &registry, BlockPos::new(16, 0, 0)),
+        "with a dead neighbour the lamp stays dark"
     );
 
     // Now shorten the line to 13 blocks so the lamp does have a live neighbour, and check that
@@ -130,6 +148,11 @@ fn golden_lever_fifteen_blocks_of_wire_and_a_lamp() {
     assert!(
         lamp_input.effective().is_powered(),
         "so the lamp is activated"
+    );
+    // And the mechanism half: propagate writes `lit` back, so the lamp is lit.
+    assert!(
+        is_lit(&world, &registry, BlockPos::new(14, 0, 0)),
+        "a powered lamp must be lit after propagation"
     );
 }
 

@@ -23,9 +23,11 @@
 //!
 //! What is **not** implemented, and is not hidden behind a working-looking API:
 //!
-//! - **Mechanisms**: pistons, redstone lamps, doors, trapdoors, fence gates,
-//!   dispensers, droppers, note blocks, TNT, copper bulbs. A mechanism block is
-//!   [`propagation::BlockRole::Passive`] — it never reacts and never lights up.
+//! - **Mechanisms**: pistons, doors, trapdoors, fence gates, dispensers,
+//!   droppers, note blocks, TNT, copper bulbs. A mechanism block is
+//!   [`propagation::BlockRole::Passive`] — it never reacts — except the
+//!   redstone lamp, which is [`propagation::BlockRole::Mechanism`] and lights
+//!   when powered (P13-03).
 //! - **Observers**, hoppers (and any container-driven comparator output), rails of every
 //!   kind, sculk sensors, daylight detectors, target blocks, trapped chests, tripwire
 //!   hooks, jukeboxes, lecterns.
@@ -41,8 +43,9 @@
 //! - **Vanilla's update order**, and Vanilla's separation of block updates from shape
 //!   updates and comparator updates.
 //! - **Writing component states back**: the propagation loop writes redstone dust's
-//!   `power` property, and leaves every other block's state alone. Nothing here toggles
-//!   a lever or lights a lamp, because nothing here is driven by a player action yet.
+//!   `power` property and a lamp's `lit` property, and leaves every other block's
+//!   state alone. Nothing here toggles a lever, because levers are driven by player
+//!   actions in the server, not by the circuit.
 //! - **Persistence**: nothing in this crate serialises the queue. A server restart loses
 //!   pending updates, which is correct for a queue of same-tick work but would need an
 //!   answer before scheduled ticks survive a save.
@@ -95,7 +98,7 @@ pub mod propagation;
 pub mod update;
 
 #[doc(inline)]
-pub use blocks::{REDSTONE_WIRE, SOURCE_BLOCKS};
+pub use blocks::{REDSTONE_LAMP, REDSTONE_WIRE, SOURCE_BLOCKS};
 #[doc(inline)]
 pub use components::{
     Comparator, ComparatorMode, ComponentState, FACING_COUNT, Lever, RedstoneTorch, Repeater,

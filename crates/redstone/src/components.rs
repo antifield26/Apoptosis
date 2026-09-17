@@ -11,7 +11,7 @@
 //! - hoppers and other container-driven outputs (comparator *reading* a container),
 //! - doors, trapdoors, fence gates,
 //! - rails of every kind (powered, detector, activator),
-//! - redstone lamps, note blocks, dispensers, droppers, TNT, copper bulbs,
+//! - note blocks, dispensers, droppers, TNT, copper bulbs,
 //!   sculk sensors, daylight detectors, target blocks, trapped chests,
 //!   tripwire hooks, lightning-rod strike timing,
 //! - redstone dust as a *component* (its wire behaviour is in [`crate::propagation`]),

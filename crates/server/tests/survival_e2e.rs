@@ -1051,10 +1051,13 @@ fn an_open_furnace_menu_shows_completed_output() {
 
 /// P13-02: placing or breaking redstone feeds the queue; dirt does not.
 ///
-/// A lever placed through the real `use_item_on` path queues exactly seven
-/// updates (six neighbours + self); dirt in an open field queues nothing
-/// (relevance gate); breaking the floor under the lever queues more (the
-/// removed stone is passive but the lever neighbour is not).
+/// Dirt goes first in a fresh game (queue stays empty: passive block, passive
+/// neighbours). Then a lever placed through the real `use_item_on` path queues
+/// exactly seven updates (six neighbours + self). Breaking the floor under the
+/// lever queues seven again — the removed stone is passive but the lever
+/// neighbour is an emitter. Note the phase order this relies on: each intent
+/// ticks `ScheduledTicks` (which drains) *before* `Players` (which feeds), so
+/// every assertion below reads a queue the drain has just emptied.
 #[test]
 fn redstone_edits_feed_the_queue_and_dirt_does_not() {
     let mut harness = Harness::new("p13-feed");
@@ -1062,6 +1065,40 @@ fn redstone_edits_feed_the_queue_and_dirt_does_not() {
     let mut out = harness.join("Sparky");
     assert_eq!(harness.game.redstone_pending(), 0);
     let _ = Harness::drain_ids(&mut out);
+
+    // Dirt far from any circuit first: passive block, passive neighbours.
+    let dirt_item = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:dirt")
+        .expect("dirt item");
+    {
+        let player = harness.game.player_mut(harness.id).expect("player");
+        player.inventory.select(0).expect("hotbar 0");
+        player
+            .inventory
+            .set_slot(
+                0,
+                mc_entity::stack::ItemStack::new(dirt_item, 64).expect("stack"),
+            )
+            .expect("slot 0");
+    }
+    harness.intent(PlayIntent::UseItemOn {
+        hand: 0,
+        position: block_position(sx + 5, sy - 1, sz),
+        face: 1,
+        cursor_x: 0.5,
+        cursor_y: 1.0,
+        cursor_z: 0.5,
+        inside_block: false,
+        sequence: 70,
+    });
+    assert_eq!(
+        harness.game.redstone_pending(),
+        0,
+        "dirt in an open field must not feed the queue"
+    );
 
     let lever_item = harness
         .game
@@ -1105,50 +1142,18 @@ fn redstone_edits_feed_the_queue_and_dirt_does_not() {
         "six neighbours + self, deduplicated"
     );
 
-    // Dirt far from any circuit: passive block, passive neighbours, no feed.
-    let dirt_item = harness
-        .game
-        .registries()
-        .items
-        .id("minecraft:dirt")
-        .expect("dirt item");
-    {
-        let player = harness.game.player_mut(harness.id).expect("player");
-        player
-            .inventory
-            .set_slot(
-                0,
-                mc_entity::stack::ItemStack::new(dirt_item, 64).expect("stack"),
-            )
-            .expect("slot 0");
-    }
-    harness.intent(PlayIntent::UseItemOn {
-        hand: 0,
-        position: block_position(sx + 5, sy - 1, sz),
-        face: 1,
-        cursor_x: 0.5,
-        cursor_y: 1.0,
-        cursor_z: 0.5,
-        inside_block: false,
-        sequence: 72,
-    });
-    assert_eq!(
-        harness.game.redstone_pending(),
-        7,
-        "dirt in an open field must not feed the queue"
-    );
-
     // Breaking the floor under the lever: removed stone is passive, but the
-    // lever neighbour is an emitter, so the queue grows past the shared seven.
+    // lever neighbour is an emitter, so the queue refills past the drain.
     harness.intent(PlayIntent::PlayerAction {
         status: 0,
         position: block_position(sx + 1, sy - 1, sz),
         facing: 1,
         sequence: 73,
     });
-    assert!(
-        harness.game.redstone_pending() > 7,
-        "breaking next to a lever must queue, saw {}",
+    assert_eq!(
+        harness.game.redstone_pending(),
+        7,
+        "breaking next to a lever must queue seven fresh updates, saw {}",
         harness.game.redstone_pending()
     );
     let _ = Harness::drain_ids(&mut out);
@@ -1224,6 +1229,180 @@ fn right_clicking_a_lever_flips_powered() {
     assert!(
         harness.game.redstone_pending() > 0,
         "flips must feed the queue"
+    );
+    let _ = Harness::drain_ids(&mut out);
+}
+
+/// P13-03: a flipped lever powers dust and lights a lamp, on the wire.
+///
+/// Builds lever—wire—wire—lamp through real placements, flips the lever, and
+/// asserts the near wire carries 14, the far wire 13, the lamp is lit, and a
+/// `block_update` went out. Flipping back darkens the line. The model does the
+/// physics; the world's change list carries the broadcast.
+#[test]
+fn a_flipped_lever_powers_dust_and_lights_a_lamp() {
+    let mut harness = Harness::new("p13-circuit");
+    let (sx, sy, sz) = harness.build_floor();
+    let mut out = harness.join("Sparky");
+    let _ = Harness::drain_ids(&mut out);
+    let items = &harness.game.registries().items;
+    let lever_item = items.id("minecraft:lever").expect("lever");
+    let dust_item = items.id("minecraft:redstone").expect("dust");
+    let lamp_item = items.id("minecraft:redstone_lamp").expect("lamp");
+    {
+        let player = harness.game.player_mut(harness.id).expect("player");
+        player.inventory.select(0).expect("hotbar 0");
+        for (slot, item, count) in [(0, lever_item, 1), (1, dust_item, 2), (2, lamp_item, 1)] {
+            player
+                .inventory
+                .set_slot(
+                    slot,
+                    mc_entity::stack::ItemStack::new(item, count).expect("stack"),
+                )
+                .expect("give");
+        }
+    }
+    // Place lever, two dust, lamp in a row on the floor. Each round finds a
+    // hotbar slot holding the wanted item first: `add_stack` refills the
+    // *first* suitable slot, not the taken one, so slot numbers drift.
+    let at = [
+        (sx + 1, sy, sz),
+        (sx + 2, sy, sz),
+        (sx + 3, sy, sz),
+        (sx + 4, sy, sz),
+    ];
+    let want = [lever_item, dust_item, dust_item, lamp_item];
+    for (round, ((x, y, z), item)) in at.iter().zip(want.iter()).enumerate() {
+        let slot = {
+            let player = harness.game.player(harness.id).expect("player");
+            (0..9u8)
+                .find(|slot| player.inventory.slot(usize::from(*slot)).item_id() == Some(*item))
+                .expect("a hotbar slot holding the item")
+        };
+        {
+            let player = harness.game.player_mut(harness.id).expect("player");
+            player.inventory.select(slot).expect("select");
+        }
+        harness.intent(PlayIntent::UseItemOn {
+            hand: 0,
+            position: block_position(*x, y - 1, *z),
+            face: 1,
+            cursor_x: 0.5,
+            cursor_y: 1.0,
+            cursor_z: 0.5,
+            inside_block: false,
+            sequence: 80 + i32::try_from(round).expect("few rounds"),
+        });
+        {
+            let state = harness.game.world().get_block(*x, *y, *z);
+            let name = harness
+                .game
+                .registries()
+                .blocks
+                .block_name(state)
+                .unwrap_or("?");
+            assert!(
+                [
+                    "minecraft:lever",
+                    "minecraft:redstone_wire",
+                    "minecraft:redstone_lamp"
+                ]
+                .contains(&name),
+                "round{round} must place its block, saw {name}"
+            );
+        }
+    }
+    for name in [
+        "minecraft:lever",
+        "minecraft:redstone_wire",
+        "minecraft:redstone_lamp",
+    ] {
+        let id = harness.game.registries().blocks.default_state(name);
+        assert!(id.is_ok(), "{name} must resolve");
+    }
+    let wire_power = |harness: &Harness, x: i32, y: i32, z: i32| {
+        let state = harness.game.world().get_block(x, y, z);
+        harness
+            .game
+            .registries()
+            .blocks
+            .properties_of(state)
+            .expect("wire has properties")
+            .into_iter()
+            .find(|(name, _)| name == "power")
+            .map(|(_, value)| value)
+    };
+    let lamp_lit = |harness: &Harness, x: i32, y: i32, z: i32| {
+        let state = harness.game.world().get_block(x, y, z);
+        harness
+            .game
+            .registries()
+            .blocks
+            .properties_of(state)
+            .expect("lamp has properties")
+            .into_iter()
+            .find(|(name, _)| name == "lit")
+            .map(|(_, value)| value)
+    };
+    // Flip the lever on: the line must power within a few ticks. Drain first
+    // so the block updates below are the propagation's, not the placements'.
+    let _ = Harness::drain_ids(&mut out);
+    harness.intent(PlayIntent::UseItemOn {
+        hand: 0,
+        position: block_position(at[0].0, at[0].1, at[0].2),
+        face: 1,
+        cursor_x: 0.5,
+        cursor_y: 1.0,
+        cursor_z: 0.5,
+        inside_block: false,
+        sequence: 90,
+    });
+    for _ in 0..3 {
+        harness.game.tick().expect("tick");
+    }
+    assert_eq!(
+        wire_power(&harness, at[1].0, at[1].1, at[1].2).as_deref(),
+        Some("14"),
+        "the near wire must carry 14"
+    );
+    assert_eq!(
+        wire_power(&harness, at[2].0, at[2].1, at[2].2).as_deref(),
+        Some("13"),
+        "the far wire must carry 13"
+    );
+    assert_eq!(
+        lamp_lit(&harness, at[3].0, at[3].1, at[3].2).as_deref(),
+        Some("true"),
+        "the lamp must be lit"
+    );
+    let ids = Harness::drain_ids(&mut out);
+    assert!(
+        ids.contains(&clientbound::play::BLOCK_UPDATE),
+        "powered wire and a lit lamp must reach clients as block updates, saw {ids:?}"
+    );
+    // Flip off: the line must go dark again.
+    harness.intent(PlayIntent::UseItemOn {
+        hand: 0,
+        position: block_position(at[0].0, at[0].1, at[0].2),
+        face: 1,
+        cursor_x: 0.5,
+        cursor_y: 1.0,
+        cursor_z: 0.5,
+        inside_block: false,
+        sequence: 91,
+    });
+    for _ in 0..3 {
+        harness.game.tick().expect("tick");
+    }
+    assert_eq!(
+        wire_power(&harness, at[1].0, at[1].1, at[1].2).as_deref(),
+        Some("0"),
+        "the near wire must fall back to 0"
+    );
+    assert_eq!(
+        lamp_lit(&harness, at[3].0, at[3].1, at[3].2).as_deref(),
+        Some("false"),
+        "the lamp must go dark"
     );
     let _ = Harness::drain_ids(&mut out);
 }

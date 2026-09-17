@@ -44,6 +44,13 @@ pub const REDSTONE_BLOCK: &str = "minecraft:redstone_block";
 /// The block name of a repeater.
 pub const REPEATER: &str = "minecraft:repeater";
 
+/// The block name of a redstone lamp.
+///
+/// The only mechanism block this model drives (P13-03): it lights when powered
+/// from any side, which needs no facing, so it precedes the directional
+/// mechanisms (pistons, doors) that P13-04's orientation work unlocks.
+pub const REDSTONE_LAMP: &str = "minecraft:redstone_lamp";
+
 /// The block name of a comparator.
 pub const COMPARATOR: &str = "minecraft:comparator";
 
