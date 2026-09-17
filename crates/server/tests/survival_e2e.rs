@@ -1407,6 +1407,138 @@ fn a_flipped_lever_powers_dust_and_lights_a_lamp() {
     let _ = Harness::drain_ids(&mut out);
 }
 
+/// P13-04: a torch listens to its attachment block, not its neighbours.
+///
+/// A torch standing on a lever with a live wire beside it stays lit (the wire
+/// is not its attachment); flipping the lever darkens the torch and the wire
+/// follows. The comparator half is pinned at the model level.
+#[test]
+fn a_torch_follows_its_attachment_not_its_neighbours() {
+    let mut harness = Harness::new("p13-torch");
+    let (sx, sy, sz) = harness.build_floor();
+    let mut out = harness.join("Sparky");
+    let _ = Harness::drain_ids(&mut out);
+    let items = &harness.game.registries().items;
+    let lever_item = items.id("minecraft:lever").expect("lever");
+    {
+        let player = harness.game.player_mut(harness.id).expect("player");
+        player.inventory.select(0).expect("hotbar 0");
+        player
+            .inventory
+            .set_slot(
+                0,
+                mc_entity::stack::ItemStack::new(lever_item, 1).expect("stack"),
+            )
+            .expect("give");
+    }
+    // Lever through the real path (feeds the queue); torch and wire placed
+    // directly — raw writes bypass the feed, and a torch cannot be placed
+    // onto a lever through clicks anyway (right-click flips it).
+    let lever_at = (sx + 1, sy, sz);
+    let torch_at = (sx + 1, sy + 1, sz);
+    let wire_at = (sx + 2, sy + 1, sz);
+    harness.intent(PlayIntent::UseItemOn {
+        hand: 0,
+        position: block_position(sx + 1, sy - 1, sz),
+        face: 1,
+        cursor_x: 0.5,
+        cursor_y: 1.0,
+        cursor_z: 0.5,
+        inside_block: false,
+        sequence: 100,
+    });
+    let torch = harness
+        .game
+        .registries()
+        .blocks
+        .default_state("minecraft:redstone_torch")
+        .expect("torch block");
+    let wire0 = harness
+        .game
+        .registries()
+        .blocks
+        .default_state("minecraft:redstone_wire")
+        .expect("wire block");
+    harness
+        .game
+        .world_mut()
+        .set_block(torch_at.0, torch_at.1, torch_at.2, torch)
+        .expect("stand the torch on the lever");
+    harness
+        .game
+        .world_mut()
+        .set_block(wire_at.0, wire_at.1, wire_at.2, wire0)
+        .expect("wire beside the torch");
+    harness.game.tick().expect("settle");
+
+    let lit = |harness: &Harness| {
+        let state = harness
+            .game
+            .world()
+            .get_block(torch_at.0, torch_at.1, torch_at.2);
+        harness
+            .game
+            .registries()
+            .blocks
+            .properties_of(state)
+            .expect("torch has properties")
+            .into_iter()
+            .find(|(name, _)| name == "lit")
+            .map(|(_, value)| value)
+    };
+    let power = |harness: &Harness| {
+        let state = harness
+            .game
+            .world()
+            .get_block(wire_at.0, wire_at.1, wire_at.2);
+        harness
+            .game
+            .registries()
+            .blocks
+            .properties_of(state)
+            .expect("wire has properties")
+            .into_iter()
+            .find(|(name, _)| name == "power")
+            .map(|(_, value)| value)
+    };
+    // Flip the lever on: the attachment powers, so the torch must go dark
+    // however it was placed (lit or unlit converge here), and the wire beside
+    // it — which did not change — must follow.
+    harness.intent(PlayIntent::UseItemOn {
+        hand: 0,
+        position: block_position(lever_at.0, lever_at.1, lever_at.2),
+        face: 1,
+        cursor_x: 0.5,
+        cursor_y: 1.0,
+        cursor_z: 0.5,
+        inside_block: false,
+        sequence: 103,
+    });
+    for _ in 0..3 {
+        harness.game.tick().expect("tick");
+    }
+    assert_eq!(lit(&harness).as_deref(), Some("false"));
+    assert_eq!(power(&harness).as_deref(), Some("0"));
+
+    // Flip back: lit again, wire live again.
+    harness.intent(PlayIntent::UseItemOn {
+        hand: 0,
+        position: block_position(lever_at.0, lever_at.1, lever_at.2),
+        face: 1,
+        cursor_x: 0.5,
+        cursor_y: 1.0,
+        cursor_z: 0.5,
+        inside_block: false,
+        sequence: 104,
+    });
+    for _ in 0..3 {
+        harness.game.tick().expect("tick");
+    }
+    assert_eq!(lit(&harness).as_deref(), Some("true"));
+    assert_eq!(power(&harness).as_deref(), Some("14"));
+    let _ = Harness::drain_ids(&mut out);
+}
+
 /// P12-09: closing a chest returns the cursor and restores the player menu.
 ///
 /// Picks up a chest stack onto the cursor, closes the window through the real

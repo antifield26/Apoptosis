@@ -397,17 +397,25 @@ fn a_torch_inverts_its_input_and_powers_the_dust_it_controls() {
     );
     // A dark torch next to dust leaves the dust at 0 once the dust is recomputed. The wire
     // starts claiming 14 — the level a live torch *would* give it — so the recomputation has
-    // something real to correct.
+    // something real to correct. The torch stays dark because its attachment (the lever
+    // below) is powered; without that lever the torch would relight, since a torch with
+    // a dead attachment is lit.
     let mut world = flat();
-    world.set(BlockPos::new(0, 0, 0), component(&registry, torch_dark));
-    world.set(BlockPos::new(1, 0, 0), wire(&registry, level(14)));
-    assert!(is_torch(&world, &registry, BlockPos::new(0, 0, 0)));
+    world.set(BlockPos::new(0, 1, 0), component(&registry, torch_dark));
+    world.set(
+        BlockPos::new(0, 0, 0),
+        component(&registry, ComponentState::Lever(Lever::new(true))),
+    );
+    world.set(BlockPos::new(1, 1, 0), wire(&registry, level(14)));
+    assert!(is_torch(&world, &registry, BlockPos::new(0, 1, 0)));
     let mut queue = UpdateQueue::new();
-    prepare(&mut queue, BlockPos::new(0, 0, 0));
+    prepare(&mut queue, BlockPos::new(0, 1, 0));
+    prepare_self(&mut queue, BlockPos::new(0, 1, 0));
+    prepare(&mut queue, BlockPos::new(1, 1, 0));
     let report = propagate(&mut world, &mut queue, table, UpdateBudget::nominal());
     assert_eq!(report.blocks_changed, 1, "exactly the wire changes");
     assert_eq!(
-        wire_emission(&world, &registry, BlockPos::new(1, 0, 0)).effective(),
+        wire_emission(&world, &registry, BlockPos::new(1, 1, 0)).effective(),
         PowerLevel::ZERO,
         "a dark torch lets the dust beside it fall to 0"
     );

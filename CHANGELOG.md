@@ -50,6 +50,19 @@ real placements lights 14/13/lit on flip and goes dark on flip-off, with
 `block_update`s observed. The golden lever—wire—lamp circuit now asserts the
 lit state instead of the old passive pin.
 
+### P13-04 — component directionality: torch attachment, comparator sides
+
+New `BlockRole::Mechanism` drives the redstone lamp; now torches read their
+attachment block (standing reads below, wall reads opposite `facing`) and flip
+`lit` immediately on disagreement, and comparators read back plus both sides by
+`facing` in both modes. Torch output stays omnidirectional — which faces
+vanilla lights is unmeasured, recorded with the jar experiment that would
+settle it — as do torch delay/burn-out and repeater locking. End to end: a
+torch standing on a lever with a wire beside it follows flips (lit→dark→lit,
+wire 14→0→14). Two golden circuits were rewritten from the old directionless
+pins (comparator faces east at its wire; dark torch keeps a powered
+attachment); KD-14 moves to `partial (input sides done)`.
+
 ## Unreleased — Phase 12 (Containers & the Survival Loop)
 
 P12 closes the survival loop around storage: chests, furnaces and hoppers open

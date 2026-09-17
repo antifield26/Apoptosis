@@ -193,22 +193,24 @@ fn golden_torch_inverter_inverts_its_attachment_block() {
         &[(BlockPos::new(1, 0, 0), 14), (BlockPos::new(2, 0, 0), 13)],
     );
 
-    // Case 2: the torch is dark, so the wire it controls must fall to 0. The scenario has to be a
-    // torch and *one* wire: with a second wire in the line, that wire would legitimately feed the
-    // first one, and the expectation would then be about the line rather than about the torch.
-    // (A wire feeding its neighbour is covered exactly, over a long chain, by
-    // `golden_lever_fifteen_blocks_of_wire_and_a_lamp`.)
+    // Case 2: the torch is dark because its attachment is powered, so it stays
+    // dark and the wire it controls falls to 0. The lever *below* the torch is
+    // what matters now — attachment, not strongest neighbour (P13-04).
     let mut world = flat();
     world.set(
-        BlockPos::new(0, 0, 0),
+        BlockPos::new(0, 1, 0),
         component(&registry, ComponentState::Torch(RedstoneTorch::new(false))),
     );
-    world.set(BlockPos::new(1, 0, 0), w(&registry, 14));
+    world.set(
+        BlockPos::new(0, 0, 0),
+        component(&registry, ComponentState::Lever(Lever::new(true))),
+    );
+    world.set(BlockPos::new(1, 1, 0), w(&registry, 14));
     let mut queue = UpdateQueue::new();
-    prepare(&mut queue, BlockPos::new(0, 0, 0));
+    prepare(&mut queue, BlockPos::new(0, 1, 0));
     let report = propagate(&mut world, &mut queue, table, UpdateBudget::nominal());
     assert_eq!(report.blocks_changed, 1, "the one wire must fall");
-    common::assert_wire_powers(&world, &registry, &[(BlockPos::new(1, 0, 0), 0)]);
+    common::assert_wire_powers(&world, &registry, &[(BlockPos::new(1, 1, 0), 0)]);
 
     // The inversion itself, over the whole input space: any non-zero input (either kind) turns
     // the torch off, and a clear input lights it. **approximation**: the delay and the burn-out
@@ -323,10 +325,10 @@ fn golden_comparator_reads_the_wire_behind_it() {
     //   x:  0        1   2   3   4
     //       lever    w   w   comparator
     //
-    // The comparator is modelled with no orientation, so its "back" input is the strongest
-    // neighbour. Wire(2) carries 13, so the comparator sees 13 and passes it through in compare
-    // mode with no side input. Its own output is then 13, which is what a wire in front of it
-    // would read.
+    // The comparator faces east here (its back is the wire at x = 2), so it
+    // passes 13 through in compare mode with no side input. Facing is part of
+    // the state under test since P13-04: the same rig with the wire on a side
+    // face outputs nothing (see the unit test for back/side separation).
     let registry = registry();
     let table = table(&registry);
     let mut world = flat();
@@ -338,13 +340,16 @@ fn golden_comparator_reads_the_wire_behind_it() {
     world.set(BlockPos::new(2, 0, 0), w(&registry, 0));
     world.set(
         BlockPos::new(3, 0, 0),
-        component(
-            &registry,
-            ComponentState::Comparator(Comparator {
-                mode: ComparatorMode::Compare,
-                powered: false,
-            }),
-        ),
+        registry
+            .state_id(
+                "minecraft:comparator",
+                &[
+                    ("mode".to_owned(), "compare".to_owned()),
+                    ("powered".to_owned(), "false".to_owned()),
+                    ("facing".to_owned(), "east".to_owned()),
+                ],
+            )
+            .expect("east-facing comparator"),
     );
     let mut queue = UpdateQueue::new();
     prepare(&mut queue, BlockPos::new(0, 0, 0));
@@ -363,8 +368,7 @@ fn golden_comparator_reads_the_wire_behind_it() {
             .get(),
         13
     );
-    // Subtract mode would take the side input off; with the side input modelled as zero the
-    // result is the same, which is the documented approximation.
+    // The pure arithmetic is unchanged: subtract takes the side off.
     assert_eq!(
         Comparator::new(ComparatorMode::Subtract).level(level(13), PowerLevel::ZERO),
         level(13)

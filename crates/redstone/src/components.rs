@@ -416,9 +416,8 @@ impl ComponentState {
     ///
     /// - [`Lever`] — **ignored**. A lever is a manual source: its state *is* its output.
     /// - [`RedstoneTorch`] — ignored, for the same reason: `lit` is the stored state.
-    ///   [`RedstoneTorch::react`] is the rule that decides what `lit` becomes when the
-    ///   attachment block changes; the caller applies it once per reaction (a scheduled
-    ///   tick in a future pass).
+    ///   [`RedstoneTorch::react`] is the rule the propagation loop applies in
+    ///   `new_state` against the attachment block (P13-04).
     /// - [`Repeater`] — ignored. Any non-zero input sets `powered`, and a powered repeater
     ///   emits 15 (**verified**: minecraft.wiki, *Redstone Mechanics* §"Signal
     ///   transmission" — "When a redstone repeater receives a redstone signal of any
@@ -426,9 +425,10 @@ impl ComponentState {
     ///   *stored* `powered` field, which is what the block state carries; the input decides
     ///   when that field changes, not what it means.
     /// - [`Comparator`] — **used**. A comparator's output is the level it receives, so
-    ///   unlike the others it cannot be read off its own state. The strongest neighbour is
-    ///   taken as its back input; the side input is
-    ///   [`ComponentState::output_power_with_side`].
+    ///   unlike the others it cannot be read off its own state. The back and side
+    ///   inputs come from its `facing` (see `output_power_with_side`); the
+    ///   directionless [`ComponentState::output_power`] below takes the strongest
+    ///   neighbour as back and zero sides, and is only for callers with no id.
     ///
     /// This split is the thing a caller must know: turning a lever or a repeater on is a
     /// *state write*, while a comparator recomputes from its input every time.

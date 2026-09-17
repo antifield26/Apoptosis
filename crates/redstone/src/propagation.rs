@@ -80,7 +80,7 @@
 //!   load, so a circuit that spans a chunk boundary behaves as if the far side were
 //!   absent - and a redstone update can never make the server generate terrain.
 
-use crate::blocks::{REDSTONE_LAMP, REDSTONE_WIRE, source_for_name};
+use crate::blocks::{REDSTONE_LAMP, REDSTONE_WALL_TORCH, REDSTONE_WIRE, source_for_name};
 use crate::components::{
     Comparator, ComparatorMode, ComponentState, Lever, RedstoneTorch, Repeater,
 };
@@ -498,7 +498,13 @@ impl<'a> EmitterTable<'a> {
     ///   [`WIRE_ATTENUATION_PER_BLOCK`], saturating at 0, emitted **weakly**. A wire never
     ///   emits strongly, which is this model's form of "a block becomes weakly powered
     ///   when it is powered only by redstone dust".
-    /// - [`BlockRole::Passive`] -> off.
+    /// - [`BlockRole::Passive`] and [`BlockRole::Mechanism`] -> off. A mechanism's
+    ///   reaction is a state write in [`EmitterTable::new_state`], not an emission.
+    ///
+    /// [`EmitterTable::emitted_for_id`] resolves direction first: a comparator reads
+    /// its back and side faces by its `facing` there, so this directionless form
+    /// (strongest neighbour as back, sides zero) is only for callers that hold no
+    /// block id.
     ///
     /// **Prefer [`EmitterTable::emitted_for_id`]**, which resolves the component's live state
     /// from the block id. This method cannot tell an inactive component from an active one —
@@ -550,6 +556,32 @@ impl<'a> EmitterTable<'a> {
             BlockRole::Passive | BlockRole::Mechanism => EmitterOutput::OFF,
             BlockRole::Wire { .. } => self.emitted(role, inputs),
             BlockRole::Emitter { .. } => match self.component_of(id) {
+                // P13-04: a comparator reads its back face and its two side
+                // faces by its `facing`, not the strongest neighbour. Compare
+                // mode with a stronger side outputs nothing; subtract mode
+                // outputs back minus side.
+                Ok(ComponentState::Comparator(comparator)) => {
+                    let facing = self
+                        .registry
+                        .properties_of(id)
+                        .ok()
+                        .and_then(|properties| {
+                            properties
+                                .iter()
+                                .find(|(key, _)| key == "facing")
+                                .map(|(_, value)| value.clone())
+                        })
+                        .unwrap_or_else(|| "north".to_owned());
+                    let (back_idx, side_a, side_b) = comparator_faces(&facing);
+                    let at = |index: usize| {
+                        inputs
+                            .faces
+                            .get(index)
+                            .map_or(PowerLevel::ZERO, |output| output.state.effective())
+                    };
+                    let side = at(side_a).max(at(side_b));
+                    EmitterOutput::of(comparator.output(at(back_idx), side))
+                }
                 Ok(component) => {
                     EmitterOutput::of(component.output_power(inputs.strongest_state()))
                 }
@@ -563,18 +595,45 @@ impl<'a> EmitterTable<'a> {
     ///
     /// A wire's new state encodes the power this algorithm computed. A mechanism's
     /// new state encodes its reaction: the lamp lights when any neighbour emits
-    /// (lamps are side-agnostic, so no facing is needed). Every other block
-    /// keeps its id: this pass does not write `powered`/`lit` back into
-    /// emitters, because nothing in it *drives* those properties from a circuit
-    /// yet — lever flips arrive as player actions, torch/repeater/comparator
-    /// state changes need P13-04's orientation work. The model's computed power
-    /// values otherwise live in wire states only.
+    /// (lamps are side-agnostic, so no facing is needed). A torch flips `lit`
+    /// from its attachment block (P13-04); every other emitter keeps its id,
+    /// because lever flips arrive as player actions and repeater/comparator
+    /// state changes need no drive (their emission is recomputed live). The
+    /// model's computed power values otherwise live in wire states only.
     #[must_use]
     pub fn new_state(&self, role: BlockRole, inputs: &BlockInputs, current_id: i32) -> Option<i32> {
         match role {
             BlockRole::Wire { .. } => {
                 let power = self.emitted(role, inputs).effective();
                 self.wire_state(power).ok()
+            }
+            // P13-04: a torch reads its attachment block, not its strongest
+            // neighbour, and flips `lit` immediately when the two disagree.
+            // Immediate, not delayed: vanilla's 2-game-tick torch delay and
+            // burn-out are unmodelled (recorded gap) — what is pinned here is
+            // *which* block the torch listens to.
+            BlockRole::Emitter {
+                source: PowerSource::Torch,
+            } => {
+                let properties = self.registry.properties_of(current_id).ok()?;
+                let name = self.name_of(current_id)?;
+                let face = torch_attachment(name, &properties);
+                let attachment_powered = inputs
+                    .faces
+                    .get(face)
+                    .is_some_and(|output| output.state.is_powered());
+                let lit = properties
+                    .iter()
+                    .find(|(key, _)| key == "lit")
+                    .is_none_or(|(_, value)| value == "true");
+                if lit != attachment_powered {
+                    return Some(current_id);
+                }
+                let mut rewritten = properties.clone();
+                if let Some(entry) = rewritten.iter_mut().find(|(key, _)| key == "lit") {
+                    entry.1 = (!lit).to_string();
+                }
+                self.registry.state_id(name, &rewritten).ok()
             }
             BlockRole::Mechanism => {
                 let lit = inputs.strongest_state().is_powered();
@@ -613,6 +672,60 @@ pub fn read_block<V: BlockView + ?Sized>(
     let inputs = gather_inputs(world, table, pos);
     let output = table.emitted_for_id(id, &inputs);
     Some((role, inputs, output))
+}
+
+/// Face index opposite `index` in [`NeighbourSet`] order
+/// (down, up, north, south, west, east).
+fn opposite_face(index: usize) -> usize {
+    match index {
+        0 => 1,
+        1 => 0,
+        2 => 3,
+        3 => 2,
+        4 => 5,
+        _ => 4,
+    }
+}
+
+/// Face index for a `facing` property value; unknown faces read as north —
+/// the default this model writes for components that declare one.
+fn facing_index(facing: &str) -> usize {
+    match facing {
+        "down" => 0,
+        "up" => 1,
+        "south" => 3,
+        "west" => 4,
+        "east" => 5,
+        // "north" and anything unknown
+        _ => 2,
+    }
+}
+
+/// The face a torch reads (P13-04): a standing torch reads the block below it,
+/// a wall torch reads the wall it hangs on — the block opposite its `facing`.
+fn torch_attachment(name: &str, properties: &[(String, String)]) -> usize {
+    if name == REDSTONE_WALL_TORCH {
+        let facing = properties
+            .iter()
+            .find(|(key, _)| key == "facing")
+            .map_or("north", |(_, value)| value.as_str());
+        opposite_face(facing_index(facing))
+    } else {
+        // down
+        0
+    }
+}
+
+/// `(back, side_a, side_b)` face indices for a comparator `facing` value
+/// (P13-04). Comparators only face horizontally in vanilla; up/down fall back
+/// to the north shape rather than refusing, and are recorded here, not hidden.
+fn comparator_faces(facing: &str) -> (usize, usize, usize) {
+    match facing_index(facing) {
+        4 => (5, 2, 3),
+        5 => (4, 2, 3),
+        3 => (2, 4, 5),
+        _ => (3, 4, 5),
+    }
 }
 
 /// A block's inputs: what each of its six neighbours currently emits.
@@ -1369,6 +1482,145 @@ mod tests {
         assert_eq!(queue.neighbour_len(), 6);
         assert_eq!(queue.push_neighbour(pos), Inserted::Inserted);
         assert!(!prepare_self(&mut queue, BlockPos::new(6, 0, 5)).was_inserted());
+    }
+
+    /// Set the `powered` property of a lever state id, preserving the rest.
+    fn lever_powered(registry: &BlockRegistry, id: i32, on: bool) -> i32 {
+        let mut properties = registry.properties_of(id).expect("lever properties");
+        for (key, value) in &mut properties {
+            if key == "powered" {
+                value.clear();
+                value.push_str(if on { "true" } else { "false" });
+            }
+        }
+        let name = registry.block_name(id).expect("lever name");
+        registry
+            .state_id(name, &properties)
+            .expect("flipped lever resolves")
+    }
+
+    /// The `lit` property of the block at `pos`, or `None` when unreadable.
+    fn lit_at(world: &FlatWorld, registry: &BlockRegistry, pos: BlockPos) -> Option<bool> {
+        let id = world.get(pos)?;
+        registry
+            .properties_of(id)
+            .ok()?
+            .into_iter()
+            .find(|(key, _)| key == "lit")
+            .map(|(_, value)| value == "true")
+    }
+
+    #[test]
+    fn a_torch_flips_from_its_attachment_not_its_strongest_neighbour() {
+        let registry = registry();
+        let table = EmitterTable::new(&registry);
+        // Standing torch at (1,1,0), lever attached below at (1,0,0), live wire
+        // east at (2,1,0) so the strongest neighbour is *not* the attachment.
+        let torch = BlockPos::new(1, 1, 0);
+        let lever_pos = BlockPos::new(1, 0, 0);
+        let wire_pos = BlockPos::new(2, 1, 0);
+        let mut world = flat();
+        world.set(
+            torch,
+            registry
+                .state_id(
+                    "minecraft:redstone_torch",
+                    &[("lit".to_owned(), "true".to_owned())],
+                )
+                .expect("lit torch"),
+        );
+        let lever_off = lever_powered(
+            &registry,
+            registry.default_state("minecraft:lever").expect("lever"),
+            false,
+        );
+        world.set(lever_pos, lever_off);
+        world.set(wire_pos, table.wire_state(level(14)).expect("wire at 14"));
+
+        // Lever off: the attachment is dark, so the torch stays lit even though
+        // a live wire sits next to it.
+        let mut queue = UpdateQueue::new();
+        prepare(&mut queue, lever_pos);
+        propagate(&mut world, &mut queue, table, UpdateBudget::nominal());
+        assert_eq!(lit_at(&world, &registry, torch), Some(true));
+
+        // Lever on: the attachment powers, so the torch goes dark. The wire
+        // beside it reads the torch, not the lever, and also goes dark.
+        world.set(lever_pos, lever_powered(&registry, lever_off, true));
+        let mut queue = UpdateQueue::new();
+        prepare(&mut queue, lever_pos);
+        let report = propagate(&mut world, &mut queue, table, UpdateBudget::nominal());
+        assert_eq!(lit_at(&world, &registry, torch), Some(false));
+        assert!(
+            report.blocks_changed >= 2,
+            "torch flip plus its wire consequence, saw {}",
+            report.blocks_changed
+        );
+    }
+
+    #[test]
+    fn a_comparator_reads_back_and_sides_by_facing() {
+        let registry = registry();
+        let table = EmitterTable::new(&registry);
+        let state = |mode: &str| {
+            registry
+                .state_id(
+                    "minecraft:comparator",
+                    &[
+                        ("mode".to_owned(), mode.to_owned()),
+                        ("powered".to_owned(), "false".to_owned()),
+                        ("facing".to_owned(), "north".to_owned()),
+                    ],
+                )
+                .expect("comparator resolves")
+        };
+        // Facing north: back is south (3), sides east (4) and west (5).
+        let mut inputs = BlockInputs::NONE;
+        inputs.faces[3] = EmitterOutput::of(PowerState::strong_at(level(10)));
+        inputs.faces[4] = EmitterOutput::of(PowerState::strong_at(level(12)));
+        // Compare: side 12 beats back 10, so the output is nothing.
+        assert_eq!(
+            table
+                .emitted_for_id(state("compare"), &inputs)
+                .state
+                .effective(),
+            PowerLevel::ZERO
+        );
+        // Subtract: 10 − 12 saturates at 0 too.
+        assert_eq!(
+            table
+                .emitted_for_id(state("subtract"), &inputs)
+                .state
+                .effective(),
+            PowerLevel::ZERO
+        );
+        // Back 14 over side 5 passes through in both modes.
+        inputs.faces[3] = EmitterOutput::of(PowerState::strong_at(level(14)));
+        inputs.faces[4] = EmitterOutput::of(PowerState::strong_at(level(5)));
+        assert_eq!(
+            table
+                .emitted_for_id(state("compare"), &inputs)
+                .state
+                .effective(),
+            level(14)
+        );
+        assert_eq!(
+            table
+                .emitted_for_id(state("subtract"), &inputs)
+                .state
+                .effective(),
+            level(9)
+        );
+        // A strong wire *behind* the back (north, the output side) is not an input.
+        inputs.faces[2] = EmitterOutput::of(PowerState::strong_at(PowerLevel::MAX));
+        assert_eq!(
+            table
+                .emitted_for_id(state("compare"), &inputs)
+                .state
+                .effective(),
+            level(14),
+            "the output face must not feed back in"
+        );
     }
 
     #[test]
