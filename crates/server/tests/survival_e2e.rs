@@ -1049,6 +1049,185 @@ fn an_open_furnace_menu_shows_completed_output() {
     let _ = Harness::drain_ids(&mut out);
 }
 
+/// P13-02: placing or breaking redstone feeds the queue; dirt does not.
+///
+/// A lever placed through the real `use_item_on` path queues exactly seven
+/// updates (six neighbours + self); dirt in an open field queues nothing
+/// (relevance gate); breaking the floor under the lever queues more (the
+/// removed stone is passive but the lever neighbour is not).
+#[test]
+fn redstone_edits_feed_the_queue_and_dirt_does_not() {
+    let mut harness = Harness::new("p13-feed");
+    let (sx, sy, sz) = harness.build_floor();
+    let mut out = harness.join("Sparky");
+    assert_eq!(harness.game.redstone_pending(), 0);
+    let _ = Harness::drain_ids(&mut out);
+
+    let lever_item = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:lever")
+        .expect("lever item");
+    {
+        let player = harness.game.player_mut(harness.id).expect("player");
+        player.inventory.select(0).expect("hotbar 0");
+        player
+            .inventory
+            .set_slot(
+                0,
+                mc_entity::stack::ItemStack::new(lever_item, 4).expect("stack"),
+            )
+            .expect("slot 0");
+    }
+    let at = (sx + 1, sy, sz);
+    harness.intent(PlayIntent::UseItemOn {
+        hand: 0,
+        position: block_position(sx + 1, sy - 1, sz),
+        face: 1,
+        cursor_x: 0.5,
+        cursor_y: 1.0,
+        cursor_z: 0.5,
+        inside_block: false,
+        sequence: 71,
+    });
+    let placed = harness.game.world().get_block(at.0, at.1, at.2);
+    let name = harness
+        .game
+        .registries()
+        .blocks
+        .block_name(placed)
+        .expect("placed has a name");
+    assert_eq!(name, "minecraft:lever", "the lever must place, got {name}");
+    assert_eq!(
+        harness.game.redstone_pending(),
+        7,
+        "six neighbours + self, deduplicated"
+    );
+
+    // Dirt far from any circuit: passive block, passive neighbours, no feed.
+    let dirt_item = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:dirt")
+        .expect("dirt item");
+    {
+        let player = harness.game.player_mut(harness.id).expect("player");
+        player
+            .inventory
+            .set_slot(
+                0,
+                mc_entity::stack::ItemStack::new(dirt_item, 64).expect("stack"),
+            )
+            .expect("slot 0");
+    }
+    harness.intent(PlayIntent::UseItemOn {
+        hand: 0,
+        position: block_position(sx + 5, sy - 1, sz),
+        face: 1,
+        cursor_x: 0.5,
+        cursor_y: 1.0,
+        cursor_z: 0.5,
+        inside_block: false,
+        sequence: 72,
+    });
+    assert_eq!(
+        harness.game.redstone_pending(),
+        7,
+        "dirt in an open field must not feed the queue"
+    );
+
+    // Breaking the floor under the lever: removed stone is passive, but the
+    // lever neighbour is an emitter, so the queue grows past the shared seven.
+    harness.intent(PlayIntent::PlayerAction {
+        status: 0,
+        position: block_position(sx + 1, sy - 1, sz),
+        facing: 1,
+        sequence: 73,
+    });
+    assert!(
+        harness.game.redstone_pending() > 7,
+        "breaking next to a lever must queue, saw {}",
+        harness.game.redstone_pending()
+    );
+    let _ = Harness::drain_ids(&mut out);
+}
+
+/// P13-02: right-clicking a lever flips `powered` and feeds the queue.
+///
+/// The lever is placed directly (raw world writes do not feed — the feed
+/// lives on the player-action path), then flipped twice through real clicks:
+/// off→on→off with only `powered` changing, each flip queueing.
+#[test]
+fn right_clicking_a_lever_flips_powered() {
+    let mut harness = Harness::new("p13-lever");
+    let (sx, sy, sz) = harness.build_floor();
+    let mut out = harness.join("Flippy");
+    let lever = harness
+        .game
+        .registries()
+        .blocks
+        .default_state("minecraft:lever")
+        .expect("lever block");
+    let at = (sx + 1, sy, sz);
+    harness
+        .game
+        .world_mut()
+        .set_block(at.0, at.1, at.2, lever)
+        .expect("place lever");
+    assert_eq!(
+        harness.game.redstone_pending(),
+        0,
+        "a raw world write must not feed the queue"
+    );
+    let _ = Harness::drain_ids(&mut out);
+
+    let powered = |harness: &Harness| {
+        let state = harness.game.world().get_block(at.0, at.1, at.2);
+        harness
+            .game
+            .registries()
+            .blocks
+            .properties_of(state)
+            .expect("lever has properties")
+            .into_iter()
+            .find(|(name, _)| name == "powered")
+            .map(|(_, value)| value)
+    };
+    let initial = powered(&harness);
+    // Flip on: must change powered, whatever it started as.
+    harness.intent(PlayIntent::UseItemOn {
+        hand: 0,
+        position: block_position(at.0, at.1, at.2),
+        face: 1,
+        cursor_x: 0.5,
+        cursor_y: 1.0,
+        cursor_z: 0.5,
+        inside_block: false,
+        sequence: 74,
+    });
+    let flipped = powered(&harness);
+    assert_ne!(flipped, initial, "a flip must change powered");
+    // Flip off: back where it started, with only `powered` touched.
+    harness.intent(PlayIntent::UseItemOn {
+        hand: 0,
+        position: block_position(at.0, at.1, at.2),
+        face: 1,
+        cursor_x: 0.5,
+        cursor_y: 1.0,
+        cursor_z: 0.5,
+        inside_block: false,
+        sequence: 75,
+    });
+    assert_eq!(powered(&harness), initial, "two flips must round-trip");
+    assert!(
+        harness.game.redstone_pending() > 0,
+        "flips must feed the queue"
+    );
+    let _ = Harness::drain_ids(&mut out);
+}
+
 /// P12-09: closing a chest returns the cursor and restores the player menu.
 ///
 /// Picks up a chest stack onto the cursor, closes the window through the real

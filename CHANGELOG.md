@@ -26,6 +26,17 @@ boundary. `scheduled_ticks.rs` pins due-once timing and the budget (a no-drain
 perturbation fails both); `PARITY-MATRIX.md` moves the scheduled-ticks row to
 `partial (queue wired, no producers/consumers)`.
 
+### P13-02 — player edits feed the redstone model
+
+Placed or removed wire/emitters — or a plain block next to one — queue
+neighbour updates plus self through `prepare`/`prepare_self`, gated on
+relevance so dirt in an open field queues nothing (unconditional feed would
+eat the 1024-per-tick neighbour budget real circuits need). Levers flip
+`powered` on right-click, preserving facing/face, and feed like a placement;
+raw world writes bypass the feed by design (the feed lives on the
+player-action path). Neighbour updates wait for the P13-03 propagation call;
+`redstone_pending` exposes the queue depth.
+
 ## Unreleased — Phase 12 (Containers & the Survival Loop)
 
 P12 closes the survival loop around storage: chests, furnaces and hoppers open

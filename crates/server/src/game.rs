@@ -1753,6 +1753,58 @@ impl Game {
             .schedule(now, mc_redstone::BlockPos::new(x, y, z), delay)
     }
 
+    /// The redstone classifier over the block registry (P13-02).
+    ///
+    /// Built per call because it is `Copy` over a reference: there is nothing
+    /// to cache, and a stored table could outlive a registry swap.
+    fn redstone_table(&self) -> mc_redstone::EmitterTable<'_> {
+        mc_redstone::EmitterTable::new(&self.registries.blocks)
+    }
+
+    /// Feed a block change at `(x, y, z)` into the redstone model (P13-02).
+    ///
+    /// Queues neighbour updates for the six neighbours plus the position
+    /// itself — but only when the changed block or at least one neighbour is
+    /// redstone-relevant (wire or emitter). An unconditional feed would turn
+    /// every dirt placement into seven queue entries the propagation then has
+    /// to classify and discard, which is a hostile-amplification path: each
+    /// placement is player-rate-limited, yet junk would still eat the
+    /// 1024-per-tick neighbour budget real circuits need. Deduplication and
+    /// the 4096-entry cap live in the queue itself.
+    fn redstone_feed(&mut self, x: i32, y: i32, z: i32, changed_id: i32) {
+        let table = self.redstone_table();
+        let relevant = |id: i32| !matches!(table.classify(id), mc_redstone::BlockRole::Passive);
+        if !relevant(changed_id) {
+            let pos = mc_redstone::BlockPos::new(x, y, z);
+            let mut any_neighbour = false;
+            for neighbour in mc_redstone::NeighbourSet::of(pos) {
+                if let Some(id) = self
+                    .world
+                    .get_block_loaded(neighbour.x, neighbour.y, neighbour.z)
+                    && relevant(id)
+                {
+                    any_neighbour = true;
+                    break;
+                }
+            }
+            if !any_neighbour {
+                return;
+            }
+        }
+        let pos = mc_redstone::BlockPos::new(x, y, z);
+        mc_redstone::propagation::prepare(&mut self.scheduled_ticks, pos);
+        mc_redstone::propagation::prepare_self(&mut self.scheduled_ticks, pos);
+    }
+
+    /// Queued redstone work (neighbour updates + scheduled ticks) still waiting.
+    ///
+    /// Test hook: the `ScheduledTicks` phase drains scheduled ticks, while
+    /// neighbour updates wait for the propagation call P13-03 adds.
+    #[must_use]
+    pub fn redstone_pending(&self) -> usize {
+        self.scheduled_ticks.len()
+    }
+
     /// Phase 5: furnaces cook, hoppers transfer (P12-03/04).
     ///
     /// Each furnace block entity advances one tick through `Furnace::tick` on the
@@ -4033,6 +4085,45 @@ impl Game {
         Ok(())
     }
 
+    /// Flip a lever's `powered` property, preserving the rest (P13-02).
+    ///
+    /// Only `powered` changes: facing/face stay whatever placement gave them,
+    /// because guessing orientation would move the lever's attachment. A lever
+    /// with no `powered` property (registry drift) is left alone rather than
+    /// rewritten.
+    fn flip_lever(&mut self, id: ConnectionId, x: i32, y: i32, z: i32) {
+        let Some(state) = self.world.get_block_loaded(x, y, z) else {
+            return;
+        };
+        let Ok(mut props) = self.registries.blocks.properties_of(state) else {
+            debug!(id = %id, "lever state is missing from the registry");
+            return;
+        };
+        let on = if let Some(powered) = props.iter_mut().find(|(name, _)| name == "powered") {
+            if powered.1 == "true" {
+                "false".clone_into(&mut powered.1);
+            } else {
+                "true".clone_into(&mut powered.1);
+            }
+            powered.1.clone()
+        } else {
+            debug!(id = %id, "lever has no powered property; left alone");
+            return;
+        };
+        let Ok(new_id) = self.registries.blocks.state_id("minecraft:lever", &props) else {
+            debug!(id = %id, "flipped lever state does not resolve");
+            return;
+        };
+        if new_id == state {
+            return;
+        }
+        if self.world.set_block(x, y, z, new_id).is_err() {
+            return;
+        }
+        debug!(id = %id, x, y, z, powered = on, "lever flipped");
+        self.redstone_feed(x, y, z, new_id);
+    }
+
     /// The operator list this game loaded.
     ///
     /// Exposed so a caller can report which operators a running server knows about, and so a
@@ -4982,6 +5073,9 @@ impl Game {
                     return Ok(());
                 }
                 debug!(id = %id, x, y, z, "block broken");
+                // P13-02: breaking a component — or a block next to one — wakes
+                // the model with the *removed* id, so dust re-evaluates.
+                self.redstone_feed(x, y, z, current);
                 if !creative {
                     // P11-04: the loot table is the drop authority in survival.
                     self.spawn_block_drops(current, x, y, z);
@@ -5074,6 +5168,14 @@ impl Game {
             self.open_container(id, x, y, z, report);
             return;
         }
+        // Levers flip on right-click (P13-02): the toggle *is* the power source
+        // changing state, so it feeds the model like a placement. Before the
+        // held-item check so an empty hand flips and a held block does not
+        // place through the lever.
+        if self.clicked_block_name(x, y, z).as_deref() == Some("minecraft:lever") {
+            self.flip_lever(id, x, y, z);
+            return;
+        }
         let hand = Hand::from_id(u8::try_from(hand).unwrap_or(0)).unwrap_or(Hand::Main);
         let Some(session) = self.sessions.get(&id) else {
             return;
@@ -5133,6 +5235,8 @@ impl Game {
             debug!(id = %id, x = tx, y = ty, z = tz, %error, "placement was refused");
             return;
         }
+        // P13-02: a placed wire, torch, lever or neighbour of one wakes the model.
+        self.redstone_feed(tx, ty, tz, block_id);
         let survival = self
             .sessions
             .get(&id)
