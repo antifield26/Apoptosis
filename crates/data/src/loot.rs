@@ -117,6 +117,7 @@
 //! table nesting and the number of draws a binomial provider may request are all bounded; and no
 //! path here can panic.
 
+use mc_core::error::{ServerError, ServerResult};
 use mc_core::ids::ResourceId;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -2008,6 +2009,113 @@ impl LootTables {
             .by_name(name)
             .ok_or_else(|| RollError::UnknownTable { name: name.clone() })?;
         roll(table, self, rng, context)
+    }
+
+    /// The **hand-written baseline subset** of the Vanilla block-loot set.
+    ///
+    /// Eight common full-cube blocks, shaped 1:1 like the jar files they
+    /// mirror (single-item pools; `alternatives` with a silk-touch first
+    /// child for stone and grass, exactly as Vanilla writes them): stone
+    /// drops cobblestone, grass drops dirt, gravel drops gravel, and
+    /// cobblestone, dirt, sand, oak logs and oak planks drop themselves.
+    /// A bare hand (unenchanted tool context) takes the non-silk branch
+    /// everywhere, which is Vanilla's own outcome for these tables.
+    ///
+    /// This exists for the same reason as the crafting and smelting baselines.
+    /// A server with no pack loaded would otherwise drop nothing at all
+    /// (`by_name` misses and the break path logs and moves on — the P14 soak
+    /// owner's "no drops" report). `load_packs` replaces these entry-for-entry
+    /// when real tables arrive ([`LootTables::insert`] overwrites same-named
+    /// tables), so the baseline is strictly a no-pack fallback, never a
+    /// competitor.
+    ///
+    /// Deliberately **not** modelled: flint from gravel (fortune-gated
+    /// chance), silk-touch self drops (the branch exists and evaluates, but
+    /// no tool here carries silk), ores and tool-tier gates, glass (drops
+    /// nothing bare-handed — correctly absent, like Vanilla).
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::CorruptData`] when a hard-coded id fails to parse,
+    /// which is a programmer error in this table, not hostile input.
+    pub fn baseline() -> ServerResult<Self> {
+        use mc_core::ids::ResourceId;
+        fn id(name: &str) -> ServerResult<ResourceId> {
+            ResourceId::parse(name).map_err(|error| {
+                ServerError::CorruptData(format!("baseline loot id {name:?}: {error}"))
+            })
+        }
+        fn item(name: &str) -> ServerResult<LootEntry> {
+            Ok(LootEntry::Item {
+                name: id(&format!("minecraft:{name}"))?,
+                weight: 1,
+                quality: 0,
+                expand: false,
+                functions: Vec::new(),
+                conditions: Vec::new(),
+            })
+        }
+        fn silk_alternatives(block: &str, plain: LootEntry) -> ServerResult<LootEntry> {
+            Ok(LootEntry::Alternatives {
+                children: vec![
+                    LootEntry::Item {
+                        name: id(&format!("minecraft:{block}"))?,
+                        weight: 1,
+                        quality: 0,
+                        expand: false,
+                        functions: Vec::new(),
+                        conditions: vec![LootCondition::MatchToolEnchantments {
+                            requirements: vec![EnchantmentRequirement {
+                                enchantment: "minecraft:silk_touch".to_owned(),
+                                min_level: Some(1),
+                                max_level: None,
+                            }],
+                        }],
+                    },
+                    plain,
+                ],
+                functions: Vec::new(),
+                conditions: Vec::new(),
+            })
+        }
+        fn table(stem: &str, entries: Vec<LootEntry>) -> ServerResult<LootTable> {
+            Ok(LootTable {
+                name: Some(id(&format!("minecraft:blocks/{stem}"))?),
+                kind: "minecraft:block".to_owned(),
+                random_sequence: Some(format!("minecraft:blocks/{stem}")),
+                pools: vec![LootPool {
+                    rolls: CountProvider::Constant(1.0),
+                    bonus_rolls: CountProvider::Constant(0.0),
+                    entries,
+                    conditions: vec![LootCondition::SurvivesExplosion],
+                    functions: Vec::new(),
+                }],
+                functions: Vec::new(),
+            })
+        }
+        // (block stem, drop item stem or `None` for an alternatives pair).
+        // `None` means "silk-touch self, else the second stem".
+        let pairs: &[(&str, &str)] = &[
+            ("cobblestone", "cobblestone"),
+            ("dirt", "dirt"),
+            ("sand", "sand"),
+            ("gravel", "gravel"),
+            ("oak_log", "oak_log"),
+            ("oak_planks", "oak_planks"),
+        ];
+        let mut tables = Self::new();
+        for (stem, drop) in pairs {
+            tables.insert(table(stem, vec![item(drop)?])?);
+        }
+        tables.insert(table(
+            "stone",
+            vec![silk_alternatives("stone", item("cobblestone")?)?],
+        )?);
+        tables.insert(table(
+            "grass_block",
+            vec![silk_alternatives("grass_block", item("dirt")?)?],
+        )?);
+        Ok(tables)
     }
 }
 

@@ -1241,3 +1241,60 @@ fn chance_is_strict_at_the_boundaries() {
     assert!(rng.chance(1.0));
     assert!(rng.chance(f32::MIN_POSITIVE));
 }
+
+#[test]
+fn baseline_tables_roll_the_common_drops_bare_handed() {
+    // P14 soak finding: with no pack loaded, breaking common blocks dropped
+    // nothing at all. The baseline covers the eight full-cube cases a bare
+    // hand meets first; pack tables replace them entry-for-entry on load.
+    // Shapes mirror the jar files 1:1 (single-item pools; alternatives with
+    // a silk-touch first child for stone and grass).
+    let tables = LootTables::baseline().expect("hand-written ids parse");
+    assert_eq!(tables.len(), 8, "eight baseline tables");
+    // A break is not an explosion: the caller's context says so, or the
+    // `survives_explosion` pool condition refuses (absence is not neutral).
+    let bare = LootContext {
+        survives_explosion: Some(true),
+        ..tool(&[])
+    };
+    for (block, drop) in [
+        ("minecraft:blocks/stone", "minecraft:cobblestone"),
+        ("minecraft:blocks/grass_block", "minecraft:dirt"),
+        ("minecraft:blocks/cobblestone", "minecraft:cobblestone"),
+        ("minecraft:blocks/dirt", "minecraft:dirt"),
+        ("minecraft:blocks/sand", "minecraft:sand"),
+        ("minecraft:blocks/gravel", "minecraft:gravel"),
+        ("minecraft:blocks/oak_log", "minecraft:oak_log"),
+        ("minecraft:blocks/oak_planks", "minecraft:oak_planks"),
+    ] {
+        let mut rng = SeqRng::new(7);
+        let out = tables
+            .roll_named(&id(block), &mut rng, &bare)
+            .unwrap_or_else(|error| panic!("{block} rolls: {error}"));
+        assert_eq!(out.len(), 1, "{block} drops exactly one stack");
+        assert_eq!(out[0].item, id(drop), "{block} bare-handed");
+        assert_eq!(out[0].count, 1);
+    }
+}
+
+#[test]
+fn baseline_silk_touch_takes_the_first_branch() {
+    // The alternatives shape is load-bearing, not decorative: with silk the
+    // stone stays stone and the grass stays grass.
+    let tables = LootTables::baseline().expect("hand-written ids parse");
+    let silk = LootContext {
+        survives_explosion: Some(true),
+        ..tool(&[("minecraft:silk_touch", 1)])
+    };
+    for (block, drop) in [
+        ("minecraft:blocks/stone", "minecraft:stone"),
+        ("minecraft:blocks/grass_block", "minecraft:grass_block"),
+    ] {
+        let mut rng = SeqRng::new(7);
+        let out = tables
+            .roll_named(&id(block), &mut rng, &silk)
+            .unwrap_or_else(|error| panic!("{block} rolls: {error}"));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].item, id(drop), "{block} with silk");
+    }
+}

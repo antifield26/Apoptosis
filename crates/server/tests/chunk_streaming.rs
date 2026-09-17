@@ -92,7 +92,8 @@ impl Harness {
 }
 
 #[test]
-fn teleporting_away_forgets_the_departed_chunks_by_name() {    let mut harness = Harness::new("p14-forget");
+fn teleporting_away_forgets_the_departed_chunks_by_name() {
+    let mut harness = Harness::new("p14-forget");
     let (id, mut out) = harness.join("Walker");
     harness.run(10);
     let (home_x, home_z) = harness.player_chunk(id);
@@ -228,12 +229,10 @@ fn crossing_into_a_new_chunk_updates_the_cache_center_first() {
     let mut chunks = Vec::new();
     while let Some(raw) = out.try_recv() {
         if raw.id == clientbound::play::SET_CHUNK_CACHE_CENTER {
-            let packet =
-                SetChunkCacheCenter::decode(&raw.payload).expect("a center decodes");
+            let packet = SetChunkCacheCenter::decode(&raw.payload).expect("a center decodes");
             centers.push((packet.x, packet.z));
         } else if raw.id == clientbound::play::LEVEL_CHUNK_WITH_LIGHT {
-            let packet =
-                LevelChunkWithLight::decode(&raw.payload).expect("a chunk decodes");
+            let packet = LevelChunkWithLight::decode(&raw.payload).expect("a chunk decodes");
             chunks.push((packet.chunk_x, packet.chunk_z));
         }
     }

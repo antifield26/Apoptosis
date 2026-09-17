@@ -1185,6 +1185,11 @@ impl Game {
     /// # Errors
     ///
     /// As for [`Game::build`].
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: the hand-written loot baseline parses, and its unit
+    /// tests fail the build if it ever stops doing so.
     pub fn build_with_operators(
         borrowed: Option<&WorldService>,
         owned: Option<WorldService>,
@@ -1280,7 +1285,9 @@ impl Game {
             random_seed: seed,
             random: RandomSource::new(seed),
             spawn_tables: crate::spawn::SpawnTables::vanilla(),
-            loot: mc_data::loot::LootTables::new(),
+            loot: mc_data::loot::LootTables::baseline().expect(
+                "the hand-written loot baseline parses; a failure here is a programmer error",
+            ),
             // Baselines until `load_packs` replaces them with pack conversions
             // (P12-07/08). Failing construction here would refuse to boot over
             // a registry problem, which is startup-time corruption.

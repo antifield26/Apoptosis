@@ -124,21 +124,26 @@ struct Harness {
     _dir: TempDir,
 }
 
+/// Open a live game on a fresh world. The game owns its storage, or it never
+/// generates terrain and every chunk is an all-air placeholder (see
+/// `natural_spawn.rs`).
+fn open_world(tag: &str) -> (Game, tokio::sync::mpsc::Sender<ClientEvent>, TempDir) {
+    let dir = TempDir::new(tag);
+    let config = mc_server::config::StorageConfig {
+        world_dir: dir.path().join("world"),
+        autosave_ticks: 0,
+    };
+    let storage = WorldService::open(&config).expect("world opens");
+    let (tx, rx) = game_channel(256);
+    let game = Game::with_seed_and_storage(storage, 4, rx, mc_server::game::DEFAULT_RANDOM_SEED)
+        .expect("game builds");
+    (game, tx, dir)
+}
+
 impl Harness {
     fn new(tag: &str) -> Self {
-        let dir = TempDir::new(tag);
+        let (mut game, tx, dir) = open_world(tag);
         let namespace = write_fixture_pack(&dir.path().join("pack"));
-        let config = mc_server::config::StorageConfig {
-            world_dir: dir.path().join("world"),
-            autosave_ticks: 0,
-        };
-        let storage = WorldService::open(&config).expect("world opens");
-        let (tx, rx) = game_channel(256);
-        // The game must own its storage, or it never generates terrain and every
-        // chunk is an all-air placeholder (see natural_spawn.rs).
-        let mut game =
-            Game::with_seed_and_storage(storage, 4, rx, mc_server::game::DEFAULT_RANDOM_SEED)
-                .expect("game builds");
 
         // The real loader, so the file-name -> table-name step is exercised.
         let mut report = LootLoadReport::default();
@@ -167,6 +172,24 @@ impl Harness {
         game.set_loot(tables);
         assert_eq!(game.loot().len(), FIXTURE_PACK.len());
 
+        Self {
+            game,
+            events: tx,
+            id: ConnectionId(1),
+            _dir: dir,
+        }
+    }
+
+    /// A live game with no pack loaded: the loot baseline is what breaks roll
+    /// against (P14 soak finding — with no pack, common breaks dropped
+    /// nothing at all).
+    fn new_baseline(tag: &str) -> Self {
+        let (game, tx, dir) = open_world(tag);
+        assert_eq!(
+            game.loot().len(),
+            8,
+            "the default loot is the eight-table baseline"
+        );
         Self {
             game,
             events: tx,
@@ -704,5 +727,39 @@ fn a_full_inventory_leaves_the_leftover_on_the_ground() {
         drops[0].count(),
         5,
         "with every item it had: a refusal must not delete the stack"
+    );
+}
+
+#[test]
+fn breaking_common_blocks_without_a_pack_drops_the_baseline() {
+    // P14 soak finding: with no pack loaded, breaking common blocks dropped
+    // nothing at all (`by_name` missed and the break path moved on). The
+    // eight-table baseline covers the break, with no fixture pack anywhere.
+    let mut harness = Harness::new_baseline("p14-loot-baseline");
+    let mut out = harness.join("Miner");
+    let _ = Harness::drain_ids(&mut out);
+
+    for (block, drop) in [
+        ("minecraft:stone", "minecraft:cobblestone"),
+        ("minecraft:dirt", "minecraft:dirt"),
+    ] {
+        let (fx, fy, fz) = harness.feet();
+        let target = (fx, fy - 1, fz);
+        harness.place(target.0, target.1, target.2, block);
+        harness.dig(target.0, target.1, target.2);
+        let want = harness.item_id(drop);
+        let drops = ground(&harness);
+        assert!(
+            drops
+                .iter()
+                .any(|stack| stack.item_id() == Some(want) && stack.count() == 1),
+            "breaking {block} with no pack must drop 1 {drop}; saw {drops:?}"
+        );
+    }
+
+    let ids = Harness::drain_ids(&mut out);
+    assert!(
+        ids.contains(&clientbound::play::ADD_ENTITY),
+        "the baseline drops are announced; saw {ids:?}"
     );
 }
