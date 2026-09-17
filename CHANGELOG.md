@@ -50,6 +50,24 @@ real placements lights 14/13/lit on flip and goes dark on flip-off, with
 `block_update`s observed. The golden lever—wire—lamp circuit now asserts the
 lit state instead of the old passive pin.
 
+### P13-05 — wire length measured against vanilla (KD-12 closed)
+
+The wiki's "up to 15 blocks" was never verified here, and the model read it as
+14 (first dust charged an attenuation step). The instrument is a real 26.1.2
+server: `target/p13_wire_run.py` boots the official jar on an isolated port
+(25699 — never 25565), builds lever + 15 dust on a stone platform with
+`setblock`, lets scheduled ticks settle, and `save-all`s; `target/p13_wire_read.py`
+unpacks the Anvil palette straight from the saved region. Result, twice (two
+rows, built in opposite order, agreeing cell for cell): **15, 14, …, 2, 1** —
+the first dust carries the full strength. `WIRE_LIVE_BLOCKS` is 15, the golden
+tables move up one (lever—wire—lamp now 15/live + lit at the end of a full
+line), and the rule is restated so machines read dust at the vanilla level:
+dust is cited at full strength, and the wire receipt subtracts one per dust
+face (a direct source still wins ties). The comparator-behind-dust golden now
+expects the full 14. A tainted run is recorded, not hidden: re-touching the
+far block 4 s before the save read it as 0, because replaced dust is never
+re-evaluated once its neighbours are stable.
+
 ### P13-04 — component directionality: torch attachment, comparator sides
 
 New `BlockRole::Mechanism` drives the redstone lamp; now torches read their

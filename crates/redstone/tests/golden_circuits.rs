@@ -9,11 +9,12 @@
 //! The wire rule under test, stated once:
 //!
 //! ```text
-//! wire_power(x) = (strongest emission among the six neighbours) - 1, floored at 0
+//! wire_power(x) = 16 - x for a 15-strength source at x = 0
 //! ```
 //!
-//! so a 15-strength source at x = 0 gives wire(1) = 14, wire(2) = 13, ... wire(14) = 1,
-//! wire(15) = 0. That is `WIRE_LIVE_BLOCKS` = 14 live wire blocks.
+//! so a 15-strength source at x = 0 gives wire(1) = 15, wire(2) = 14, ... wire(15) = 1,
+//! wire(16) = 0. That is `WIRE_LIVE_BLOCKS` = 15 live wire blocks (P13-05, measured
+//! on a real 26.1.2 server).
 
 mod common;
 
@@ -47,17 +48,18 @@ fn is_lit(
 fn golden_lever_fifteen_blocks_of_wire_and_a_lamp() {
     // Layout, all on y = 0 with the wire resting on nothing this model cares about:
     //
-    //   x:  0        1   2   3  ...                              15   16
+    //   x:  0        1   2   3  ...                              16   17
     //       lever    w   w   w   ...                              w    lamp
     //
-    // Hand-computed expectation (the lever emits 15 weakly, then one attenuation per block):
+    // Hand-computed expectation (P13-05, measured: the first dust carries the
+    // full strength, then one attenuation per block):
     //
-    //   wire(1) = 14   wire(2) = 13   wire(3) = 12   ...   wire(13) = 2   wire(14) = 1
-    //   wire(15) = 0   (so the lamp at x = 16 is off)
+    //   wire(1) = 15   wire(2) = 14   wire(3) = 13   ...   wire(14) = 2   wire(15) = 1
+    //   wire(16) = 0   (so the lamp at x = 17 is off)
     //
-    // The lamp is `minecraft:redstone_lamp`, which this pass does **not** implement: it is
-    // `Passive` and never lights. Its role here is to be the thing whose *input* can be read, so
-    // the test asserts the power the lamp would receive rather than a lit state.
+    // The lamp is `minecraft:redstone_lamp`, the driven mechanism (P13-03): the first
+    // half asserts it stays dark off a dead wire, the second half that it lights
+    // off a live one.
     let registry = registry();
     let table = table(&registry);
     let mut world = flat();
@@ -65,11 +67,11 @@ fn golden_lever_fifteen_blocks_of_wire_and_a_lamp() {
         BlockPos::new(0, 0, 0),
         component(&registry, ComponentState::Lever(Lever::new(true))),
     );
-    for x in 1..=15 {
+    for x in 1..=16 {
         world.set(BlockPos::new(x, 0, 0), w(&registry, 0));
     }
     world.set(
-        BlockPos::new(16, 0, 0),
+        BlockPos::new(17, 0, 0),
         block(&registry, "minecraft:redstone_lamp"),
     );
 
@@ -81,69 +83,70 @@ fn golden_lever_fifteen_blocks_of_wire_and_a_lamp() {
         "this circuit must fit the nominal budget"
     );
 
-    // The 14 live wire blocks, spelled out one number per position.
-    let expected: [(BlockPos, u8); 15] = [
-        (BlockPos::new(1, 0, 0), 14),
-        (BlockPos::new(2, 0, 0), 13),
-        (BlockPos::new(3, 0, 0), 12),
-        (BlockPos::new(4, 0, 0), 11),
-        (BlockPos::new(5, 0, 0), 10),
-        (BlockPos::new(6, 0, 0), 9),
-        (BlockPos::new(7, 0, 0), 8),
-        (BlockPos::new(8, 0, 0), 7),
-        (BlockPos::new(9, 0, 0), 6),
-        (BlockPos::new(10, 0, 0), 5),
-        (BlockPos::new(11, 0, 0), 4),
-        (BlockPos::new(12, 0, 0), 3),
-        (BlockPos::new(13, 0, 0), 2),
-        (BlockPos::new(14, 0, 0), 1),
-        // The 15th wire block is off: the signal died after 14 blocks of dust.
-        (BlockPos::new(15, 0, 0), 0),
+    // The 15 live wire blocks, spelled out one number per position.
+    let expected: [(BlockPos, u8); 16] = [
+        (BlockPos::new(1, 0, 0), 15),
+        (BlockPos::new(2, 0, 0), 14),
+        (BlockPos::new(3, 0, 0), 13),
+        (BlockPos::new(4, 0, 0), 12),
+        (BlockPos::new(5, 0, 0), 11),
+        (BlockPos::new(6, 0, 0), 10),
+        (BlockPos::new(7, 0, 0), 9),
+        (BlockPos::new(8, 0, 0), 8),
+        (BlockPos::new(9, 0, 0), 7),
+        (BlockPos::new(10, 0, 0), 6),
+        (BlockPos::new(11, 0, 0), 5),
+        (BlockPos::new(12, 0, 0), 4),
+        (BlockPos::new(13, 0, 0), 3),
+        (BlockPos::new(14, 0, 0), 2),
+        (BlockPos::new(15, 0, 0), 1),
+        // The 16th wire block is off: the signal died after 15 blocks of dust.
+        (BlockPos::new(16, 0, 0), 0),
     ];
     common::assert_wire_powers(&world, &registry, &expected);
 
-    // What the lamp reads: the strongest neighbour emission. Its only live neighbour is the
-    // dead wire at x = 15, so it reads nothing. (Vanilla would also be dark here.)
+    // What the lamp reads: its only neighbour is the dead wire at x = 16, so it
+    // reads nothing. (Vanilla would also be dark here.)
     assert_eq!(
-        common::emitted_at(&world, &registry, BlockPos::new(15, 0, 0)).effective(),
+        common::emitted_at(&world, &registry, BlockPos::new(16, 0, 0)).effective(),
         PowerLevel::ZERO
     );
     assert_eq!(
-        table.classify(world.get(BlockPos::new(16, 0, 0)).expect("lamp")),
+        table.classify(world.get(BlockPos::new(17, 0, 0)).expect("lamp")),
         BlockRole::Mechanism,
         "the lamp is the driven mechanism (P13-03)"
     );
     assert!(
-        !is_lit(&world, &registry, BlockPos::new(16, 0, 0)),
+        !is_lit(&world, &registry, BlockPos::new(17, 0, 0)),
         "with a dead neighbour the lamp stays dark"
     );
 
-    // Now shorten the line to 13 blocks so the lamp does have a live neighbour, and check that
+    // Now shorten the line to 14 blocks so the lamp does have a live neighbour, and check that
     // the number the lamp reads is the one the model computed for the adjacent wire.
     let mut world = flat();
     world.set(
         BlockPos::new(0, 0, 0),
         component(&registry, ComponentState::Lever(Lever::new(true))),
     );
-    for x in 1..=13 {
+    for x in 1..=14 {
         world.set(BlockPos::new(x, 0, 0), w(&registry, 0));
     }
     world.set(
-        BlockPos::new(14, 0, 0),
+        BlockPos::new(15, 0, 0),
         block(&registry, "minecraft:redstone_lamp"),
     );
     let mut queue = UpdateQueue::new();
     prepare(&mut queue, BlockPos::new(0, 0, 0));
     propagate(&mut world, &mut queue, table, UpdateBudget::nominal());
     assert_eq!(
-        wire_power_at(&world, &registry, BlockPos::new(13, 0, 0)),
+        wire_power_at(&world, &registry, BlockPos::new(14, 0, 0)),
         Some(2)
     );
-    let lamp_input = common::emitted_at(&world, &registry, BlockPos::new(13, 0, 0));
+    let lamp_input = common::emitted_at(&world, &registry, BlockPos::new(14, 0, 0));
     assert_eq!(
         lamp_input.effective().get(),
         2,
-        "the lamp at x = 14 reads the wire at x = 13, which carries 2"
+        "the lamp at x = 15 reads the wire at x = 14, which carries 2"
     );
     assert!(
         lamp_input.effective().is_powered(),
@@ -151,7 +154,7 @@ fn golden_lever_fifteen_blocks_of_wire_and_a_lamp() {
     );
     // And the mechanism half: propagate writes `lit` back, so the lamp is lit.
     assert!(
-        is_lit(&world, &registry, BlockPos::new(14, 0, 0)),
+        is_lit(&world, &registry, BlockPos::new(15, 0, 0)),
         "a powered lamp must be lit after propagation"
     );
 }
@@ -176,7 +179,7 @@ fn golden_torch_inverter_inverts_its_attachment_block() {
     let table = table(&registry);
 
     // Case 1: the torch is lit, which is the state of a freshly placed torch with no power on its
-    // attachment. The wire next to it carries 14 and the next one 13.
+    // attachment. The wire next to it carries 15 and the next one 14.
     let mut world = flat();
     world.set(
         BlockPos::new(0, 0, 0),
@@ -190,7 +193,7 @@ fn golden_torch_inverter_inverts_its_attachment_block() {
     common::assert_wire_powers(
         &world,
         &registry,
-        &[(BlockPos::new(1, 0, 0), 14), (BlockPos::new(2, 0, 0), 13)],
+        &[(BlockPos::new(1, 0, 0), 15), (BlockPos::new(2, 0, 0), 14)],
     );
 
     // Case 2: the torch is dark because its attachment is powered, so it stays
@@ -235,7 +238,7 @@ fn golden_repeater_with_its_documented_delay() {
     //       repeater   w   w   w   w   w
     //
     // The repeater is `powered = true`, so it emits 15 and the dust restarts its count from
-    // there: wire(1) = 14, wire(2) = 13, wire(3) = 12, wire(4) = 11, wire(5) = 10.
+    // there: wire(1) = 15, wire(2) = 14, wire(3) = 13, wire(4) = 12, wire(5) = 11.
     //
     // The delay is *stored*, not waited on: `Repeater::MAX_DELAY` = 4 game ticks comes from the
     // `delay=1|2|3|4` property in the registry fixture (dumped from the 26.1.2 data), and this
@@ -265,11 +268,11 @@ fn golden_repeater_with_its_documented_delay() {
         &world,
         &registry,
         &[
-            (BlockPos::new(1, 0, 0), 14),
-            (BlockPos::new(2, 0, 0), 13),
-            (BlockPos::new(3, 0, 0), 12),
-            (BlockPos::new(4, 0, 0), 11),
-            (BlockPos::new(5, 0, 0), 10),
+            (BlockPos::new(1, 0, 0), 15),
+            (BlockPos::new(2, 0, 0), 14),
+            (BlockPos::new(3, 0, 0), 13),
+            (BlockPos::new(4, 0, 0), 12),
+            (BlockPos::new(5, 0, 0), 11),
         ],
     );
 
@@ -326,7 +329,7 @@ fn golden_comparator_reads_the_wire_behind_it() {
     //       lever    w   w   comparator
     //
     // The comparator faces east here (its back is the wire at x = 2), so it
-    // passes 13 through in compare mode with no side input. Facing is part of
+    // passes 14 through in compare mode with no side input. Facing is part of
     // the state under test since P13-04: the same rig with the wire on a side
     // face outputs nothing (see the unit test for back/side separation).
     let registry = registry();
@@ -358,24 +361,24 @@ fn golden_comparator_reads_the_wire_behind_it() {
     common::assert_wire_powers(
         &world,
         &registry,
-        &[(BlockPos::new(1, 0, 0), 14), (BlockPos::new(2, 0, 0), 13)],
+        &[(BlockPos::new(1, 0, 0), 15), (BlockPos::new(2, 0, 0), 14)],
     );
-    // Hand-computed: the comparator's strongest neighbour is wire(2) at 13, and compare mode with
-    // no side input passes 13 through.
+    // Hand-computed: the comparator's back is wire(2) at 14, and compare mode with
+    // no side input passes 14 through.
     assert_eq!(
         common::emitted_at(&world, &registry, BlockPos::new(3, 0, 0))
             .effective()
             .get(),
-        13
+        14
     );
     // The pure arithmetic is unchanged: subtract takes the side off.
     assert_eq!(
-        Comparator::new(ComparatorMode::Subtract).level(level(13), PowerLevel::ZERO),
-        level(13)
+        Comparator::new(ComparatorMode::Subtract).level(level(14), PowerLevel::ZERO),
+        level(14)
     );
     assert_eq!(
-        Comparator::new(ComparatorMode::Subtract).level(level(13), level(5)),
-        level(8)
+        Comparator::new(ComparatorMode::Subtract).level(level(14), level(5)),
+        level(9)
     );
 }
 
@@ -394,7 +397,7 @@ fn golden_a_torch_clock_advances_one_scheduled_tick_per_tick() {
         BlockPos::new(0, 0, 0),
         block(&registry, "minecraft:redstone_block"),
     );
-    world.set(BlockPos::new(1, 0, 0), w(&registry, 14));
+    world.set(BlockPos::new(1, 0, 0), w(&registry, 15));
     let clock = BlockPos::new(1, 0, 0);
     let mut queue = UpdateQueue::new();
     assert!(queue.schedule(0, clock, 1).is_ok());
@@ -434,8 +437,8 @@ fn golden_a_torch_clock_advances_one_scheduled_tick_per_tick() {
         );
         assert_eq!(
             wire_power_at(&world, &registry, clock),
-            Some(14),
-            "tick {tick}: the wire is stable at 14"
+            Some(15),
+            "tick {tick}: the wire is stable at 15"
         );
     }
 }

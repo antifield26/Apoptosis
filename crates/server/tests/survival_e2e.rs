@@ -1362,13 +1362,13 @@ fn a_flipped_lever_powers_dust_and_lights_a_lamp() {
     }
     assert_eq!(
         wire_power(&harness, at[1].0, at[1].1, at[1].2).as_deref(),
-        Some("14"),
-        "the near wire must carry 14"
+        Some("15"),
+        "the near wire must carry 15 (P13-05, measured)"
     );
     assert_eq!(
         wire_power(&harness, at[2].0, at[2].1, at[2].2).as_deref(),
-        Some("13"),
-        "the far wire must carry 13"
+        Some("14"),
+        "the far wire must carry 14"
     );
     assert_eq!(
         lamp_lit(&harness, at[3].0, at[3].1, at[3].2).as_deref(),
@@ -1535,7 +1535,7 @@ fn a_torch_follows_its_attachment_not_its_neighbours() {
         harness.game.tick().expect("tick");
     }
     assert_eq!(lit(&harness).as_deref(), Some("true"));
-    assert_eq!(power(&harness).as_deref(), Some("14"));
+    assert_eq!(power(&harness).as_deref(), Some("15"));
     let _ = Harness::drain_ids(&mut out);
 }
 

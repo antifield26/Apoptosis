@@ -58,10 +58,11 @@ fn reads_come_from_the_world_and_writes_are_recorded_in_its_change_list() {
     prepare(&mut queue, BlockPos::new(0, 64, 0));
     let report = propagate(&mut world, &mut queue, table, UpdateBudget::nominal());
 
-    // The four wires changed, and the power is the hand-computed 14, 13, 12, 11.
+    // The four wires changed, and the power is the hand-computed 15, 14, 13, 12
+    // (P13-05, measured: the first dust off a source carries the full strength).
     assert_eq!(report.blocks_changed, 4, "four wires change");
     for (index, x) in (1..=4).enumerate() {
-        let expected = 14 - u8::try_from(index).expect("fits");
+        let expected = 15 - u8::try_from(index).expect("fits");
         let id = world.get_block(x, 64, 0);
         assert_eq!(
             table.classify(id),

@@ -58,8 +58,8 @@ fn a_tiny_budget_bounds_each_tick_exactly() {
     // The strongest form of the requirement: a 17-block line with a 3-update budget must take many
     // ticks, must process at most 3 per tick, and must keep the leftover queued.
     //
-    // Hand-computed final state: `wire(x) = max(0, 15 - x)`, so 14, 13, ... 1 for x = 1..=14 and **0
-    // for x = 15, 16, 17** — the line is deliberately longer than the signal reaches, so the test also
+    // Hand-computed final state: `wire(x) = 16 - x`, so 15, 14, ... 1 for x = 1..=15 and **0
+    // for x = 16, 17** — the line is deliberately longer than the signal reaches, so the test also
     // covers "a wire beyond the reach stays off and does not stall the queue".
     let registry = registry();
     let table = table(&registry);
@@ -69,7 +69,7 @@ fn a_tiny_budget_bounds_each_tick_exactly() {
     assert!(!queue.is_empty(), "there is work to do");
 
     let final_power =
-        |pos: BlockPos| Some(15u8.saturating_sub(u8::try_from(pos.x).expect("x fits in u8")));
+        |pos: BlockPos| Some(16u8.saturating_sub(u8::try_from(pos.x).expect("x fits in u8")));
 
     let mut ticks = 0usize;
     let mut total = 0usize;
@@ -131,9 +131,9 @@ fn a_tiny_budget_bounds_each_tick_exactly() {
         "the 17th wire block is beyond the signal's reach"
     );
     assert_eq!(
-        common::wire_power_at(&world, &registry, positions[13]),
+        common::wire_power_at(&world, &registry, positions[14]),
         Some(1),
-        "the 14th is the last live one"
+        "the 15th is the last live one (P13-05, measured)"
     );
 }
 
@@ -218,8 +218,11 @@ fn a_clock_never_grows_the_queue_and_never_hangs() {
             "tick {tick}: a single clock must not accumulate a backlog, queue.len() = {}",
             queue.len()
         );
-        assert!(
-            common::wire_power_at(&world, &registry, clock) == Some(14),
+        // P13-05: dust next to a source carries the full strength, so the wire
+        // reads 15 from the first tick on and never drifts after.
+        assert_eq!(
+            common::wire_power_at(&world, &registry, clock),
+            Some(15),
             "tick {tick}: the clock's value does not drift"
         );
     }
@@ -330,7 +333,7 @@ fn prepare_self_and_run_block_tick_do_not_lose_a_position_across_a_budget_split(
     prepare(&mut queue, BlockPos::new(0, 0, 0));
     prepare_self(&mut queue, BlockPos::new(1, 0, 0));
 
-    let final_power = |pos: BlockPos| Some(15 - u8::try_from(pos.x).expect("fits"));
+    let final_power = |pos: BlockPos| Some(16u8.saturating_sub(u8::try_from(pos.x).expect("fits")));
     let mut tick = 0u64;
     let mut finished = false;
     while tick < 5000 {

@@ -103,28 +103,22 @@ pub const WIRE_ATTENUATION_PER_BLOCK: u8 = 1;
 /// and 0 is off.
 pub const MIN_LIVE_WIRE_POWER: u8 = 1;
 
-/// How many wire blocks in a straight line away from a source carry a non-zero signal, in
-/// this model.
+/// How many wire blocks in a straight line away from a source carry a non-zero signal.
 ///
-/// **derived**, and deliberately *one less* than the wiki's phrasing, which is spelled out
-/// here rather than hidden:
+/// **measured on a real 26.1.2 server (P13-05)**: a powered lever with dust at
+/// x=1..15 reads 15, 14, …, 2, 1 — the first dust carries the full strength,
+/// then one per block, for 15 live blocks. Method: `target/p13_wire_run.py`
+/// boots the official jar, builds the line with `setblock`, lets scheduled
+/// ticks settle, and `save-all`s; `target/p13_wire_read.py` unpacks the Anvil
+/// palette straight from the saved region. Two independent rows (z=0 built
+/// last, z=1 built first) agree cell for cell; the world, both scripts and the
+/// console log are preserved under `target/p13-wire/`. An earlier run that
+/// re-touched the far block 4 s before the save read it as 0 — replaced dust
+/// is never re-evaluated once its neighbours are stable — and is recorded here
+/// so the tainted cell is not mistaken for physics.
 ///
-/// - minecraft.wiki, *Redstone mechanics* section "Signal transmission" says "Redstone dust
-///   can thus transmit a signal up to 15 blocks by itself".
-/// - The rule this crate applies to a wire is "the strongest neighbouring emission minus
-///   [`WIRE_ATTENUATION_PER_BLOCK`]", so the wire immediately next to a 15-strength source
-///   carries 14, not 15. The line then reads 14, 13, ... 1 and the 15th wire block is at 0.
-/// - That is `MAX_POWER - WIRE_ATTENUATION_PER_BLOCK` live blocks, which is 14.
-///
-/// The off-by-one is a real difference from the wiki's sentence, not a rounding artefact: this
-/// model charges the first wire block one attenuation step, while the wiki's sentence counts
-/// the source's own strength as the first block. Which of the two matches 26.1.2 is **not
-/// verified here**; the implemented number is 14, `tests/propagation.rs` asserts 14, and this
-/// constant exists so the number has one name.
-///
-/// **derived** arithmetic: `MAX_POWER / WIRE_ATTENUATION_PER_BLOCK - 1 = 14`.
-pub const WIRE_LIVE_BLOCKS: u32 =
-    MAX_POWER as u32 / WIRE_ATTENUATION_PER_BLOCK as u32 - WIRE_ATTENUATION_PER_BLOCK as u32;
+/// **derived** arithmetic: `MAX_POWER / WIRE_ATTENUATION_PER_BLOCK = 15`.
+pub const WIRE_LIVE_BLOCKS: u32 = MAX_POWER as u32 / WIRE_ATTENUATION_PER_BLOCK as u32;
 
 /// A readable and writable view of block states, as the algorithm needs it.
 ///
@@ -152,8 +146,8 @@ pub trait BlockView {
 /// The three roles a block can play in this model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockRole {
-    /// Redstone dust: takes the strongest neighbouring emission, minus attenuation, and
-    /// stores it in its `power` property.
+    /// Redstone dust: takes the strongest neighbouring emission, minus one per
+    /// dust face, and stores it in its `power` property.
     Wire {
         /// The power level currently stored in the block state.
         stored: PowerLevel,
@@ -232,13 +226,28 @@ impl EmitterOutput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockInputs {
     /// Emissions of `down, up, north(-z), south(+z), west(-x), east(+x)`.
+    ///
+    /// Dust is cited at its full stored level here; the one-step attenuation
+    /// for dust-to-dust lives in the wire receipt rule (P13-05, measured), keyed
+    /// off [`BlockInputs::dust`], so machines (comparators, lamps, torches) read
+    /// dust at the level vanilla shows them.
     pub faces: [EmitterOutput; 6],
+    /// Whether the cited neighbour on each face is itself dust.
+    ///
+    /// Only dust-to-dust attenuates: a wire receipt subtracts one per dust face
+    /// and takes the maximum, so the first dust off a source carries the full
+    /// strength and each further block one less, while a comparator behind the
+    /// same dust reads the full level. Synthetic inputs built by tests leave
+    /// this all false, i.e. "no neighbour is dust", so receipt takes the plain
+    /// maximum.
+    pub dust: [bool; 6],
 }
 
 impl BlockInputs {
     /// No input from any face.
     pub const NONE: Self = Self {
         faces: [EmitterOutput::OFF; 6],
+        dust: [false; 6],
     };
 
     /// The strongest emission across the six faces.
@@ -494,10 +503,12 @@ impl<'a> EmitterTable<'a> {
     ///   strongest neighbour and its side inputs to be zero, so it behaves as a
     ///   compare-mode pass-through. Its real side inputs are the two perpendicular faces,
     ///   which need orientation.
-    /// - [`BlockRole::Wire`] -> the strongest neighbour emission minus
-    ///   [`WIRE_ATTENUATION_PER_BLOCK`], saturating at 0, emitted **weakly**. A wire never
-    ///   emits strongly, which is this model's form of "a block becomes weakly powered
-    ///   when it is powered only by redstone dust".
+    /// - [`BlockRole::Wire`] -> the strongest neighbouring emission, minus one per
+    ///   dust face, emitted **weakly**. Dust faces attenuate (P13-05, measured);
+    ///   any other face passes through, so the first dust off a source carries
+    ///   the full strength. A wire never emits strongly, which is this model's
+    ///   form of "a block becomes weakly powered when it is powered only by
+    ///   redstone dust".
     /// - [`BlockRole::Passive`] and [`BlockRole::Mechanism`] -> off. A mechanism's
     ///   reaction is a state write in [`EmitterTable::new_state`], not an emission.
     ///
@@ -514,11 +525,22 @@ impl<'a> EmitterTable<'a> {
     #[must_use]
     pub fn emitted(&self, role: BlockRole, inputs: &BlockInputs) -> EmitterOutput {
         match role {
+            // P13-05, measured: dust-to-dust steps down one per block while any
+            // other neighbour passes through at full strength, so the first
+            // dust off a source carries 15 and each further block one less.
+            // Per-face, so a direct source wins ties against attenuated dust.
             BlockRole::Wire { .. } => {
-                let strongest = inputs.strongest().effective();
-                EmitterOutput::of(PowerState::weak_only(
-                    strongest.saturating_sub(WIRE_ATTENUATION_PER_BLOCK),
-                ))
+                let mut best = PowerLevel::ZERO;
+                for (face, is_dust) in inputs.faces.iter().zip(inputs.dust.iter()) {
+                    let mut level = face.effective();
+                    if *is_dust {
+                        level = PowerLevel::from_raw(
+                            level.get().saturating_sub(WIRE_ATTENUATION_PER_BLOCK),
+                        );
+                    }
+                    best = best.max(level);
+                }
+                EmitterOutput::of(PowerState::weak_only(best))
             }
             BlockRole::Emitter { source } => {
                 let state = match source {
@@ -731,18 +753,16 @@ fn comparator_faces(facing: &str) -> (usize, usize, usize) {
 /// A block's inputs: what each of its six neighbours currently emits.
 ///
 /// A wire's emission depends on *its* neighbours' emissions, so this walks exactly one
-/// step further and stops. Three things keep that finite and cheap:
+/// step further and stops. Dust is cited at its full stored level; the wire receipt
+/// rule subtracts one per dust face (see [`EmitterTable::emitted`]). Two things keep
+/// that finite and cheap:
 ///
-/// - a wire's own stored `power` is only used for a *neighbouring* wire, never for
-///   itself, so a wire cannot cite itself;
 /// - [`BlockRole::Passive`] emits nothing, terminating most walks immediately;
-/// - a neighbouring wire is read from its stored `power` property rather than by
-///   recursing again, so a dust loop terminates instead of recursing forever.
+/// - non-wire neighbours are read live from their stored state, so a freshly
+///   flipped lever is visible without waiting for its own update.
 ///
-/// The result is that a wire's power here is always "one attenuation step from what its
-/// neighbours currently emit", which is the same rule the propagation loop applies when it
-/// recomputes that wire directly. They agree by construction, and
-/// `tests/golden_circuits.rs` checks the numbers.
+/// `tests/golden_circuits.rs` checks the resulting numbers cell for cell against
+/// the measured line.
 #[must_use]
 pub fn gather_inputs<V: BlockView + ?Sized>(
     world: &V,
@@ -750,14 +770,18 @@ pub fn gather_inputs<V: BlockView + ?Sized>(
     pos: BlockPos,
 ) -> BlockInputs {
     let mut faces = [EmitterOutput::OFF; 6];
+    let mut dust = [false; 6];
     for (index, neighbour) in NeighbourSet::of(pos).into_iter().enumerate() {
         let Some(neighbour_id) = world.get_state(neighbour) else {
             continue;
         };
         faces[index] = match table.classify(neighbour_id) {
+            // P13-05: cited at full strength — the attenuation step lives in the
+            // wire receipt rule, so machines read dust at the level vanilla
+            // shows them while dust-to-dust still steps down.
             BlockRole::Wire { stored } => {
-                let inner = gather_wire_inputs(world, table, neighbour);
-                table.emitted(BlockRole::Wire { stored }, &inner)
+                dust[index] = true;
+                EmitterOutput::of(PowerState::weak_only(stored))
             }
             // A component's emission is read from its own state, which is why this goes
             // through the id: an unlit torch must emit nothing here.
@@ -766,29 +790,7 @@ pub fn gather_inputs<V: BlockView + ?Sized>(
             BlockRole::Mechanism | BlockRole::Passive => EmitterOutput::OFF,
         };
     }
-    BlockInputs { faces }
-}
-
-/// The inputs of a wire's own neighbours, one level deep and then read from state.
-fn gather_wire_inputs<V: BlockView + ?Sized>(
-    world: &V,
-    table: EmitterTable<'_>,
-    wire: BlockPos,
-) -> BlockInputs {
-    let mut faces = [EmitterOutput::OFF; 6];
-    for (index, neighbour) in NeighbourSet::of(wire).into_iter().enumerate() {
-        let Some(neighbour_id) = world.get_state(neighbour) else {
-            continue;
-        };
-        faces[index] = match table.classify(neighbour_id) {
-            // A wire next to a wire cites the stored level instead of recursing, so a
-            // dust loop reads its own previous state rather than recursing forever.
-            BlockRole::Wire { stored } => EmitterOutput::of(PowerState::weak_only(stored)),
-            BlockRole::Emitter { .. } => table.emitted_for_id(neighbour_id, &BlockInputs::NONE),
-            BlockRole::Mechanism | BlockRole::Passive => EmitterOutput::OFF,
-        };
-    }
-    BlockInputs { faces }
+    BlockInputs { faces, dust }
 }
 
 /// One block that changed, in the order it changed.
@@ -1281,14 +1283,14 @@ mod tests {
     #[test]
     fn the_wire_rule_is_one_strength_per_block() {
         assert_eq!(WIRE_ATTENUATION_PER_BLOCK, 1);
-        assert_eq!(WIRE_LIVE_BLOCKS, 14);
+        assert_eq!(WIRE_LIVE_BLOCKS, 15);
         assert_eq!(MIN_LIVE_WIRE_POWER, 1);
         // `WIRE_LIVE_BLOCKS` is a consequence of the other two, not a third number to keep
-        // in sync. It is one less than `MAX_POWER / attenuation` because the first wire takes
-        // one attenuation step off the source; see the constant's docs.
+        // in sync: the first dust off a source carries the full strength (P13-05, measured),
+        // then one per block, so 15 blocks read 15 down to 1. See the constant's docs.
         assert_eq!(
             WIRE_LIVE_BLOCKS,
-            u32::from(MAX_POWER) / u32::from(WIRE_ATTENUATION_PER_BLOCK) - 1
+            u32::from(MAX_POWER) / u32::from(WIRE_ATTENUATION_PER_BLOCK)
         );
     }
 
@@ -1332,9 +1334,12 @@ mod tests {
     }
 
     #[test]
-    fn a_wire_takes_one_step_off_its_strongest_neighbour() {
+    fn a_wire_takes_the_strongest_cited_emission() {
         let registry = registry();
         let table = EmitterTable::new(&registry);
+        // P13-05, measured: attenuation happens per dust face at receipt, so a
+        // synthetic input with no dust faces takes the plain maximum. A source
+        // next to a wire gives the wire the full strength.
         for source in [
             PowerSource::RedstoneBlock,
             PowerSource::Torch,
@@ -1348,8 +1353,8 @@ mod tests {
             };
             assert_eq!(
                 table.emitted(role, &inputs).effective(),
-                level(MAX_POWER - WIRE_ATTENUATION_PER_BLOCK),
-                "{source} next to a wire must give the wire 14"
+                level(MAX_POWER),
+                "{source} next to a wire must give the wire the full strength"
             );
             assert!(
                 !table.emitted(role, &inputs).is_strong(),

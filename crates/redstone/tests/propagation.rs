@@ -90,21 +90,21 @@ fn line_with_source(
 #[test]
 fn the_attenuation_rule_is_the_documented_one() {
     assert_eq!(WIRE_ATTENUATION_PER_BLOCK, 1);
-    // The *live* reach is 15 / 1 - 1 = 14, because the first wire already takes one step off
-    // the source. `WIRE_LIVE_BLOCKS` documents why that is one less than the wiki's "15
-    // blocks" phrasing; the test below asserts the 14 empirically.
-    assert_eq!(WIRE_LIVE_BLOCKS, 14);
+    // The *live* reach is 15 / 1 = 15: the first dust off a source carries the
+    // full strength (P13-05, measured on a real 26.1.2 server), then one per
+    // block. `WIRE_LIVE_BLOCKS` documents the measurement.
+    assert_eq!(WIRE_LIVE_BLOCKS, 15);
     assert_eq!(
         WIRE_LIVE_BLOCKS,
-        u32::from(MAX_POWER) / u32::from(WIRE_ATTENUATION_PER_BLOCK) - 1
+        u32::from(MAX_POWER) / u32::from(WIRE_ATTENUATION_PER_BLOCK)
     );
 }
 
 #[test]
 fn power_attenuates_by_exactly_one_per_block_from_a_strong_source() {
     // A block of redstone at (0,0,0), wire at x = 1..=15. Hand-computed expectation:
-    //   wire(x) = 15 - x   for x in 1..=15
-    // so wire(1) = 14 and wire(15) = 0. The value at x = 0 is the source itself.
+    //   wire(x) = 16 - x   for x in 1..=15
+    // so wire(1) = 15 and wire(15) = 1. The value at x = 0 is the source itself.
     let registry = registry();
     let (world, _, positions) = line_with_source(block(&registry, "minecraft:redstone_block"), 15);
     let expected: Vec<(BlockPos, u8)> = (0..15)
@@ -112,7 +112,7 @@ fn power_attenuates_by_exactly_one_per_block_from_a_strong_source() {
             let x = index + 1;
             (
                 BlockPos::new(x, 0, 0),
-                MAX_POWER - u8::try_from(x).expect("x fits in u8"),
+                16 - u8::try_from(x).expect("x fits in u8"),
             )
         })
         .collect();
@@ -124,32 +124,32 @@ fn power_attenuates_by_exactly_one_per_block_from_a_strong_source() {
         wire_emission(&world, &registry, BlockPos::new(1, 0, 0))
             .effective()
             .get(),
-        14
+        15
     );
     assert_eq!(
         wire_emission(&world, &registry, BlockPos::new(2, 0, 0))
             .effective()
             .get(),
-        13
+        14
     );
     assert_eq!(
         wire_emission(&world, &registry, BlockPos::new(7, 0, 0))
             .effective()
             .get(),
-        8
+        9
     );
     assert_eq!(
         wire_emission(&world, &registry, BlockPos::new(14, 0, 0))
             .effective()
             .get(),
-        1
+        2
     );
     assert_eq!(
         wire_emission(&world, &registry, BlockPos::new(15, 0, 0))
             .effective()
             .get(),
-        0,
-        "15 blocks from the source is the documented end of the signal"
+        1,
+        "15 blocks from the source is the measured end of the signal (P13-05)"
     );
     // The source itself is unaffected: a redstone block is not a wire.
     assert!(matches!(
@@ -161,12 +161,12 @@ fn power_attenuates_by_exactly_one_per_block_from_a_strong_source() {
 }
 
 #[test]
-fn the_signal_reaches_exactly_fourteen_live_wire_blocks_and_no_further() {
+fn the_signal_reaches_exactly_fifteen_live_wire_blocks_and_no_further() {
     // The reach is a property of the *chain*, so it is tested on a line longer than the
     // reach. Hand-computed expectation for a 15-strength source at (0,0,0):
-    //   wire(x) = 15 - x, so wire(14) = 1 is the last live block and wire(15) = 0.
-    // 14 live blocks, which is `WIRE_LIVE_BLOCKS`. The wiki's sentence says "up to 15 blocks";
-    // the difference is documented on that constant rather than papered over.
+    //   wire(x) = 16 - x, so wire(15) = 1 is the last live block and wire(16) = 0.
+    // 15 live blocks, which is `WIRE_LIVE_BLOCKS`, matching the wiki's sentence
+    // and the P13-05 vanilla measurement.
     let registry = registry();
     let (world, _, _) = line_with_source(block(&registry, "minecraft:redstone_block"), 20);
     let live: Vec<i32> = wire_line(20)
@@ -180,19 +180,19 @@ fn the_signal_reaches_exactly_fourteen_live_wire_blocks_and_no_further() {
         .collect();
     assert_eq!(
         live,
-        (1..=14).collect::<Vec<i32>>(),
-        "exactly the first 14 wire blocks carry a signal"
+        (1..=15).collect::<Vec<i32>>(),
+        "exactly the first 15 wire blocks carry a signal"
     );
     assert_eq!(u32::try_from(live.len()).expect("fits"), WIRE_LIVE_BLOCKS);
     assert_eq!(
-        wire_emission(&world, &registry, BlockPos::new(14, 0, 0))
+        wire_emission(&world, &registry, BlockPos::new(15, 0, 0))
             .effective()
             .get(),
         1,
         "the last live block carries the weakest possible signal"
     );
     assert_eq!(
-        wire_emission(&world, &registry, BlockPos::new(15, 0, 0)).effective(),
+        wire_emission(&world, &registry, BlockPos::new(16, 0, 0)).effective(),
         PowerLevel::ZERO,
         "and the next one is off"
     );
@@ -246,12 +246,12 @@ fn our_strong_and_weak_sources_are_distinguishable_only_through_the_recorded_kin
     );
     assert!(!lever_is_strong, "a lever is a weak source in this model");
     assert_eq!(
-        from_redstone_block, 14,
-        "dust beside a redstone block carries 14"
+        from_redstone_block, 15,
+        "dust beside a redstone block carries 15"
     );
     assert_eq!(
-        from_lever, 14,
-        "GAP: dust beside a lever also carries 14, because the wire rule takes the maximum \
+        from_lever, 15,
+        "GAP: dust beside a lever also carries 15, because the wire rule takes the maximum \
          of weak and strong and has no conductivity to distinguish them. The kind is recorded \
          and unused."
     );
@@ -282,15 +282,21 @@ fn our_a_block_between_a_source_and_dust_stops_the_signal() {
             "no conductivity: the stone blocks the signal instead of passing it through"
         );
         // With the block removed, the same source does power dust one step away.
+        // The replacement wire needs its own update queued (prepare_self) as
+        // well as its neighbours' — exactly what the server's edit feed does.
+        // Single-level citation means a wire two blocks out can no longer light
+        // through an unqueued middle wire; the middle wire must be recomputed
+        // itself, which is the queued update here.
         world.set(BlockPos::new(1, 0, 0), wire(&registry, PowerLevel::ZERO));
         let mut queue = UpdateQueue::new();
         prepare(&mut queue, BlockPos::new(1, 0, 0));
+        prepare_self(&mut queue, BlockPos::new(1, 0, 0));
         propagate(&mut world, &mut queue, table, UpdateBudget::nominal());
         assert_eq!(
             wire_emission(&world, &registry, BlockPos::new(1, 0, 0))
                 .effective()
                 .get(),
-            14
+            15
         );
     }
 }
@@ -365,10 +371,10 @@ fn a_powered_repeater_outputs_fifteen_whatever_the_input_strength() {
     prepare(&mut queue, BlockPos::new(0, 0, 0));
     propagate(&mut world, &mut queue, table, UpdateBudget::nominal());
     let expected = [
-        (BlockPos::new(1, 0, 0), 14u8),
-        (BlockPos::new(2, 0, 0), 13),
-        (BlockPos::new(3, 0, 0), 12),
-        (BlockPos::new(4, 0, 0), 11),
+        (BlockPos::new(1, 0, 0), 15u8),
+        (BlockPos::new(2, 0, 0), 14),
+        (BlockPos::new(3, 0, 0), 13),
+        (BlockPos::new(4, 0, 0), 12),
     ];
     common::assert_wire_powers(&world, &registry, &expected);
 }
@@ -396,7 +402,7 @@ fn a_torch_inverts_its_input_and_powers_the_dust_it_controls() {
         "an unlit torch emits nothing, whatever its input"
     );
     // A dark torch next to dust leaves the dust at 0 once the dust is recomputed. The wire
-    // starts claiming 14 — the level a live torch *would* give it — so the recomputation has
+    // starts claiming 15 — the level a live torch *would* give it — so the recomputation has
     // something real to correct. The torch stays dark because its attachment (the lever
     // below) is powered; without that lever the torch would relight, since a torch with
     // a dead attachment is lit.
@@ -406,7 +412,7 @@ fn a_torch_inverts_its_input_and_powers_the_dust_it_controls() {
         BlockPos::new(0, 0, 0),
         component(&registry, ComponentState::Lever(Lever::new(true))),
     );
-    world.set(BlockPos::new(1, 1, 0), wire(&registry, level(14)));
+    world.set(BlockPos::new(1, 1, 0), wire(&registry, level(15)));
     assert!(is_torch(&world, &registry, BlockPos::new(0, 1, 0)));
     let mut queue = UpdateQueue::new();
     prepare(&mut queue, BlockPos::new(0, 1, 0));
@@ -420,8 +426,8 @@ fn a_torch_inverts_its_input_and_powers_the_dust_it_controls() {
         "a dark torch lets the dust beside it fall to 0"
     );
 
-    // The same scenario with the torch lit drives the dust to 14, which is the inversion seen
-    // from the dust's side: lit → 14, dark → 0.
+    // The same scenario with the torch lit drives the dust to 15, which is the inversion seen
+    // from the dust's side: lit → 15, dark → 0.
     let mut world = flat();
     world.set(BlockPos::new(0, 0, 0), component(&registry, torch_lit));
     world.set(BlockPos::new(1, 0, 0), wire(&registry, PowerLevel::ZERO));
@@ -432,7 +438,7 @@ fn a_torch_inverts_its_input_and_powers_the_dust_it_controls() {
         wire_emission(&world, &registry, BlockPos::new(1, 0, 0))
             .effective()
             .get(),
-        14
+        15
     );
 }
 
@@ -497,7 +503,7 @@ fn a_self_rescheduling_clock_is_bounded_by_the_per_tick_cap_not_by_iteration() {
         BlockPos::new(0, 0, 0),
         block(&registry, "minecraft:redstone_block"),
     );
-    world.set(BlockPos::new(1, 0, 0), wire(&registry, level(14)));
+    world.set(BlockPos::new(1, 0, 0), wire(&registry, level(15)));
     let table = table(&registry);
     let mut queue = UpdateQueue::new();
     // Seed the clock: the wire is due on tick 1.
@@ -549,11 +555,12 @@ fn a_self_rescheduling_clock_is_bounded_by_the_per_tick_cap_not_by_iteration() {
         "a self-rescheduling wire must keep waking up"
     );
     // And the wire is still exactly where the rule puts it: bounded work, not drift.
+    // P13-05: dust next to a source carries the full strength.
     assert_eq!(
         wire_emission(&world, &registry, BlockPos::new(1, 0, 0))
             .effective()
             .get(),
-        14
+        15
     );
 }
 
@@ -595,8 +602,8 @@ fn a_zero_budget_processes_nothing_reports_it_and_loses_nothing() {
 #[test]
 fn a_dust_loop_terminates_because_a_wire_cites_state_rather_than_recursing() {
     // Four wires in a ring: every wire is adjacent to two wires and nothing else, so the
-    // whole ring is off and must settle in one pass. Without the "cite the stored level"
-    // rule in `gather_wire_inputs` this would recurse forever.
+    // whole ring is off and must settle in one pass. Without the "cite the stored level
+    // rather than recursing" rule in `gather_inputs` this would recurse forever.
     let registry = registry();
     let mut world = flat();
     let ring = [
@@ -642,16 +649,16 @@ fn removing_the_source_drops_every_wire_in_the_line_to_zero_in_one_pass() {
         line_with_source(block(&registry, "minecraft:redstone_block"), 5);
     let table = table(&registry);
 
-    // Precondition: the line is fully lit, 14 down to 10, so the assertions below are not vacuous.
+    // Precondition: the line is fully lit, 15 down to 11, so the assertions below are not vacuous.
     common::assert_wire_powers(
         &world,
         &registry,
         &[
-            (BlockPos::new(1, 0, 0), 14),
-            (BlockPos::new(2, 0, 0), 13),
-            (BlockPos::new(3, 0, 0), 12),
-            (BlockPos::new(4, 0, 0), 11),
-            (BlockPos::new(5, 0, 0), 10),
+            (BlockPos::new(1, 0, 0), 15),
+            (BlockPos::new(2, 0, 0), 14),
+            (BlockPos::new(3, 0, 0), 13),
+            (BlockPos::new(4, 0, 0), 12),
+            (BlockPos::new(5, 0, 0), 11),
         ],
     );
 
@@ -705,7 +712,7 @@ fn switching_a_lever_off_drops_the_line_and_on_lights_it_again() {
         world.set(*pos, wire(&registry, PowerLevel::ZERO));
     }
 
-    // Off -> on: the line lights, 14 down to 10.
+    // Off -> on: the line lights, 15 down to 11.
     world.set(
         BlockPos::new(0, 0, 0),
         component(&registry, ComponentState::Lever(Lever::new(true))),
@@ -714,7 +721,7 @@ fn switching_a_lever_off_drops_the_line_and_on_lights_it_again() {
     prepare(&mut queue, BlockPos::new(0, 0, 0));
     propagate(&mut world, &mut queue, table, UpdateBudget::nominal());
     for (index, pos) in line.iter().enumerate() {
-        let expected = 14 - u8::try_from(index).expect("fits");
+        let expected = 15 - u8::try_from(index).expect("fits");
         assert_eq!(
             wire_emission(&world, &registry, *pos).effective().get(),
             expected,

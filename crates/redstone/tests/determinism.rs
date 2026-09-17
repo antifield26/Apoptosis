@@ -191,8 +191,9 @@ fn the_change_transcript_records_the_ids_and_the_emission() {
     let change = report.changes[0];
     assert_eq!(change.pos, BlockPos::new(1, 0, 0));
     assert_eq!(change.old_state, wire(&registry, PowerLevel::ZERO));
-    assert_eq!(change.new_state, wire(&registry, level(14)));
-    assert_eq!(change.emitted.effective(), level(14));
+    // P13-05: the first dust off a source carries the full strength.
+    assert_eq!(change.new_state, wire(&registry, level(15)));
+    assert_eq!(change.emitted.effective(), level(15));
     assert_eq!(change.cause, mc_redstone::UpdateKind::NeighborChanged);
 }
 
@@ -348,8 +349,8 @@ fn a_budget_of_zero_leaves_the_queue_exactly_as_it_was() {
     for x in 1..=4 {
         assert_eq!(
             common::wire_power_at(&world, &registry, BlockPos::new(x, 0, 0)),
-            Some(15 - u8::try_from(x).expect("fits")),
-            "wire at x = {x}"
+            Some(16u8.saturating_sub(u8::try_from(x).expect("fits"))),
+            "wire at x = {x} (P13-05: first dust carries the full strength)"
         );
     }
 }
