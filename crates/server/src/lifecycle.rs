@@ -220,6 +220,10 @@ impl<H: TickHook> Server<H> {
             crate::game::DEFAULT_RANDOM_SEED,
             operators,
         )?;
+        // `/op` persists through this directory (P14-02): the same join that
+        // the load above reads from, so a grant lands where the next boot
+        // looks.
+        game.set_ops_directory(crate::ops::ops_directory(&self.config.storage.world_dir));
         // Data packs. The world's `DataPacks` list is read from the `level.dat` of the world just
         // opened, which is why this happens here and not at config-validation time: the list is
         // world data, not configuration.

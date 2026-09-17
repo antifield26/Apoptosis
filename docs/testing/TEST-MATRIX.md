@@ -5,11 +5,11 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 412 passed, 0 failed, 34 ignored** across **110 suites**, re-derived from
-`cargo test --workspace --no-fail-fast` on the P13-07 tree (`python
+Totals: **1 426 passed, 0 failed, 34 ignored** across **111 suites**, re-derived from
+`cargo test --workspace --no-fail-fast` on the P14-01/02 tree (`python
 tools/gates/run.py --quick`: every gate passed). The count has
 moved 1 194 -> 1 196 -> 1 206 -> 1 207 -> 1 212 -> 1 325 -> 1 344 -> 1 346 -> 1 358 ->
-1 365 -> 1 380 -> 1 384 -> 1 386 -> 1 388 -> 1 389 -> 1 392 -> 1 399 -> **1 412**: three from the Audit 07 remediation, two Audit 08 coverage tests, ten from the
+1 365 -> 1 380 -> 1 384 -> 1 386 -> 1 388 -> 1 389 -> 1 392 -> 1 399 -> 1 412 -> **1 426**: three from the Audit 07 remediation, two Audit 08 coverage tests, ten from the
 `mc-capture-rig` crate (P10-01), one regression test for the
 compression-transition defect (P10-02), the synced-registry work (P10-03), then
 P10-04..11 and P11-01..03, nineteen from the P11-04..09 landing, two from
@@ -44,16 +44,21 @@ placeholders are replaced by the measured cells) and one net-new
 golden and the lamp end-to-end moved onto the vanilla-faithful pedestal
 geometry in the same pass, and **thirteen from P13-07**: the `vanilla_conductivity`
 differential, which replays the machine-read fixture (92 cells, one vanilla
-world) through the model row by row. The 34 ignored = the 8 differential
+world) through the model row by row, and **fourteen from P14-01/02**: eleven
+`admin_commands` end-to-end (gamemode/give/kill/seed/difficulty + peaceful-night
+ + op/deop grant, revoke, persist, reload, ladder, no-dir), two `ops` unit
+(insert/grant/revoke/round-trip/save shape), and one `mc-entity` unit
+(`kill` bypasses invulnerability but not death). The 34 ignored = the 8 differential
 suites in the last section (16 tests) + `vanilla_loot` 3 + `vanilla_chunk_light` 2
 + `vanilla_light_differential` 1 + `light_update_trigger` 1 + `sky_light_surface` 2
 + `terrain_distribution` 3 + `pi_profile` 4 + `tick_baseline` 2 (16+3+2+1+1+2+3+4+2
 = 34) — all run on demand.
 
 **Every per-crate count below was re-measured with `cargo test -p <crate> --lib`**
-while updating this total. The 17 lib counts sum to **1 031** (`mc-protocol` 113 ->
-**116**, `mc-container` 130 -> **133**, `mc-redstone` 64 -> **66**, rest unchanged), the 5 doc-tests and
-the **376** named-suite tests complete the 1 412 (1 031 + 5 + 376 = 1 412, the third
+while updating this total. The 17 lib counts sum to **1 034** (`mc-protocol` 113 ->
+**116**, `mc-container` 130 -> **133**, `mc-redstone` 64 -> **66**, `mc-entity` 135 ->
+**136**, `mc-server` 61 -> **63**, rest unchanged), the 5 doc-tests and
+the **387** named-suite tests complete the 1 426 (1 034 + 5 + 387 = 1 426, the third
 figure derived from the run total and the other two rather than counted
 independently). Both Audit 07's method and its lesson still apply: the figures must
 be re-measured per crate, because five of them once turned out to be **another

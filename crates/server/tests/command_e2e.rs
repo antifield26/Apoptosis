@@ -192,8 +192,16 @@ async fn every_declared_command_is_reachable_from_a_client() {
         "time 1000",
         "tp Commander 10 70 -5",
         "op",
-        // A player is level 0, so this is denied — but it must be a *message*, not a
-        // disconnect, and it must not reveal the command's grammar.
+        "gamemode creative",
+        "give Commander stone 5",
+        "kill",
+        "seed",
+        "difficulty",
+        "difficulty peaceful",
+        "deop Commander",
+        // A player is level 0, so the operator commands below are denied — but
+        // each denial must be a *message*, not a disconnect, and must not
+        // reveal the command's grammar.
         "stop",
     ] {
         harness.command(command).await;

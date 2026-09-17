@@ -184,6 +184,7 @@ use mc_nbt::NbtTag;
 use mc_network::bridge::{ClientEvent, ClientEventKind, ConnectionId, GameEvents, OutboundSender};
 use mc_persistence::chunk::{ChunkData, ChunkPos};
 use mc_persistence::dimension::Dimension;
+use mc_persistence::level::Difficulty;
 use mc_protocol::RawPacket;
 use mc_protocol::packets::Packet;
 use mc_protocol::packets::play::{
@@ -201,6 +202,7 @@ use mc_world::chunk::Chunk;
 use mc_world::light::LightArray;
 use mc_world::{Aabb, Vec3, World};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 use tracing::{debug, info, trace, warn};
 
 /// A chunk's light as the wire wants it: four masks and two array lists.
@@ -709,9 +711,9 @@ pub(crate) struct Session {
     /// What this connection is permitted to do.
     ///
     /// Set at join from `ops.json` (listed uuids hold their file level,
-    /// everyone else [`mc_command::PermissionLevel::All`]) and never raised
-    /// afterwards: there is no in-game grant path, because `/op` does not
-    /// write the file. A stale comment here once claimed no storage was read;
+    /// everyone else [`mc_command::PermissionLevel::All`]) and raised or
+    /// lowered afterwards only by `/op` and `/deop`, which persist the file
+    /// first (P14-02). A stale comment here once claimed no storage was read;
     /// `ops_e2e` proves the join path reads it (P08-08 review).
     pub(crate) permission: mc_command::PermissionLevel,
     /// The name this player joined with.
@@ -720,6 +722,11 @@ pub(crate) struct Session {
     /// log could print it and nothing else could reach it. **"The server knows this" and "the server can say
     /// this" are different states**, and this field is the difference.
     pub(crate) name: String,
+    /// The profile uuid, hyphenated, as `ops.json` keys on it (P14-02).
+    ///
+    /// Matching operators by name would let anyone take an operator's identity
+    /// by taking their name, so grants resolve through this instead.
+    pub(crate) uuid: String,
     /// The container window this player has open.
     ///
     /// Window 0 is always the player inventory; opening a chest, furnace or
@@ -1020,6 +1027,22 @@ pub struct Game {
     /// by `Server::open_world` and leaves this empty, because refusing to boot over an
     /// operator file would take a working world offline.
     operators: crate::ops::OperatorList,
+    /// Where `ops.json` lives, when the lifecycle told us (P14-02).
+    ///
+    /// `None` until then — and always in tests that never set it — in which
+    /// case `/op` reports that it cannot persist rather than failing. The
+    /// directory is the world's parent (Vanilla puts the file beside
+    /// `server.properties`), resolved once by [`crate::ops::ops_directory`].
+    ops_directory: Option<PathBuf>,
+    /// World difficulty (P14-01).
+    ///
+    /// Read from `level.dat` when storage is present, `Normal` otherwise
+    /// (Vanilla's default for existing worlds). `/difficulty` reports and
+    /// sets this; setting also writes `level.dat` back when storage is
+    /// present. The one runtime consumer is the monster-spawn gate
+    /// (peaceful spawns no hostiles); damage numbers stay the hardcoded
+    /// Normal values, which the parity matrix records.
+    difficulty: Difficulty,
     /// The configured player cap, for `/list`.
     ///
     /// One value rather than the whole `ServerConfig`: the alternative was a new
@@ -1046,9 +1069,8 @@ pub struct Game {
     /// Owned here, drained every tick by the `ScheduledTicks` phase. `mc-redstone`
     /// owns the queue mechanics (caps, dedup, budget, order); the game owns when
     /// it drains. P13-02 attaches the world feed (what schedules) and P13-03 the
-    /// mechanism reactions (what a due tick does) — until then a drained tick is
-    /// counted on the report and has no other effect, and nothing in production
-    /// schedules, so nothing is dropped in practice.
+    /// mechanism reactions: due ticks prepare neighbours, `propagate` runs, and
+    /// live wires reschedule (see `tick_scheduled`).
     scheduled_ticks: mc_redstone::UpdateQueue,
     /// Chunks that became placeholders while this game could not read storage.
     ///
@@ -1222,6 +1244,12 @@ impl Game {
         // because the struct literal below moves `registries`.
         let crafting_registry = mc_container::RecipeRegistry::baseline(&registries.items)?;
         let smelting_furnace = mc_container::SmeltingRegistry::baseline(&registries.items)?;
+        // Difficulty comes from `level.dat` when storage is present (P14-01);
+        // computed here because the literal below moves `owned`.
+        let difficulty = borrowed
+            .and_then(|storage| storage.storage().level())
+            .or_else(|| owned.as_ref().and_then(|storage| storage.storage().level()))
+            .map_or(Difficulty::Normal, |level| level.difficulty);
 
         Ok(Self {
             registries,
@@ -1261,6 +1289,8 @@ impl Game {
                 &mc_worldgen::structures::StructureRegistry::new(),
             ),
             operators,
+            ops_directory: None,
+            difficulty,
             max_players: DEFAULT_MAX_PLAYERS,
             time_offset: 0,
             shutdown_requested: false,
@@ -2513,6 +2543,7 @@ impl Game {
             // Monsters first, vanilla's category order; the creature row is
             // the fallback when the monster rule rejects the position.
             if let Some(row) = monster
+                && !matches!(self.difficulty, Difficulty::Peaceful)
                 && crate::spawn::monster_spawn_allowed(
                     block_light,
                     sky_light,
@@ -3774,6 +3805,7 @@ impl Game {
                 // in-memory id is a `Uuid`.
                 permission: self.operators.level_for(&profile.id.to_string()),
                 name: profile.name.clone(),
+                uuid: profile.id.to_string(),
                 menu,
                 next_window: 1,
                 open_block: None,
@@ -4156,6 +4188,221 @@ impl Game {
         }
         debug!(id = %id, x, y, z, powered = on, "lever flipped");
         self.redstone_feed(x, y, z, new_id);
+    }
+
+    /// Set the directory `ops.json` lives in (P14-02).
+    ///
+    /// The lifecycle calls this with [`crate::ops::ops_directory`] once it
+    /// knows the world directory; until then `/op` reports that it cannot
+    /// persist rather than failing.
+    pub fn set_ops_directory(&mut self, directory: std::path::PathBuf) {
+        self.ops_directory = Some(directory);
+    }
+
+    /// Grant `target` operator status at `level`, persisting `ops.json` (P14-02).
+    ///
+    /// The grant applies to the live session *and* the file, in that order of
+    /// rollback: the in-memory insert happens first, then the save, and a
+    /// failed save rolls the insert back — so memory and file never disagree
+    /// about who is an operator. Only online players can be granted (their
+    /// uuid comes from the session; matching by name would let anyone take
+    /// an identity). Vanilla's default grant level is 4.
+    ///
+    /// Returns the granted name and whether the list changed, or `None` when
+    /// no session holds `target` or no ops directory was ever set (nothing is
+    /// changed then).
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Operational`] when the `ops.json` write fails, after
+    /// rolling the in-memory grant back.
+    pub(crate) fn grant_operator(
+        &mut self,
+        target: mc_network::bridge::ConnectionId,
+        level: mc_command::PermissionLevel,
+    ) -> ServerResult<Option<(String, bool)>> {
+        let Some(directory) = self.ops_directory.clone() else {
+            return Ok(None);
+        };
+        let (uuid, name) = {
+            let Some(session) = self.sessions.get(&target) else {
+                return Ok(None);
+            };
+            (session.uuid.clone(), session.name.clone())
+        };
+        let changed = self.operators.insert(&uuid, &name, level);
+        if changed && let Err(error) = self.operators.save(&directory) {
+            self.operators.remove(&uuid);
+            return Err(error);
+        }
+        if let Some(session) = self.sessions.get_mut(&target) {
+            session.permission = level;
+        }
+        Ok(Some((name, changed)))
+    }
+
+    /// Revoke `target`'s operator status, persisting `ops.json` (P14-02).
+    ///
+    /// Same rollback contract as [`Game::grant_operator`]: a failed save
+    /// restores the removed entry. A live session is demoted to level 0 on
+    /// success. Returns the revoked name, or `None` when the uuid was never
+    /// listed (nothing is changed then) — or when no session holds `target`
+    /// or no ops directory was ever set.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Operational`] when the `ops.json` write fails, after
+    /// restoring the entry.
+    pub(crate) fn revoke_operator(
+        &mut self,
+        target: mc_network::bridge::ConnectionId,
+    ) -> ServerResult<Option<String>> {
+        let Some(directory) = self.ops_directory.clone() else {
+            return Ok(None);
+        };
+        let (uuid, name) = {
+            let Some(session) = self.sessions.get(&target) else {
+                return Ok(None);
+            };
+            (session.uuid.clone(), session.name.clone())
+        };
+        let Some(previous) = self.operators.get(&uuid).cloned() else {
+            return Ok(None);
+        };
+        self.operators.remove(&uuid);
+        if let Err(error) = self.operators.save(&directory) {
+            self.operators.restore(previous);
+            return Err(error);
+        }
+        if let Some(session) = self.sessions.get_mut(&target) {
+            session.permission = mc_command::PermissionLevel::All;
+        }
+        Ok(Some(name))
+    }
+
+    /// The connection id of the session named `name`, if one is online.
+    ///
+    /// Case-insensitive like `/tp`'s target check: the name arrives from the
+    /// login handshake with its original capitalisation, and a command that
+    /// refused `steve` for `Steve` would be refusing a typo, not an attack.
+    pub(crate) fn session_id_by_name(
+        &self,
+        name: &str,
+    ) -> Option<mc_network::bridge::ConnectionId> {
+        self.sessions.values().find_map(|session| {
+            session
+                .name
+                .eq_ignore_ascii_case(name)
+                .then_some(session.id)
+        })
+    }
+
+    /// World difficulty (P14-01).
+    #[must_use]
+    pub const fn difficulty(&self) -> Difficulty {
+        self.difficulty
+    }
+
+    /// Whether `level.dat` locks the difficulty (P14-01).
+    ///
+    /// Without storage there is no file to lock, so nothing is locked. With
+    /// storage the answer comes from the file, which is also what a fresh
+    /// boot would read — the field and the file cannot disagree about this.
+    #[must_use]
+    pub fn difficulty_locked(&self) -> bool {
+        self.storage
+            .as_ref()
+            .and_then(|service| service.storage().level())
+            .is_some_and(|level| level.difficulty_locked)
+    }
+
+    /// Set the difficulty, writing `level.dat` back when storage is present.
+    ///
+    /// The field always updates (it is what the spawn gate reads); the file
+    /// write makes a restart keep it. Without storage there is no file, so
+    /// only the field updates — stated, because a test game otherwise looks
+    /// like it persists.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Operational`] when the `level.dat` write fails. A locked
+    /// difficulty is refused by the *caller* (`/difficulty` answers it), not
+    /// here, because a lock is normal input rather than a failure.
+    pub fn set_difficulty(&mut self, difficulty: Difficulty) -> ServerResult<()> {
+        self.difficulty = difficulty;
+        // `WorldService::open` creates `level.dat` when missing, so a stored
+        // world always has a level to edit; a `None` here is defensive only.
+        if let Some(service) = self.storage_mut()
+            && let Some(mut level) = service.storage().level().cloned()
+        {
+            level.difficulty = difficulty;
+            service.storage_mut().save_level(level)?;
+        }
+        Ok(())
+    }
+
+    /// Set a player's game mode and mirror it into their menu (P14-01).
+    ///
+    /// The menu is the authority for item placement, so its creative flag
+    /// follows the mode the way the join and respawn paths already do.
+    /// Returns whether a session was found. Broadcasting the change to other
+    /// clients (player-info abilities) is not modelled; the parity matrix
+    /// records the gap.
+    pub(crate) fn set_player_game_mode(
+        &mut self,
+        id: mc_network::bridge::ConnectionId,
+        mode: GameMode,
+    ) -> bool {
+        let Some(session) = self.sessions.get_mut(&id) else {
+            return false;
+        };
+        session.player.game_mode = mode;
+        session.menu.set_creative(mode.is_creative());
+        true
+    }
+
+    /// Give `count` of `item` to a player, dropping what does not fit (P14-01).
+    ///
+    /// Vanilla's `/give` drops the remainder at the player's feet rather than
+    /// refusing or deleting it, and `add_stack` spreads across slots rather
+    /// than dropping — so the remainder of `add_stack` is spawned, mirroring
+    /// the close-rebuild path. Returns `(placed, dropped)`, or `None` when no
+    /// session holds `id`.
+    pub(crate) fn give_player_item(
+        &mut self,
+        id: mc_network::bridge::ConnectionId,
+        item: i32,
+        count: i32,
+    ) -> Option<(i32, i32)> {
+        let stack = mc_entity::stack::ItemStack::new(item, count).ok()?;
+        let leftover = {
+            let session = self.sessions.get_mut(&id)?;
+            session.player.inventory.add_stack(stack)
+        };
+        let dropped = leftover.count();
+        if !leftover.is_empty() {
+            let position = self
+                .sessions
+                .get(&id)
+                .map_or(mc_entity::player::Vec3::default(), |s| s.player.position);
+            let _ = self.spawn_item(leftover, to_world(position));
+        }
+        Some((count - dropped, dropped))
+    }
+
+    /// Kill a player through the damage path, bypassing invulnerability (P14-01).
+    ///
+    /// Vanilla's `/kill` works in creative mode; [`Player::kill`] is not
+    /// ordinary damage for the same reason. Drops and the death message run
+    /// through [`Game::after_damage`] like any other lethal hit. Returns the
+    /// outcome, or `None` when no session holds `id`.
+    pub(crate) fn kill_player(
+        &mut self,
+        id: mc_network::bridge::ConnectionId,
+    ) -> Option<DamageOutcome> {
+        let outcome = self.sessions.get_mut(&id)?.player.kill();
+        self.after_damage(id, outcome);
+        Some(outcome)
     }
 
     /// The operator list this game loaded.

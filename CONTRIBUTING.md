@@ -32,7 +32,7 @@ and [docs/operations/RUNBOOK.md](docs/operations/RUNBOOK.md)).
 
 | Gate | Command | Current state (2026-09-15) |
 |---|---|---|
-| Tests | `cargo test --workspace --no-fail-fast` | 1 412 passed / 0 failed / 34 ignored, 110 suites |
+| Tests | `cargo test --workspace --no-fail-fast` | 1 426 passed / 0 failed / 34 ignored, 111 suites |
 | Formatting | `cargo fmt --all -- --check` | clean |
 | Lints | `cargo clippy --workspace --all-targets -- -D warnings` | clean |
 | aarch64 | `cargo check --target aarch64-unknown-linux-gnu --workspace --all-targets` | clean |

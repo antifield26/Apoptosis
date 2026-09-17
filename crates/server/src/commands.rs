@@ -1,6 +1,6 @@
-//! The server's command set (P07-05).
+//! The server's command set (P07-05, P14-01).
 //!
-//! Seven commands, chosen because each exercises a different part of the framework and
+//! Twelve commands, chosen because each exercises a different part of the framework and
 //! each is *usefully* implementable today:
 //!
 //! | Command | Argument shape it exercises | What it does |
@@ -10,8 +10,14 @@
 //! | `say` | greedy string | broadcasts a message |
 //! | `time` | optional ranged integer | queries or sets the world time |
 //! | `tp` | word + block position | moves the source (or reports where it would) |
-//! | `op` | word, operator-only | reports that permission grants are not persisted |
+//! | `op` | player name, administrator-only | grants operator status at level 4 and persists `ops.json` |
+//! | `deop` | player name, administrator-only | revokes operator status and persists `ops.json` |
 //! | `stop` | none, console-only | asks the server to shut down |
+//! | `gamemode` | word + optional player name, operator-only | sets the invoking player's game mode |
+//! | `give` | player name + resource + optional ranged integer, operator-only | gives items, dropping overflow at the player's feet |
+//! | `kill` | optional player name, operator-only | kills the invoking player through the damage path, even in creative |
+//! | `seed` | none, operator-only | reports the world seed |
+//! | `difficulty` | optional word, operator-only | queries or sets the world difficulty |
 //!
 //! ## What each command deliberately does *not* do
 //!
@@ -26,10 +32,32 @@
 //! - **`tp`** moves the *invoking* player, not a named target, because the server has no
 //!   cross-player teleport authority model yet; the `target` argument is validated and
 //!   must name the source itself. That is a real limitation, not a stub.
-//! - **`op`** cannot persist a grant: `ops.json` is read at startup but never
-//!   written (P07-04's remaining half), so it reports that and changes nothing.
+//! - **`op`** grants level 4 (Vanilla's default `op-permission-level`) to an
+//!   *online* player and writes `ops.json` beside the world, taking effect
+//!   immediately and surviving restarts; only online players can be named
+//!   (uuids come from sessions, never from name matching). Both `/op` and
+//!   `/deop` require level 3 like Vanilla — `/op` used to sit at level 2,
+//!   which let a level-2 holder mint level-4 operators.
+//! - **`deop`** removes the entry (and demotes a live session to 0);
+//!   revoking someone who was never listed changes nothing and says so.
+//!   A failed file write rolls the in-memory change back and says that
+//!   instead of claiming success.
 //! - **`stop`** sets the shutdown flag; it does not save first, because the lifecycle's
 //!   shutdown path already saves after the network drains (ADR-0001 D-04).
+//! - **`gamemode`** takes the invoking player only (same authority reason as `tp`);
+//!   it sets the mode field and the menu's creative flag the way join and respawn do,
+//!   but broadcasts no player-info or abilities update, so other clients learn of it
+//!   late. Mode words are Vanilla's full names plus the `s`/`c`/`a`/`sp` shortcuts.
+//! - **`give`** takes the invoking player only; the count caps at one stack (64) and
+//!   the remainder of a full inventory drops at the player's feet, which is Vanilla's
+//!   rule. Item names are registry ids (`minecraft:stone`, bare `stone` works).
+//! - **`kill`** takes the invoking player only; it bypasses creative invulnerability
+//!   the way Vanilla's kill does, and drops run through the normal death path.
+//! - **`seed`** reports the simulation seed, which is also the worldgen seed.
+//! - **`difficulty`** sets the world's difficulty (persisted to `level.dat` when
+//!   storage is present) and gates hostile monster spawns on peaceful; mob damage
+//!   numbers stay the hardcoded Normal values, and a locked `level.dat` refuses
+//!   the set. Words are Vanilla's four full names, case-sensitive like Vanilla.
 //!
 //! Every one of these is a line in the parity matrix (the Phase 07 report is in git history, tag `phase-09-final`).
 
@@ -116,8 +144,33 @@ impl Game {
         // command inside it passes its own check. Vanilla agrees, and it is what stops a function
         // from being a privilege-escalation route.
         add(Command::new("function", "Run a data function").with_argument(Argument::word("name")));
-        add(Command::new("op", "Grant operator status").requiring(PermissionLevel::Operator));
+        add(Command::new("op", "Grant operator status")
+            .with_argument(Argument::required("target", ArgumentKind::PlayerName))
+            .requiring(PermissionLevel::Administrator));
+        add(Command::new("deop", "Revoke operator status")
+            .with_argument(Argument::required("target", ArgumentKind::PlayerName))
+            .requiring(PermissionLevel::Administrator));
         add(Command::new("stop", "Stop the server").requiring(PermissionLevel::Console));
+        // P14-01: the admin set, all operator-only like Vanilla's level 2.
+        add(Command::new("gamemode", "Set your game mode")
+            .with_argument(Argument::word("mode"))
+            .with_argument(Argument::optional("target", ArgumentKind::PlayerName))
+            .requiring(PermissionLevel::Operator));
+        add(Command::new("give", "Give yourself items")
+            .with_argument(Argument::required("target", ArgumentKind::PlayerName))
+            .with_argument(Argument::required("item", ArgumentKind::Resource))
+            .with_argument(Argument::optional(
+                "count",
+                ArgumentKind::Integer(ValueRange::new(1, 64)),
+            ))
+            .requiring(PermissionLevel::Operator));
+        add(Command::new("kill", "Kill yourself")
+            .with_argument(Argument::optional("target", ArgumentKind::PlayerName))
+            .requiring(PermissionLevel::Operator));
+        add(Command::new("seed", "Show the world seed").requiring(PermissionLevel::Operator));
+        add(Command::new("difficulty", "Query or set the difficulty")
+            .with_argument(Argument::optional("difficulty", ArgumentKind::Word))
+            .requiring(PermissionLevel::Operator));
         tree
     }
 
@@ -254,7 +307,13 @@ impl Game {
                 Ok(CommandResult::silent())
             }
             "function" => self.command_function(id, parsed, report),
-            "op" => Ok(Self::command_op(parsed)),
+            "op" => Ok(self.command_op(id, parsed)),
+            "deop" => Ok(self.command_deop(id, parsed)),
+            "gamemode" => Ok(self.command_gamemode(id, parsed)),
+            "give" => Ok(self.command_give(id, parsed)),
+            "kill" => Ok(self.command_kill(id, parsed)),
+            "seed" => Ok(self.command_seed()),
+            "difficulty" => Ok(self.command_difficulty(parsed)),
             "stop" => Ok(CommandResult::Stop),
             // Unreachable: the tree only contains the names above, and `parse` resolved
             // this one through it. Returning a refusal rather than panicking keeps a
@@ -403,21 +462,216 @@ impl Game {
         }
     }
 
-    /// `/op`
+    /// `/op <player>` and `/deop <player>` (P14-02).
     ///
-    /// Associated rather than a method: it changes nothing and reads nothing, which is
-    /// precisely the point it reports.
-    fn command_op(parsed: &mc_command::dispatch::ParsedCommand) -> CommandResult {
-        // Vanilla's `/op` takes a player and writes `ops.json`. This build *reads*
-        // the file at startup (P07-04) but never writes it, so granting here would
-        // not survive a restart — and writing an operator file is an authority
-        // decision this phase deliberately does not make silently. Saying exactly
-        // that is better than a fake success (P08-08 review).
-        CommandResult::message(format!(
-            "/op is not implemented: permission grants are not persisted (ops.json \
-              is read at startup, never written), so {} is not changed.",
-            parsed.source.name
-        ))
+    /// Both require level 3, matching Vanilla (`/op` used to sit at level 2
+    /// here, which let a level-2 holder mint level-4 operators — a privilege
+    /// escalation Vanilla's ladder does not allow). Only online players can
+    /// be named: their uuid comes from the session, and matching by name
+    /// would let anyone take an operator's identity. Grants land at level 4,
+    /// Vanilla's default `op-permission-level`.
+    fn command_op(
+        &mut self,
+        _id: mc_network::bridge::ConnectionId,
+        parsed: &mc_command::dispatch::ParsedCommand,
+    ) -> CommandResult {
+        let Some(name) = parsed.string(0) else {
+            return CommandResult::message("Usage: /op <player>");
+        };
+        let Some(target) = self.session_id_by_name(name) else {
+            return CommandResult::message(format!(
+                "Cannot op {name:?}: only online players can be granted (name matching cannot identify anyone else)"
+            ));
+        };
+        match self.grant_operator(target, mc_command::PermissionLevel::Console) {
+            Err(error) => CommandResult::message(format!(
+                "Could not persist the grant, and nothing was changed: {error}"
+            )),
+            Ok(None) => CommandResult::message(
+                "/op cannot persist: no ops directory was ever set, so nothing was changed.",
+            ),
+            Ok(Some((granted, true))) => {
+                CommandResult::message(format!("Made {granted} a server operator"))
+            }
+            Ok(Some((granted, false))) => {
+                CommandResult::message(format!("Nothing changed: {granted} is already an operator"))
+            }
+        }
+    }
+
+    /// `/deop <player>` (P14-02): the reverse grant, same ladder, same file.
+    fn command_deop(
+        &mut self,
+        _id: mc_network::bridge::ConnectionId,
+        parsed: &mc_command::dispatch::ParsedCommand,
+    ) -> CommandResult {
+        let Some(name) = parsed.string(0) else {
+            return CommandResult::message("Usage: /deop <player>");
+        };
+        let Some(target) = self.session_id_by_name(name) else {
+            return CommandResult::message(format!(
+                "Cannot deop {name:?}: only online players can be revoked"
+            ));
+        };
+        match self.revoke_operator(target) {
+            Err(error) => CommandResult::message(format!(
+                "Could not persist the revocation, and nothing was changed: {error}"
+            )),
+            Ok(None) => {
+                CommandResult::message(format!("Nothing changed: {name} is not an operator"))
+            }
+            Ok(Some(revoked)) => {
+                CommandResult::message(format!("Made {revoked} no longer a server operator"))
+            }
+        }
+    }
+
+    /// Parse a game-mode word: Vanilla's full names plus the `s`/`c`/`a`/`sp`
+    /// shortcuts Vanilla accepts.
+    fn parse_game_mode(word: &str) -> Option<mc_entity::GameMode> {
+        use mc_entity::GameMode;
+        Some(match word {
+            "survival" | "s" => GameMode::Survival,
+            "creative" | "c" => GameMode::Creative,
+            "adventure" | "a" => GameMode::Adventure,
+            "spectator" | "sp" => GameMode::Spectator,
+            _ => return None,
+        })
+    }
+
+    /// `/gamemode <mode> [target]`
+    fn command_gamemode(
+        &mut self,
+        id: mc_network::bridge::ConnectionId,
+        parsed: &mc_command::dispatch::ParsedCommand,
+    ) -> CommandResult {
+        let Some(word) = parsed.string(0) else {
+            return CommandResult::message("Usage: /gamemode <mode> [target]");
+        };
+        let Some(mode) = Self::parse_game_mode(word) else {
+            return CommandResult::message(
+                "Usage: /gamemode <survival|creative|adventure|spectator> [target]",
+            );
+        };
+        let target = parsed.string(1).unwrap_or(&parsed.source.name);
+        if !target.eq_ignore_ascii_case(&parsed.source.name) {
+            return CommandResult::message(format!(
+                "Cannot change {target:?}'s game mode: this build only changes the invoking player"
+            ));
+        }
+        if !self.set_player_game_mode(id, mode) {
+            return CommandResult::message("You are not online.");
+        }
+        let name = match mode {
+            mc_entity::GameMode::Survival => "Survival Mode",
+            mc_entity::GameMode::Creative => "Creative Mode",
+            mc_entity::GameMode::Adventure => "Adventure Mode",
+            mc_entity::GameMode::Spectator => "Spectator Mode",
+        };
+        CommandResult::message(format!("Set own game mode to {name}"))
+    }
+
+    /// `/give <target> <item> [count]`
+    fn command_give(
+        &mut self,
+        id: mc_network::bridge::ConnectionId,
+        parsed: &mc_command::dispatch::ParsedCommand,
+    ) -> CommandResult {
+        let target = parsed.string(0).unwrap_or("");
+        if !target.eq_ignore_ascii_case(&parsed.source.name) {
+            return CommandResult::message(format!(
+                "Cannot give to {target:?}: this build only gives to the invoking player"
+            ));
+        }
+        let Some(item) = parsed.argument(1).and_then(|value| value.as_resource()) else {
+            return CommandResult::message("Usage: /give <target> <item> [count]");
+        };
+        let name = item.to_string();
+        let Ok(item_id) = self.registries().items.id(&name) else {
+            return CommandResult::message(format!("Unknown item {name:?}"));
+        };
+        // The grammar caps the count at one stack (1..=64), so the conversion
+        // below cannot truncate; the fallback is unreachable caution, not a
+        // second rule.
+        let count = parsed
+            .integer(2)
+            .and_then(|count| i32::try_from(count).ok())
+            .unwrap_or(1);
+        match self.give_player_item(id, item_id, count) {
+            None => CommandResult::message("You are not online."),
+            Some((placed, 0)) => {
+                CommandResult::message(format!("Gave {placed} [{name}] to {}", parsed.source.name))
+            }
+            Some((placed, dropped)) => CommandResult::message(format!(
+                "Gave {placed} [{name}] to {} ({dropped} dropped: inventory full)",
+                parsed.source.name
+            )),
+        }
+    }
+
+    /// `/kill [target]`
+    fn command_kill(
+        &mut self,
+        id: mc_network::bridge::ConnectionId,
+        parsed: &mc_command::dispatch::ParsedCommand,
+    ) -> CommandResult {
+        let target = parsed.string(0).unwrap_or(&parsed.source.name);
+        if !target.eq_ignore_ascii_case(&parsed.source.name) {
+            return CommandResult::message(format!(
+                "Cannot kill {target:?}: this build only kills the invoking player"
+            ));
+        }
+        match self.kill_player(id) {
+            None => CommandResult::message("You are not online."),
+            Some(outcome) if outcome.died => {
+                CommandResult::message(format!("Killed {}", parsed.source.name))
+            }
+            Some(_) => CommandResult::message(format!("{} is already dead", parsed.source.name)),
+        }
+    }
+
+    /// `/seed`
+    fn command_seed(&self) -> CommandResult {
+        CommandResult::message(format!("Seed: {}", self.random_seed()))
+    }
+
+    /// `/difficulty [difficulty]`
+    fn command_difficulty(
+        &mut self,
+        parsed: &mc_command::dispatch::ParsedCommand,
+    ) -> CommandResult {
+        use mc_persistence::level::Difficulty;
+        fn display(difficulty: Difficulty) -> &'static str {
+            match difficulty {
+                Difficulty::Peaceful => "Peaceful",
+                Difficulty::Easy => "Easy",
+                Difficulty::Normal => "Normal",
+                Difficulty::Hard => "Hard",
+            }
+        }
+        let Some(word) = parsed.string(0) else {
+            return CommandResult::message(format!(
+                "The difficulty is {}",
+                display(self.difficulty())
+            ));
+        };
+        // Vanilla's four full names, case-sensitive like Vanilla's enum parser.
+        let difficulty = match word {
+            "peaceful" => Difficulty::Peaceful,
+            "easy" => Difficulty::Easy,
+            "normal" => Difficulty::Normal,
+            "hard" => Difficulty::Hard,
+            _ => {
+                return CommandResult::message("Usage: /difficulty [peaceful|easy|normal|hard]");
+            }
+        };
+        if self.difficulty_locked() {
+            return CommandResult::message("The difficulty is locked and cannot be changed.");
+        }
+        if let Err(error) = self.set_difficulty(difficulty) {
+            return CommandResult::message(format!("Could not save level.dat: {error}"));
+        }
+        CommandResult::message(format!("Set the difficulty to {}", display(difficulty)))
     }
 }
 

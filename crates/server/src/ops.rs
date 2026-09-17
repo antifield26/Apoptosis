@@ -16,10 +16,10 @@
 //!
 //! ## The decisions, each of which could reasonably go the other way
 //!
-//! - **Read-only.** The server reads the file at startup and never writes it. Vanilla's `/op`
-//!   rewrites it; here `/op` still reports that it cannot persist, which is honest and is
-//!   recorded in the parity matrix. Writing an operator file is an authority decision, and
-//!   this phase is not the place to make it silently.
+//! - **Read at startup, written by `/op` and `/deop` (P14-02).** Vanilla
+//!   rewrites the file on every grant and revoke; so does this build now —
+//!   the in-memory change rolls back when the write fails, so the file and
+//!   the list never disagree about who is an operator.
 //! - **A missing file is not an error.** Vanilla creates one on first run; a server with no
 //!   operators is a normal server.
 //! - **A malformed file is an error from [`OperatorList::load`], and the *caller*
@@ -171,6 +171,93 @@ impl OperatorList {
             list.by_uuid.insert(operator.uuid.clone(), operator);
         }
         Ok(list)
+    }
+
+    /// Grant (or re-grant) `uuid` at `level`, recording `name` for messages.
+    ///
+    /// Matching stays by uuid: granting "Notch" twice updates the one entry
+    /// rather than adding a second, so the file can never hold two levels for
+    /// the same operator (the load path refuses duplicates for the same
+    /// reason). Returns whether the list changed.
+    pub fn insert(&mut self, uuid: &str, name: &str, level: PermissionLevel) -> bool {
+        let uuid = normalise_uuid(uuid);
+        let changed = self.by_uuid.get(&uuid).is_none_or(|current| {
+            current.level != level || current.name != name || current.bypasses_player_limit
+        });
+        // A re-grant keeps a previously granted bypass: revoking a flag the
+        // operator holds is `/deop`'s opposite and is not this command's job.
+        let bypasses_player_limit = self
+            .by_uuid
+            .get(&uuid)
+            .is_some_and(|current| current.bypasses_player_limit);
+        self.by_uuid.insert(
+            uuid.clone(),
+            Operator {
+                uuid,
+                name: name.to_owned(),
+                level,
+                bypasses_player_limit,
+            },
+        );
+        changed
+    }
+
+    /// Revoke `uuid`. Returns whether an entry was removed.
+    pub fn remove(&mut self, uuid: &str) -> bool {
+        self.by_uuid.remove(&normalise_uuid(uuid)).is_some()
+    }
+
+    /// Restore a previously removed entry verbatim, bypass flag included.
+    ///
+    /// `pub(crate)` because it exists for one caller: a failed `save` rolling
+    /// back a revoke must put back *exactly* what was there, and `insert`
+    /// deliberately never restores a bypass (a grant is not a restore).
+    pub(crate) fn restore(&mut self, operator: Operator) {
+        self.by_uuid.insert(operator.uuid.clone(), operator);
+    }
+
+    /// Write the list back to `ops.json` in `directory`, Vanilla's shape.
+    ///
+    /// Entries ascending by uuid (the map order), pretty-printed like
+    /// Vanilla's own writer. A missing directory is created; anything else
+    /// that goes wrong is an error the caller reports rather than a grant
+    /// the caller pretends happened.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Operational`] when the directory cannot be created or
+    /// the file cannot be written or serialised.
+    pub fn save(&self, directory: &Path) -> ServerResult<()> {
+        let entries: Vec<serde_json::Value> = self
+            .by_uuid
+            .values()
+            .map(|operator| {
+                serde_json::json!({
+                    "uuid": operator.uuid,
+                    "name": operator.name,
+                    "level": operator.level.level(),
+                    "bypassesPlayerLimit": operator.bypasses_player_limit,
+                })
+            })
+            .collect();
+        let text = serde_json::to_string_pretty(&entries).map_err(|error| {
+            ServerError::Operational(format!(
+                "{}: cannot serialise: {error}",
+                directory.display()
+            ))
+        })?;
+        std::fs::create_dir_all(directory).map_err(|error| {
+            ServerError::Operational(format!(
+                "{}: cannot create directory: {error}",
+                directory.display()
+            ))
+        })?;
+        std::fs::write(directory.join(OPS_FILE_NAME), text).map_err(|error| {
+            ServerError::Operational(format!(
+                "{}: cannot write {OPS_FILE_NAME}: {error}",
+                directory.display()
+            ))
+        })
     }
 
     /// The entry for a uuid, normalising the key the way `parse_entry` does.

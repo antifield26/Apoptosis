@@ -413,6 +413,32 @@ impl Player {
         self.game_mode.is_invulnerable()
     }
 
+    /// Kill outright, bypassing invulnerability, for `/kill` (P14-01).
+    ///
+    /// Vanilla's kill command works in creative mode: it is not ordinary
+    /// damage, so [`GameMode::is_invulnerable`] does not stop it. A dead
+    /// player is unaffected (death happens once — see [`Player::apply_damage`]
+    /// rule 3), and the returned outcome feeds the same death path
+    /// (`drain_all` drops, death message) as any other lethal hit.
+    pub fn kill(&mut self) -> DamageOutcome {
+        if !self.is_alive() {
+            return DamageOutcome {
+                applied: false,
+                died: false,
+                dealt: 0.0,
+                health: self.health,
+            };
+        }
+        let dealt = self.health;
+        self.health = 0.0;
+        DamageOutcome {
+            applied: true,
+            died: true,
+            dealt,
+            health: 0.0,
+        }
+    }
+
     /// Set health, clamped into `0.0..=20.0` (non-finite input becomes 0.0).
     pub fn set_health(&mut self, health: f32) {
         self.health = if health.is_finite() {
@@ -1221,6 +1247,30 @@ mod tests {
         assert_eq!(outcome.dealt, MAX_HEALTH);
         assert_eq!(player.health, 0.0);
         assert!(outcome.died);
+    }
+
+    #[test]
+    fn kill_bypasses_invulnerability_but_not_death() {
+        // `/kill` works in creative mode (P14-01): it is not ordinary damage.
+        for mode in [
+            GameMode::Survival,
+            GameMode::Creative,
+            GameMode::Spectator,
+            GameMode::Adventure,
+        ] {
+            let mut player = survivor();
+            player.game_mode = mode;
+            player.apply_damage(7.0);
+            let before = player.health;
+            let outcome = player.kill();
+            assert_eq!(outcome.dealt, before, "{mode:?}");
+            assert_eq!(outcome.health, 0.0);
+            assert!(outcome.applied && outcome.died);
+            assert!(!player.is_alive());
+            // Death is still reported exactly once.
+            let again = player.kill();
+            assert!(!again.applied && !again.died);
+        }
     }
 
     #[test]

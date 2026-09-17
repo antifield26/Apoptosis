@@ -290,3 +290,63 @@ fn a_realistic_file_round_trips_through_load() {
     );
     assert_eq!(list.bypass_count(), 1);
 }
+
+#[test]
+fn insert_grants_updates_and_reports_change() {
+    let mut list = OperatorList::new();
+    assert!(list.insert("AAA", "Aye", PermissionLevel::Operator));
+    assert_eq!(list.level_for("aaa"), PermissionLevel::Operator);
+    // Same grant twice: no change (idempotent re-op).
+    assert!(!list.insert("aaa", "Aye", PermissionLevel::Operator));
+    // A re-grant at a new level updates the one entry rather than adding.
+    assert!(list.insert("AAA", "Aye", PermissionLevel::Console));
+    assert_eq!(list.len(), 1);
+    assert_eq!(list.level_for("aaa"), PermissionLevel::Console);
+    // A re-grant keeps a previously granted bypass rather than clearing it.
+    let mut flagged = OperatorList::parse(
+        r#"[{"uuid": "abc", "level": 4, "bypassesPlayerLimit": true}]"#,
+        Path::new("ops.json"),
+    )
+    .expect("parses");
+    assert!(flagged.insert("abc", "Abc", PermissionLevel::Operator));
+    assert_eq!(flagged.bypass_count(), 1);
+    assert!(flagged.remove("ABC"));
+    assert!(!flagged.remove("abc"), "removing twice reports no change");
+    assert!(flagged.is_empty());
+}
+
+#[test]
+fn save_writes_vanillas_shape_and_load_reads_it_back() {
+    let dir = mc_test_support::fixtures::TempDir::new("ops-save");
+    let mut list = OperatorList::new();
+    list.insert(
+        "069a79f4-44e9-4726-a5be-fca90e38aaf5",
+        "Notch",
+        PermissionLevel::Console,
+    );
+    list.insert(
+        "853c80ef-3c37-49fd-aa49-938b674adae6",
+        "jeb_",
+        PermissionLevel::Operator,
+    );
+    list.save(dir.path()).expect("saves");
+    let text = std::fs::read_to_string(dir.path().join(super::OPS_FILE_NAME)).expect("read");
+    let round_tripped = OperatorList::load(dir.path()).expect("loads what save wrote");
+    assert_eq!(round_tripped.len(), 2);
+    assert_eq!(
+        round_tripped.level_for("069a79f4-44e9-4726-a5be-fca90e38aaf5"),
+        PermissionLevel::Console
+    );
+    assert_eq!(
+        round_tripped.level_for("853c80ef-3c37-49fd-aa49-938b674adae6"),
+        PermissionLevel::Operator
+    );
+    assert!(
+        text.contains("bypassesPlayerLimit"),
+        "vanilla field names: {text}"
+    );
+    // Ascending uuid order, so the file is reproducible.
+    let notch = text.find("069a79f4").expect("notch written");
+    let jeb = text.find("853c80ef").expect("jeb written");
+    assert!(notch < jeb, "uuid order in file");
+}
