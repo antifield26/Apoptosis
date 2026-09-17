@@ -67,8 +67,13 @@
 //!   torch, and the configured delay of a repeater. This pass changes a component's
 //!   output in the same tick as its input; only *wire* rescheduling is modelled, via
 //!   [`schedule_wire_recheck`].
-//! - **Conductivity.** A solid block never becomes powered here, so a circuit that
-//!   relies on powering a block rather than dust does not work. See [`BlockRole`].
+//! - **Conductivity, directionally (P13-06, measured).** A solid is powered
+//!   strongly by a torch below it or an attached on-lever, weakly by dust
+//!   above or beside it, and never by a redstone block; dust reads a powered
+//!   solid beside/below it (weak reads step down one more) but not above it,
+//!   and a lamp reads only the solids above/below it. See [`solid_power`].
+//!   Remaining gaps: repeater/comparator contributions to a solid ignore
+//!   facing, and a ceiling lever's mount is assumed symmetric (unmeasured).
 //! - **Quasi-connectivity** (a piston activated by the space above it), and the
 //!   mechanism component set (pistons, doors, dispensers, ...) other than the
 //!   redstone lamp. An unimplemented mechanism block is [`BlockRole::Passive`]
@@ -166,17 +171,20 @@ pub enum BlockRole {
     },
     /// Everything else.
     ///
-    /// **approximation** - Vanilla would call some of these conductive and power them
-    /// weakly, which is how a lever powers dust *through* a block. This model has no
-    /// conductivity table, so a passive block is never powered and never passes power
-    /// on. One visible consequence: "lever attached to a block, dust on the far side"
-    /// does not work here, while "lever next to dust" does.
+    /// **conductive, directionally (P13-06, measured)** — a passive solid can
+    /// carry power ([`solid_power`]): a torch below it or an attached lever
+    /// powers it strongly, dust above or beside it powers it weakly, and a
+    /// block of redstone never powers it. So "lever attached to a block, dust
+    /// on the far side" works here when the dust reads the lever's mount, and
+    /// "block beside stone, dust on the stone" does not.
     Passive,
     /// A mechanism the circuit drives (P13-03).
     ///
-    /// Only the redstone lamp so far: it lights when powered from any side, which
-    /// needs no facing. A mechanism emits nothing itself — neighbours read it as
-    /// dark either way — so this role exists for the *reaction*, not the emission.
+    /// Only the redstone lamp so far: it lights when the solid above or below
+    /// it is powered (P13-06, measured — side neighbours never light it, not
+    /// even live sources). A mechanism emits nothing itself — neighbours read
+    /// it as dark either way — so this role exists for the *reaction*, not
+    /// the emission.
     Mechanism,
 }
 
@@ -612,18 +620,26 @@ impl<'a> EmitterTable<'a> {
         }
     }
 
-    /// The new block-state id for a block with `role`, or `None` when the block cannot
-    /// be recomputed.
+    /// The new block-state id for the block at `pos`, or `None` when the block
+    /// cannot be recomputed.
     ///
     /// A wire's new state encodes the power this algorithm computed. A mechanism's
-    /// new state encodes its reaction: the lamp lights when any neighbour emits
-    /// (lamps are side-agnostic, so no facing is needed). A torch flips `lit`
+    /// new state encodes its reaction: the lamp lights when the solid above or
+    /// below it is powered (P13-06, measured — read from `world`, because the
+    /// lamp's own `inputs` cite neighbours, not those neighbours' power).
     /// from its attachment block (P13-04); every other emitter keeps its id,
     /// because lever flips arrive as player actions and repeater/comparator
     /// state changes need no drive (their emission is recomputed live). The
     /// model's computed power values otherwise live in wire states only.
     #[must_use]
-    pub fn new_state(&self, role: BlockRole, inputs: &BlockInputs, current_id: i32) -> Option<i32> {
+    pub fn new_state<V: BlockView + ?Sized>(
+        &self,
+        world: &V,
+        pos: BlockPos,
+        role: BlockRole,
+        inputs: &BlockInputs,
+        current_id: i32,
+    ) -> Option<i32> {
         match role {
             BlockRole::Wire { .. } => {
                 let power = self.emitted(role, inputs).effective();
@@ -658,7 +674,18 @@ impl<'a> EmitterTable<'a> {
                 self.registry.state_id(name, &rewritten).ok()
             }
             BlockRole::Mechanism => {
-                let lit = inputs.strongest_state().is_powered();
+                // P13-06 (measured): a lamp lights iff the solid above or
+                // below it is powered. A live source beside it (lever, dust,
+                // torch, block) leaves it dark, and so does a powered stone
+                // beside it — the lamp reads its support and its cap, not
+                // its sides.
+                let lit = [pos.offset(0, 1, 0), pos.offset(0, -1, 0)]
+                    .into_iter()
+                    .any(|at| {
+                        world.get_state(at).is_some_and(|id| {
+                            is_conductive(self, id) && solid_power(world, *self, at, None).is_some()
+                        })
+                    });
                 let properties = self.registry.properties_of(current_id).ok()?;
                 let current = properties
                     .iter()
@@ -679,6 +706,339 @@ impl<'a> EmitterTable<'a> {
     }
 }
 
+/// Whether a block state can carry power like stone (P13-06).
+///
+/// Conductive means solid *and* otherwise inert: air, fluids and non-solids
+/// never conduct, and neither do components (wire, emitters, mechanisms keep
+/// their own roles — a lamp is solid but must not conduct). Unknown ids count
+/// as solid (the collision default), so they conduct too.
+///
+/// **approximation**: transparent solids (glass) conduct here because there is
+/// no opacity table yet — vanilla's rule is opaque cubes. Named, not hidden.
+#[must_use]
+pub fn is_conductive(table: &EmitterTable<'_>, id: i32) -> bool {
+    !matches!(
+        table.classify(id),
+        BlockRole::Wire { .. } | BlockRole::Emitter { .. } | BlockRole::Mechanism
+    ) && mc_world::collision::is_solid_or_unknown(table.registry(), id)
+}
+
+/// The power a solid block carries, if any (P13-06).
+///
+/// **measured on a real 26.1.2 server**: the conductivity matrix, one topology
+/// per row, read from the saved Anvil files (`target/p13-wire/vanilla`, scripts
+/// `target/p13_wire_run.py` / `target/p13_wire_read.py`). A solid at `pos` is
+/// powered at full strength by exactly these neighbours:
+///
+/// - a lit torch directly **below** it (torch tower: dust on top reads 15,
+///   dust beside reads 15, lamp on top lights, torch on top goes out).
+///   A torch above, beside, or attached to the block does **not** power it
+///   (side dust 0, under-dust 0, attached wall torch leaves it cold).
+/// - an **on** lever whose attachment block is `pos`: a floor lever powers the
+///   block below it, a wall lever powers the block it is mounted on (side dust
+///   off both reads 15). A lever beside a block it is not mounted on powers
+///   nothing (torch on that stone stays lit).
+/// - live dust **above** it or on its four **sides**, at the level the dust
+///   carries without its own solid neighbours (solid-blind receipt) and
+///   **weakly** (dust on top powers the stone; dust beside powers it; dust
+///   below does not). Sideways dust counts only with headroom: a solid
+///   directly above the dust suppresses its sideways powering (covered wire:
+///   side probe 0 with a cover, 14 without). Weak matters downstream: dust
+///   off a weak stone steps down one more (side probe reads 14 off a dust-fed
+///   15 stone), while dust off a strong stone reads the full level.
+///
+/// A block of redstone never powers an adjacent solid in any direction (above,
+/// side and below probes all read 0), though dust and torches adjacent to the
+/// block itself read it directly. Buttons, pressure plates and lightning rods
+/// are treated like the block (no solid powering): unmeasured, extrapolated
+/// from the block, recorded here not hidden. Repeaters and comparators keep
+/// the pre-P13-06 directionless contribution (their facing is not consulted):
+/// unmeasured positionally, named gap.
+///
+/// The winner is the maximum level; a strong kind wins ties at equal level.
+/// `exclude` skips the reader's own position, so dust cannot keep itself
+/// powered through a block (without the exclusion, breaking the source leaves
+/// the dust lit: the stone cites the dust it feeds).
+///
+/// Power is *computed*, never stored: there is no block-state property for a
+/// powered stone, in this model or in vanilla. Returns `None` for dark.
+#[must_use]
+pub fn solid_power<V: BlockView + ?Sized>(
+    world: &V,
+    table: EmitterTable<'_>,
+    pos: BlockPos,
+    exclude: Option<BlockPos>,
+) -> Option<(PowerLevel, bool)> {
+    let mut best = PowerLevel::ZERO;
+    let mut strong = false;
+    for (index, neighbour) in NeighbourSet::of(pos).into_iter().enumerate() {
+        if Some(neighbour) == exclude {
+            continue;
+        }
+        let Some(id) = world.get_state(neighbour) else {
+            continue;
+        };
+        let contribution = match table.classify(id) {
+            // Dust above a stone powers it, weakly, at the level the dust
+            // carries *without* its solid neighbours (face 1 always; a side
+            // face only with headroom — no solid directly above the dust).
+            // The solid-blind receipt is the P13-06 Q-a/P14 finding, measured:
+            // dust fed through a solid does not re-emit into solids (a probe
+            // reading 14 off a stone leaves the stone it stands on cold),
+            // while source-fed dust of the same level does (14 source-fed
+            // dust powers its pedestal). Dust below never powers (face 0).
+            BlockRole::Wire { .. }
+                if index != 0 && dust_headroom(world, table, neighbour, index) =>
+            {
+                // Solids read as dark inside: this is the dust's emission
+                // into solids, not its display level, so solid neighbours
+                // must not feed it back (that loop is what Q-a breaks).
+                let blind = gather_inputs_inner(world, table, neighbour, true, false);
+                let drive = table
+                    .emitted(
+                        BlockRole::Wire {
+                            stored: PowerLevel::ZERO,
+                        },
+                        &blind,
+                    )
+                    .effective();
+                if drive.is_powered() {
+                    Some((drive, false))
+                } else {
+                    None
+                }
+            }
+            BlockRole::Emitter { source } => {
+                solid_emitter_contribution(world, table, source, id, neighbour, pos, index)
+            }
+            BlockRole::Wire { .. } | BlockRole::Mechanism | BlockRole::Passive => None,
+        };
+        if let Some((level, is_strong)) = contribution
+            && (level.get() > best.get() || (level == best && is_strong && !strong))
+        {
+            best = level;
+            strong = is_strong;
+        }
+    }
+    if best.get() > 0 {
+        Some((best, strong))
+    } else {
+        None
+    }
+}
+
+/// Whether dust at `dust_pos` may power the solid beside or above it.
+///
+/// Dust above the solid (face 1) always may; dust on a side face may only
+/// with headroom — a conductive solid directly above the dust suppresses its
+/// sideways powering (P13-06 W1/W3, measured). Unloaded above reads as open
+/// (no chunk load is ever triggered for a read).
+fn dust_headroom<V: BlockView + ?Sized>(
+    world: &V,
+    table: EmitterTable<'_>,
+    dust_pos: BlockPos,
+    face_index: usize,
+) -> bool {
+    if face_index == 1 {
+        return true;
+    }
+    world
+        .get_state(dust_pos.offset(0, 1, 0))
+        .is_none_or(|above| !is_conductive(&table, above))
+}
+
+/// What one emitter neighbour contributes to a solid's power, if anything.
+///
+/// Position is the whole rule: torches count only from directly below (face
+/// 0), levers only through their attachment block, diodes directionlessly
+/// (unmeasured gap), and blocks/buttons/plates/rods never.
+fn solid_emitter_contribution<V: BlockView + ?Sized>(
+    world: &V,
+    table: EmitterTable<'_>,
+    source: PowerSource,
+    id: i32,
+    emitter_pos: BlockPos,
+    solid_pos: BlockPos,
+    face_index: usize,
+) -> Option<(PowerLevel, bool)> {
+    match source {
+        // A lit torch powers the block above it, and nothing else.
+        PowerSource::Torch => {
+            if face_index != 0 || !property_is(table, id, "lit") {
+                return None;
+            }
+            Some((PowerLevel::MAX, true))
+        }
+        // An on lever powers its attachment block: below a floor lever, above
+        // a ceiling lever, behind a wall lever (opposite its facing).
+        PowerSource::Lever => {
+            if !property_is(table, id, "powered") {
+                return None;
+            }
+            let mount = lever_mount(table, id, emitter_pos)?;
+            if mount == solid_pos {
+                Some((PowerLevel::MAX, true))
+            } else {
+                None
+            }
+        }
+        // Unmeasured directionally: keep the pre-P13-06 directionless read.
+        // Solids read as dark inside (solids_live=false): a solid beside two
+        // comparators would otherwise recurse forever.
+        PowerSource::Repeater | PowerSource::Comparator => {
+            let inputs = gather_inputs_inner(world, table, emitter_pos, false, false);
+            let output = table.emitted_for_id(id, &inputs);
+            let level = output.effective();
+            if level.is_powered() {
+                Some((level, output.is_strong()))
+            } else {
+                None
+            }
+        }
+        // Measured for the block (never, all directions), extrapolated to the
+        // other point sources.
+        PowerSource::RedstoneBlock
+        | PowerSource::Button
+        | PowerSource::PressurePlate
+        | PowerSource::LightningRod => None,
+    }
+}
+
+/// Whether the block state `id` carries `property == "true"`, read through the
+/// registry. Unreadable properties count as absent (dark), never as on.
+fn property_is(table: EmitterTable<'_>, id: i32, property: &str) -> bool {
+    table.registry().properties_of(id).is_ok_and(|properties| {
+        properties
+            .iter()
+            .any(|(key, value)| key == property && value == "true")
+    })
+}
+
+/// The block a lever is attached to, from its `face`/`facing` properties.
+///
+/// Floor levers hang on the block below, ceiling levers on the block above,
+/// wall levers on the block behind them (opposite `facing`). A missing `face`
+/// (or a wall lever with an unreadable `facing`) attaches to nothing here
+/// rather than guessing: the conservative miss is a dark circuit, not a lit
+/// one.
+fn lever_mount(table: EmitterTable<'_>, id: i32, lever_pos: BlockPos) -> Option<BlockPos> {
+    let properties = table.registry().properties_of(id).ok()?;
+    let face = properties
+        .iter()
+        .find(|(key, _)| key == "face")
+        .map(|(_, value)| value.as_str())?;
+    match face {
+        "floor" => Some(lever_pos.offset(0, -1, 0)),
+        "ceiling" => Some(lever_pos.offset(0, 1, 0)),
+        "wall" => {
+            let facing = properties
+                .iter()
+                .find(|(key, _)| key == "facing")
+                .map_or("north", |(_, value)| value.as_str());
+            let (dx, dy, dz) = offset_of_face(opposite_face(facing_index(facing)));
+            Some(lever_pos.offset(dx, dy, dz))
+        }
+        _ => None,
+    }
+}
+
+/// Offset a face index one step, in [`NeighbourSet`] order
+/// (down, up, north, south, west, east).
+fn offset_of_face(index: usize) -> (i32, i32, i32) {
+    match index {
+        0 => (0, -1, 0),
+        1 => (0, 1, 0),
+        2 => (0, 0, -1),
+        3 => (0, 0, 1),
+        4 => (-1, 0, 0),
+        _ => (1, 0, 0),
+    }
+}
+
+/// A block's inputs: what each of its six neighbours currently emits.
+///
+/// `for_wire` selects the dust view, which differs from the machine view in
+/// two measured ways (P13-06): a weakly powered solid is cited like dust, so
+/// the wire receipt rule steps it down one more (dust off a dust-fed stone
+/// reads 14 off a 15 stone, while dust off a torch/lever-fed stone reads the
+/// full level) — and a solid directly above is cited as dark, because dust
+/// does not read the stone above it (under-dust reads 0 under a powered
+/// stone). With `false` the machine view applies and any powered solid counts
+/// at full level (lamps light, torches flip, comparators read the level).
+/// Dust is cited at full strength in both views; the wire receipt rule
+/// attenuates per dust face. `solids_live` selects whether solid neighbours
+/// are read through [`solid_power`]: `false` reads them as dark and is what
+/// [`solid_power`] itself uses for a comparator's inputs, so the two
+/// functions cannot recurse into each other (a solid beside two comparators
+/// would otherwise ping-pong forever). Top-level gathers always pass `true`.
+///
+/// The result for wires is "the strongest cited emission, minus one per dust
+/// face": full strength off a source, one less per dust block travelled — the
+/// rule `tests/golden_circuits.rs` checks cell for cell against the measured line.
+#[must_use]
+pub fn gather_inputs<V: BlockView + ?Sized>(
+    world: &V,
+    table: EmitterTable<'_>,
+    pos: BlockPos,
+    for_wire: bool,
+) -> BlockInputs {
+    gather_inputs_inner(world, table, pos, for_wire, true)
+}
+
+fn gather_inputs_inner<V: BlockView + ?Sized>(
+    world: &V,
+    table: EmitterTable<'_>,
+    pos: BlockPos,
+    for_wire: bool,
+    solids_live: bool,
+) -> BlockInputs {
+    let mut faces = [EmitterOutput::OFF; 6];
+    let mut dust = [false; 6];
+    for (index, neighbour) in NeighbourSet::of(pos).into_iter().enumerate() {
+        let Some(neighbour_id) = world.get_state(neighbour) else {
+            continue;
+        };
+        faces[index] = match table.classify(neighbour_id) {
+            // P13-05: cited at full strength — the attenuation step lives in the
+            // wire receipt rule, so machines read dust at the level vanilla
+            // shows them while dust-to-dust still steps down.
+            BlockRole::Wire { stored } => {
+                dust[index] = true;
+                EmitterOutput::of(PowerState::weak_only(stored))
+            }
+            // A component's emission is read from its own state, which is why this goes
+            // through the id: an unlit torch must emit nothing here.
+            BlockRole::Emitter { .. } => table.emitted_for_id(neighbour_id, &BlockInputs::NONE),
+            // Mechanisms emit nothing (a lit lamp does not power neighbours).
+            BlockRole::Mechanism => EmitterOutput::OFF,
+            // P13-06: a conductive solid contributes its computed power —
+            // full strength when strongly powered (torch below, lever
+            // attachment); a weakly powered solid (dust-fed) counts for
+            // machines but cites like dust for wire, so the receipt rule
+            // steps it down one more. Dust never reads the solid above it.
+            BlockRole::Passive => {
+                // Dust never reads the solid above it (face 1 is up).
+                if !solids_live || !is_conductive(&table, neighbour_id) || (for_wire && index == 1)
+                {
+                    EmitterOutput::OFF
+                } else {
+                    match solid_power(world, table, neighbour, Some(pos)) {
+                        Some((level, true)) => EmitterOutput::of(PowerState::strong_at(level)),
+                        Some((level, false)) => {
+                            if for_wire {
+                                dust[index] = true;
+                            }
+                            EmitterOutput::of(PowerState::weak_only(level))
+                        }
+                        None => EmitterOutput::OFF,
+                    }
+                }
+            }
+        };
+    }
+    BlockInputs { faces, dust }
+}
+
 /// Read the current inputs and emitted output of one block.
 ///
 /// Returns `None` when the position is not loaded ([`BlockView::get_state`] returned
@@ -691,7 +1051,7 @@ pub fn read_block<V: BlockView + ?Sized>(
 ) -> Option<(BlockRole, BlockInputs, EmitterOutput)> {
     let id = world.get_state(pos)?;
     let role = table.classify(id);
-    let inputs = gather_inputs(world, table, pos);
+    let inputs = gather_inputs(world, table, pos, matches!(role, BlockRole::Wire { .. }));
     let output = table.emitted_for_id(id, &inputs);
     Some((role, inputs, output))
 }
@@ -748,49 +1108,6 @@ fn comparator_faces(facing: &str) -> (usize, usize, usize) {
         3 => (2, 4, 5),
         _ => (3, 4, 5),
     }
-}
-
-/// A block's inputs: what each of its six neighbours currently emits.
-///
-/// A wire's emission depends on *its* neighbours' emissions, so this walks exactly one
-/// step further and stops. Dust is cited at its full stored level; the wire receipt
-/// rule subtracts one per dust face (see [`EmitterTable::emitted`]). Two things keep
-/// that finite and cheap:
-///
-/// - [`BlockRole::Passive`] emits nothing, terminating most walks immediately;
-/// - non-wire neighbours are read live from their stored state, so a freshly
-///   flipped lever is visible without waiting for its own update.
-///
-/// `tests/golden_circuits.rs` checks the resulting numbers cell for cell against
-/// the measured line.
-#[must_use]
-pub fn gather_inputs<V: BlockView + ?Sized>(
-    world: &V,
-    table: EmitterTable<'_>,
-    pos: BlockPos,
-) -> BlockInputs {
-    let mut faces = [EmitterOutput::OFF; 6];
-    let mut dust = [false; 6];
-    for (index, neighbour) in NeighbourSet::of(pos).into_iter().enumerate() {
-        let Some(neighbour_id) = world.get_state(neighbour) else {
-            continue;
-        };
-        faces[index] = match table.classify(neighbour_id) {
-            // P13-05: cited at full strength — the attenuation step lives in the
-            // wire receipt rule, so machines read dust at the level vanilla
-            // shows them while dust-to-dust still steps down.
-            BlockRole::Wire { stored } => {
-                dust[index] = true;
-                EmitterOutput::of(PowerState::weak_only(stored))
-            }
-            // A component's emission is read from its own state, which is why this goes
-            // through the id: an unlit torch must emit nothing here.
-            BlockRole::Emitter { .. } => table.emitted_for_id(neighbour_id, &BlockInputs::NONE),
-            // Mechanisms emit nothing (a lit lamp does not power neighbours).
-            BlockRole::Mechanism | BlockRole::Passive => EmitterOutput::OFF,
-        };
-    }
-    BlockInputs { faces, dust }
 }
 
 /// One block that changed, in the order it changed.
@@ -937,6 +1254,16 @@ pub fn propagate<V: BlockView + ?Sized>(
                     }
                 }
                 debug_assert_ne!(change.old_state, change.new_state);
+            } else {
+                // P13-06: a conductive solid never changes state, so the arm above
+                // never fires for one — but its *computed* power may have, and the
+                // wires and mechanisms around it read that power. Forward to the
+                // non-solid neighbours so they recompute. Solid-to-solid needs
+                // nothing: a solid's power is a pure function of adjacent
+                // emitters and dust, never of another solid's computed power, so
+                // one hop suffices and the loop still terminates (re-queues
+                // downstream gate on actual state changes).
+                forward_through_solid(world, table, queue, pos, &mut report);
             }
         }
     }
@@ -951,6 +1278,50 @@ pub fn propagate<V: BlockView + ?Sized>(
 }
 
 /// Recompute one position and write it if it changed.
+fn forward_through_solid<V: BlockView + ?Sized>(
+    world: &V,
+    table: EmitterTable<'_>,
+    queue: &mut UpdateQueue,
+    pos: BlockPos,
+    report: &mut PropagationReport,
+) {
+    let Some(id) = world.get_state(pos) else {
+        return;
+    };
+    if !is_conductive(&table, id) {
+        return;
+    }
+    // Narrowing, not correctness: a solid with no wire, emitter or mechanism
+    // neighbour cannot matter to anyone, so its neighbours are not queued.
+    // Dirt breaking in an open field stays cheap; correctness never depends on
+    // this check because every real change re-queues through `process_one`.
+    // (A lamp counts: it may need to light off this stone.)
+    let mut relevant = false;
+    for neighbour in NeighbourSet::of(pos) {
+        let Some(neighbour_id) = world.get_state(neighbour) else {
+            continue;
+        };
+        if !matches!(table.classify(neighbour_id), BlockRole::Passive) {
+            relevant = true;
+            break;
+        }
+    }
+    if !relevant {
+        return;
+    }
+    for neighbour in NeighbourSet::of(pos) {
+        let Some(neighbour_id) = world.get_state(neighbour) else {
+            continue;
+        };
+        if matches!(table.classify(neighbour_id), BlockRole::Passive) {
+            continue;
+        }
+        if queue.push_neighbour(neighbour) == Inserted::Refused {
+            report.updates_refused += 1;
+        }
+    }
+}
+
 fn process_one<V: BlockView + ?Sized>(
     world: &mut V,
     table: EmitterTable<'_>,
@@ -959,9 +1330,9 @@ fn process_one<V: BlockView + ?Sized>(
 ) -> Option<PropagatedChange> {
     let id = world.get_state(pos)?;
     let role = table.classify(id);
-    let inputs = gather_inputs(world, table, pos);
+    let inputs = gather_inputs(world, table, pos, matches!(role, BlockRole::Wire { .. }));
     let emitted = table.emitted_for_id(id, &inputs);
-    let new_state = table.new_state(role, &inputs, id)?;
+    let new_state = table.new_state(world, pos, role, &inputs, id)?;
     tracing::trace!(
         %pos,
         ?role,
@@ -1218,8 +1589,8 @@ impl BlockView for FlatWorld {
 mod tests {
     use super::{
         BlockInputs, BlockRole, BlockView, EmitterOutput, EmitterTable, FlatWorld,
-        MIN_LIVE_WIRE_POWER, WIRE_ATTENUATION_PER_BLOCK, WIRE_LIVE_BLOCKS, prepare, prepare_self,
-        propagate,
+        MIN_LIVE_WIRE_POWER, WIRE_ATTENUATION_PER_BLOCK, WIRE_LIVE_BLOCKS, gather_inputs, prepare,
+        prepare_self, propagate,
     };
     use crate::blocks::REDSTONE_WIRE;
     use crate::components::{
@@ -1371,7 +1742,7 @@ mod tests {
     }
 
     #[test]
-    fn a_passive_block_emits_nothing_and_is_never_powered() {
+    fn a_passive_block_emits_nothing_but_can_carry_power() {
         let registry = registry();
         let table = EmitterTable::new(&registry);
         let stone = registry.default_state("minecraft:stone").expect("stone");
@@ -1398,24 +1769,26 @@ mod tests {
             EmitterOutput::OFF,
             "a mechanism emits nothing itself; its reaction is the state write"
         );
+        // A lamp on a cold stone stays dark; on a torch-powered stone it
+        // lights (P13-06, measured: T1 lit, E/F dark).
+        let lamp_pos = BlockPos::new(4, 1, 4);
+        let stone_pos = BlockPos::new(4, 0, 4);
+        let mut world = FlatWorld::boxed((8, 4, 8));
+        world.set(lamp_pos, lamp);
+        world.set(stone_pos, stone);
+        let lamp_inputs = gather_inputs(&world, table, lamp_pos, false);
         assert_eq!(
-            table.new_state(BlockRole::Mechanism, &inputs, lamp),
-            table
-                .registry()
-                .state_id(
-                    "minecraft:redstone_lamp",
-                    &[("lit".to_owned(), "true".to_owned())]
-                )
-                .ok(),
-            "a powered lamp lights"
+            table.new_state(&world, lamp_pos, BlockRole::Mechanism, &lamp_inputs, lamp),
+            Some(lamp),
+            "a lamp on a cold stone stays dark"
         );
         assert_eq!(
             table.emitted(BlockRole::Passive, &inputs),
             EmitterOutput::OFF,
-            "conductivity is not modelled, so a passive block never becomes a source"
+            "a passive block never becomes a source, powered or not"
         );
         assert_eq!(
-            table.new_state(BlockRole::Passive, &inputs, stone),
+            table.new_state(&world, stone_pos, BlockRole::Passive, &inputs, stone),
             Some(stone),
             "a passive block's state is left alone"
         );

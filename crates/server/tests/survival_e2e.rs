@@ -1235,10 +1235,14 @@ fn right_clicking_a_lever_flips_powered() {
 
 /// P13-03: a flipped lever powers dust and lights a lamp, on the wire.
 ///
-/// Builds lever—wire—wire—lamp through real placements, flips the lever, and
-/// asserts the near wire carries 14, the far wire 13, the lamp is lit, and a
-/// `block_update` went out. Flipping back darkens the line. The model does the
-/// physics; the world's change list carries the broadcast.
+/// Builds lever—wire—wire plus a stone pedestal with a lamp on top through
+/// real placements, flips the lever, and asserts the near wire carries 15,
+/// the far wire 14, the lamp is lit, and a `block_update` went out. The lamp
+/// stands on the pedestal rather than beside the dust because that is the
+/// vanilla-faithful geometry (P13-06, measured: a lamp beside live dust stays
+/// dark; the far dust powers the pedestal from the side and the lamp reads
+/// its support). Flipping back darkens the line. The model does the physics;
+/// the world's change list carries the broadcast.
 #[test]
 fn a_flipped_lever_powers_dust_and_lights_a_lamp() {
     let mut harness = Harness::new("p13-circuit");
@@ -1249,10 +1253,16 @@ fn a_flipped_lever_powers_dust_and_lights_a_lamp() {
     let lever_item = items.id("minecraft:lever").expect("lever");
     let dust_item = items.id("minecraft:redstone").expect("dust");
     let lamp_item = items.id("minecraft:redstone_lamp").expect("lamp");
+    let stone_item = items.id("minecraft:stone").expect("stone");
     {
         let player = harness.game.player_mut(harness.id).expect("player");
         player.inventory.select(0).expect("hotbar 0");
-        for (slot, item, count) in [(0, lever_item, 1), (1, dust_item, 2), (2, lamp_item, 1)] {
+        for (slot, item, count) in [
+            (0, lever_item, 1),
+            (1, dust_item, 2),
+            (2, lamp_item, 1),
+            (3, stone_item, 1),
+        ] {
             player
                 .inventory
                 .set_slot(
@@ -1262,16 +1272,18 @@ fn a_flipped_lever_powers_dust_and_lights_a_lamp() {
                 .expect("give");
         }
     }
-    // Place lever, two dust, lamp in a row on the floor. Each round finds a
-    // hotbar slot holding the wanted item first: `add_stack` refills the
-    // *first* suitable slot, not the taken one, so slot numbers drift.
+    // Place lever, two dust, pedestal in a row on the floor, then the lamp on
+    // top of the pedestal. Each round finds a hotbar slot holding the wanted
+    // item first: `add_stack` refills the *first* suitable slot, not the
+    // taken one, so slot numbers drift.
     let at = [
         (sx + 1, sy, sz),
         (sx + 2, sy, sz),
         (sx + 3, sy, sz),
         (sx + 4, sy, sz),
+        (sx + 4, sy + 1, sz),
     ];
-    let want = [lever_item, dust_item, dust_item, lamp_item];
+    let want = [lever_item, dust_item, dust_item, stone_item, lamp_item];
     for (round, ((x, y, z), item)) in at.iter().zip(want.iter()).enumerate() {
         let slot = {
             let player = harness.game.player(harness.id).expect("player");
@@ -1305,7 +1317,8 @@ fn a_flipped_lever_powers_dust_and_lights_a_lamp() {
                 [
                     "minecraft:lever",
                     "minecraft:redstone_wire",
-                    "minecraft:redstone_lamp"
+                    "minecraft:redstone_lamp",
+                    "minecraft:stone",
                 ]
                 .contains(&name),
                 "round{round} must place its block, saw {name}"
@@ -1371,7 +1384,7 @@ fn a_flipped_lever_powers_dust_and_lights_a_lamp() {
         "the far wire must carry 14"
     );
     assert_eq!(
-        lamp_lit(&harness, at[3].0, at[3].1, at[3].2).as_deref(),
+        lamp_lit(&harness, at[4].0, at[4].1, at[4].2).as_deref(),
         Some("true"),
         "the lamp must be lit"
     );
@@ -1400,7 +1413,7 @@ fn a_flipped_lever_powers_dust_and_lights_a_lamp() {
         "the near wire must fall back to 0"
     );
     assert_eq!(
-        lamp_lit(&harness, at[3].0, at[3].1, at[3].2).as_deref(),
+        lamp_lit(&harness, at[4].0, at[4].1, at[4].2).as_deref(),
         Some("false"),
         "the lamp must go dark"
     );

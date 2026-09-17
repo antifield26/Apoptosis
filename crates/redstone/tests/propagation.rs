@@ -1,24 +1,25 @@
-//! Propagation acceptance: attenuation over a line, the strong/weak distinction, and
+//! Propagation acceptance: attenuation over a line, the conductivity matrix, and
 //! exhaustion from a real circuit.
 //!
 //! ## What is being tested, and what is *not*
 //!
 //! `mc-redstone` does **not** claim Vanilla's update order, its block-update/shape-update
-//! split, conductivity, or its component timing (see `propagation`'s module docs). What it
+//! split, or its component timing (see `propagation`'s module docs). What it
 //! does claim is:
 //!
 //! - the wire attenuation rule (verified: minecraft.wiki, *Redstone mechanics* §"Signal
 //!   transmission" — "the signal strength decreases by 1 for every block of redstone dust
 //!   that the signal travels … up to 15 blocks by itself"), and
-//! - the strong/weak distinction (verified for the rule; the redstone block's strength is
-//!   the one place the implemented table is an interpretation, and `power.rs` says so).
+//! - the conductivity matrix (measured on a real 26.1.2 server, P13-06): which
+//!   neighbour powers a solid, in which direction, strongly or weakly — and
+//!   which neighbours a lamp reads.
 //!
 //! The tests whose subject is the *implemented* rule rather than Vanilla's are named
 //! `our_…`, so nothing here can be mistaken for a parity claim.
 
 mod common;
 
-use common::{block, component, flat, is_torch, level, registry, table, wire};
+use common::{block, component, flat, is_torch, level, lever, registry, table, torch, wire};
 use mc_redstone::components::{
     Comparator, ComparatorMode, ComponentState, Lever, RedstoneTorch, Repeater,
     clamp_repeater_delay,
@@ -198,21 +199,60 @@ fn the_signal_reaches_exactly_fifteen_live_wire_blocks_and_no_further() {
     );
 }
 
+/// Propagate one prepared position on the nominal budget, refusing exhaustion.
+fn settle(
+    world: &mut mc_redstone::FlatWorld,
+    registry: &mc_registry::BlockRegistry,
+    pos: BlockPos,
+) {
+    let mut queue = UpdateQueue::new();
+    prepare(&mut queue, pos);
+    let report = propagate(world, &mut queue, table(registry), UpdateBudget::nominal());
+    assert!(
+        !report.budget_exhausted,
+        "this circuit must fit the nominal budget"
+    );
+}
+
+/// Whether the lamp at `pos` is lit, read through the registry.
+fn lit_at(
+    world: &mc_redstone::FlatWorld,
+    registry: &mc_registry::BlockRegistry,
+    pos: BlockPos,
+) -> bool {
+    let id = world.get(pos).expect("lamp must be in the box");
+    registry
+        .properties_of(id)
+        .expect("lamp state resolves")
+        .into_iter()
+        .any(|(name, value)| name == "lit" && value == "true")
+}
+
+/// A wall torch facing `facing`, lit or not.
+fn wall_torch(registry: &mc_registry::BlockRegistry, facing: &str, lit: bool) -> i32 {
+    registry
+        .state_id(
+            "minecraft:redstone_wall_torch",
+            &[
+                ("facing".to_owned(), facing.to_owned()),
+                ("lit".to_owned(), lit.to_string()),
+            ],
+        )
+        .unwrap_or_else(|error| panic!("wall torch {facing}/{lit} must resolve: {error}"))
+}
+
 #[test]
-fn our_strong_and_weak_sources_are_distinguishable_only_through_the_recorded_kind() {
+fn our_direct_emission_kind_is_recorded_but_solids_follow_position() {
     // **The honest state of the strong/weak split in this pass**, asserted rather than
     // implied:
     //
-    // - The *rule* ("strong powers adjacent dust, weak does not") is verified against
-    //   minecraft.wiki and is what `SignalKind` documents.
-    // - Which sources are strong is **not** verified, and this model marks exactly one
-    //   (`RedstoneBlock`) as strong.
-    // - Nothing in the propagation arithmetic reads the kind yet: `EmitterOutput::effective`
-    //   takes the maximum of the two fields, so a strong redstone block and a weak lever
-    //   produce the *same* wire power when placed next to dust.
-    //
-    // So the distinction is carried and recorded, and is **not yet observable** in a circuit
-    // without conductivity. That is the gap, and this test is where it is written down.
+    // - A block of redstone emits strongly to adjacent dust and a lever weakly,
+    //   and both put 15 on the wire next to them (the wire rule takes the
+    //   maximum either way).
+    // - Which kind a *solid* carries is positional (P13-06, measured), not a
+    //   property of the source kind: a block of redstone never powers an
+    //   adjacent solid, and a lever only powers its mount — both checked
+    //   below and in the matrix tests.
     let registry = registry();
     let table = table(&registry);
 
@@ -251,54 +291,485 @@ fn our_strong_and_weak_sources_are_distinguishable_only_through_the_recorded_kin
     );
     assert_eq!(
         from_lever, 15,
-        "GAP: dust beside a lever also carries 15, because the wire rule takes the maximum \
-         of weak and strong and has no conductivity to distinguish them. The kind is recorded \
-         and unused."
+        "dust beside a lever also carries 15: the wire rule takes the maximum \
+         of weak and strong"
     );
-}
-
-#[test]
-fn our_a_block_between_a_source_and_dust_stops_the_signal() {
-    // The consequence of having no conductivity table: a solid block in the path is the end
-    // of the circuit, whether the source is strong or weak. Vanilla would strongly power the
-    // stone and light dust on its far side.
-    let registry = registry();
-    let table = table(&registry);
+    // And neither powers the stone beside it: that follows position, and the
+    // matrix tests pin every cell.
     for source in [
         block(&registry, "minecraft:redstone_block"),
-        component(&registry, ComponentState::Lever(Lever::new(true))),
+        lever(&registry, "wall", "north", true),
     ] {
         let mut world = flat();
         world.set(BlockPos::new(0, 0, 0), source);
         world.set(BlockPos::new(1, 0, 0), block(&registry, "minecraft:stone"));
-        world.set(BlockPos::new(2, 0, 0), wire(&registry, PowerLevel::ZERO));
-        let mut queue = UpdateQueue::new();
-        prepare(&mut queue, BlockPos::new(0, 0, 0));
-        let report = propagate(&mut world, &mut queue, table, UpdateBudget::nominal());
-        assert!(!report.budget_exhausted);
+        settle(&mut world, &registry, BlockPos::new(0, 0, 0));
         assert_eq!(
-            wire_emission(&world, &registry, BlockPos::new(2, 0, 0)).effective(),
-            PowerLevel::ZERO,
-            "no conductivity: the stone blocks the signal instead of passing it through"
-        );
-        // With the block removed, the same source does power dust one step away.
-        // The replacement wire needs its own update queued (prepare_self) as
-        // well as its neighbours' — exactly what the server's edit feed does.
-        // Single-level citation means a wire two blocks out can no longer light
-        // through an unqueued middle wire; the middle wire must be recomputed
-        // itself, which is the queued update here.
-        world.set(BlockPos::new(1, 0, 0), wire(&registry, PowerLevel::ZERO));
-        let mut queue = UpdateQueue::new();
-        prepare(&mut queue, BlockPos::new(1, 0, 0));
-        prepare_self(&mut queue, BlockPos::new(1, 0, 0));
-        propagate(&mut world, &mut queue, table, UpdateBudget::nominal());
-        assert_eq!(
-            wire_emission(&world, &registry, BlockPos::new(1, 0, 0))
-                .effective()
-                .get(),
-            15
+            mc_redstone::propagation::solid_power(&world, table, BlockPos::new(1, 0, 0), None),
+            None,
+            "no solid power beside a block or a non-mount lever"
         );
     }
+}
+
+#[test]
+fn torch_powers_only_the_stone_above_it() {
+    // P13-06, measured rows D2/R1/T1/T2 (hot) and R6/Q-b/z14 (cold). Lanes
+    // are 4 apart so no lane reads another; every probe is diagonal-or-far
+    // from every source but its stone.
+    let registry = registry();
+    let mut world = flat();
+    let stone = block(&registry, "minecraft:stone");
+    // D2: dust on top of a torch-powered stone reads 15.
+    world.set(BlockPos::new(0, 0, 0), torch(&registry, true));
+    world.set(BlockPos::new(0, 1, 0), stone);
+    world.set(BlockPos::new(0, 2, 0), wire(&registry, PowerLevel::ZERO));
+    // R1: dust beside a torch-powered stone reads 15.
+    world.set(BlockPos::new(4, 0, 0), torch(&registry, true));
+    world.set(BlockPos::new(4, 1, 0), stone);
+    world.set(BlockPos::new(5, 0, 0), stone);
+    world.set(BlockPos::new(5, 1, 0), wire(&registry, PowerLevel::ZERO));
+    // T1: a lamp on a torch-powered stone lights.
+    world.set(BlockPos::new(8, 0, 0), torch(&registry, true));
+    world.set(BlockPos::new(8, 1, 0), stone);
+    world.set(
+        BlockPos::new(8, 2, 0),
+        block(&registry, "minecraft:redstone_lamp"),
+    );
+    // T2: a torch on a torch-powered stone goes out.
+    world.set(BlockPos::new(12, 0, 0), torch(&registry, true));
+    world.set(BlockPos::new(12, 1, 0), stone);
+    world.set(BlockPos::new(12, 2, 0), torch(&registry, true));
+    // R6: a torch above a stone does not power it (side probe dark).
+    world.set(BlockPos::new(16, 0, 0), stone);
+    world.set(BlockPos::new(16, 1, 0), torch(&registry, true));
+    world.set(BlockPos::new(17, 0, 0), wire(&registry, PowerLevel::ZERO));
+    // Q-b: a torch beside a stone does not power it (top probe dark).
+    world.set(BlockPos::new(20, 0, 0), torch(&registry, true));
+    world.set(BlockPos::new(21, 0, 0), stone);
+    world.set(BlockPos::new(21, 1, 0), wire(&registry, PowerLevel::ZERO));
+    // z14: a wall torch attached to a stone does not power it, and stays lit.
+    world.set(BlockPos::new(24, 1, 0), stone);
+    world.set(BlockPos::new(25, 1, 0), wall_torch(&registry, "east", true));
+    world.set(BlockPos::new(23, 1, 0), wire(&registry, PowerLevel::ZERO));
+    for x in [0, 4, 8, 12, 16, 20, 24] {
+        settle(&mut world, &registry, BlockPos::new(x, 0, 0));
+        settle(&mut world, &registry, BlockPos::new(x, 1, 0));
+    }
+    assert_eq!(
+        wire_emission(&world, &registry, BlockPos::new(0, 2, 0))
+            .effective()
+            .get(),
+        15,
+        "D2: dust on top of torch-powered stone reads 15"
+    );
+    assert_eq!(
+        wire_emission(&world, &registry, BlockPos::new(5, 1, 0))
+            .effective()
+            .get(),
+        15,
+        "R1: dust beside torch-powered stone reads 15"
+    );
+    assert!(
+        lit_at(&world, &registry, BlockPos::new(8, 2, 0)),
+        "T1: lamp on torch-powered stone lights"
+    );
+    assert!(
+        !lit_at(&world, &registry, BlockPos::new(12, 2, 0)),
+        "T2: torch on torch-powered stone goes out"
+    );
+    assert_eq!(
+        wire_emission(&world, &registry, BlockPos::new(17, 0, 0)).effective(),
+        PowerLevel::ZERO,
+        "R6: torch above does not power the stone"
+    );
+    assert_eq!(
+        wire_emission(&world, &registry, BlockPos::new(21, 1, 0)).effective(),
+        PowerLevel::ZERO,
+        "Q-b: torch beside does not power the stone"
+    );
+    assert_eq!(
+        wire_emission(&world, &registry, BlockPos::new(23, 1, 0)).effective(),
+        PowerLevel::ZERO,
+        "z14: attached torch does not power the stone"
+    );
+    assert!(
+        lit_at(&world, &registry, BlockPos::new(25, 1, 0)),
+        "z14: torch on a cold stone stays lit"
+    );
+}
+
+#[test]
+fn lever_powers_only_its_mount() {
+    // P13-06, measured rows R9 (floor), R10 (wall mount) and B' (side).
+    let registry = registry();
+    let mut world = flat();
+    let stone = block(&registry, "minecraft:stone");
+    // R9: a floor lever powers the stone below it, strongly.
+    world.set(BlockPos::new(0, 0, 0), stone);
+    world.set(
+        BlockPos::new(0, 1, 0),
+        lever(&registry, "floor", "north", true),
+    );
+    world.set(BlockPos::new(1, 0, 0), wire(&registry, PowerLevel::ZERO));
+    // R10: a wall lever powers the stone it is mounted on, strongly.
+    world.set(BlockPos::new(5, 0, 0), stone);
+    world.set(
+        BlockPos::new(4, 0, 0),
+        lever(&registry, "wall", "west", true),
+    );
+    world.set(BlockPos::new(5, 0, 1), wire(&registry, PowerLevel::ZERO));
+    // B': a lever beside a stone it is not mounted on powers nothing; a
+    // torch on that stone stays lit.
+    world.set(
+        BlockPos::new(8, 0, 0),
+        lever(&registry, "wall", "north", true),
+    );
+    world.set(BlockPos::new(9, 0, 0), stone);
+    world.set(BlockPos::new(10, 0, 0), wire(&registry, PowerLevel::ZERO));
+    world.set(BlockPos::new(9, 1, 0), torch(&registry, true));
+    // An off lever powers nothing even through its mount.
+    world.set(BlockPos::new(12, 0, 0), stone);
+    world.set(
+        BlockPos::new(12, 1, 0),
+        lever(&registry, "floor", "north", false),
+    );
+    world.set(BlockPos::new(13, 0, 0), wire(&registry, PowerLevel::ZERO));
+    for x in [0, 4, 8, 12] {
+        settle(&mut world, &registry, BlockPos::new(x, 0, 0));
+        settle(&mut world, &registry, BlockPos::new(x, 1, 0));
+    }
+    assert_eq!(
+        wire_emission(&world, &registry, BlockPos::new(1, 0, 0))
+            .effective()
+            .get(),
+        15,
+        "R9: dust beside a lever-powered mount reads the full level"
+    );
+    assert_eq!(
+        wire_emission(&world, &registry, BlockPos::new(5, 0, 1))
+            .effective()
+            .get(),
+        15,
+        "R10: dust beside a wall-lever mount reads the full level"
+    );
+    assert_eq!(
+        wire_emission(&world, &registry, BlockPos::new(10, 0, 0)).effective(),
+        PowerLevel::ZERO,
+        "B': dust beside a non-mount stone stays dark"
+    );
+    assert!(
+        lit_at(&world, &registry, BlockPos::new(9, 1, 0)),
+        "B': torch on a non-mount stone stays lit"
+    );
+    assert_eq!(
+        wire_emission(&world, &registry, BlockPos::new(13, 0, 0)).effective(),
+        PowerLevel::ZERO,
+        "an off lever powers nothing"
+    );
+}
+
+#[test]
+fn a_redstone_block_never_powers_stone() {
+    // P13-06, measured rows C2 (above), A' (side) and R8 (below): all dark.
+    // The block still drives adjacent dust and torches directly (S, M1).
+    let registry = registry();
+    let mut world = flat();
+    let stone = block(&registry, "minecraft:stone");
+    let redstone_block = block(&registry, "minecraft:redstone_block");
+    // C2: dust on top of a block-topped stone reads 0.
+    world.set(BlockPos::new(0, 0, 0), redstone_block);
+    world.set(BlockPos::new(0, 1, 0), stone);
+    world.set(BlockPos::new(0, 2, 0), wire(&registry, PowerLevel::ZERO));
+    // A': a torch on a block-beside stone stays lit.
+    world.set(BlockPos::new(4, 0, 0), redstone_block);
+    world.set(BlockPos::new(5, 0, 0), stone);
+    world.set(BlockPos::new(5, 1, 0), torch(&registry, true));
+    // R8: dust beside a block-based stone reads 0.
+    world.set(BlockPos::new(8, 0, 0), stone);
+    world.set(BlockPos::new(8, 1, 0), redstone_block);
+    world.set(BlockPos::new(9, 0, 0), wire(&registry, PowerLevel::ZERO));
+    // S: dust directly on top of the block reads 15.
+    world.set(BlockPos::new(12, 0, 0), redstone_block);
+    world.set(BlockPos::new(12, 1, 0), wire(&registry, PowerLevel::ZERO));
+    // M1: a torch directly on top of the block goes out.
+    world.set(BlockPos::new(16, 0, 0), redstone_block);
+    world.set(BlockPos::new(16, 1, 0), torch(&registry, true));
+    for x in [0, 4, 8, 12, 16] {
+        settle(&mut world, &registry, BlockPos::new(x, 0, 0));
+        settle(&mut world, &registry, BlockPos::new(x, 1, 0));
+    }
+    assert_eq!(
+        wire_emission(&world, &registry, BlockPos::new(0, 2, 0)).effective(),
+        PowerLevel::ZERO,
+        "C2: block below does not power the stone"
+    );
+    assert!(
+        lit_at(&world, &registry, BlockPos::new(5, 1, 0)),
+        "A': block beside does not power the stone"
+    );
+    assert_eq!(
+        wire_emission(&world, &registry, BlockPos::new(9, 0, 0)).effective(),
+        PowerLevel::ZERO,
+        "R8: block above does not power the stone"
+    );
+    assert_eq!(
+        wire_emission(&world, &registry, BlockPos::new(12, 1, 0))
+            .effective()
+            .get(),
+        15,
+        "S: dust directly on the block reads 15"
+    );
+    assert!(
+        !lit_at(&world, &registry, BlockPos::new(16, 1, 0)),
+        "M1: torch directly on the block goes out"
+    );
+}
+
+#[test]
+fn dust_powers_stone_beneath_and_beside_it_but_not_from_below() {
+    // P13-06, measured rows Q-c (top feeds, side probe 14), z=20 (side feeds,
+    // top probe 14) and z=22 (dust below feeds nothing). Dust-fed stone is
+    // weak: the probe steps down one more.
+    let registry = registry();
+    let mut world = flat();
+    let stone = block(&registry, "minecraft:stone");
+    // Q-c: live dust on a stone, side probe reads 14.
+    world.set(BlockPos::new(4, 1, 0), stone);
+    world.set(BlockPos::new(4, 2, 0), wire(&registry, PowerLevel::ZERO));
+    world.set(BlockPos::new(5, 1, 0), stone);
+    world.set(BlockPos::new(5, 2, 0), torch(&registry, true));
+    world.set(BlockPos::new(5, 0, 0), stone);
+    world.set(BlockPos::new(3, 0, 0), stone);
+    world.set(BlockPos::new(3, 1, 0), wire(&registry, PowerLevel::ZERO));
+    // z=20: live dust beside a stone, top probe reads 14.
+    world.set(BlockPos::new(10, 0, 0), stone);
+    world.set(BlockPos::new(11, 0, 0), wire(&registry, PowerLevel::ZERO));
+    world.set(
+        BlockPos::new(12, 0, 0),
+        component(&registry, ComponentState::Lever(Lever::new(true))),
+    );
+    world.set(BlockPos::new(10, 1, 0), wire(&registry, PowerLevel::ZERO));
+    // z=22: live dust below a stone, side probe reads 0.
+    world.set(BlockPos::new(16, 0, 0), wire(&registry, PowerLevel::ZERO));
+    world.set(
+        BlockPos::new(17, 0, 0),
+        component(&registry, ComponentState::Lever(Lever::new(true))),
+    );
+    world.set(BlockPos::new(16, 1, 0), stone);
+    world.set(BlockPos::new(15, 0, 0), stone);
+    world.set(BlockPos::new(15, 1, 0), wire(&registry, PowerLevel::ZERO));
+    // W3: the z=20 shape with a cover stone on the dust — the cover
+    // suppresses the sideways powering, so the top probe reads 0.
+    world.set(BlockPos::new(20, 0, 0), stone);
+    world.set(BlockPos::new(21, 0, 0), wire(&registry, PowerLevel::ZERO));
+    world.set(
+        BlockPos::new(22, 0, 0),
+        component(&registry, ComponentState::Lever(Lever::new(true))),
+    );
+    world.set(BlockPos::new(20, 1, 0), wire(&registry, PowerLevel::ZERO));
+    world.set(BlockPos::new(21, 1, 0), stone);
+    for x in [4, 5, 10, 12, 16, 17, 20, 21, 22] {
+        settle(&mut world, &registry, BlockPos::new(x, 0, 0));
+        settle(&mut world, &registry, BlockPos::new(x, 1, 0));
+        settle(&mut world, &registry, BlockPos::new(x, 2, 0));
+    }
+    assert_eq!(
+        wire_emission(&world, &registry, BlockPos::new(4, 2, 0))
+            .effective()
+            .get(),
+        15,
+        "Q-c sanity: the top dust is live"
+    );
+    assert_eq!(
+        wire_emission(&world, &registry, BlockPos::new(3, 1, 0))
+            .effective()
+            .get(),
+        14,
+        "Q-c: dust beside a dust-fed stone reads 14"
+    );
+    assert_eq!(
+        wire_emission(&world, &registry, BlockPos::new(10, 1, 0))
+            .effective()
+            .get(),
+        14,
+        "z=20: dust on top of a dust-fed stone reads 14"
+    );
+    assert_eq!(
+        wire_emission(&world, &registry, BlockPos::new(15, 1, 0)).effective(),
+        PowerLevel::ZERO,
+        "z=22: dust below does not power the stone"
+    );
+    assert_eq!(
+        wire_emission(&world, &registry, BlockPos::new(20, 1, 0)).effective(),
+        PowerLevel::ZERO,
+        "W3: covered dust does not power the stone beside it"
+    );
+}
+
+#[test]
+fn dust_reads_powered_stone_beside_and_below_but_not_above() {
+    // P13-06, measured: R1 (side, 15 off strong stone), D2 (below, 15 off
+    // strong stone) and Q-a (above, 0 under a powered stone).
+    let registry = registry();
+    let mut world = flat();
+    let stone = block(&registry, "minecraft:stone");
+    // Q-a: a certainly-powered stone (dust-fed from above, side probe 14)
+    // with dust directly beneath it: the under-dust reads 0.
+    world.set(BlockPos::new(4, 1, 0), stone);
+    world.set(BlockPos::new(4, 2, 0), wire(&registry, PowerLevel::ZERO));
+    world.set(BlockPos::new(5, 1, 0), stone);
+    world.set(BlockPos::new(5, 2, 0), torch(&registry, true));
+    world.set(BlockPos::new(5, 0, 0), stone);
+    world.set(BlockPos::new(4, 0, 0), wire(&registry, PowerLevel::ZERO));
+    world.set(BlockPos::new(3, 0, 0), stone);
+    world.set(BlockPos::new(3, 1, 0), wire(&registry, PowerLevel::ZERO));
+    for x in [3, 4, 5] {
+        settle(&mut world, &registry, BlockPos::new(x, 0, 0));
+        settle(&mut world, &registry, BlockPos::new(x, 1, 0));
+        settle(&mut world, &registry, BlockPos::new(x, 2, 0));
+    }
+    assert_eq!(
+        wire_emission(&world, &registry, BlockPos::new(3, 1, 0))
+            .effective()
+            .get(),
+        14,
+        "validator: the stone is powered (dust-fed)"
+    );
+    assert_eq!(
+        wire_emission(&world, &registry, BlockPos::new(4, 0, 0)).effective(),
+        PowerLevel::ZERO,
+        "Q-a: dust under a powered stone reads 0"
+    );
+}
+
+#[test]
+fn lamp_reads_only_the_solids_above_and_below_it() {
+    // P13-06, measured rows T1 (below, lit), R2 (side, dark), Q-d (above,
+    // lit), K1/I/L1/L2 (sources, dark).
+    let registry = registry();
+    let mut world = flat();
+    let stone = block(&registry, "minecraft:stone");
+    let lamp = block(&registry, "minecraft:redstone_lamp");
+    // T1: lamp on a torch-powered stone lights.
+    world.set(BlockPos::new(0, 0, 0), torch(&registry, true));
+    world.set(BlockPos::new(0, 1, 0), stone);
+    world.set(BlockPos::new(0, 2, 0), lamp);
+    // R2: lamp beside a torch-powered stone stays dark.
+    world.set(BlockPos::new(4, 0, 0), torch(&registry, true));
+    world.set(BlockPos::new(4, 1, 0), stone);
+    world.set(BlockPos::new(5, 0, 0), stone);
+    world.set(BlockPos::new(5, 1, 0), lamp);
+    // Q-d: lamp under a dust-powered stone lights.
+    world.set(BlockPos::new(8, 0, 0), lamp);
+    world.set(BlockPos::new(8, 1, 0), stone);
+    world.set(BlockPos::new(8, 2, 0), wire(&registry, PowerLevel::ZERO));
+    world.set(BlockPos::new(9, 1, 0), stone);
+    world.set(BlockPos::new(9, 2, 0), torch(&registry, true));
+    world.set(BlockPos::new(9, 0, 0), stone);
+    // K1: lamp beside live dust stays dark.
+    world.set(
+        BlockPos::new(12, 0, 0),
+        component(&registry, ComponentState::Lever(Lever::new(true))),
+    );
+    world.set(BlockPos::new(13, 0, 0), wire(&registry, PowerLevel::ZERO));
+    world.set(BlockPos::new(13, 0, 1), lamp);
+    // I: lamp beside an on lever stays dark.
+    world.set(
+        BlockPos::new(16, 0, 0),
+        component(&registry, ComponentState::Lever(Lever::new(true))),
+    );
+    world.set(BlockPos::new(17, 0, 0), lamp);
+    // L1: lamp on top of a redstone block stays dark.
+    world.set(
+        BlockPos::new(20, 0, 0),
+        block(&registry, "minecraft:redstone_block"),
+    );
+    world.set(BlockPos::new(20, 1, 0), lamp);
+    for x in [0, 4, 8, 9, 12, 13, 16, 17, 20] {
+        settle(&mut world, &registry, BlockPos::new(x, 0, 0));
+        settle(&mut world, &registry, BlockPos::new(x, 1, 0));
+        settle(&mut world, &registry, BlockPos::new(x, 2, 0));
+    }
+    assert!(
+        lit_at(&world, &registry, BlockPos::new(0, 2, 0)),
+        "T1: lamp on powered stone lights"
+    );
+    assert!(
+        !lit_at(&world, &registry, BlockPos::new(5, 1, 0)),
+        "R2: lamp beside powered stone stays dark"
+    );
+    assert!(
+        lit_at(&world, &registry, BlockPos::new(8, 0, 0)),
+        "Q-d: lamp under powered stone lights"
+    );
+    assert_eq!(
+        wire_emission(&world, &registry, BlockPos::new(13, 0, 0))
+            .effective()
+            .get(),
+        15,
+        "K1 sanity: the dust beside the lamp is live"
+    );
+    assert!(
+        !lit_at(&world, &registry, BlockPos::new(13, 0, 1)),
+        "K1: lamp beside live dust stays dark"
+    );
+    assert!(
+        !lit_at(&world, &registry, BlockPos::new(17, 0, 0)),
+        "I: lamp beside an on lever stays dark"
+    );
+    assert!(
+        !lit_at(&world, &registry, BlockPos::new(20, 1, 0)),
+        "L1: lamp on a redstone block stays dark"
+    );
+}
+
+#[test]
+fn a_solid_cannot_keep_dust_lit_through_itself() {
+    // The exclusion half of `solid_power`: dust must not cite itself through
+    // the block. A floor lever on a stone lights the dust beside the mount;
+    // flipping the lever off must darken it again. Without excluding the
+    // reader, the stone would keep citing the lit dust and the line would
+    // never go dark.
+    let registry = registry();
+    let mut world = flat();
+    world.set(BlockPos::new(1, 0, 0), block(&registry, "minecraft:stone"));
+    world.set(
+        BlockPos::new(1, 1, 0),
+        lever(&registry, "floor", "north", true),
+    );
+    world.set(BlockPos::new(2, 0, 0), wire(&registry, PowerLevel::ZERO));
+    settle(&mut world, &registry, BlockPos::new(1, 1, 0));
+    assert_eq!(
+        wire_emission(&world, &registry, BlockPos::new(2, 0, 0))
+            .effective()
+            .get(),
+        15,
+        "precondition: dust lit through the lever's mount"
+    );
+    // Flip the lever off: the whole path must go dark in one pass.
+    world.set(
+        BlockPos::new(1, 1, 0),
+        lever(&registry, "floor", "north", false),
+    );
+    let mut queue = UpdateQueue::new();
+    prepare(&mut queue, BlockPos::new(1, 1, 0));
+    let report = propagate(
+        &mut world,
+        &mut queue,
+        table(&registry),
+        UpdateBudget::nominal(),
+    );
+    assert!(
+        report.blocks_changed >= 1,
+        "the dust must change, got {}",
+        report.blocks_changed
+    );
+    assert_eq!(
+        wire_emission(&world, &registry, BlockPos::new(2, 0, 0)).effective(),
+        PowerLevel::ZERO,
+        "no self-sustaining loop through the stone"
+    );
 }
 
 #[test]

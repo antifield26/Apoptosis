@@ -150,28 +150,33 @@ impl fmt::Display for PowerLevel {
 
 /// Which of the two ways a block can be powered.
 ///
-/// **verified** — minecraft.wiki, *Redstone mechanics* §"Strongly energy vs. weakly
-/// energy" and §"Powered blocks":
+/// **measured on a real 26.1.2 server (P13-06)** — the conductivity matrix
+/// (`target/p13-wire/vanilla`, scripts `target/p13_wire_run.py` /
+/// `target/p13_wire_read.py`) replaces the wiki paragraph this documentation
+/// used to quote, which the measurements refute in three places (a torch does
+/// not power the block it is attached to; dust beside a lit torch carries 15;
+/// a redstone block never powers an adjacent solid). The rule that holds:
 ///
-/// > Strongly powered blocks can power redstone dust, and weakly powered blocks
-/// > cannot.
+/// - A solid fed by a torch below it or by an attached on-lever is **strong**:
+///   dust off it reads the full level (side and top probes read 15).
+/// - A solid fed by dust above or beside it is **weak**: dust off it steps
+///   down one more (probes read 14 off a 15-fed stone), while mechanisms read
+///   the full level.
+/// - A redstone block never powers an adjacent solid in any direction, though
+///   adjacent dust and torches read the block itself directly.
 ///
-/// and, on how a block *becomes* strongly powered:
-///
-/// > A block becomes strongly powered by being powered by a redstone power
-/// > component, a powered redstone repeater, or a powered redstone comparator.
-///
-/// That second sentence is the part this model implements in a simpler form: this
-/// crate treats exactly one source ([`PowerSource::RedstoneBlock`]) as strong and
-/// every other source as weak, which is **not** the same rule. See
-/// [`PowerSource::is_strong_source`] for the deviation.
+/// Which kind a solid carries is decided positionally in
+/// [`crate::propagation::solid_power`], not by [`PowerSource::is_strong_source`]:
+/// that flag names the kind of a *direct emission* (a block of redstone emits
+/// strongly to adjacent dust), which is a different question from what kind a
+/// stone conducts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SignalKind {
-    /// Powers an adjacent mechanism and a repeater/comparator facing away from the
-    /// block, but not adjacent redstone dust.
+    /// Powers an adjacent mechanism at full level; adjacent dust steps down
+    /// one more (a dust-fed stone conducts weakly).
     Weak,
-    /// Additionally powers adjacent redstone dust, including dust on top of and
-    /// beneath the block.
+    /// Additionally powers adjacent redstone dust at the full level (a
+    /// torch/lever-fed stone conducts strongly).
     Strong,
 }
 
@@ -207,18 +212,14 @@ impl fmt::Display for SignalKind {
 /// way a redstone model goes subtly wrong:
 ///
 /// - `strong` is what the block emits **through itself** to a neighbour on its far
-///   side. A lever attached to the side of a stone block strongly powers that stone;
-///   redstone dust *on top of* the stone is then powered, because the stone passes
-///   the signal through. **verified** for the rule and for the lever's ability to
-///   power its attachment block (minecraft.wiki *Redstone mechanics* §"Strongly
-///   powered": "A block is strongly powered when it can power adjacent redstone
-///   dust (including redstone dust on and beneath the block)").
-/// - `weak` is what the block emits **to its immediate neighbours only**. Redstone
-///   dust next to a lit redstone torch is *not* powered by it, while the block the
-///   torch is attached to is. **verified** for the rule (same section: a block
-///   becomes weakly powered "when it is powered only by redstone dust") and for the
-///   torch-versus-dust part, which is the message of the wiki's `Powers.png`
-///   caption.
+///   side. A lever attached to a stone block strongly powers that stone;
+///   redstone dust *beside* the stone then reads the full level, because the
+///   stone passes the signal through. **measured (P13-06)**: a floor lever's
+///   stone reads 15 on a side probe, and so does a wall lever's mount.
+/// - `weak` is what the block emits **to its immediate neighbours only**. Dust
+///   *on top of* a dust-fed stone reads one less than the stone carries
+///   (**measured**: 14 off a 15-fed stone), while a lamp on the same stone
+///   reads the full level.
 ///
 /// ## What is *not* verified here
 ///
@@ -227,14 +228,13 @@ impl fmt::Display for SignalKind {
 ///
 /// - that a consumer reads `max(weak, strong)` rather than testing the two kinds
 ///   separately;
-/// - the exact set of blocks each [`PowerSource`] variant powers in each direction;
-/// - the per-direction asymmetry of the torch (it powers the block above and its
-///   attachment block, but not dust to its sides or below) — that asymmetry is
-///   **not** implemented; see [`PowerSource`];
+/// - the exact set of blocks each [`PowerSource`] variant powers in each direction,
+///   beyond the P13-06 matrix (torch below only; lever attachment only; dust
+///   above and beside only; redstone block never);
 /// - whether a powered block passes on the *strength* it received or always passes
-///   15. This model passes the strength through unchanged when a block is a wire or
-///   an emitter and drops it to zero otherwise, which is an approximation of the
-///   conductivity rules, not a verified derivation.
+///   15. This model passes the received strength through (a dust-fed stone
+///   carries the dust's level), which matches the one attenuated case measured
+///   (15 in, 14 out) and is an assumption below 15.
 ///
 /// The `max` rule is therefore implemented and tested as a **product decision**
 /// (test name: `our_consumer_reads_the_maximum_of_weak_and_strong`), not as a
@@ -348,10 +348,11 @@ impl PowerState {
 /// **approximation** — all directional and state-specific detail is dropped. Two
 /// known deviations:
 ///
-/// - A redstone torch in Vanilla powers the block it is attached to and the block
-///   above it, and does **not** power redstone dust to its sides or below. Here a
-///   [`PowerSource`] is direction-agnostic, so a torch whose state is "lit" is
-///   treated as emitting to every neighbour. Component orientation is not modelled.
+/// - A redstone torch in Vanilla powers only the block **above** it (never the
+///   block it is attached to, never sideways) — **measured P13-06** — while its
+///   emission to adjacent dust is kept direction-agnostic here (dust beside a
+///   lit torch reads 15, measured; above and below assumed). Component
+///   orientation is not modelled.
 /// - A comparator's output depends on its back and side inputs rather than being a
 ///   constant; [`PowerSource::Comparator`] therefore responds to neighbours like
 ///   redstone dust does (max neighbour level, no attenuation) instead of using
@@ -421,24 +422,19 @@ impl PowerSource {
         }
     }
 
-    /// Whether this source strongly powers the block it is attached to.
+    /// Whether this source's direct emission is strong.
     ///
-    /// **verified (partially)** — the wiki is explicit that redstone dust only
-    /// strongly powers a block ("A block becomes weakly powered when it is powered
-    /// only by redstone dust"), and it lists "a redstone power component, a powered
-    /// redstone repeater, or a powered redstone comparator" as things that strongly
-    /// power a block. That would make the repeater and the comparator strong sources
-    /// too, and this function deliberately does **not** say so: whether a *repeater's
-    /// output* strongly powers the block in front of it is listed here as
-    /// **unverified**, and the conservative choice is to model it as weak until a
-    /// baseline test says otherwise. The one case where the deviation is visible is a
-    /// repeater or comparator facing a solid block with dust on the far side.
+    /// This flag is about the emission to immediately adjacent dust and
+    /// mechanisms — a redstone block emits strongly there (dust on it reads
+    /// 15, **measured P13-06**) — and must not be read as "powers adjacent
+    /// solids": the block never powers a solid (P13-06, all directions), while
+    /// the torch and lever, weak emitters here, strongly power a stone through
+    /// position (torch below, lever attachment). That positional rule lives in
+    /// [`crate::propagation::solid_power`].
     ///
-    /// A block of redstone is the only variant reported as strong. **verified** by
-    /// elimination for the torch and lever: the torch's and lever's effect on an
-    /// attachment block is precisely the "weak power" case the wiki describes, so
-    /// neither can be strong. The redstone block's strong emission is the standard
-    /// reading of a power component and is **not** independently verified here.
+    /// Whether a *repeater's or comparator's output* strongly powers the block
+    /// in front of it is **unverified**, and the conservative choice is to
+    /// model both as weak until a baseline test says otherwise.
     #[must_use]
     pub const fn is_strong_source(self) -> bool {
         matches!(self, Self::RedstoneBlock)

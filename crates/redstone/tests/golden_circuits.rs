@@ -121,41 +121,122 @@ fn golden_lever_fifteen_blocks_of_wire_and_a_lamp() {
         "with a dead neighbour the lamp stays dark"
     );
 
-    // Now shorten the line to 14 blocks so the lamp does have a live neighbour, and check that
-    // the number the lamp reads is the one the model computed for the adjacent wire.
+    // Now shorten the line to 13 blocks and stand the lamp on a stone
+    // pedestal at the end: the last dust powers the pedestal from the side
+    // (P13-06, measured z=20), and the lamp reads its support. A lamp beside
+    // live dust would stay dark (K1) — the pedestal is the vanilla-faithful
+    // geometry.
     let mut world = flat();
     world.set(
         BlockPos::new(0, 0, 0),
         component(&registry, ComponentState::Lever(Lever::new(true))),
     );
-    for x in 1..=14 {
+    for x in 1..=13 {
         world.set(BlockPos::new(x, 0, 0), w(&registry, 0));
     }
+    world.set(BlockPos::new(14, 0, 0), block(&registry, "minecraft:stone"));
     world.set(
-        BlockPos::new(15, 0, 0),
+        BlockPos::new(14, 1, 0),
         block(&registry, "minecraft:redstone_lamp"),
     );
     let mut queue = UpdateQueue::new();
     prepare(&mut queue, BlockPos::new(0, 0, 0));
     propagate(&mut world, &mut queue, table, UpdateBudget::nominal());
     assert_eq!(
-        wire_power_at(&world, &registry, BlockPos::new(14, 0, 0)),
-        Some(2)
+        wire_power_at(&world, &registry, BlockPos::new(13, 0, 0)),
+        Some(3)
     );
-    let lamp_input = common::emitted_at(&world, &registry, BlockPos::new(14, 0, 0));
-    assert_eq!(
-        lamp_input.effective().get(),
-        2,
-        "the lamp at x = 15 reads the wire at x = 14, which carries 2"
+    // And the mechanism half: propagate writes `lit` back, so the lamp on
+    // the dust-powered pedestal is lit.
+    assert!(
+        is_lit(&world, &registry, BlockPos::new(14, 1, 0)),
+        "a lamp on a dust-powered pedestal must be lit after propagation"
+    );
+}
+
+#[test]
+fn golden_lever_mount_powers_stone_strongly() {
+    // Layout, y = 0 except where noted:
+    //
+    //       z=0:  stone-A  lever(floor,on)   w(2,0,0)
+    //             x=1      x=1,y=1
+    //       z=0:  lever(wall,west,on)  stone-B  torch(top, out)
+    //             x=4                  x=5      x=5,y=1
+    //       z=0:  lever(wall,west,on)  stone-C  lamp(top, lit) + lamp beside C (dark)
+    //             x=7                  x=8      x=8,y=1          x=9,y=1 on stone x=9,y=0
+    //
+    // P13-06, measured rows R9/R10: a lever powers its mount strongly, so
+    // dust beside the mount reads the full level, a torch on the mount goes
+    // out, and a lamp on the mount lights — while a lamp beside the mount
+    // stays dark (R2).
+    let registry = registry();
+    let table = table(&registry);
+    let mut world = flat();
+    let stone = |world: &mut mc_redstone::propagation::FlatWorld, x: i32, y: i32| {
+        world.set(BlockPos::new(x, y, 0), block(&registry, "minecraft:stone"));
+    };
+    // Mount A: floor lever, dust beside the mount.
+    stone(&mut world, 1, 0);
+    world.set(
+        BlockPos::new(1, 1, 0),
+        common::lever(&registry, "floor", "north", true),
+    );
+    world.set(BlockPos::new(2, 0, 0), w(&registry, 0));
+    // Mount B: wall lever, torch on the mount.
+    world.set(
+        BlockPos::new(4, 0, 0),
+        common::lever(&registry, "wall", "west", true),
+    );
+    stone(&mut world, 5, 0);
+    world.set(
+        BlockPos::new(5, 1, 0),
+        registry
+            .state_id(
+                "minecraft:redstone_torch",
+                &[("lit".to_owned(), "true".to_owned())],
+            )
+            .expect("lit torch"),
+    );
+    // Mount C: wall lever, lamp on the mount, lamp beside the mount.
+    world.set(
+        BlockPos::new(7, 0, 0),
+        common::lever(&registry, "wall", "west", true),
+    );
+    stone(&mut world, 8, 0);
+    world.set(
+        BlockPos::new(8, 1, 0),
+        block(&registry, "minecraft:redstone_lamp"),
+    );
+    stone(&mut world, 9, 0);
+    world.set(
+        BlockPos::new(9, 1, 0),
+        block(&registry, "minecraft:redstone_lamp"),
+    );
+    let mut queue = UpdateQueue::new();
+    for x in [1, 4, 5, 7, 8] {
+        prepare(&mut queue, BlockPos::new(x, 0, 0));
+        prepare(&mut queue, BlockPos::new(x, 1, 0));
+    }
+    let report = propagate(&mut world, &mut queue, table, UpdateBudget::nominal());
+    assert!(
+        !report.budget_exhausted,
+        "this circuit must fit the nominal budget"
+    );
+    // Dust beside a lever-powered mount reads the full level.
+    common::assert_wire_powers(&world, &registry, &[(BlockPos::new(2, 0, 0), 15)]);
+    // The torch on the mount goes out; the lamp on the mount lights; the
+    // lamp beside the mount stays dark.
+    assert!(
+        !is_lit(&world, &registry, BlockPos::new(5, 1, 0)),
+        "a torch on a lever-powered mount must go dark"
     );
     assert!(
-        lamp_input.effective().is_powered(),
-        "so the lamp is activated"
+        is_lit(&world, &registry, BlockPos::new(8, 1, 0)),
+        "a lamp on a lever-powered mount must light"
     );
-    // And the mechanism half: propagate writes `lit` back, so the lamp is lit.
     assert!(
-        is_lit(&world, &registry, BlockPos::new(15, 0, 0)),
-        "a powered lamp must be lit after propagation"
+        !is_lit(&world, &registry, BlockPos::new(9, 1, 0)),
+        "a lamp beside a powered mount must stay dark"
     );
 }
 

@@ -52,6 +52,36 @@ pub fn component(registry: &BlockRegistry, state: ComponentState) -> i32 {
         .unwrap_or_else(|error| panic!("{state:?} must resolve to a block state: {error}"))
 }
 
+/// The state id of a lever with an explicit mount: `face` is
+/// `floor`|`wall`|`ceiling`, `facing` is `north`|`south`|`west`|`east`.
+///
+/// P13-06 measures the mount, not the lever in the abstract — a floor lever
+/// powers the block below it, a wall lever the block behind it — so
+/// conductivity tests always build the lever this way rather than through
+/// [`component`], which keeps the registry's first `face`/`facing`.
+pub fn lever(registry: &BlockRegistry, face: &str, facing: &str, powered: bool) -> i32 {
+    registry
+        .state_id(
+            "minecraft:lever",
+            &[
+                ("face".to_owned(), face.to_owned()),
+                ("facing".to_owned(), facing.to_owned()),
+                ("powered".to_owned(), powered.to_string()),
+            ],
+        )
+        .unwrap_or_else(|error| panic!("lever {face}/{facing}/{powered} must resolve: {error}"))
+}
+
+/// The state id of a lit (or unlit) standing torch.
+pub fn torch(registry: &BlockRegistry, lit: bool) -> i32 {
+    registry
+        .state_id(
+            "minecraft:redstone_torch",
+            &[("lit".to_owned(), lit.to_string())],
+        )
+        .unwrap_or_else(|error| panic!("torch lit={lit} must resolve: {error}"))
+}
+
 /// The state id of a redstone wire at `power`.
 pub fn wire(registry: &BlockRegistry, power: PowerLevel) -> i32 {
     table(registry)
