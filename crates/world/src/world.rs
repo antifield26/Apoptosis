@@ -439,6 +439,13 @@ impl World {
 
     /// Move `box` by `delta`, stopping at solid blocks, per axis.
     ///
+    /// Axis order is Vanilla's, bytecode-read from the 26.1.2 jar
+    /// (`Direction.axisStepOrder`, P14-03): Y first, then the longer
+    /// horizontal axis (`|x| >= |z|` resolves X before Z, else Z before X).
+    /// The order is observable only when a box is obstructed on two axes in
+    /// one step — typically falling diagonally against a wall, where Y-first
+    /// lands before the wall instead of flying over it.
+    ///
     /// Returns the movement actually applied, whether the box is now resting on
     /// something (`on_ground`), and whether any axis was obstructed (so the caller
     /// can zero a velocity component).
@@ -463,8 +470,16 @@ impl World {
         let mut collided = [false; 3];
         let mut on_ground = false;
 
-        #[allow(clippy::needless_range_loop)]
-        for axis in 0..3 {
+        // Vanilla's `axisStepOrder`: Y, then the longer horizontal axis. Zero
+        // axes are skipped inside the loop exactly as before.
+        // Vanilla's `axisStepOrder`: Y, then the longer horizontal axis. Zero
+        // axes are skipped inside the loop exactly as before.
+        let order: [usize; 3] = if delta.x.abs() >= delta.z.abs() {
+            [1, 0, 2]
+        } else {
+            [1, 2, 0]
+        };
+        for axis in order {
             let amount = match axis {
                 0 => delta.x,
                 1 => delta.y,
@@ -746,6 +761,61 @@ mod tests {
             result.delta.z
         );
         assert!(result.delta.x < 2.0 && result.delta.x > 1.5);
+    }
+
+    #[test]
+    fn falling_diagonally_lands_before_a_wall() {
+        // P14-03, bytecode-measured (Direction.axisStepOrder): Y resolves
+        // first. A box falling one block onto the floor while moving into a
+        // wall lands, then stops against the wall — it does not fly over the
+        // wall at height and land behind it (the old X-first order did).
+        let mut world = world();
+        world.set_block(1, 64, 0, 1).expect("wall");
+        let box_ = player_at(0.0, 65.0, 0.0);
+        let result = world.move_with_collision(box_, Vec3::new(2.0, -2.0, 0.0));
+        assert!(
+            (result.delta.y - -1.0).abs() < 0.01,
+            "landed on the floor (top 64), moved {}",
+            result.delta.y
+        );
+        assert!(result.on_ground, "landing reports ground");
+        assert!(
+            result.delta.x < 1.0,
+            "stopped before the wall instead of flying over it, moved {}",
+            result.delta.x
+        );
+        assert!(result.collided[0], "x blocked by the wall");
+        let after = box_.offset(result.delta);
+        assert!(
+            after.max_x <= 1.0 + 1e-6,
+            "must not be inside the wall, max_x {}",
+            after.max_x
+        );
+    }
+
+    #[test]
+    fn the_longer_horizontal_axis_resolves_first() {
+        // P14-03, bytecode-measured: Y, then the longer of X/Z (|x| >= |z|
+        // takes X first). A short wall beside the path stops an X-first box
+        // but not a Z-first one: with |dz| > |dx| the box slips past.
+        let mut world = world();
+        world.set_block(2, 64, 0, 1).expect("short wall");
+        let box_ = player_at(0.0, 64.0, 0.0);
+        let result = world.move_with_collision(box_, Vec3::new(3.0, 0.0, 4.0));
+        assert!(
+            (result.delta.z - 4.0).abs() < 1e-6,
+            "z runs free: {}",
+            result.delta.z
+        );
+        assert!(
+            (result.delta.x - 3.0).abs() < 1e-6,
+            "x slips past the short wall once z is clear: {}",
+            result.delta.x
+        );
+        assert!(
+            !result.collided[0] && !result.collided[2],
+            "nothing was hit"
+        );
     }
 
     #[test]
