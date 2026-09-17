@@ -13,7 +13,9 @@ use mc_network::bridge::{
 };
 use mc_protocol::ids::clientbound;
 use mc_protocol::packets::Packet;
-use mc_protocol::packets::play::{ForgetLevelChunk, LevelChunkWithLight, SetChunkCacheRadius};
+use mc_protocol::packets::play::{
+    ForgetLevelChunk, LevelChunkWithLight, SetChunkCacheCenter, SetChunkCacheRadius,
+};
 use mc_server::game::{Game, TickReport};
 use mc_server::storage::WorldService;
 use mc_test_support::fixtures::TempDir;
@@ -90,8 +92,7 @@ impl Harness {
 }
 
 #[test]
-fn teleporting_away_forgets_the_departed_chunks_by_name() {
-    let mut harness = Harness::new("p14-forget");
+fn teleporting_away_forgets_the_departed_chunks_by_name() {    let mut harness = Harness::new("p14-forget");
     let (id, mut out) = harness.join("Walker");
     harness.run(10);
     let (home_x, home_z) = harness.player_chunk(id);
@@ -206,4 +207,49 @@ fn view_distance_is_clamped_confirmed_and_honoured() {
         beyond, 0,
         "{beyond} of {total} chunks arrived from outside radius 2"
     );
+}
+
+#[test]
+fn crossing_into_a_new_chunk_updates_the_cache_center_first() {
+    // Owner finding (soak): the center went out once at enter-play and never
+    // again, so walking far showed nothing new and respawning far away stuck
+    // on "Loading terrain". The center must lead the chunks on every chunk
+    // crossing — including teleports and respawns, which move without walking.
+    let mut harness = Harness::new("p14-center");
+    let (id, mut out) = harness.join("Walker");
+    harness.run(5);
+    while out.try_recv().is_some() {}
+
+    harness.command(id, "tp Walker 600 80 0");
+    harness.run(5);
+    let (cx, cz) = harness.player_chunk(id);
+
+    let mut centers = Vec::new();
+    let mut chunks = Vec::new();
+    while let Some(raw) = out.try_recv() {
+        if raw.id == clientbound::play::SET_CHUNK_CACHE_CENTER {
+            let packet =
+                SetChunkCacheCenter::decode(&raw.payload).expect("a center decodes");
+            centers.push((packet.x, packet.z));
+        } else if raw.id == clientbound::play::LEVEL_CHUNK_WITH_LIGHT {
+            let packet =
+                LevelChunkWithLight::decode(&raw.payload).expect("a chunk decodes");
+            chunks.push((packet.chunk_x, packet.chunk_z));
+        }
+    }
+    assert!(
+        centers.contains(&(cx, cz)),
+        "the new chunk {cx},{cz} must become the center, saw {centers:?}"
+    );
+    assert!(
+        !chunks.is_empty(),
+        "fresh land must stream after the teleport"
+    );
+    // Every streamed chunk belongs to the new centre's radius, not the old one.
+    for (x, z) in &chunks {
+        assert!(
+            (x - cx).abs() <= 4 && (z - cz).abs() <= 4,
+            "chunk {x},{z} is outside the new radius around {cx},{cz}"
+        );
+    }
 }

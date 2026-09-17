@@ -192,8 +192,9 @@ use mc_protocol::packets::play::{
     ContainerSetData, ContainerSetSlot, ForgetLevelChunk, GameEvent, HEIGHTMAP_WORLD_SURFACE,
     Heightmap, LevelChunkWithLight, LightUpdate, MENU_FURNACE, MENU_GENERIC_9X3, MENU_HOPPER,
     NETWORK_BIOME_MIN_BITS, OpenScreen, PalettedContainer as WireContainer, PlayDisconnect,
-    PlayIntent, PlayerPosition, Respawn, SetChunkCacheRadius, SetDefaultSpawnPosition,
-    SetExperience, SetHealth, SetHeldSlot, SetTime, block_position, unpack_block_position,
+    PlayIntent, PlayerPosition, Respawn, SetChunkCacheCenter, SetChunkCacheRadius,
+    SetDefaultSpawnPosition, SetExperience, SetHealth, SetHeldSlot, SetTime, block_position,
+    unpack_block_position,
 };
 use mc_protocol::text::TextComponent;
 use mc_registry::Registries;
@@ -706,6 +707,14 @@ pub(crate) struct Session {
     outbound: OutboundSender,
     /// Chunks already sent, so streaming is incremental.
     sent_chunks: BTreeSet<ChunkPos>,
+    /// The chunk centre the client was last told (P14-04 follow-up).
+    ///
+    /// The connection tells the client `(0, 0)` at enter-play; the game sets
+    /// the join chunk here and re-sends on every chunk crossing, before the
+    /// chunks themselves stream. Without it the client culls and waits on a
+    /// stale centre: walking far shows nothing new, and respawning far away
+    /// sticks on "Loading terrain".
+    center: ChunkPos,
     /// The view distance this session streams at (P14-04).
     ///
     /// Starts at the server maximum and follows the client's
@@ -3809,6 +3818,7 @@ impl Game {
                 entity,
                 outbound,
                 sent_chunks: BTreeSet::new(),
+                center: chunk_of(at.x, at.z),
                 tick_start_y: f64::from(sy),
                 // The operator list is the authority: a listed uuid gets its file level,
                 // and anyone else is level 0. `ops.json` stores the hyphenated uuid, which is
@@ -6644,16 +6654,41 @@ impl Game {
 
     /// Send the chunks a player is missing, nearest first, bounded per tick.
     fn stream_for(&mut self, id: ConnectionId, report: &mut TickReport) -> ServerResult<()> {
-        let Some(session) = self.sessions.get(&id) else {
-            return Ok(());
+        // The client's cache centre must lead the chunks, not trail them: it
+        // culls and waits on the centre it was last told (P14-04 follow-up).
+        let centre = {
+            let Some(session) = self.sessions.get(&id) else {
+                return Ok(());
+            };
+            session.chunk()
         };
-        let centre = session.chunk();
-        let radius = session.view_distance;
+        let stale = self
+            .sessions
+            .get(&id)
+            .is_some_and(|session| session.center != centre);
+        if stale {
+            let packet = SetChunkCacheCenter {
+                x: centre.x,
+                z: centre.z,
+            };
+            self.send(id, &packet, report)?;
+            if let Some(session) = self.sessions.get_mut(&id) {
+                session.center = centre;
+            }
+        }
+        let radius = self
+            .sessions
+            .get(&id)
+            .map_or(self.view_distance, |session| session.view_distance);
         let mut wanted: Vec<ChunkPos> = Vec::new();
         for dx in -radius..=radius {
             for dz in -radius..=radius {
                 let candidate = ChunkPos::new(centre.x + dx, centre.z + dz);
-                if !session.sent_chunks.contains(&candidate) {
+                let sent = self
+                    .sessions
+                    .get(&id)
+                    .is_some_and(|session| session.sent_chunks.contains(&candidate));
+                if !sent {
                     wanted.push(candidate);
                 }
             }
