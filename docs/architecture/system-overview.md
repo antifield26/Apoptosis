@@ -42,8 +42,7 @@ completion. Connection tasks handle keepalive/ping/client-information inline; on
 tick-queued, and every connection shares one bounded inbound queue (`lifecycle::EVENT_QUEUE`, 1024).
 
 A tick runs six phases in serial order (`mc-simulation::PHASE_ORDER`): `Network → ScheduledTicks →
-Entities → Players → BlockEntities → Broadcast`. `ScheduledTicks` is still a documented no-op (P13's
-first task); `BlockEntities` ticks furnaces and hoppers since P12-03/04. Each player holds one open
+Entities → Players → BlockEntities → Broadcast`. `ScheduledTicks` drains the redstone update queue every tick (P13-01: due ticks with fired/pending accounting, then `propagate` under budget); `BlockEntities` ticks furnaces and hoppers since P12-03/04. Each player holds one open
 window: `window 0` is the player inventory, `1..=127` a chest/furnace/hopper menu whose block half
 flushes into the chunk's block entity; the cursor rides `set_cursor_item` and closes restore the
 player menu. Chunk saves carry both `entities` and `block_entities` NBT (P11-08/P12-05).
@@ -106,8 +105,7 @@ Recorded rather than papered over; the full catalogue with per-row evidence is t
 - **Entities sync and persist, within limits.** Mobs spawn, walk, hit back, drop loot, and ride the chunk
   save with drops (P11); viewers see moves, hurt and death. Gaps: per-kind follow ranges, XP orbs,
   pathfinding, and entities in otherwise-clean chunks.
-- **Redstone is a tested model, not wired into the tick loop.** Propagation, budgets and determinism have
-  tests; `TickPhase::ScheduledTicks` is still a no-op (P13's first task).
+- **Redstone is a measured model, wired into the tick loop.** Directional conductivity (P13-06), the 15-block wire (P13-05) and the vanilla differential (P13-07) pin it; player edits feed the queue (P13-02) and the `ScheduledTicks` phase propagates and broadcasts.
 - **8 of roughly 90 Vanilla commands.** Chests, furnaces and hoppers open as windows a client can
   transact with; double chests open single, tag recipes never convert, hopper↔furnace routing is skipped.
 - **Partial real-client acceptance.** A Java 26.1.2 client has joined, entered play, rendered night/mobs/

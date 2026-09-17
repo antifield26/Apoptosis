@@ -174,8 +174,8 @@ backup: it covers neither region files nor operator error.
 - Pi 5 soak: one 30-minute 10-player run on record
   (`docs/performance/BENCHMARK-BASELINE.md`); re-soak after P12 tick work.
 - Online mode: fail-fast boundary only; enabling it is an error, not auth.
-- `.zip` data packs unread; structure subset is single-chunk only; redstone not
-  wired into the tick loop; advancements load but never fire; loot fires as the
+- `.zip` data packs unread; structure subset is single-chunk only; redstone timing
+  (torch delay/burn-out, update order) unmodelled; advancements load but never fire; loot fires as the
   block/mob drop authority (P11-04); furnace recipes come from the loaded pack
   once `vanilla_data` is set, else the hand-written baseline (P12-08; see the
   parity matrix's smelting row).
