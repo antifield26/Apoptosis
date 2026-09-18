@@ -2302,7 +2302,9 @@ pub struct SetTime {
 pub struct ClockState {
     /// Registry id of the clock (`WorldClocks` bootstrap order: overworld first).
     pub clock_id: i32,
-    /// The clock's total ticks — what the client's sky renders.
+    /// The clock's total ticks — what the client's sky renders. A `VarLong`
+    /// on the wire (`ByteBufCodecs.VAR_LONG` inside the composite), not a
+    /// fixed long: writing 8 bytes here was the P14-09 field-length error.
     pub total_ticks: i64,
     /// Sub-tick interpolation, normally `0.0`.
     pub partial_tick: f32,
@@ -2337,7 +2339,7 @@ impl Packet for SetTime {
             }
             clocks.push(ClockState {
                 clock_id: raw - 1,
-                total_ticks: reader.read_i64()?,
+                total_ticks: reader.read_varlong()?,
                 partial_tick: reader.read_f32()?,
                 rate: reader.read_f32()?,
             });
@@ -2363,7 +2365,7 @@ impl Packet for SetTime {
                 )));
             }
             writer.write_varint(clock.clock_id + 1);
-            writer.write_i64(clock.total_ticks);
+            writer.write_varlong(clock.total_ticks);
             writer.write_f32(clock.partial_tick);
             writer.write_f32(clock.rate);
         }
@@ -4202,7 +4204,7 @@ mod tests {
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x17, 0x70, // world age
                 0x01, // one clock update
                 0x01, // overworld reference (id + 1)
-                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4E, 0x20, // 20000 ticks
+                0xA0, 0x9C, 0x01, // 20000 as VarLong
                 0x00, 0x00, 0x00, 0x00, // partial 0.0
                 0x3F, 0x80, 0x00, 0x00, // rate 1.0
             ]

@@ -109,9 +109,10 @@ Four more walk findings, all fixed and redeployed:
 - `/time set` rejected and the sky never moved: the grammar took only a bare
   integer, and the packet shape (`i64` + flag) decoded on the client as world
   age plus an *empty clock map*. `set_time` now carries the overworld clock
-  entry (`count, id, added, removed` patch shape read from
-  `ItemStack$1`/`DataComponentPatch$3`; clock reference is id+1 per
-  `ByteBufCodecs$30`; overworld bootstraps first), the per-second broadcast
+  entry (clock reference is id+1 per `ByteBufCodecs$30`; the state's ticks are
+  a `VarLong`, partial and rate `f32`s per the composite — the first attempt
+  wrote a fixed `i64` and the client dropped the connection on a field-length
+  error, which the golden now pins as `A0 9C 01`); the per-second broadcast
   carries the `/time` offset, and the command takes `set <ticks|preset>` with
   `day`/`noon`/`night`/`midnight` (bare integers still set).
 - Placement rearranged the hotbar: the consumed remainder went through
