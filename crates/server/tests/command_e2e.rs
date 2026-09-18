@@ -491,6 +491,15 @@ async fn time_set_and_presets_reach_the_client_clock() {
         drift < 5,
         "an integer set must land exactly, drifted {drift}"
     );
+    // A typo must print usage, never silently query: the old fallback made a
+    // failed set indistinguishable from a successful one (P14-09 walk).
+    let before = harness.game.time_offset();
+    harness.command("time frobnicate").await;
+    assert_eq!(
+        harness.game.time_offset(),
+        before,
+        "a typo must not move the clock"
+    );
     let ids = harness.drain_ids(600).await;
     assert!(
         ids.contains(&clientbound::play::SET_TIME),

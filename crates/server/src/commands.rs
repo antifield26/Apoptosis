@@ -30,7 +30,8 @@
 //!   not advance the date the way Vanilla's `time set` does; `add` is not
 //!   modelled. `set` takes an integer or a preset
 //!   (`day`/`noon`/`night`/`midnight`); a bare integer still sets for
-//!   back-compat, and anything else queries.
+//!   back-compat. Anything else prints usage — it never answers the time,
+//!   because a silent query once hid failed sets (P14-09 walk).
 //! - **`tp`** moves the *invoking* player, not a named target, because the server has no
 //!   cross-player teleport authority model yet; the `target` argument is validated and
 //!   must name the source itself. That is a real limitation, not a stub.
@@ -408,26 +409,25 @@ impl Game {
                 time.rem_euclid(24_000)
             )))
         };
-        // Bare `/time`, `/time query`, and anything unparseable as a set read
-        // the clock rather than failing: the old grammar answered queries and
-        // the walk's `/time set` fell into it confusingly, so only a real
-        // `set` with a real value writes.
+        // Bare `/time` and `/time query` read the clock. Anything else must
+        // resolve to a set or say usage: the old fallback answered every typo
+        // with the time, which made a failed set indistinguishable from a
+        // successful one on the live client (P14-09 walk).
         let target: Option<i64> = match (action, value) {
-            (None | Some("query"), _) => return query(),
+            (None | Some("query"), None) => return query(),
             (Some("set"), Some(word)) => Self::time_value(word),
-            (Some(word), None) => word.parse::<i64>().ok().or_else(|| {
-                // A lone preset without `set` (`/time night`) is accepted the
-                // way players type it; a lone unknown word is not a set.
-                if Self::time_preset(word).is_some() {
-                    Self::time_preset(word)
-                } else {
-                    None
-                }
-            }),
-            _ => None,
+            (Some(word), None) => word.parse::<i64>().ok().or_else(|| Self::time_preset(word)),
+            _ => {
+                return Ok(CommandResult::message(
+                    "Usage: /time [query | <ticks> | set <ticks|day|noon|night|midnight>]"
+                        .to_owned(),
+                ));
+            }
         };
         let Some(target) = target else {
-            return query();
+            return Ok(CommandResult::message(
+                "Usage: /time [query | <ticks> | set <ticks|day|noon|night|midnight>]".to_owned(),
+            ));
         };
         // Setting records an offset from the tick counter, so the value sticks
         // while the clock keeps advancing — and the broadcast below carries it
@@ -435,6 +435,12 @@ impl Game {
         // shape decoded as an empty clock map, so `/time` moved the server's
         // mobs but never the client's sky).
         self.set_time_offset(target - (self.tick_count() % 24_000).cast_signed());
+        info!(
+            from = %parsed.source.name,
+            target,
+            offset = self.time_offset(),
+            "time offset set"
+        );
         let packet = SetTime {
             world_age: self.tick_count().cast_signed(),
             clocks: vec![mc_protocol::packets::play::ClockState {

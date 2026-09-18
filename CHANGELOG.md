@@ -115,6 +115,10 @@ Four more walk findings, all fixed and redeployed:
   error, which the golden now pins as `A0 9C 01`); the per-second broadcast
   carries the `/time` offset, and the command takes `set <ticks|preset>` with
   `day`/`noon`/`night`/`midnight` (bare integers still set).
+
+  Follow-up: unknown `/time` words printed the time instead of usage, which
+  made a failed set indistinguishable from a successful one — now they print
+  usage, and a successful set logs `time offset set` server-side.
 - Placement rearranged the hotbar: the consumed remainder went through
   `add_stack`'s lowest-partial-first fill instead of back into the held slot.
   Consume-in-place (`take`/`shrink`/`replace_held`); the new test fails on
