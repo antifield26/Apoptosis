@@ -1,13 +1,14 @@
 //! Reconnect robustness (P14-05): leave and rejoin while running, and rejoin
 //! after a full restart.
 //!
-//! Sessions are not persisted (no playerdata yet): a rejoin starts fresh at
-//! spawn with an empty inventory, like a first join. What must hold is the
-//! plumbing — the old entity is swept exactly once, no ghost session lingers,
-//! the new session streams, and a restart accepts the same name again. Death
-//! and respawn with a real client, and a rejoin finding pre-restart state,
-//! stay on KD-38's open list: they need a real client at a keyboard, and no
-//! test here can stand in for one.
+//! A rejoin within one run restores the live state (position, health,
+//! inventory, mode) from the remembered player; a restart still starts fresh
+//! at spawn (no playerdata files yet — that is the P16 item). What must hold
+//! is the plumbing — the old entity is swept exactly once, no ghost session
+//! lingers, the new session streams, and a restart accepts the same name
+//! again. Death and respawn with a real client stay on KD-38's open list:
+//! they need a real client at a keyboard, and no test here can stand in for
+//! one.
 
 use mc_network::bridge::{
     ClientEvent, ClientEventKind, ConnectionId, ConnectionIds, InboundReceiver, OutboundSender,
@@ -152,5 +153,50 @@ fn rejoin_after_a_full_restart_works() {
         game2.player_count(),
         1,
         "a restart must accept the same name again"
+    );
+}
+
+/// A disconnect must not send the player back to spawn (P14-09 walk): leave
+/// stores the live player and the rejoin restores position, health and
+/// inventory. A restart still starts fresh — that half is the P16
+/// playerdata item, pinned by the restart test above staying green.
+#[test]
+fn rejoin_restores_where_the_player_left() {
+    let mut harness = Harness::new("p14-remember");
+    let (id, _out) = harness.join("Homer");
+    let dirt = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:dirt")
+        .expect("dirt item");
+    {
+        let player = harness.game.player_mut(id).expect("player");
+        player.position = mc_entity::player::Vec3::new(100.5, 70.0, -40.5);
+        player.health = 8.0;
+        player
+            .inventory
+            .set_slot(3, mc_entity::stack::ItemStack::new(dirt, 5).expect("stack"))
+            .expect("slot 3");
+    }
+    harness.leave(id);
+
+    let (id2, _) = harness.join("Homer");
+    let player = harness.game.player(id2).expect("player");
+    assert!(
+        (player.position.x - 100.5).abs() < 1e-6
+            && (player.position.y - 70.0).abs() < 1e-6
+            && (player.position.z + 40.5).abs() < 1e-6,
+        "rejoin restores the leave position, got {:?}",
+        player.position
+    );
+    assert!(
+        (player.health - 8.0).abs() < f32::EPSILON,
+        "rejoin restores health"
+    );
+    assert_eq!(
+        player.inventory.slot(3).count(),
+        5,
+        "rejoin restores the inventory"
     );
 }

@@ -26,9 +26,11 @@
 //! - **`help`** takes no page argument and does not paginate. Vanilla's does both.
 //! - **`list`** does not report the maximum player count in Vanilla's exact format.
 //! - **`say`** broadcasts to players only. The server console sees it in the log.
-//! - **`time`** sets `timeOfDay` but not `dayTime`, so it does not advance the day
-//!   counter the way Vanilla's `time set` does. `time set day` and the named presets
-//!   (`day`/`noon`/`night`/`midnight`) are not accepted — only an integer.
+//! - **`time`** sets the overworld clock but not the day counter, so it does
+//!   not advance the date the way Vanilla's `time set` does; `add` is not
+//!   modelled. `set` takes an integer or a preset
+//!   (`day`/`noon`/`night`/`midnight`); a bare integer still sets for
+//!   back-compat, and anything else queries.
 //! - **`tp`** moves the *invoking* player, not a named target, because the server has no
 //!   cross-player teleport authority model yet; the `target` argument is validated and
 //!   must name the source itself. That is a real limitation, not a stub.
@@ -124,12 +126,9 @@ impl Game {
         add(Command::new("help", "List the commands you can use"));
         add(Command::new("list", "List the players online"));
         add(Command::new("say", "Broadcast a message").with_argument(Argument::greedy("message")));
-        add(
-            Command::new("time", "Query or set the world time").with_argument(Argument::optional(
-                "value",
-                ArgumentKind::Integer(ValueRange::new(0, 24_000)),
-            )),
-        );
+        add(Command::new("time", "Query or set the world time")
+            .with_argument(Argument::optional("action", ArgumentKind::Word))
+            .with_argument(Argument::optional("value", ArgumentKind::Word)));
         add(Command::new("tp", "Teleport to coordinates")
             .with_argument(Argument::word("target"))
             .with_argument(Argument::required("pos", ArgumentKind::BlockPos)));
@@ -390,33 +389,60 @@ impl Game {
         Ok(CommandResult::silent())
     }
 
-    /// `/time [value]`
+    /// `/time [query]`, `/time <ticks>`, `/time set <ticks|day|noon|night|midnight>`
+    ///
+    /// Vanilla's `add` is not modelled (declared): advancing the clock by a
+    /// delta is a second verb on the same offset, and this handler covers set
+    /// plus query — the two the walk asked for.
     fn command_time(
         &mut self,
         parsed: &mc_command::dispatch::ParsedCommand,
         report: &mut TickReport,
     ) -> ServerResult<CommandResult> {
-        let Some(value) = parsed.integer(0) else {
-            // Query: there is no per-world time field yet, so the answer comes from the
-            // tick counter the world-time broadcast already uses.
-            let time = (self.tick_count() % 24_000).cast_signed();
-            return Ok(CommandResult::message(format!(
-                "The time is {time} (daytime)"
-            )));
+        let action = parsed.string(0);
+        let value = parsed.string(1);
+        let query = || {
+            let time = (self.tick_count() % 24_000).cast_signed() + self.time_offset();
+            Ok(CommandResult::message(format!(
+                "The time is {} (daytime)",
+                time.rem_euclid(24_000)
+            )))
         };
-        // Setting overwrites `time_of_day` for this tick and every later one, since the
-        // broadcast recomputes it from the tick counter each second. So the offset is
-        // recorded rather than the value, which is what makes `/time` stick.
-        // The day-time arithmetic is signed because the offset can be negative; the
-        // tick counter is not, and the modulo keeps the value small either way.
-        self.set_time_offset(value - (self.tick_count() % 24_000).cast_signed());
-        let time = (self.tick_count() % 24_000).cast_signed() + self.time_offset();
-        // The offset is still recorded, because it is what the query above and any future clock sync read.
-        // It can no longer reach the client through `set_time`: 26.1.2 removed `time_of_day` from that packet
-        // (P10-03, KD-43). The offset is applied to `time` for the reply below.
+        // Bare `/time`, `/time query`, and anything unparseable as a set read
+        // the clock rather than failing: the old grammar answered queries and
+        // the walk's `/time set` fell into it confusingly, so only a real
+        // `set` with a real value writes.
+        let target: Option<i64> = match (action, value) {
+            (None | Some("query"), _) => return query(),
+            (Some("set"), Some(word)) => Self::time_value(word),
+            (Some(word), None) => word.parse::<i64>().ok().or_else(|| {
+                // A lone preset without `set` (`/time night`) is accepted the
+                // way players type it; a lone unknown word is not a set.
+                if Self::time_preset(word).is_some() {
+                    Self::time_preset(word)
+                } else {
+                    None
+                }
+            }),
+            _ => None,
+        };
+        let Some(target) = target else {
+            return query();
+        };
+        // Setting records an offset from the tick counter, so the value sticks
+        // while the clock keeps advancing — and the broadcast below carries it
+        // to every client in the overworld clock entry (P14-09 walk: the old
+        // shape decoded as an empty clock map, so `/time` moved the server's
+        // mobs but never the client's sky).
+        self.set_time_offset(target - (self.tick_count() % 24_000).cast_signed());
         let packet = SetTime {
             world_age: self.tick_count().cast_signed(),
-            flag: 0,
+            clocks: vec![mc_protocol::packets::play::ClockState {
+                clock_id: mc_protocol::packets::play::WORLD_CLOCK_OVERWORLD,
+                total_ticks: self.tick_count().cast_signed() + self.time_offset(),
+                partial_tick: 0.0,
+                rate: 1.0,
+            }],
         };
         let ids: Vec<mc_network::bridge::ConnectionId> = self.sessions.keys().copied().collect();
         for target in ids {
@@ -424,8 +450,28 @@ impl Game {
         }
         Ok(CommandResult::message(format!(
             "Set the time to {}",
-            time.rem_euclid(24_000)
+            (self.tick_count().cast_signed() + self.time_offset()).rem_euclid(24_000)
         )))
+    }
+
+    /// A `/time` value word: an integer, or one of Vanilla's presets
+    /// (`day` 1000, `noon` 6000, `night` 13000, `midnight` 18000).
+    fn time_value(word: &str) -> Option<i64> {
+        if let Ok(value) = word.parse::<i64>() {
+            return Some(value.rem_euclid(24_000));
+        }
+        Self::time_preset(word)
+    }
+
+    /// Vanilla's named times, or `None`.
+    fn time_preset(word: &str) -> Option<i64> {
+        match word {
+            "day" => Some(1_000),
+            "noon" => Some(6_000),
+            "night" => Some(13_000),
+            "midnight" => Some(18_000),
+            _ => None,
+        }
     }
 
     /// `/tp <target> <pos>`

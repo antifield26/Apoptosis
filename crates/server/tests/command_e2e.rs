@@ -472,6 +472,34 @@ async fn a_time_query_does_not_change_the_offset() {
 }
 
 #[tokio::test]
+async fn time_set_and_presets_reach_the_client_clock() {
+    // P14-09 walk: `/time set` was rejected by the grammar and the old packet
+    // shape decoded as an empty clock map, so the server's mobs moved to
+    // night while the client's sky never did.
+    let mut harness = Harness::start("p07-time-set").await;
+    // Effective time reads two counters, and a tick may pass between the
+    // command and the read — so assert the value the command aimed at, plus
+    // only forward drift from later ticks.
+    harness.command("time set night").await;
+    let drift = (harness.game.tick_count().cast_signed() + harness.game.time_offset() - 13_000)
+        .rem_euclid(24_000);
+    assert!(drift < 5, "night must land on 13000, drifted {drift}");
+    harness.command("time set 20000").await;
+    let drift = (harness.game.tick_count().cast_signed() + harness.game.time_offset() - 20_000)
+        .rem_euclid(24_000);
+    assert!(
+        drift < 5,
+        "an integer set must land exactly, drifted {drift}"
+    );
+    let ids = harness.drain_ids(600).await;
+    assert!(
+        ids.contains(&clientbound::play::SET_TIME),
+        "a set must broadcast the clock immediately, saw {ids:?}"
+    );
+    harness.service.shutdown().await;
+}
+
+#[tokio::test]
 async fn teleport_moves_the_invoking_player() {
     let mut harness = Harness::start("p07-tp").await;
     let id = harness.id();

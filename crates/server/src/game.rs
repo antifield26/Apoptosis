@@ -951,6 +951,14 @@ pub struct Game {
     /// `/say` iterate every session, and `/tp` resolves a name to one. Making the whole
     /// struct crate-visible would expose far more than that; this exposes exactly the map.
     pub(crate) sessions: BTreeMap<ConnectionId, Session>,
+    /// Last live player state by profile uuid, for rejoin-within-a-run.
+    ///
+    /// `leave` stores the whole [`Player`] (position, health, inventory, mode);
+    /// a rejoin restores it when it was alive. This survives disconnects, not
+    /// restarts: `playerdata/<uuid>.dat` files are the P16 item, and a fresh
+    /// process starts every player at spawn (declared, and the restart test
+    /// pins it).
+    remembered: BTreeMap<String, Player>,
     /// Every live entity in the dimension (P05-03).
     entities: EntityStore,
     /// Which entity each connection controls.
@@ -1278,6 +1286,7 @@ impl Game {
             storage: owned,
             world,
             sessions: BTreeMap::new(),
+            remembered: BTreeMap::new(),
             entities: EntityStore::new(),
             entity_ids: BTreeMap::new(),
             events,
@@ -3668,17 +3677,20 @@ impl Game {
         if !tick.is_multiple_of(20) {
             return Ok(());
         }
-        // **26.1.2 removed `time_of_day` from the wire** (P10-03, KD-43): the captured vanilla payload is
-        // `i64` + one byte, and the client derives the time of day from the `world_clock` registry instead.
-        // So this packet can no longer carry the server's time of day, and `/time set` no longer moves a
-        // real client's sky. That is not a regression from this change — the old encoding carried
-        // `time_of_day` and a real client rejected the whole packet — but it is a capability the server does
-        // not have until 26.1's clock mechanism is implemented.
-        //
-        // `flag` mirrors the captured value rather than interpreting it.
+        // 26.1 carries the sky in the overworld clock entry, not in a bare
+        // field (P14-09 walk: `/time` moved the server's mobs but never the
+        // client's sky, because the old `i64 + flag` shape decoded on the
+        // client as world age plus an *empty* clock map). The entry's total
+        // advances with the tick and carries the `/time` offset, so the sky
+        // keeps moving after a set instead of freezing at the set value.
         let packet = SetTime {
             world_age: tick as i64,
-            flag: 0,
+            clocks: vec![mc_protocol::packets::play::ClockState {
+                clock_id: mc_protocol::packets::play::WORLD_CLOCK_OVERWORLD,
+                total_ticks: tick as i64 + self.time_offset,
+                partial_tick: 0.0,
+                rate: 1.0,
+            }],
         }
         .to_raw()?;
         self.broadcast_all(&packet, report);
@@ -3738,6 +3750,11 @@ impl Game {
             entity.removed = true;
         }
         self.entity_ids.remove(&id);
+        // Remember the live state for a rejoin within this run (P14-09 walk:
+        // disconnects put the player back at spawn). The cursor merge above
+        // already ran, so the inventory stored here is complete.
+        self.remembered
+            .insert(session.uuid.clone(), session.player.clone());
         info!(
             id = %id,
             name = %session.player.profile.name,
@@ -3774,7 +3791,19 @@ impl Game {
         // One expression for the join position so the entity projection, the
         // authoritative `Player` and the `player_position` packet cannot disagree.
         let (sx, sy, sz) = self.world.spawn();
-        let at = Vec3::new(f64::from(sx) + 0.5, f64::from(sy), f64::from(sz) + 0.5);
+        let mut at = Vec3::new(f64::from(sx) + 0.5, f64::from(sy), f64::from(sz) + 0.5);
+        // A rejoin within this run resumes where the player left (P14-09
+        // walk): the remembered state restores position, health, inventory
+        // and mode when it was alive. A dead leaver rejoins fresh at spawn,
+        // and a restart forgets everything (no playerdata files yet).
+        let restored = self
+            .remembered
+            .get(&profile.id.to_string())
+            .filter(|former| former.is_alive())
+            .cloned();
+        if let Some(ref former) = restored {
+            at = to_world(former.position);
+        }
         // The entity store allocates the id, so it is unique across every entity in
         // the dimension and never reused — the property the wire protocol needs.
         let Ok(entity) = self.entities.spawn(EntityBody::Player, to_entity(at)) else {
@@ -3792,6 +3821,16 @@ impl Game {
         );
         player.position = to_entity(at);
         player.game_mode = GameMode::Survival;
+        if let Some(former) = restored {
+            // The menu below mirrors this inventory, and the position packet
+            // below reports `at`, so restoring here keeps every copy honest.
+            player.yaw = former.yaw;
+            player.pitch = former.pitch;
+            player.health = former.health;
+            player.food = former.food;
+            player.inventory = former.inventory;
+            player.game_mode = former.game_mode;
+        }
 
         // The menu is the authority for item placement, so it is built here and the
         // player's inventory is mirrored into it. `mirror_inventory` is one of the
@@ -3826,7 +3865,7 @@ impl Game {
                 outbound,
                 sent_chunks: BTreeSet::new(),
                 center: chunk_of(at.x, at.z),
-                tick_start_y: f64::from(sy),
+                tick_start_y: at.y,
                 // The operator list is the authority: a listed uuid gets its file level,
                 // and anyone else is level 0. `ops.json` stores the hyphenated uuid, which is
                 // what `Uuid`'s `Display` produces — the conversion is a real one, since the
@@ -3868,9 +3907,9 @@ impl Game {
         self.send(
             id,
             &PlayerPosition {
-                x: f64::from(sx) + 0.5,
-                y: f64::from(sy),
-                z: f64::from(sz) + 0.5,
+                x: at.x,
+                y: at.y,
+                z: at.z,
                 velocity_x: 0.0,
                 velocity_y: 0.0,
                 velocity_z: 0.0,
@@ -5556,10 +5595,15 @@ impl Game {
                 let Some(session) = self.sessions.get_mut(&id) else {
                     return;
                 };
+                // Consume in place: `take` + `shrink` + write back to the
+                // *same* slot. Routing the remainder through `add_stack`
+                // merged it into the lowest partial stack first, so placing
+                // from a full held stack emptied the held slot and grew an
+                // earlier one — the client's hotbar visibly rearranged on
+                // every placement (P14-09 walk).
                 let mut stack = session.player.inventory.take_held(hand);
                 stack.shrink(1);
-                let leftover = session.player.inventory.add_stack(stack);
-                debug_assert!(leftover.is_empty(), "a shrunk stack must fit back");
+                let _ = session.player.inventory.replace_held(hand, stack);
             }
             // One path for "an action changed my items": mirror the inventory into the
             // menu, advance the revision and send the per-slot updates. The bespoke
@@ -5663,6 +5707,20 @@ impl Game {
                 portal_cooldown: 0,
                 sea_level: 63,
                 data_kept: 0,
+            },
+            report,
+        )?;
+        // KD-50, second half: the join path sends this and respawn did not.
+        // The client's loading screen dismisses on `LevelLoadTracker`
+        // becoming ready, which only the start-chunks game event drives — a
+        // respawned client sat on "Loading terrain" forever with every packet
+        // well-formed and no error anywhere. Vanilla shows the same dirt
+        // screen momentarily on respawn, so this matches rather than invents.
+        self.send(
+            id,
+            &GameEvent {
+                event: GAME_EVENT_LEVEL_CHUNKS_LOAD_START,
+                value: 0.0,
             },
             report,
         )?;

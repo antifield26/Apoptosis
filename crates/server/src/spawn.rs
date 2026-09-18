@@ -145,9 +145,10 @@ pub const NIGHT_START_TICK: i64 = 13_000;
 
 /// Time of day on the overworld clock.
 ///
-/// The wire no longer carries it (26.1.2 removed `time_of_day`; see
-/// `send_world_time`), so the server keeps its own: `(world_age + offset)`
-/// modulo the clock's 24 000-tick period.
+/// The wire carries it inside the overworld clock entry (`send_world_time`
+/// writes `tick + offset` as the entry's total); the server keeps the same
+/// arithmetic locally: `(world_age + offset)` modulo the clock's 24 000-tick
+/// period.
 #[must_use]
 pub fn time_of_day(world_age: i64, offset: i64) -> i64 {
     (world_age + offset).rem_euclid(DAY_PERIOD_TICKS)

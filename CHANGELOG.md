@@ -97,6 +97,33 @@ Two findings from the owner's first walk on 25567, both fixed and redeployed:
 Known gaps the walk re-confirmed (not defects, scheduled): creeper
 fuse/explosions (P16-04), dig progress (P16-05).
 
+### P14-09 round 2 — respawn, time, consume-in-place, rejoin state
+
+Four more walk findings, all fixed and redeployed:
+
+- Death respawn stuck on "Loading terrain": the respawn path never re-armed
+  the client's level-load tracker (KD-50's second half — the join path sends
+  the start-chunks game event, respawn did not). One `GameEvent` send after
+  the `Respawn` packet; the death test now asserts the event rides along and
+  fails without it.
+- `/time set` rejected and the sky never moved: the grammar took only a bare
+  integer, and the packet shape (`i64` + flag) decoded on the client as world
+  age plus an *empty clock map*. `set_time` now carries the overworld clock
+  entry (`count, id, added, removed` patch shape read from
+  `ItemStack$1`/`DataComponentPatch$3`; clock reference is id+1 per
+  `ByteBufCodecs$30`; overworld bootstraps first), the per-second broadcast
+  carries the `/time` offset, and the command takes `set <ticks|preset>` with
+  `day`/`noon`/`night`/`midnight` (bare integers still set).
+- Placement rearranged the hotbar: the consumed remainder went through
+  `add_stack`'s lowest-partial-first fill instead of back into the held slot.
+  Consume-in-place (`take`/`shrink`/`replace_held`); the new test fails on
+  revert.
+- Disconnect forgot the player: `leave` never stored anything (declared gap —
+  no playerdata files). The live `Player` is now remembered by uuid and a
+  rejoin within the run restores position, health, inventory and mode; a
+  restart still starts fresh, which the restart test pins. Full
+  `playerdata/<uuid>.dat` files are the P16 item.
+
 Nine scripted clients plus the owner on HMCL, 10 concurrent for 30 minutes
 against `1f57a4c` on the Pi 5 (bind `0.0.0.0:25566`, view 8). Full record:
 `BENCHMARK-BASELINE.md` §P14-Pi. Re-derived from the archived logs (AUDIT-14

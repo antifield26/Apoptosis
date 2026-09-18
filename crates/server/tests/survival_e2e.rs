@@ -513,6 +513,82 @@ fn breaking_and_placing_blocks_is_validated_and_broadcast() {
     );
 }
 
+/// A placement consumes from the held slot in place: with a partial stack
+/// earlier in the hotbar, the remainder must not migrate there (P14-09 walk:
+/// every placement visibly rearranged the client's hotbar, because the
+/// remainder went through `add_stack`'s lowest-partial-first fill).
+#[test]
+fn placement_consumes_in_the_held_slot() {
+    let mut harness = Harness::new("p04-place-held");
+    let (sx, sy, sz) = harness.build_floor();
+    let mut out = harness.join("Builder");
+    let _ = Harness::drain_ids(&mut out);
+
+    let dirt_item = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:dirt")
+        .expect("dirt item");
+    {
+        let player = harness.game.player_mut(harness.id).expect("player");
+        player.inventory.select(0).expect("hotbar 0");
+        player
+            .inventory
+            .set_slot(
+                0,
+                mc_entity::stack::ItemStack::new(dirt_item, 64).expect("stack"),
+            )
+            .expect("slot 0");
+        // A partial stack earlier in fill order than nothing — but the held
+        // slot is 0, so a correct consume never touches slot 1.
+        player
+            .inventory
+            .set_slot(
+                1,
+                mc_entity::stack::ItemStack::new(dirt_item, 32).expect("stack"),
+            )
+            .expect("slot 1");
+        // Stand clear of the target cell: clicking the top face of the floor
+        // at (sx+1) puts the block at (sx+1, sy, sz), and the placer may not
+        // intersect it.
+        player.position =
+            mc_entity::player::Vec3::new(f64::from(sx) + 4.5, f64::from(sy), f64::from(sz) + 0.5);
+    }
+
+    harness.intent(PlayIntent::UseItemOn {
+        hand: 0,
+        position: block_position(sx + 1, sy - 1, sz),
+        face: 1,
+        cursor_x: 0.5,
+        cursor_y: 1.0,
+        cursor_z: 0.5,
+        inside_block: false,
+        sequence: 0,
+    });
+    assert_eq!(
+        harness.game.world().get_block(sx + 1, sy, sz),
+        harness
+            .game
+            .registries()
+            .blocks
+            .default_state("minecraft:dirt")
+            .expect("dirt block"),
+        "the block must land for this test to exercise the consume path"
+    );
+    let player = harness.game.player(harness.id).expect("player");
+    assert_eq!(
+        player.inventory.slot(0).count(),
+        63,
+        "the held slot loses exactly one"
+    );
+    assert_eq!(
+        player.inventory.slot(1).count(),
+        32,
+        "the earlier partial stack is untouched"
+    );
+}
+
 #[test]
 fn death_and_respawn_restore_the_player() {
     let mut harness = Harness::new("p04-death");
@@ -551,6 +627,12 @@ fn death_and_respawn_restore_the_player() {
     assert!(
         ids.contains(&clientbound::play::RESPAWN),
         "the respawn packet must be sent, saw {ids:?}"
+    );
+    assert!(
+        ids.contains(&clientbound::play::GAME_EVENT),
+        "respawn must re-arm the client's level-load tracker (KD-50, second \
+         half): without the start-chunks game event a real client sits on \
+         \"Loading terrain\" forever, saw {ids:?}"
     );
 }
 

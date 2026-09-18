@@ -2272,31 +2272,51 @@ impl Packet for SetExperience {
 
 /// `minecraft:set_time` (clientbound play).
 ///
-/// **26.1.2 removed `time_of_day` from the wire.** Captured from a vanilla server (P10-03, KD-43): eighteen
-/// packets, all 9 bytes, `i64` + one byte, with the `i64` incrementing by exactly 20 per send. The client
-/// derives the time of day from the `world_clock` registry instead — which is why this phase had to make that
-/// registry work before play was reachable at all.
+/// 26.1 replaced the old `(world_age, day_time, do_daylight_cycle)` triple
+/// with `(world_age, clock_updates)`: an `i64` plus a map of
+/// `WorldClock → ClockNetworkState`, bytecode-read from the jar
+/// (`ClientboundSetTimePacket`: `LONG` then a composite of
+/// `WorldClock.STREAM_CODEC` and `ClockNetworkState.STREAM_CODEC`).
 ///
-/// We previously sent `i64 world_age` + `i64 time_of_day` + `bool`, 8 bytes too many, which a real client
-/// reported as `was larger than I expected`.
+/// A clock reference is the registry id plus one (`ByteBufCodecs$30`: `0`
+/// means inline, otherwise `byId(i - 1)`); the overworld clock bootstraps
+/// first, so it is id `0` on the wire as `0x01`. A clock state is
+/// `total_ticks i64`, `partial_tick f32`, `rate f32` in field order. An empty
+/// patch-free map is a single `0x00` — which is exactly what the P10-03
+/// capture holds after its `i64` (eighteen packets, all 9 bytes): those
+/// captures were an empty clock map, not "one trailing byte".
 ///
-/// Body: `i64` world age, `i64` time of day, `bool` tick day time.
-///
-/// World age is monotonic and drives weather/statistics; time of day may be
-/// negative for a fixed-time world, and the trailing flag decides whether the
-/// client keeps advancing the day/night cycle on its own. All three are
-/// explicit here for the same reason.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// We previously sent `i64 world_age` + `i64 time_of_day` + `bool`, 8 bytes
+/// too many, which a real client reported as `was larger than I expected`.
+#[derive(Debug, Clone, PartialEq)]
 pub struct SetTime {
     /// Ticks the world has existed.
     pub world_age: i64,
-    /// The trailing byte, observed as `0x00` in every captured packet.
-    ///
-    /// Its meaning is **not established by the capture**. It is one byte, always zero, and it is carried
-    /// faithfully rather than interpreted: guessing that it means "tick the day/night cycle" and sending
-    /// `true` would be inventing a semantic from a field that never varied.
-    pub flag: u8,
+    /// Clock updates, normally the single overworld entry. Empty decodes and
+    /// encodes as the P10-03 capture (map size zero).
+    pub clocks: Vec<ClockState>,
 }
+
+/// One `WorldClock → ClockNetworkState` map entry.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClockState {
+    /// Registry id of the clock (`WorldClocks` bootstrap order: overworld first).
+    pub clock_id: i32,
+    /// The clock's total ticks — what the client's sky renders.
+    pub total_ticks: i64,
+    /// Sub-tick interpolation, normally `0.0`.
+    pub partial_tick: f32,
+    /// Tick rate multiplier, normally `1.0`.
+    pub rate: f32,
+}
+
+/// The overworld day clock's registry id (`WorldClocks.bootstrap` registers
+/// it first).
+pub const WORLD_CLOCK_OVERWORLD: i32 = 0;
+
+/// Cap on clock entries in one `set_time`; vanilla sends one per loaded
+/// clockable dimension, and a hostile count must not drive a large loop.
+pub const MAX_CLOCK_UPDATES: usize = 8;
 
 impl Packet for SetTime {
     const ID: i32 = clientbound::play::SET_TIME;
@@ -2304,20 +2324,49 @@ impl Packet for SetTime {
     fn decode(payload: &[u8]) -> ServerResult<Self> {
         let mut reader = PacketReader::new(payload);
         let world_age = reader.read_i64()?;
-        let flag = reader.read_u8()?;
+        let count = read_count(&mut reader, "clock update", MAX_CLOCK_UPDATES)?;
+        let mut clocks = Vec::with_capacity(count);
+        for _ in 0..count {
+            // Reference encoding: `0` would be an inline clock (never sent),
+            // otherwise `byId(i - 1)`.
+            let raw = reader.read_varint()?;
+            if raw <= 0 {
+                return Err(ServerError::Protocol(format!(
+                    "set_time clock reference {raw} is not a registry id"
+                )));
+            }
+            clocks.push(ClockState {
+                clock_id: raw - 1,
+                total_ticks: reader.read_i64()?,
+                partial_tick: reader.read_f32()?,
+                rate: reader.read_f32()?,
+            });
+        }
         if !reader.is_empty() {
             return Err(ServerError::Protocol(format!(
                 "set_time has {} trailing bytes",
                 reader.remaining()
             )));
         }
-        Ok(Self { world_age, flag })
+        Ok(Self { world_age, clocks })
     }
 
     fn encode(&self) -> ServerResult<Vec<u8>> {
         let mut writer = PacketWriter::new();
         writer.write_i64(self.world_age);
-        writer.write_u8(self.flag);
+        writer.write_varint(packed_len(self.clocks.len())?);
+        for clock in &self.clocks {
+            if clock.clock_id < 0 {
+                return Err(ServerError::Invariant(format!(
+                    "clock id {} is negative",
+                    clock.clock_id
+                )));
+            }
+            writer.write_varint(clock.clock_id + 1);
+            writer.write_i64(clock.total_ticks);
+            writer.write_f32(clock.partial_tick);
+            writer.write_f32(clock.rate);
+        }
         Ok(writer.finish())
     }
 }
@@ -4115,25 +4164,54 @@ mod tests {
 
     #[test]
     fn the_captured_vanilla_set_time_is_reproduced() {
+        // Eighteen packets, all 9 bytes: world age plus an *empty clock map*.
+        // What P10-03 read as "one trailing byte" was the map size zero.
         let captured: [u8; 9] = [
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1c, 0xf2, // world age 7410
-            0x00, // the trailing byte
+            0x00, // zero clock updates
         ];
         let packet = SetTime {
             world_age: 7410,
-            flag: 0,
+            clocks: Vec::new(),
         };
         let encoded = packet.encode().expect("encodes");
-        assert_eq!(
-            encoded.len(),
-            captured.len(),
-            "26.1.2 removed `time_of_day`; a 17-byte payload is what a real client rejected"
-        );
         assert_eq!(
             encoded, captured,
             "the captured vanilla bytes must be reproduced exactly"
         );
         assert_eq!(SetTime::decode(&encoded).expect("decodes"), packet);
+    }
+
+    #[test]
+    fn set_time_carries_the_overworld_clock() {
+        // world age 6000, one clock: overworld (id 0 → wire 1), 20000 ticks,
+        // no partial, normal rate.
+        let packet = SetTime {
+            world_age: 6000,
+            clocks: vec![super::ClockState {
+                clock_id: super::WORLD_CLOCK_OVERWORLD,
+                total_ticks: 20_000,
+                partial_tick: 0.0,
+                rate: 1.0,
+            }],
+        };
+        let body = packet.encode().expect("encodes");
+        assert_eq!(
+            body,
+            [
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x17, 0x70, // world age
+                0x01, // one clock update
+                0x01, // overworld reference (id + 1)
+                0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4E, 0x20, // 20000 ticks
+                0x00, 0x00, 0x00, 0x00, // partial 0.0
+                0x3F, 0x80, 0x00, 0x00, // rate 1.0
+            ]
+        );
+        assert_eq!(SetTime::decode(&body).expect("decodes"), packet);
+        // An inline clock (reference 0) is refused, not guessed at.
+        let mut inline = body.clone();
+        inline[9] = 0x00;
+        assert!(SetTime::decode(&inline).is_err());
     }
 
     #[test]
@@ -5238,7 +5316,7 @@ mod tests {
 
         let time = SetTime {
             world_age: 12_345,
-            flag: 0,
+            clocks: Vec::new(),
         };
         assert_eq!(
             SetTime::decode(&time.encode().expect("encodes")).expect("decodes"),
