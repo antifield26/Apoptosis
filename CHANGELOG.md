@@ -75,19 +75,28 @@ e2e). Death and respawn with a real client, and a rejoin finding
 pre-restart state on screen, stay on KD-38's open list: they need a real
 client at a keyboard.
 
-### P14-06 — Pi acceptance soak: NOT RUN
+### P14-06 — Pi acceptance soak: RAN 2026-09-17 (mixed real+scripted)
 
-No Raspberry Pi is reachable from this environment and no real Java client
-is at hand, so the mixed real+scripted 10-client soak did not run. The
-`BENCHMARK-BASELINE.md` record stands untouched; nothing here claims the
-verdict.
+Nine scripted clients plus the owner on HMCL, 10 concurrent for 30 minutes
+against `1f57a4c` on the Pi 5 (bind `0.0.0.0:25566`, view 8). Full record:
+`BENCHMARK-BASELINE.md` §P14-Pi. Re-derived from the archived logs (AUDIT-14
+corrected the chat verdict's tail claim — lifetime overruns total 58, not
+"none after 14:35"): loaded-window medians 3.06 ms mean, 3.04/3.20/3.31 ms
+p50/p95/p99; 52 overruns inside the client window, a 6-tick idle spike at
+15:07:33 (worst 301 ms, unattributed, recovered on its own), zero new in the
+final 44 minutes; clients 9/9 PLAY with `failures: []`; CPU p50 6.9% of one
+core, RSS 337 MB flat. No crash, no disconnect. The soak found two defects,
+both fixed after it (cache-center `8fa8521`, loot baseline `f83689b`) and
+therefore NOT covered by it.
 
-### P14-07 — release 0.2.0: pending the Pi verdict
+### P14-07 — release 0.2.0: pending verification, not the soak
 
-No tag is cut: tagging would claim a milestone whose Pi demonstration (P14-06)
-and real-client acceptance have not run. The release workflow is unchanged
-(tag-triggered, x86_64 artifact + checksums, aarch64 built on-device); the
-workspace version stays `0.1.0` until the verdict lands.
+No tag is cut: the soak passed with a note, but the two defects it found
+(and their fixes) have never run in front of a real client — the 25567
+verification walk is owed first, and the screen halves (rendering, pickup
+on screen, death arc) still need a keyboard. The release workflow is
+unchanged (tag-triggered, x86_64 artifact + checksums, aarch64 built
+on-device); the workspace version stays `0.1.0` until that walk lands.
 
 ### P14-08 — usable-milestone verdict, clause by clause
 
@@ -112,15 +121,18 @@ demonstrated is recorded as not demonstrated.
   (`block_entity_e2e` chest restart, P12).
 - Chat with other players: **demonstrated** (chat relay e2e).
 - Operator runs `/gamemode`, `/give`, `/op` and friends: **demonstrated**
-  (`admin_commands` 11 tests: modes, counts, overflow drops, creative kill,
-  seed text, difficulty persist + peaceful gate, grant/revoke/persist/reload,
-  ladder, no-dir fallback).
-- Performance under a mixed real+scripted soak: **NOT RUN** (P14-06).
+  (`admin_commands` 13 tests: modes, counts, overflow drops, creative kill,
+  seed text, difficulty persist + peaceful gate + locked refusal, grant/revoke/
+  persist/reload/rollback, ladder, no-dir fallback).
+- Performance under a mixed real+scripted soak: **pass with one noted idle
+  spike** (P14-06: load medians ~3 ms, 58 lifetime overruns with an
+  unattributed +6 at 15:07:33, recovered; full record §P14-Pi).
 - KD-10 collision axis order: **closed** (bytecode + aligned + tests).
 - KD-33 ops.json write path: **closed** (persist + reload + ladder tests).
 
-**Phase verdict: usable except where a real client or a Pi is the
-instrument — five clauses need them, and all five say so above.**
+**Phase verdict: usable except where a real client is the
+instrument — the soak passed with a note, and the four screen halves plus
+the 25567 verification walk say NOT RUN above.**
 
 ## Unreleased — Phase 13 (World Systems & Redstone)
 

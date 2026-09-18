@@ -8,6 +8,9 @@
 use mc_network::bridge::game_channel;
 use mc_protocol::RawPacket;
 use mc_protocol::ids::{clientbound, serverbound};
+use mc_protocol::packets::Packet;
+use mc_protocol::packets::config::ClientInformation;
+use mc_protocol::packets::play::SetChunkCacheRadius;
 use mc_server::game::Game;
 use mc_server::storage::WorldService;
 use mc_test_support::client::TestClient;
@@ -368,6 +371,65 @@ async fn a_command_flood_from_one_client_does_not_starve_the_tick() {
     assert!(
         chats >= 300,
         "every flooded command is answered over the next ticks, saw {chats}"
+    );
+    harness.service.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_client_information_update_resets_the_streaming_radius() {
+    // The P14-04 forwarding path over a real socket: the config-phase
+    // settings arrive before play (and stay silent here, 8 clamped to the
+    // server's 3 changes nothing observable), then a play-phase update to 2
+    // must come back as a radius-2 confirm.
+    let mut harness = Harness::start("p14-client-info").await;
+    let info = ClientInformation {
+        locale: "en_us".to_owned(),
+        view_distance: 2,
+        chat_mode: 0,
+        chat_colors: true,
+        skin_parts: 0x7f,
+        main_hand: 1,
+        text_filtering: false,
+        server_listing: true,
+    };
+    harness
+        .client
+        .send_raw_packet(&RawPacket::new(
+            serverbound::play::CLIENT_INFORMATION,
+            info.encode_body().expect("encodes"),
+        ))
+        .await
+        .expect("settings sent");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut radii = Vec::new();
+    while tokio::time::Instant::now() < deadline {
+        harness.game.tick().expect("tick");
+        match tokio::time::timeout(Duration::from_millis(100), harness.client.recv()).await {
+            Ok(Ok(raw)) if raw.id == clientbound::play::SET_CHUNK_CACHE_RADIUS => {
+                radii.push(
+                    SetChunkCacheRadius::decode(&raw.payload)
+                        .expect("a radius decodes")
+                        .radius,
+                );
+            }
+            Ok(Ok(_)) | Err(_) => {}
+            Ok(Err(_)) => break,
+        }
+        if radii.contains(&2) {
+            break;
+        }
+    }
+    // enter_play announces the server radius first; the update confirms 2
+    // after it, exactly once.
+    assert_eq!(
+        radii.last(),
+        Some(&2),
+        "the update must confirm radius 2 last; saw {radii:?}"
+    );
+    assert_eq!(
+        radii.iter().filter(|radius| **radius == 2).count(),
+        1,
+        "exactly one radius-2 confirm; saw {radii:?}"
     );
     harness.service.shutdown().await;
 }

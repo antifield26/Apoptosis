@@ -171,8 +171,10 @@ backup: it covers neither region files nor operator error.
 
 ## 6. Known gaps (not hidden)
 
-- Pi 5 soak: one 30-minute 10-player run on record
-  (`docs/performance/BENCHMARK-BASELINE.md`); re-soak after P12 tick work.
+- Pi 5 soak: two 30-minute 10-player runs on record
+  (`docs/performance/BENCHMARK-BASELINE.md` §§P09-Pi, P14-Pi) — the second is
+  the re-soak after P12 tick work, mixed real+scripted, pass with one noted
+  idle spike. Soak at INFO level (the P14 run logged DEBUG: 32 MB).
 - Online mode: fail-fast boundary only; enabling it is an error, not auth.
 - `.zip` data packs unread; structure subset is single-chunk only; redstone timing
   (torch delay/burn-out, update order) unmodelled; advancements load but never fire; loot fires as the

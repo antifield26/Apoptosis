@@ -235,6 +235,47 @@ than LAN, and the storage is microSD rather than the NVMe target. None of
 these plausibly moves MSPT by 250×, which is the headroom the settled windows
 show — but the record says so, not "production-ready".
 
+### P14-Pi — the mixed real+scripted 10-client soak (P14-06, executed 2026-09-17)
+
+The first soak with a real client in the mix: nine scripted clients plus the
+owner on a keyboard, against the P14 tree. Verdict per the §4 rule: **passed
+with one noted idle spike** — the loaded windows sit an order of magnitude
+under the 50 ms budget (medians 3.04/3.20/3.31 ms p50/p95/p99); lifetime
+overruns total 58, of which 52 fall inside the client window and 6 arrive in a
+single near-idle window at 15:07:33 (worst tick 301 ms, unattributed — see the
+spike note). No crash, no disconnect, the owner stayed connected throughout,
+and the 44 minutes after the spike added zero new overruns.
+
+| Field | Value |
+|---|---|
+| Date | 2026-09-17 (client window ~14:24–14:55 local; server log 14:24:32–15:51:03; sampler 10 s cadence) |
+| Hardware / OS / toolchain | same Pi 5 Model B, Debian 13 trixie aarch64, pinned 1.98.1 (see §P09-Pi) |
+| Commit | `1f57a4c` (P14-06/07/08 docs), release profile, built on-device (~80 s) |
+| Server config | `~/soak/config.toml`: bind `0.0.0.0:25566`, view distance 8; world `~/soak/world` |
+| Workload | 9 × `tools/pi-bench/soak_client_v2.py` (127.0.0.1:25566, 1800 s, 20 Hz movement + rotating `/list`) + owner Antifield on HMCL = 10 concurrent |
+| Clients | `~/soak_clients.log`: 9/9 reached PLAY, 1802.1 s elapsed, 1076 keepalives answered, 16200 teleports acked, 3240 commands sent, 2601 chunks received, **failures: []** |
+| TPS | 20 TPS held; 174 `tick metrics` windows recomputed from `~/soak_server.log` |
+| MSPT, loaded (14:28–14:55, 10 players, n=54) | window-mean median **3.06 ms**; p50/p95/p99 medians **3.04 / 3.20 / 3.31 ms**; chunks held ≤ 649 |
+| Overruns | lifetime **58**: +5 join burst, steady accrual through the client window (last +2 at 14:36:03, total 52), then zero for 31 min, then **+6 at 15:07:33** with 1 idle player (see spike note), then zero for the final 44 min |
+| CPU | sampler `~/soak_metrics.csv` (190 rows): p50 **6.9 %**, p95 **8.5 %**, max 35.2 % of one core |
+| RSS | 14 MB at start → **337 MB** max, flat at the end (chunk/world load-up, no leak signal inside the window) |
+| Spike note (15:07:33) | window mean 2.27 ms / p95 0.90 ms but 6 ticks > 50 ms, worst 301 ms; 1 player, 85 entities, 406 chunks, 0 dirty; no join/leave/command/save line anywhere near it at INFO or DEBUG. Unattributed with the current instrumentation (the snapshot reports aggregate MSPT only) — an incorporates-by-reference correction of the chat verdict, which had claimed zero new overruns after 14:35 from a live tail instead of the archived log. Follow-up: log the worst phase on overrun windows (backlog); not blocking, the server recovered on its own |
+| Raw data | `~/soak_server.log` (32 MB, DEBUG level — use INFO next time), `~/soak_metrics.csv`, `~/soak_clients.log` on the Pi |
+
+**Defects found by this run** (both fixed on main): far walks showed no new
+chunks and far respawns stuck on "Loading terrain" — `set_chunk_cache_center`
+went out once at enter-play and never again (`8fa8521`: now sent on every
+chunk crossing); and a packless server dropped nothing from common breaks —
+an eight-table loot baseline now covers stone/cobble/dirt/grass/sand/gravel/
+log/planks (`f83689b`). Neither fix is covered by this soak (both landed
+after); the 25567 verification walk is owed before the 0.2.0 tag.
+
+**Boundary:** scripted majority (KD-38), loopback, microSD — same three as
+§P09-Pi. The loaded medians are ~15× the §P09-Pi scripted figures (3.0 vs 0.2
+ms): the mixed workload streams far more chunks (≤ 649 vs 289 held) on a tree
+that has since gained furnace/hopper ticking, persistence and viewer resyncs —
+that is the re-soak §4 step 6 asked for, and the headroom is still ~15×.
+
 ## 2. Planned workloads
 
 1. `idle` — empty server, tick overhead floor.

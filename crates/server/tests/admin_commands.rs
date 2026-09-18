@@ -576,3 +576,100 @@ fn peaceful_night_spawns_no_hostiles() {
         .count();
     assert_eq!(hostiles, 0, "peaceful night spawns no hostiles");
 }
+
+#[test]
+fn locked_difficulty_refuses_the_set() {
+    // A `level.dat` with the lock set refuses `/difficulty` with a reason;
+    // the field is untouched. The lock lives in the file, so the test locks
+    // the file before the game reads it.
+    use mc_server::storage::WorldService;
+    let dir = mc_test_support::fixtures::TempDir::new("p14-locked");
+    let config = mc_server::config::StorageConfig {
+        world_dir: dir.path().join("world"),
+        autosave_ticks: 0,
+    };
+    let mut service = WorldService::open(&config).expect("world opens");
+    let mut level = service
+        .storage()
+        .level()
+        .expect("fresh world has a level")
+        .clone();
+    level.difficulty_locked = true;
+    service.storage_mut().save_level(level).expect("locks");
+
+    let (tx, rx) = mc_network::bridge::game_channel(256);
+    let mut game = Game::build_with_operators(None, Some(service), 3, rx, 7, ops_for("Boss", 4))
+        .expect("game builds");
+    assert!(game.difficulty_locked(), "the lock reads back");
+    let before = format!("{:?}", game.difficulty());
+
+    let ids = mc_network::bridge::ConnectionIds::new();
+    let id = ids.next_id();
+    let (outbound, mut out) = mc_network::bridge::OutboundSender::pair(id, 8192);
+    tx.try_send(ClientEvent {
+        id,
+        kind: ClientEventKind::Joined {
+            profile: mc_network::auth::offline_profile("Boss"),
+            outbound,
+        },
+    })
+    .expect("join queued");
+    game.tick().expect("tick");
+
+    let mut report = TickReport::default();
+    game.dispatch_command(id, "difficulty hard", &mut report)
+        .expect("a command is answered");
+    let mut lines = Vec::new();
+    while let Some(raw) = out.try_recv() {
+        if raw.id == mc_protocol::ids::clientbound::play::DISGUISED_CHAT {
+            use mc_protocol::packets::Packet;
+            use mc_protocol::packets::play::SystemChat;
+            match SystemChat::decode(&raw.payload) {
+                Ok(chat) => lines.push(chat.content.as_plain().to_owned()),
+                Err(error) => panic!("a disguised_chat must decode: {error}"),
+            }
+        }
+    }
+    assert!(
+        lines.iter().any(|line| line.contains("locked")),
+        "the lock must refuse with a reason, saw {lines:?}"
+    );
+    assert_eq!(
+        format!("{:?}", game.difficulty()),
+        before,
+        "a refused set changes nothing"
+    );
+}
+
+#[test]
+fn op_rolls_back_when_the_file_write_fails() {
+    // Point the ops directory at a *file*: `create_dir_all` fails, the save
+    // fails, and the grant must roll back — memory and file never disagree,
+    // and the player is told exactly that.
+    let mut harness = Harness::new("p14-op-rollback", ops_for("Boss", 4));
+    let blocker = harness.dir.path().join("not-a-directory");
+    std::fs::write(&blocker, "in the way").expect("blocker written");
+    harness.game.set_ops_directory(blocker);
+    let (boss, mut boss_out) = harness.join("Boss");
+    let (rookie, _) = harness.join("Rookie");
+
+    let lines = harness.command(boss, &mut boss_out, "op Rookie");
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("nothing was changed")),
+        "the failure must say nothing was applied, saw {lines:?}"
+    );
+    assert_eq!(
+        harness.game.player_permission(rookie),
+        PermissionLevel::All,
+        "a failed save grants nothing live"
+    );
+    assert!(
+        !harness
+            .game
+            .operators()
+            .is_operator(&mc_network::auth::offline_profile("Rookie").id.to_string()),
+        "and nothing lingers in memory either"
+    );
+}

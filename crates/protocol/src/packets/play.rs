@@ -428,7 +428,14 @@ impl Packet for ForgetLevelChunk {
     const ID: i32 = clientbound::play::FORGET_LEVEL_CHUNK;
 
     fn decode(payload: &[u8]) -> ServerResult<Self> {
-        let packed = PacketReader::new(payload).read_i64()?;
+        let mut reader = PacketReader::new(payload);
+        let packed = reader.read_i64()?;
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "forget_level_chunk has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
         Ok(Self {
             x: packed as i32,
             z: (packed >> 32) as i32,
@@ -4244,6 +4251,14 @@ mod tests {
                 "({x}, {z}) must round-trip"
             );
         }
+        // The packet is one long wide: trailing bytes are refused, like every
+        // other fixed-shape clientbound decode (AUDIT-14, A-03 recheck).
+        let mut padded = packet.encode().expect("encodes");
+        padded.push(0x00);
+        assert!(
+            ForgetLevelChunk::decode(&padded).is_err(),
+            "a trailing byte must not decode"
+        );
     }
 
     #[test]
