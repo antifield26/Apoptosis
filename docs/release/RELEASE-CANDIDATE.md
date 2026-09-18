@@ -11,16 +11,17 @@ a builder or operator needs to produce and run the server from source today.
 A from-scratch, pure-Rust dedicated server for Minecraft: Java Edition
 **26.1.2** (protocol **775**, wire display string "26.1"), offline mode,
 Vanilla-Survival slice: login → config → play, movement/collision, break/place,
-inventory transactions, containers model, death/respawn, commands (8 — the
-dispatcher tree has nine nodes, the ninth being `/function`, which the parity
-matrix counts under data packs), data
+inventory transactions, containers transactable, death/respawn, commands (15 —
+help/list/say/time/tp/execute/function/op/deop/stop plus the P14 admin set
+gamemode/give/kill/seed/difficulty), data
 packs (tags/recipes/functions), seeded terrain with a single-chunk structure
 subset, Anvil-compatible persistence verified against real vanilla worlds.
 Scope boundaries and every known divergence:
 [docs/vanilla-parity/PARITY-MATRIX.md](../vanilla-parity/PARITY-MATRIX.md) (KD-01…KD-39; the
-release-affecting highlights: no lighting propagation yet — clients render
-dark; entities are not persisted or synced; redstone is modelled but not
-tick-driven; 8 of ~90 commands).
+release-affecting highlights: static lighting only (no day/night dimming, no
+incremental relight); mobs lack per-kind follow ranges, XP orbs and paths;
+redstone is measured and tick-driven but has no pistons/observers and no exact
+update order; 15 of ~90 commands).
 
 ## 2. Building from source
 

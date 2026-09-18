@@ -32,32 +32,44 @@ in [docs/vanilla-parity/PARITY-MATRIX.md](docs/vanilla-parity/PARITY-MATRIX.md).
   end-to-end: 529 vanilla chunks decoded, rewritten by this server, then
   **booted on a real vanilla 26.1.2 server**, which preserved our edits and
   re-saved every dimension.
-- **Commands & data packs** — 8 commands plus `/function` with permission
-  levels (`ops.json` is read), real data-pack loading: 758/758 vanilla tags
-  resolve, 1 421 recipes load, functions run under the invoker's permissions.
+- **Commands & data packs** — 15 commands with permission levels (`/op` and
+  `/deop` persist grants to `ops.json`, which is also read at boot;
+  `/gamemode`, `/give`, `/kill`, `/seed`, `/difficulty` are operator-only),
+  plus `/function` running under the invoker's permissions; real data-pack
+  loading: 758/758 vanilla tags resolve, 1 421 recipes load, functions run.
 - **World generation** — seeded Perlin terrain with six biomes, trees, and a
   single-chunk subset of the jar's 1 202 structure templates.
 - **Performance** — the documented 20 TPS acceptance procedure was executed on
   a Raspberry Pi 5: a 30-minute soak with 10 players held settled tick
   p50/p95/p99 medians of **0.21/0.27/0.29 ms** with zero overruns outside the
-  join burst ([record](docs/performance/BENCHMARK-BASELINE.md)).
+  join burst ([record](docs/performance/BENCHMARK-BASELINE.md)); a later mixed
+  real+scripted soak on the current tree held ~3.0/3.2/3.3 ms medians with 58
+  lifetime overruns (§P14-Pi in the same record).
 
 ## What is explicitly not here
 
 This project records gaps instead of papering over them. The headline items
 (full catalog: [docs/vanilla-parity/PARITY-MATRIX.md](docs/vanilla-parity/PARITY-MATRIX.md)):
 
-- **No lighting propagation** — chunks are sent with zero light masks, so
-  clients render them dark.
+- **Lighting is a static model, owner-confirmed** — per-state emission and
+  dampening read from the jar's own accessors, sky flood from the heightmaps,
+  block-light BFS, cached per chunk with invalidation, `light_update` sent on
+  block change. Open: no day/night dimming (client-side) and no incremental
+  relight (a torch costs a full recompute).
 - **Entities persist and sync as drops/mobs** (P11-08, P12-05 for block
   entities); mobs still lack per-kind follow ranges, XP orbs, and paths.
-- **Redstone is a tested model, not wired into the tick loop.**
-- **8 of ~90 commands**; chests, furnaces and hoppers open as windows a real
+- **Redstone is a measured model, wired into the tick loop** — directional
+  conductivity, the 15-block wire and the vanilla differential pin it (P13);
+  scheduled ticks propagate and broadcast. Open: pistons/observers/doors,
+  exact update order, delay constants.
+- **15 of ~90 commands**; chests, furnaces and hoppers open as windows a real
   client can transact with (P12), but no real-client container session has
   been run yet.
 - **No full real-client acceptance yet** — a Java 26.1.2 client has joined,
-  rendered night, mobs and drops (P10-11/P11 acceptance), but container,
-  death→respawn and restart screens are still unverified on a live client.
+  rendered night, mobs and drops (P10-11/P11 acceptance), and played a
+  30-minute mixed 10-client soak (P14-06, pass with one noted idle spike),
+  but container, pickup-render, death→respawn and restart screens are still
+  unverified on a live client.
 - Offline mode only: enabling `online_mode` refuses to start (no Mojang
   session flow is implemented).
 
