@@ -3677,24 +3677,32 @@ impl Game {
         if !tick.is_multiple_of(20) {
             return Ok(());
         }
-        // 26.1 carries the sky in the overworld clock entry, not in a bare
-        // field (P14-09 walk: `/time` moved the server's mobs but never the
-        // client's sky, because the old `i64 + flag` shape decoded on the
-        // client as world age plus an *empty* clock map). The entry's total
-        // advances with the tick and carries the `/time` offset, so the sky
-        // keeps moving after a set instead of freezing at the set value.
+        // Vanilla's steady state is an empty clock map
+        // (`forceGameTimeSynchronization`); the client advances its clock
+        // instances locally from the join-time full sync and the immediate
+        // single-entry broadcast a `/time` mutation sends. A full entry every
+        // second would also work, but the empty map is what eighteen captured
+        // vanilla packets all carry.
         let packet = SetTime {
             world_age: tick as i64,
-            clocks: vec![mc_protocol::packets::play::ClockState {
-                clock_id: mc_protocol::packets::play::WORLD_CLOCK_OVERWORLD,
-                total_ticks: tick as i64 + self.time_offset,
-                partial_tick: 0.0,
-                rate: 1.0,
-            }],
+            clocks: Vec::new(),
         }
         .to_raw()?;
         self.broadcast_all(&packet, report);
         Ok(())
+    }
+
+    /// The overworld clock entry at `tick`, carrying the `/time` offset.
+    pub(crate) fn overworld_clock_entry(
+        &self,
+        tick: Tick,
+    ) -> mc_protocol::packets::play::ClockState {
+        mc_protocol::packets::play::ClockState {
+            clock_id: mc_protocol::packets::play::WORLD_CLOCK_OVERWORLD,
+            total_ticks: tick as i64 + self.time_offset,
+            partial_tick: 0.0,
+            rate: 1.0,
+        }
     }
 
     // ---------------------------------------------------------------- events
@@ -3934,6 +3942,19 @@ impl Game {
             report,
         )?;
         self.send_vitals(id, report)?;
+        // The join-time full clock sync (`sendLevelInfo` on vanilla): without
+        // an absolute seed the client's overworld instance advances locally
+        // from zero forever, and no later entry can fix a sky that never
+        // learned where it started. The per-second broadcast carries an empty
+        // map from here on.
+        self.send(
+            id,
+            &SetTime {
+                world_age: self.tick as i64,
+                clocks: vec![self.overworld_clock_entry(self.tick)],
+            },
+            report,
+        )?;
         if let Some(session) = self.sessions.get_mut(&id) {
             session.ready = true;
         }

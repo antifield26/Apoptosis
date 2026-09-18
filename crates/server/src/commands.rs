@@ -443,12 +443,7 @@ impl Game {
         );
         let packet = SetTime {
             world_age: self.tick_count().cast_signed(),
-            clocks: vec![mc_protocol::packets::play::ClockState {
-                clock_id: mc_protocol::packets::play::WORLD_CLOCK_OVERWORLD,
-                total_ticks: self.tick_count().cast_signed() + self.time_offset(),
-                partial_tick: 0.0,
-                rate: 1.0,
-            }],
+            clocks: vec![self.overworld_clock_entry(self.tick_count())],
         };
         let ids: Vec<mc_network::bridge::ConnectionId> = self.sessions.keys().copied().collect();
         for target in ids {

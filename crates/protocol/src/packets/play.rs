@@ -2278,13 +2278,24 @@ impl Packet for SetExperience {
 /// (`ClientboundSetTimePacket`: `LONG` then a composite of
 /// `WorldClock.STREAM_CODEC` and `ClockNetworkState.STREAM_CODEC`).
 ///
-/// A clock reference is the registry id plus one (`ByteBufCodecs$30`: `0`
-/// means inline, otherwise `byId(i - 1)`); the overworld clock bootstraps
-/// first, so it is id `0` on the wire as `0x01`. A clock state is
-/// `total_ticks i64`, `partial_tick f32`, `rate f32` in field order. An empty
-/// patch-free map is a single `0x00` — which is exactly what the P10-03
-/// capture holds after its `i64` (eighteen packets, all 9 bytes): those
-/// captures were an empty clock map, not "one trailing byte".
+/// A clock reference is the **raw registry id** (`ByteBufCodecs$29`: `VarInt`
+/// in, `byId` out — no plus-one, no inline form). The overworld clock
+/// bootstraps first, so it is id `0` on the wire as `0x00`. An earlier
+/// revision wrote id-plus-one (confusing this with the `holder` convention
+/// of `ByteBufCodecs$30`); every update then landed on the wrong instance,
+/// the overworld instance advanced locally from zero forever, and `/time`
+/// moved the server's mobs without ever moving the client's sky — with no
+/// error anywhere, because the shape stayed valid (P14-09 walk).
+///
+/// Rhythm, also from the jar: the per-second broadcast (`MinecraftServer.
+/// forceGameTimeSynchronization`) always carries an **empty** map; a changed
+/// clock is broadcast immediately (`ServerClockManager.modifyClock` builds a
+/// single-entry map and pushes it); joins get the full sync. So per-second
+/// empties are the steady state, not a degenerate case.
+///
+/// A clock state is `total_ticks VarLong`, `partial_tick f32`, `rate f32` in
+/// field order. An empty map is a single `0x00` — which is exactly what the
+/// P10-03 capture holds after its `i64` (eighteen packets, all 9 bytes).
 ///
 /// We previously sent `i64 world_age` + `i64 time_of_day` + `bool`, 8 bytes
 /// too many, which a real client reported as `was larger than I expected`.
@@ -2329,16 +2340,15 @@ impl Packet for SetTime {
         let count = read_count(&mut reader, "clock update", MAX_CLOCK_UPDATES)?;
         let mut clocks = Vec::with_capacity(count);
         for _ in 0..count {
-            // Reference encoding: `0` would be an inline clock (never sent),
-            // otherwise `byId(i - 1)`.
-            let raw = reader.read_varint()?;
-            if raw <= 0 {
+            // Raw registry id, no offset: overworld is `0x00`.
+            let clock_id = reader.read_varint()?;
+            if clock_id < 0 {
                 return Err(ServerError::Protocol(format!(
-                    "set_time clock reference {raw} is not a registry id"
+                    "set_time clock id {clock_id} is negative"
                 )));
             }
             clocks.push(ClockState {
-                clock_id: raw - 1,
+                clock_id,
                 total_ticks: reader.read_varlong()?,
                 partial_tick: reader.read_f32()?,
                 rate: reader.read_f32()?,
@@ -2364,7 +2374,7 @@ impl Packet for SetTime {
                     clock.clock_id
                 )));
             }
-            writer.write_varint(clock.clock_id + 1);
+            writer.write_varint(clock.clock_id);
             writer.write_varlong(clock.total_ticks);
             writer.write_f32(clock.partial_tick);
             writer.write_f32(clock.rate);
@@ -4186,8 +4196,9 @@ mod tests {
 
     #[test]
     fn set_time_carries_the_overworld_clock() {
-        // world age 6000, one clock: overworld (id 0 → wire 1), 20000 ticks,
-        // no partial, normal rate.
+        // world age 6000, one clock: overworld id 0 on the wire as `0x00`,
+        // 20000 ticks, no partial, normal rate. (An earlier revision wrote
+        // id-plus-one here; the golden pins the raw id.)
         let packet = SetTime {
             world_age: 6000,
             clocks: vec![super::ClockState {
@@ -4203,17 +4214,17 @@ mod tests {
             [
                 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x17, 0x70, // world age
                 0x01, // one clock update
-                0x01, // overworld reference (id + 1)
+                0x00, // overworld, raw registry id
                 0xA0, 0x9C, 0x01, // 20000 as VarLong
                 0x00, 0x00, 0x00, 0x00, // partial 0.0
                 0x3F, 0x80, 0x00, 0x00, // rate 1.0
             ]
         );
         assert_eq!(SetTime::decode(&body).expect("decodes"), packet);
-        // An inline clock (reference 0) is refused, not guessed at.
-        let mut inline = body.clone();
-        inline[9] = 0x00;
-        assert!(SetTime::decode(&inline).is_err());
+        // A negative clock id is refused, not guessed at.
+        let mut bad = body[..9].to_vec();
+        bad.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF, 0x0F]);
+        assert!(SetTime::decode(&bad).is_err());
     }
 
     #[test]

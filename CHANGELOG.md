@@ -119,6 +119,15 @@ Four more walk findings, all fixed and redeployed:
   Follow-up: unknown `/time` words printed the time instead of usage, which
   made a failed set indistinguishable from a successful one — now they print
   usage, and a successful set logs `time offset set` server-side.
+
+  Follow-up 2 (the sky still ignored the clock): the clock reference was
+  written id-plus-one (confusing the `holder` convention with the raw-id
+  `registry` codec the map actually uses), so every update landed on the
+  wrong instance while the overworld instance advanced locally from zero
+  forever — shape-valid, zero errors. Keys are raw ids now (overworld
+  `0x00`); the rhythm matches the jar too (`modifyClock` broadcasts a
+  single entry immediately, per-second carries an empty map, joins get the
+  full sync).
 - Placement rearranged the hotbar: the consumed remainder went through
   `add_stack`'s lowest-partial-first fill instead of back into the held slot.
   Consume-in-place (`take`/`shrink`/`replace_held`); the new test fails on

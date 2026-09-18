@@ -195,6 +195,12 @@ fn a_player_joins_and_receives_terrain_and_vitals() {
         ids.contains(&clientbound::play::DISGUISED_CHAT),
         "the join must greet the player"
     );
+    assert!(
+        ids.contains(&clientbound::play::SET_TIME),
+        "the join must carry the full clock sync (P14-09 walk): without an \
+         absolute seed the client's overworld instance advances locally from \
+         zero forever, saw {ids:?}"
+    );
 
     // The whole view arrives over subsequent ticks — **as many as the streaming budget needs**, which is why
     // this waits for the count rather than ticking a number of times. Eight ticks sufficed while
