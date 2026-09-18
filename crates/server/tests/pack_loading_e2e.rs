@@ -409,3 +409,40 @@ fn a_world_pack_recipe_reaches_the_crafting_table() {
         "the converted table must contain the pack recipe"
     );
 }
+
+/// Loading packs with no pack configured must not wipe the hand-written loot
+/// baseline (P14-09 finding: the live verify server logged "no loot table"
+/// for `stone`/`oak_log`/`gravel` and dropped nothing, because `load_packs`
+/// rebuilt from empty and `set_loot` replaced the constructor's baseline —
+/// while every suite test, which never runs `load_packs`, stayed green).
+#[test]
+fn loading_with_no_packs_keeps_the_loot_baseline() {
+    let dir = TempDir::new("packs-baseline-survives");
+    let world = dir.path().join("world");
+    std::fs::create_dir_all(&world).expect("world dir");
+
+    let storage = WorldService::open(&mc_server::config::StorageConfig {
+        world_dir: world.clone(),
+        autosave_ticks: 0,
+    })
+    .expect("opens");
+    let mut game = Game::new(&storage, 3, game_channel(64).1).expect("game");
+    let stone = mc_core::ids::ResourceId::parse("minecraft:blocks/stone").expect("an id");
+    assert!(
+        game.loot().by_name(&stone).is_some(),
+        "the constructor installs the baseline"
+    );
+
+    load_packs(&mut game, &PackRoots::new(&world), &EnabledPacks::default()).expect("loads");
+    for table in [
+        "minecraft:blocks/stone",
+        "minecraft:blocks/cobblestone",
+        "minecraft:blocks/oak_log",
+    ] {
+        let id = mc_core::ids::ResourceId::parse(table).expect("an id");
+        assert!(
+            game.loot().by_name(&id).is_some(),
+            "an empty pack load must keep the baseline table {table}"
+        );
+    }
+}

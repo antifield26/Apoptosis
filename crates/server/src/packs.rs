@@ -187,6 +187,12 @@ impl PackRoots {
 ///
 /// Only for a failure that makes the *game* unusable. A pack problem never propagates: it is
 /// recorded in the returned outcome, because a broken pack must not stop the server.
+///
+/// # Panics
+///
+/// When the hand-written loot baseline fails to parse. That table is a
+/// programmer-authored constant, not input, so a failure is a build-time
+/// defect reported loudly rather than a runtime error.
 #[allow(clippy::too_many_lines)]
 pub fn load_packs(
     game: &mut Game,
@@ -280,7 +286,14 @@ pub fn load_packs(
     // Loot, from every pack's `loot_table/` directory in load order (P11-04).
     // The registries are read once here; `load_directory` only consults them
     // for validation reports. Last-wins insert keeps the override semantics.
-    let mut loot = mc_data::loot::LootTables::new();
+    // Seeded from the hand-written baseline (P14 soak follow-up): with no
+    // pack configured the loop below finds nothing, and starting from empty
+    // here used to wipe the baseline the constructor installed — every
+    // packless break logged "no loot table" and dropped nothing on the live
+    // server while the harness tests stayed green. Pack tables still win per
+    // name; the baseline covers the rest.
+    let mut loot = mc_data::loot::LootTables::baseline()
+        .expect("the hand-written loot baseline parses; a failure here is a programmer error");
     let mut loot_report = mc_data::loot::LootLoadReport::default();
     let blocks = game.registries().blocks.clone();
     let items = game.registries().items.clone();
