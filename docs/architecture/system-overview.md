@@ -94,7 +94,7 @@ divergence live in [PARITY-MATRIX.md](../vanilla-parity/PARITY-MATRIX.md), which
 | Persistence | NBT + Anvil read/write with atomic saves, carrying live entities and block entities (P11-08/P12-05); verified end to end — a world this code rewrote was **booted on a real vanilla 26.1.2 server**, which preserved the edits and re-saved every dimension |
 | Commands & data | 15 commands (help/list/say/time/tp/execute/function/op/deop/stop/gamemode/give/kill/seed/difficulty), permission levels from `ops.json` (read at boot, written by `/op`/`/deop`); real data-pack loading from the configured vanilla pack and from world packs; the deployed vanilla pack resolves 758 tags and loads 1 421 recipes; loot tables fire as the drop authority and furnace/crafting tables convert from the pack (fuel stays the jar-verified baseline) |
 | World generation | seeded terrain with six biomes, trees, and a single-chunk subset of the jar's 1 202 structure templates |
-| Performance | the documented 20 TPS acceptance procedure ran on a Raspberry Pi 5: a 30-minute soak with 10 scripted clients held settled tick p50/p95/p99 medians of 0.21/0.27/0.29 ms with zero settled overruns ([record](../performance/BENCHMARK-BASELINE.md)); that soak predates the P12 furnace/hopper tick work, so re-soak is owed before the verdict covers it |
+| Performance | the documented 20 TPS acceptance procedure ran twice on a Raspberry Pi 5: the scripted 10-client soak held p50/p95/p99 medians of 0.21/0.27/0.29 ms with zero settled overruns, and the later mixed real+scripted soak on the current tree held ~3.0/3.2/3.3 ms medians with 58 lifetime overruns and one noted idle spike ([record](../performance/BENCHMARK-BASELINE.md), §§P09-Pi, P14-Pi) |
 
 ## What is deliberately absent
 
@@ -106,10 +106,11 @@ Recorded rather than papered over; the full catalogue with per-row evidence is t
   save with drops (P11); viewers see moves, hurt and death. Gaps: per-kind follow ranges, XP orbs,
   pathfinding, and entities in otherwise-clean chunks.
 - **Redstone is a measured model, wired into the tick loop.** Directional conductivity (P13-06), the 15-block wire (P13-05) and the vanilla differential (P13-07) pin it; player edits feed the queue (P13-02) and the `ScheduledTicks` phase propagates and broadcasts.
-- **8 of roughly 90 Vanilla commands.** Chests, furnaces and hoppers open as windows a client can
+- **15 of roughly 90 Vanilla commands.** Chests, furnaces and hoppers open as windows a client can
   transact with; double chests open single, tag recipes never convert, hopper↔furnace routing is skipped.
 - **Partial real-client acceptance.** A Java 26.1.2 client has joined, entered play, rendered night/mobs/
-  drops and chatted (P10-11/P11); container, death→respawn and restart screens are still unverified.
+  drops and chatted (P10-11/P11), and played a 30-minute mixed 10-client soak (P14-06, pass with one noted
+  idle spike); container, pickup-render, death→respawn and restart screens are still unverified.
 - **Offline mode only.** `online_mode = true` refuses to start rather than degrading silently.
 
 ## Invariants a change must not break

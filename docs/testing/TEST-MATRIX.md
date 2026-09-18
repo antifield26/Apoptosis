@@ -5,11 +5,11 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 440 passed, 0 failed, 34 ignored** across **113 suites**, re-derived from
+Totals: **1 441 passed, 0 failed, 34 ignored** across **113 suites**, re-derived from
 `cargo test --workspace --no-fail-fast` on the current tree (`python
 tools/gates/run.py --quick`: every gate passed). The count has
 moved 1 194 -> 1 196 -> 1 206 -> 1 207 -> 1 212 -> 1 325 -> 1 344 -> 1 346 -> 1 358 ->
-1 365 -> 1 380 -> 1 384 -> 1 386 -> 1 388 -> 1 389 -> 1 392 -> 1 399 -> 1 412 -> 1 426 -> 1 428 -> 1 431 -> 1 433 -> 1 437 -> **1 440**: three from the Audit 07 remediation, two Audit 08 coverage tests, ten from the
+1 365 -> 1 380 -> 1 384 -> 1 386 -> 1 388 -> 1 389 -> 1 392 -> 1 399 -> 1 412 -> 1 426 -> 1 428 -> 1 431 -> 1 433 -> 1 437 -> 1 440 -> **1 441**: three from the Audit 07 remediation, two Audit 08 coverage tests, ten from the
 `mc-capture-rig` crate (P10-01), one regression test for the
 compression-transition defect (P10-02), the synced-registry work (P10-03), then
 P10-04..11 and P11-01..03, nineteen from the P11-04..09 landing, two from
@@ -60,7 +60,9 @@ update on chunk crossing (`chunk_streaming`), two loot-baseline roll tests
 (`mc-data`), and breaking common blocks with no pack loaded
 (`loot_and_pickup`), and **three from AUDIT-14**: the locked-difficulty
 refusal and the op-save-failure rollback (`admin_commands` 11 -> 13), and the
-config-phase view-distance event reaching the game (`command_e2e` 11 -> 12).
+config-phase view-distance event reaching the game (`command_e2e` 11 -> 12),
+and **one from the P14-09 walk**: the empty pack load keeps the loot baseline
+(`pack_loading_e2e` 9 -> 10; fails on revert to the baseline-wiping load).
 The 34 ignored = the 8 differential
 suites in the last section (16 tests) + `vanilla_loot` 3 + `vanilla_chunk_light` 2
 + `vanilla_light_differential` 1 + `light_update_trigger` 1 + `sky_light_surface` 2
@@ -72,7 +74,7 @@ while updating this total. The 17 lib counts sum to **1 039** (`mc-protocol` 113
 **117**, `mc-container` 130 -> **133**, `mc-redstone` 64 -> **66**, `mc-entity` 135 ->
 **136**, `mc-server` 61 -> **63**, `mc-world` 42 -> **44**, `mc-data` 127 ->
 **129**, rest unchanged), the 5 doc-tests and
-the **396** named-suite tests complete the 1 440 (1 039 + 5 + 396 = 1 440, the third
+the **397** named-suite tests complete the 1 441 (1 039 + 5 + 397 = 1 441, the third
 figure derived from the run total and the other two rather than counted
 independently). Both Audit 07's method and its lesson still apply: the figures must
 be re-measured per crate, because five of them once turned out to be **another
@@ -116,7 +118,7 @@ remaining per-crate lib binaries are itemised above and complete the 1 389 total
 soak an eight-table loot baseline covers common breaks with no pack loaded
 (stone drops cobblestone); **P12**: chest/furnace/hopper menus open on non-zero windows and transact with conservation (20-click flood), furnaces cook with `container_set_data` progress, hoppers transfer on the 8-tick cooldown, block entities persist across restart, breaks drop contents, crafting recomputes from the table, closes return the cursor |
 | Redstone | `propagation` (23), `budget_exhaustion` (7), `determinism` (6), `golden_circuits` (6), `power_model` (8), `world_integration` (4), `vanilla_conductivity` (13) | budgeted propagation reaches unbounded-run state, full change-vector determinism, golden circuits (lever—wire—lamp on a dust-powered pedestal; comparator faces east at its wire), power bounds; P13-01 wires the scheduled-tick queue into the tick (see Server foundations); P13-03 drives the lamp; P13-04 reads torch attachments and comparator back/sides by facing; P13-05 measures 15 live blocks on a real 26.1.2 server (world + scripts under `target/p13-wire/`); P13-06 measures the conductivity matrix on the same rig (torch-below/lever-mount strong, dust above/beside weak and solid-blind, block never; lamp reads above/below) |
-| Commands & data | `mc-command` lib (89), `command_e2e` (12), `execute_e2e` (9), `function_e2e` (14), `mc-data` lib (129), `pack_discovery` (10), `pack_loading_e2e` (**9**: 8 + AUDIT-12 recipe join regression) | permission-before-grammar, every declared command reachable, malformed commands never disconnect, execute modifier chains, function recursion/privilege bounds, pack discovery and world-pack loading (P12-07/08 recipe load + conversions) |
+| Commands & data | `mc-command` lib (89), `command_e2e` (12), `execute_e2e` (9), `function_e2e` (14), `mc-data` lib (129), `pack_discovery` (10), `pack_loading_e2e` (**10**: 9 + P14-09 baseline-survives-load) | permission-before-grammar, every declared command reachable, malformed commands never disconnect, execute modifier chains, function recursion/privilege bounds, pack discovery and world-pack loading (P12-07/08 recipe load + conversions) |
 | World generation | `mc-worldgen` lib (81), `worldgen_e2e` (7), `structure_golden` (9), `seed_derivation` (8), `golden` (6), `determinism` (7) | seed determinism, terrain invariants, structure placement goldens, existing-world-first generation |
 | Server foundations | `mc-server` lib (63), `scheduled_ticks` (**2**), `mc-core` (10), `mc-nbt` (16 + 1 doc), `mc-registry` (21), `mc-simulation` (27), `mc-redstone` (**66**), `mc-test-support` (4), `mc-capture-rig` (11) | config guardrails, backup/verify/restore, shutdown barrier, operational metrics snapshot, error taxonomy, NBT vectors, the registry table itself (including the `MC_FIXTURE_DIR` precedence half), fixture helpers, the tick scheduler, the redstone model's own invariants, the client-capture rig; P13-01 scheduled-tick drain timing + budget (perturbation-verified) |
 | Security (cross-cutting) | classes live inside the suites above | hostile VarInt/frames + random-byte connections (protocol/network libs), slow-drip bound, registry reservation cap, 300-command flood (`command_e2e`), hostile op paths (`ops_e2e`, 7), 2 000-click conservation (`inventory_duplication`), hostile disk state (`corruption`, 16), config bounds (`mc-server` lib), **a decoded packet body with trailing bytes is accepted** (AUDIT-09 A-03, open — serverbound silent-accept is deliberate; AUDIT-14 A14-01 found P14's new clientbound `forget_level_chunk` decoder skipping the hard-refusal convention and fixed it with a padded-input test) |

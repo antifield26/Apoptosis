@@ -2214,7 +2214,7 @@ impl Game {
                             .collect::<Vec<_>>(),
                         session.menu.state_id(),
                         session.menu.cursor(),
-                        session.menu.window_id() as i8,
+                        i32::from(session.menu.window_id()),
                     ),
                     None => continue,
                 };
@@ -4621,7 +4621,7 @@ impl Game {
             }
         }
         let state = session.menu.state_id();
-        let window = session.menu.window_id().cast_signed();
+        let window = i32::from(session.menu.window_id());
         if changed.is_empty() {
             return;
         }
@@ -4919,7 +4919,7 @@ impl Game {
                 session.menu.state_id(),
                 session.menu.cursor(),
                 i32::from(session.menu.window_id()),
-                session.menu.window_id() as i8,
+                i32::from(session.menu.window_id()),
             )
         };
         if let Err(error) = self.send(
@@ -5045,7 +5045,7 @@ impl Game {
                     // mismatch, so the client drops the duplicated stack.
                     let contents = session.menu.full_contents();
                     let state = session.menu.state_id();
-                    let wire_window = session.menu.window_id().cast_signed();
+                    let wire_window = i32::from(session.menu.window_id());
                     let packet = ContainerSetContent {
                         window_id: wire_window,
                         state_id: state,
@@ -5072,7 +5072,7 @@ impl Game {
             let contents = session.menu.full_contents();
             let state = session.menu.state_id();
             // The menu addresses windows as u8 (its own bound); the wire uses i8.
-            let wire_window = session.menu.window_id().cast_signed();
+            let wire_window = i32::from(session.menu.window_id());
             let packet = ContainerSetContent {
                 window_id: wire_window,
                 state_id: state,
@@ -5096,7 +5096,7 @@ impl Game {
         }
         let cursor = session.menu.cursor();
         let state = session.menu.state_id();
-        let window = session.menu.window_id().cast_signed();
+        let window = i32::from(session.menu.window_id());
 
         for (menu_slot, stack) in updates {
             let packet = ContainerSetSlot {

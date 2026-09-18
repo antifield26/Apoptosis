@@ -3090,13 +3090,30 @@ pub const MAX_METADATA_ENTRIES: usize = 256;
 /// framing it *does* know (id, count, component count, component type id)
 /// without inventing component codecs for Phase 04. The empty stack is
 /// `item_id == 0`, and then `count`/`components` must be empty too.
+/// One optional slot on the wire, exactly as 26.1.2's
+/// `ItemStack.createOptionalStreamCodec` reads it (`ItemStack$1` +
+/// `DataComponentPatch$3`, bytecode-read from the jar):
+///
+/// `count VarInt`; a count `<= 0` is the whole stack (bare `0x00`, the only
+/// bytes an empty slot ever occupies). Otherwise `item id VarInt`, then the
+/// component patch: `added-count VarInt`, that many `(type, value)` entries,
+/// `removed-count VarInt`, that many bare type ids.
+///
+/// Two consequences this crate got wrong before the P14-09 walk (a picked-up
+/// cobblestone was the first non-empty stack a real client ever had to
+/// decode from us, and it failed): the count comes **first**, not the id,
+/// and an empty patch is two zero bytes (`00 00`), not one. Empty slots encode
+/// identically either way (`0x00`), which is why every inventory sync before
+/// that walk looked fine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ItemStack {
     /// Item registry id; `0` means "empty stack".
     pub item_id: i32,
     /// Stack size; ignored when `item_id` is 0.
     pub count: i32,
-    /// `(component type id, pre-encoded component data)` pairs.
+    /// Added `(component type id, pre-encoded component data)` pairs.
+    /// Removed components are unmodelled: this crate never sends any and
+    /// refuses to receive any rather than dropping them silently.
     pub components: Vec<(i32, Vec<u8>)>,
 }
 
@@ -3135,22 +3152,27 @@ impl ItemStack {
     /// that does not fit a `VarInt` (server-authored data).
     pub fn encode(&self, writer: &mut PacketWriter) -> ServerResult<usize> {
         let before = writer.len();
-        writer.write_varint(self.item_id);
-        if self.is_empty() {
-            return Ok(writer.len() - before);
-        }
         if self.count < 0 {
             return Err(ServerError::Invariant(format!(
                 "item stack count {} is negative",
                 self.count
             )));
         }
+        // Vanilla reads the count first and stops at `<= 0`; an id-0 stack
+        // is air by registry lookup, so both spellings encode as bare zero.
+        if self.count == 0 || self.item_id == 0 {
+            writer.write_varint(0);
+            return Ok(writer.len() - before);
+        }
         writer.write_varint(self.count);
+        writer.write_varint(self.item_id);
         writer.write_varint(packed_len(self.components.len())?);
         for (type_id, data) in &self.components {
             writer.write_varint(*type_id);
             writer.write_bytes(data);
         }
+        // Removed components: always empty on send (unmodelled).
+        writer.write_varint(0);
         Ok(writer.len() - before)
     }
 
@@ -3159,8 +3181,13 @@ impl ItemStack {
     /// # Errors
     ///
     /// [`ServerError::Protocol`] for a negative item id, an absurd component
-    /// count, or a truncated payload.
+    /// count, a removed-component list (unmodelled — refused, never dropped),
+    /// or a truncated payload.
     pub fn decode(reader: &mut PacketReader<'_>) -> ServerResult<Self> {
+        let count = reader.read_varint()?;
+        if count <= 0 {
+            return Ok(Self::empty());
+        }
         let item_id = reader.read_varint()?;
         if item_id < 0 {
             return Err(ServerError::Protocol(format!(
@@ -3168,19 +3195,26 @@ impl ItemStack {
             )));
         }
         if item_id == 0 {
+            // `Item.byId(0)` is air: a positive count of nothing is nothing.
             return Ok(Self::empty());
         }
-        let count = reader.read_varint()?;
-        let component_count = read_count(reader, "item component", MAX_ITEM_COMPONENTS)?;
+        let added = read_count(reader, "item component", MAX_ITEM_COMPONENTS)?;
         // Component payload lengths are not self-describing in a way this crate
         // models, so each component owns the bytes it declares. Without a
         // length field the only safe assumption is "the rest of the packet",
-        // which is why this decoder accepts at most one component and rejects
-        // anything else rather than guessing.
-        if component_count > 0 {
+        // which is why this decoder accepts at most zero added components and
+        // rejects anything else rather than guessing.
+        if added > 0 {
             return Err(ServerError::Protocol(format!(
-                "{component_count} item data components present but component \
+                "{added} item data components present but component \
                  payload framing is unmodelled"
+            )));
+        }
+        let removed = read_count(reader, "removed item component", MAX_ITEM_COMPONENTS)?;
+        if removed > 0 {
+            return Err(ServerError::Protocol(format!(
+                "{removed} removed item components present but removed \
+                 components are unmodelled"
             )));
         }
         Ok(Self {
@@ -3199,14 +3233,15 @@ pub const MAX_ITEM_COMPONENTS: usize = 1024;
 
 /// `minecraft:container_set_slot` (clientbound play).
 ///
-/// Body: `i8` window id, `VarInt` state id, `i16` slot index, then the
-/// [`ItemStack`]. Window `0` is the player inventory, `-1` the cursor, and
-/// `-2` the crafting output in vanilla; the state id is echoed by the client in
+/// Body: container-id `VarInt`, state-id `VarInt`, `i16` slot index, then the
+/// [`ItemStack`]. The container id is a `VarInt` on the wire
+/// (`FriendlyByteBuf.readContainerId`, bytecode-read): window `0` is the
+/// player inventory, `-1` the cursor. The state id is echoed by the client in
 /// `container_click` so a stale click can be detected.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContainerSetSlot {
     /// Window the slot belongs to.
-    pub window_id: i8,
+    pub window_id: i32,
     /// Inventory state id the client last acknowledged.
     pub state_id: i32,
     /// Slot index within the window.
@@ -3220,7 +3255,7 @@ impl Packet for ContainerSetSlot {
 
     fn decode(payload: &[u8]) -> ServerResult<Self> {
         let mut reader = PacketReader::new(payload);
-        let window_id = reader.read_i8()?;
+        let window_id = reader.read_varint()?;
         let state_id = reader.read_varint()?;
         let slot = reader.read_i16()?;
         let item = ItemStack::decode(&mut reader)?;
@@ -3240,7 +3275,7 @@ impl Packet for ContainerSetSlot {
 
     fn encode(&self) -> ServerResult<Vec<u8>> {
         let mut writer = PacketWriter::new();
-        writer.write_i8(self.window_id);
+        writer.write_varint(self.window_id);
         writer.write_varint(self.state_id);
         writer.write_i16(self.slot);
         self.item.encode(&mut writer)?;
@@ -3250,14 +3285,14 @@ impl Packet for ContainerSetSlot {
 
 /// `minecraft:container_set_content` (clientbound play).
 ///
-/// Body: `i8` window id, `VarInt` state id, `VarInt` slot count, that many
-/// [`ItemStack`]s, then the carried (cursor) stack. The carried stack is
+/// Body: container-id `VarInt`, state-id `VarInt`, `VarInt` slot count, that
+/// many [`ItemStack`]s, then the carried (cursor) stack. The carried stack is
 /// **not** part of the count — it is written unconditionally, even when empty —
 /// so an off-by-one here shifts every remaining stack.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContainerSetContent {
     /// Window being filled.
-    pub window_id: i8,
+    pub window_id: i32,
     /// Inventory state id the client last acknowledged.
     pub state_id: i32,
     /// Contents of the window's slots, in slot-index order.
@@ -3277,7 +3312,7 @@ impl Packet for ContainerSetContent {
 
     fn decode(payload: &[u8]) -> ServerResult<Self> {
         let mut reader = PacketReader::new(payload);
-        let window_id = reader.read_i8()?;
+        let window_id = reader.read_varint()?;
         let state_id = reader.read_varint()?;
         let count = read_count(&mut reader, "container slot", MAX_CONTAINER_SLOTS)?;
         let mut slots = Vec::with_capacity(count);
@@ -3301,7 +3336,7 @@ impl Packet for ContainerSetContent {
 
     fn encode(&self) -> ServerResult<Vec<u8>> {
         let mut writer = PacketWriter::new();
-        writer.write_i8(self.window_id);
+        writer.write_varint(self.window_id);
         writer.write_varint(self.state_id);
         writer.write_varint(packed_len(self.slots.len())?);
         for slot in &self.slots {
@@ -5634,8 +5669,8 @@ mod tests {
         let mut writer = PacketWriter::new();
         simple.encode(&mut writer).expect("encodes");
         let body = writer.finish();
-        // id 5, count 3, zero components.
-        assert_eq!(body, [0x05, 0x03, 0x00]);
+        // Vanilla Slot order: count 3, id 5, zero added, zero removed.
+        assert_eq!(body, [0x03, 0x05, 0x00, 0x00]);
         let mut reader = crate::wire::PacketReader::new(&body);
         assert_eq!(ItemStack::decode(&mut reader).expect("decodes"), simple);
         assert!(reader.is_empty());
@@ -5651,7 +5686,7 @@ mod tests {
         let mut writer = PacketWriter::new();
         with_component.encode(&mut writer).expect("encodes");
         let body = writer.finish();
-        assert_eq!(body, [0x05, 0x01, 0x01, 0x07, 0xAA, 0xBB]);
+        assert_eq!(body, [0x01, 0x05, 0x01, 0x07, 0xAA, 0xBB, 0x00]);
 
         let mut reader = crate::wire::PacketReader::new(&body);
         assert!(
@@ -5670,8 +5705,26 @@ mod tests {
             item: ItemStack::simple(5, 3),
         };
         let body = packet.encode().expect("encodes");
-        assert_eq!(body, [0x00, 0x01, 0x00, 0x24, 0x05, 0x03, 0x00]);
+        // window 0, state 1, slot 36, then the Slot: count 3, id 5, no patch.
+        assert_eq!(body, [0x00, 0x01, 0x00, 0x24, 0x03, 0x05, 0x00, 0x00]);
         assert_eq!(ContainerSetSlot::decode(&body).expect("decodes"), packet);
+
+        // The P14-09 walk's failing bytes, pinned: one cobblestone (item 35)
+        // into slot 5 — count first, patch pair after the id.
+        let cobble = ContainerSetSlot {
+            window_id: 0,
+            state_id: 7,
+            slot: 5,
+            item: ItemStack::simple(35, 1),
+        };
+        assert_eq!(
+            cobble.encode().expect("encodes"),
+            [0x00, 0x07, 0x00, 0x05, 0x01, 0x23, 0x00, 0x00]
+        );
+        assert_eq!(
+            ContainerSetSlot::decode(&cobble.encode().expect("encodes")).expect("decodes"),
+            cobble
+        );
 
         let empty = ContainerSetSlot {
             window_id: -1,
@@ -5679,8 +5732,15 @@ mod tests {
             slot: -1,
             item: ItemStack::empty(),
         };
+        let empty_body = empty.encode().expect("encodes");
+        // The container id is a VarInt, not a byte: -1 is five bytes, and an
+        // i8 encoding here would have shifted the whole packet.
         assert_eq!(
-            ContainerSetSlot::decode(&empty.encode().expect("encodes")).expect("decodes"),
+            empty_body,
+            [0xFF, 0xFF, 0xFF, 0xFF, 0x0F, 0x00, 0xFF, 0xFF, 0x00]
+        );
+        assert_eq!(
+            ContainerSetSlot::decode(&empty_body).expect("decodes"),
             empty
         );
         assert!(ContainerSetSlot::decode(&[0x00, 0x01]).is_err());
@@ -5702,8 +5762,8 @@ mod tests {
                 0x02, // state id
                 0x02, // two slots
                 0x00, // slot 0 empty
-                0x01, 0x40, 0x00, // slot 1: id 1, count 64, no components
-                0x02, 0x01, 0x00, // carried: id 2, count 1
+                0x40, 0x01, 0x00, 0x00, // slot 1: count 64, id 1, empty patch
+                0x01, 0x02, 0x00, 0x00, // carried: count 1, id 2, empty patch
             ]
         );
         assert_eq!(ContainerSetContent::decode(&body).expect("decodes"), packet);
@@ -5767,7 +5827,7 @@ mod tests {
             item: ItemStack::simple(5, 3),
         };
         let body = cursor.encode().expect("encodes");
-        assert_eq!(body, [0x05, 0x03, 0x00]);
+        assert_eq!(body, [0x03, 0x05, 0x00, 0x00]);
         assert_eq!(SetCursorItem::decode(&body).expect("decodes"), cursor);
         assert!(SetCursorItem::decode(&[0x05]).is_err());
     }

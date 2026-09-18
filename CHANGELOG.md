@@ -77,6 +77,26 @@ client at a keyboard.
 
 ### P14-06 — Pi acceptance soak: RAN 2026-09-17 (mixed real+scripted)
 
+### P14-09 — verification-walk findings (fixed, walk continues)
+
+Two findings from the owner's first walk on 25567, both fixed and redeployed:
+
+- Packless breaks dropped nothing: `load_packs` rebuilt loot from empty and
+  `set_loot` wiped the constructor's eight-table baseline (the live log showed
+  `no loot table` for stone/oak_log/gravel). Pack loading now seeds from the
+  baseline with per-name pack override; `loading_with_no_packs_keeps_the_loot_baseline`
+  fails on revert.
+- Pickup crashed the client on `container_set_slot`: our Slot codec wrote
+  `id, count, components` while 26.1.2 reads `count, id, added, removed`
+  (`ItemStack$1` + `DataComponentPatch$3`, bytecode-read) — empty slots encode
+  identically either way, so the picked-up cobblestone was the first non-empty
+  stack a real client ever decoded from us. Container ids are `VarInt`, not
+  `i8` (`readContainerId`), fixed in `set_slot` and `set_content` together.
+  Goldens pin `1×cobblestone` and the `-1` window; the old order fails them.
+
+Known gaps the walk re-confirmed (not defects, scheduled): creeper
+fuse/explosions (P16-04), dig progress (P16-05).
+
 Nine scripted clients plus the owner on HMCL, 10 concurrent for 30 minutes
 against `1f57a4c` on the Pi 5 (bind `0.0.0.0:25566`, view 8). Full record:
 `BENCHMARK-BASELINE.md` §P14-Pi. Re-derived from the archived logs (AUDIT-14
