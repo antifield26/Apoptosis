@@ -3963,6 +3963,31 @@ impl Game {
             },
         );
 
+        // The client renders an empty hotbar until told otherwise: a rejoin
+        // with a non-empty inventory showed nothing until the first
+        // inventory action touched it (P14-10 walk). Sync the whole player
+        // window here, with every other full-state packet, while the menu
+        // was just mirrored from the authoritative inventory above.
+        {
+            let Some(session) = self.sessions.get(&id) else {
+                warn!(id = %id, "join failed before the inventory sync");
+                return Ok(());
+            };
+            let packet = ContainerSetContent {
+                window_id: i32::from(session.menu.window_id()),
+                state_id: session.menu.state_id(),
+                slots: session
+                    .menu
+                    .full_contents()
+                    .iter()
+                    .copied()
+                    .map(wire_stack)
+                    .collect(),
+                carried: wire_stack(session.menu.cursor()),
+            };
+            self.send(id, &packet, report)?;
+        }
+
         // The network layer already sent JoinGame; this is the world-side
         // continuation: the level-load signal, position, spawn marker, vitals, then terrain.
         //

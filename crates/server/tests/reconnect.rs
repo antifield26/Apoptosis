@@ -1,19 +1,20 @@
-//! Reconnect robustness (P14-05): leave and rejoin while running, and rejoin
-//! after a full restart.
+//! Reconnect robustness (P14-05/10): leave and rejoin while running, and
+//! rejoin after a full restart.
 //!
 //! A rejoin within one run restores the live state (position, health,
-//! inventory, mode) from the remembered player; a restart still starts fresh
-//! at spawn (no playerdata files yet — that is the P16 item). What must hold
-//! is the plumbing — the old entity is swept exactly once, no ghost session
-//! lingers, the new session streams, and a restart accepts the same name
-//! again. Death and respawn with a real client stay on KD-38's open list:
-//! they need a real client at a keyboard, and no test here can stand in for
-//! one.
+//! inventory, mode) from the remembered player; a restart restores it from
+//! `playerdata/<uuid>.dat`, falling back to fresh at spawn when the file is
+//! missing or corrupt. What must hold is the plumbing — the old entity is
+//! swept exactly once, no ghost session lingers, the new session streams,
+//! and a restart accepts the same name again. Death and respawn with a real
+//! client stay on KD-38's open list: they need a real client at a keyboard,
+//! and no test here can stand in for one.
 
 use mc_network::bridge::{
     ClientEvent, ClientEventKind, ConnectionId, ConnectionIds, InboundReceiver, OutboundSender,
     game_channel,
 };
+use mc_protocol::packets::Packet;
 use mc_server::game::Game;
 use mc_server::storage::WorldService;
 use mc_test_support::fixtures::TempDir;
@@ -276,7 +277,7 @@ fn restart_restores_the_player_from_the_playerdata_file() {
             .expect("game builds");
     let ids = ConnectionIds::new();
     let id2 = ids.next_id();
-    let (outbound, _out2) = OutboundSender::pair(id2, 8192);
+    let (outbound, mut out2) = OutboundSender::pair(id2, 8192);
     tx.try_send(ClientEvent {
         id: id2,
         kind: ClientEventKind::Joined {
@@ -307,6 +308,28 @@ fn restart_restores_the_player_from_the_playerdata_file() {
         player.inventory.slot(3).count(),
         5,
         "a restart restores the inventory"
+    );
+    // And the client is told: the rejoin burst must carry the whole window,
+    // with the dirt where the server has it (inventory slot 3 rides menu
+    // slot 36 + 3 = 39) — otherwise the hotbar renders empty until the first
+    // inventory action (P14-10 walk).
+    let mut contents = Vec::new();
+    while let Some(raw) = out2.try_recv() {
+        if raw.id == mc_protocol::ids::clientbound::play::CONTAINER_SET_CONTENT {
+            let packet = mc_protocol::packets::play::ContainerSetContent::decode(&raw.payload)
+                .expect("the sync decodes");
+            contents = packet.slots;
+        }
+    }
+    assert!(
+        contents.len() == 46,
+        "the rejoin must sync the whole player window, got {} slots",
+        contents.len()
+    );
+    assert_eq!(
+        contents[39].count, 5,
+        "the sync carries the restored stack in its slot, got {:?}",
+        contents[39]
     );
 }
 

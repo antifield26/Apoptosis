@@ -201,6 +201,12 @@ fn a_player_joins_and_receives_terrain_and_vitals() {
          absolute seed the client's overworld instance advances locally from \
          zero forever, saw {ids:?}"
     );
+    assert!(
+        ids.contains(&clientbound::play::CONTAINER_SET_CONTENT),
+        "the join must sync the whole player window (P14-10 walk): a rejoin \
+         with a non-empty inventory rendered an empty hotbar until the first \
+         inventory action, saw {ids:?}"
+    );
 
     // The whole view arrives over subsequent ticks — **as many as the streaming budget needs**, which is why
     // this waits for the count rather than ticking a number of times. Eight ticks sufficed while
