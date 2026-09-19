@@ -230,6 +230,7 @@ fn rejoin_restores_where_the_player_left() {
 /// leave writes the file, a fresh `Game` on the same directory reads it back.
 /// The in-memory copy cannot cross this boundary by construction, so this is
 /// the file's test, not the map's.
+#[allow(clippy::too_many_lines)]
 #[test]
 fn restart_restores_the_player_from_the_playerdata_file() {
     let mut harness = Harness::new_owned("p14-playerdata");
@@ -244,6 +245,8 @@ fn restart_restores_the_player_from_the_playerdata_file() {
         let player = harness.game.player_mut(id).expect("player");
         player.position = mc_entity::player::Vec3::new(100.5, 70.0, -40.5);
         player.health = 8.0;
+        player.yaw = 90.0;
+        player.pitch = -30.0;
         player
             .inventory
             .set_slot(3, mc_entity::stack::ItemStack::new(dirt, 5).expect("stack"))
@@ -309,16 +312,37 @@ fn restart_restores_the_player_from_the_playerdata_file() {
         5,
         "a restart restores the inventory"
     );
+    assert!(
+        (player.yaw - 90.0).abs() < f32::EPSILON && (player.pitch + 30.0).abs() < f32::EPSILON,
+        "a restart restores the look direction, got {}/{})",
+        player.yaw,
+        player.pitch
+    );
     // And the client is told: the rejoin burst must carry the whole window,
     // with the dirt where the server has it (inventory slot 3 rides menu
     // slot 36 + 3 = 39) — otherwise the hotbar renders empty until the first
-    // inventory action (P14-10 walk).
+    // inventory action (P14-10 walk). The join teleport must carry the
+    // restored look too: the state was saved fine, but the packet hardcoded
+    // 0/0 and snapped every rejoin's view.
     let mut contents = Vec::new();
+    let mut teleports = 0;
     while let Some(raw) = out2.try_recv() {
         if raw.id == mc_protocol::ids::clientbound::play::CONTAINER_SET_CONTENT {
             let packet = mc_protocol::packets::play::ContainerSetContent::decode(&raw.payload)
                 .expect("the sync decodes");
             contents = packet.slots;
+        }
+        if raw.id == mc_protocol::ids::clientbound::play::PLAYER_POSITION {
+            let packet = mc_protocol::packets::play::PlayerPosition::decode(&raw.payload)
+                .expect("the teleport decodes");
+            teleports += 1;
+            assert!(
+                (packet.yaw - 90.0).abs() < f32::EPSILON
+                    && (packet.pitch + 30.0).abs() < f32::EPSILON,
+                "the join teleport must carry the restored look, got {}/{}",
+                packet.yaw,
+                packet.pitch
+            );
         }
     }
     assert!(
@@ -331,8 +355,8 @@ fn restart_restores_the_player_from_the_playerdata_file() {
         "the sync carries the restored stack in its slot, got {:?}",
         contents[39]
     );
+    assert!(teleports >= 1, "the rejoin must teleport the player");
 }
-
 /// A corrupt playerdata file rejoins fresh at spawn (P14-10 walk): refusing
 /// the join would strand the player with no recourse on a headless Pi, so
 /// corruption warns and resets rather than bricks.

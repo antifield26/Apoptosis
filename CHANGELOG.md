@@ -170,11 +170,16 @@ file warns and resets rather than bricking the join (refusing would strand
   Follow-up from the same walk: a rejoin with a non-empty inventory rendered
   an empty hotbar, because join never sent the player window's contents — a
   full `container_set_content` now rides the join burst (pinned in the join
-  test and byte-checked on a restart rejoin). Still open from that walk and
-  scheduled, not fixed: the crafting-table block opens nothing (no 3×3
-  window exists — P17-02), and the inventory crafting grid misbehaves
-  probabilistically (ghost placements, empty-then-restored output), which
-  needs a packet-log debug session (P17-02).
+  test and byte-checked on a restart rejoin). A rejoin also snapped the view
+  to 0/0: the join teleport now carries the restored yaw/pitch. Still open
+  from that walk and scheduled, not fixed: the crafting-table block opens
+  nothing (no 3×3 window exists — P17-02), the inventory crafting grid
+  misbehaves probabilistically (ghost placements, empty-then-restored
+  output, ghost items in the output slot when the backpack opens — needs a
+  packet-log debug session, P17-02), and a chest placed before a restart
+  keeps server-side collision but renders wrong client-side with position
+  jitter on top (no server error logged; needs a local save/load round-trip
+  plus chunk-byte diff and a screenshot classification — P17).
 
 Nine scripted clients plus the owner on HMCL, 10 concurrent for 30 minutes
 against `1f57a4c` on the Pi 5 (bind `0.0.0.0:25566`, view 8). Full record:

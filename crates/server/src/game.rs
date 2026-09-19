@@ -4008,6 +4008,12 @@ impl Game {
             },
             report,
         )?;
+        // A rejoin restores the look direction too (P14-10 walk: the exit
+        // yaw/pitch is saved, but the join teleport snapped every view to
+        // 0/0). Fresh joins keep 0/0, which is what a new player has.
+        let (yaw, pitch) = self.sessions.get(&id).map_or((0.0, 0.0), |session| {
+            (session.player.yaw, session.player.pitch)
+        });
         self.send(
             id,
             &PlayerPosition {
@@ -4017,8 +4023,8 @@ impl Game {
                 velocity_x: 0.0,
                 velocity_y: 0.0,
                 velocity_z: 0.0,
-                yaw: 0.0,
-                pitch: 0.0,
+                yaw,
+                pitch,
                 flags: 0,
                 teleport_id: 1,
             },
