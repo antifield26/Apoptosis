@@ -22,10 +22,12 @@ death respawns past the loading screen, `/time` moves the sky, placements
 consume in place, disconnects remember the player. Nine walk findings fixed
 in this release (loot-seed wipe, Slot codec order, VarInt container ids,
 respawn level-load event, clock-map shape/keys/rhythm, hotbar migrate,
-player memory, silent `/time` fallback). Known gaps carried forward, not
-hidden: creeper fuse/explosions, dig progress, full `playerdata/<uuid>.dat`
-files (all P16); container and restart screen halves pending final
-confirmation (P14-10); pistons, terrain richness, NVMe acceptance (P18+).
+player memory, silent `/time` fallback, restart persistence via
+`playerdata/<uuid>.dat`). Known gaps carried forward, not
+hidden: creeper fuse/explosions, dig progress (both P16); container screen
+half pending walk confirmation (P14-10, `/give chest` works around the
+tag-ingredient crafting gap); pistons, terrain richness, NVMe acceptance
+(P18+).
 
 ## Unreleased — Phase 14 (Usability & 0.2.0)
 
@@ -153,6 +155,17 @@ Four more walk findings, all fixed and redeployed:
   rejoin within the run restores position, health, inventory and mode; a
   restart still starts fresh, which the restart test pins. Full
   `playerdata/<uuid>.dat` files are the P16 item.
+
+### P14-10 — restart persistence (`playerdata/<uuid>.dat`)
+
+The walk asked for the restart half too, so the P16 item landed early:
+`leave` writes the vanilla gzip player compound beside the world (atomic
+tmp+rename, 1 MiB bomb cap, `playerdata.rs`); a rejoin loads position,
+health, inventory and mode, a stored death rejoins fresh, and a corrupt
+file warns and resets rather than bricking the join (refusing would strand
+the player with no recourse on a headless Pi). Six tests: file
+round-trip/garbage units plus restart-restore and corrupt-fresh across a
+dropped `Game` (both fail with the write or the read removed).
 
 Nine scripted clients plus the owner on HMCL, 10 concurrent for 30 minutes
 against `1f57a4c` on the Pi 5 (bind `0.0.0.0:25566`, view 8). Full record:

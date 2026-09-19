@@ -3763,6 +3763,21 @@ impl Game {
         // already ran, so the inventory stored here is complete.
         self.remembered
             .insert(session.uuid.clone(), session.player.clone());
+        // And persist it to `playerdata/<uuid>.dat` so a *restart* also
+        // restores it (P14-10 walk). A failed write warns and keeps the
+        // in-memory copy as the fallback rather than failing the leave.
+        if let Some(root) = self.playerdata_root() {
+            match session.player.to_nbt(&self.registries.items) {
+                Ok(tag) => {
+                    if let Err(error) = crate::playerdata::save(&root, &session.uuid, &tag) {
+                        warn!(id = %id, %error, "playerdata save failed; memory copy kept");
+                    }
+                }
+                Err(error) => {
+                    warn!(id = %id, %error, "playerdata encode failed; memory copy kept");
+                }
+            }
+        }
         info!(
             id = %id,
             name = %session.player.profile.name,
@@ -3800,16 +3815,36 @@ impl Game {
         // authoritative `Player` and the `player_position` packet cannot disagree.
         let (sx, sy, sz) = self.world.spawn();
         let mut at = Vec3::new(f64::from(sx) + 0.5, f64::from(sy), f64::from(sz) + 0.5);
-        // A rejoin within this run resumes where the player left (P14-09
-        // walk): the remembered state restores position, health, inventory
-        // and mode when it was alive. A dead leaver rejoins fresh at spawn,
-        // and a restart forgets everything (no playerdata files yet).
+        // `playerdata/<uuid>.dat` outranks memory: files survive restarts,
+        // memory only disconnects. A corrupt file warns here and rejoins
+        // fresh; the position peek decides where the entity spawns, so a
+        // stored position is honoured before anything else reads it.
+        let mut file_tag: Option<mc_nbt::NbtTag> = None;
+        if let Some(root) = self.playerdata_root() {
+            match crate::playerdata::load(&root, &profile.id.to_string()) {
+                Ok(tag) => {
+                    if let Some(ref tag) = tag
+                        && let Some(pos) = crate::playerdata::peek_pos(tag)
+                    {
+                        at = pos;
+                    }
+                    file_tag = tag;
+                }
+                Err(error) => {
+                    warn!(id = %id, %error, "corrupt playerdata; starting fresh");
+                }
+            }
+        }
+        // The in-memory copy covers disconnects whose file write failed;
+        // the file above already decided `at`.
         let restored = self
             .remembered
             .get(&profile.id.to_string())
             .filter(|former| former.is_alive())
             .cloned();
-        if let Some(ref former) = restored {
+        if file_tag.is_none()
+            && let Some(ref former) = restored
+        {
             at = to_world(former.position);
         }
         // The entity store allocates the id, so it is unique across every entity in
@@ -3821,23 +3856,59 @@ impl Game {
         };
         let entity_id = entity.get();
 
-        let mut player = Player::new(
-            prepared.profile,
-            entity_id,
-            "minecraft:overworld",
-            prepared.inventory,
-        );
-        player.position = to_entity(at);
-        player.game_mode = GameMode::Survival;
-        if let Some(former) = restored {
-            // The menu below mirrors this inventory, and the position packet
-            // below reports `at`, so restoring here keeps every copy honest.
-            player.yaw = former.yaw;
-            player.pitch = former.pitch;
-            player.health = former.health;
-            player.food = former.food;
-            player.inventory = former.inventory;
-            player.game_mode = former.game_mode;
+        // A stored file rebuilds the whole player (position, health, inventory,
+        // mode); a stored death rejoins fresh at spawn. Otherwise the fresh
+        // player below, with the in-memory restore after it.
+        let from_file = file_tag.is_some();
+        let mut player = match file_tag {
+            Some(tag) => {
+                match Player::from_nbt(
+                    &tag,
+                    prepared.profile.clone(),
+                    entity_id,
+                    &self.registries.items,
+                ) {
+                    Ok(loaded) if loaded.health > 0.0 => loaded,
+                    Ok(_) => {
+                        debug!(id = %id, "stored death rejoins fresh at spawn");
+                        Player::new(
+                            prepared.profile,
+                            entity_id,
+                            "minecraft:overworld",
+                            prepared.inventory,
+                        )
+                    }
+                    Err(error) => {
+                        warn!(id = %id, %error, "playerdata decode failed; starting fresh");
+                        Player::new(
+                            prepared.profile,
+                            entity_id,
+                            "minecraft:overworld",
+                            prepared.inventory,
+                        )
+                    }
+                }
+            }
+            None => Player::new(
+                prepared.profile,
+                entity_id,
+                "minecraft:overworld",
+                prepared.inventory,
+            ),
+        };
+        if !from_file {
+            player.position = to_entity(at);
+            player.game_mode = GameMode::Survival;
+            if let Some(former) = restored {
+                // The menu below mirrors this inventory, and the position packet
+                // below reports `at`, so restoring here keeps every copy honest.
+                player.yaw = former.yaw;
+                player.pitch = former.pitch;
+                player.health = former.health;
+                player.food = former.food;
+                player.inventory = former.inventory;
+                player.game_mode = former.game_mode;
+            }
         }
 
         // The menu is the authority for item placement, so it is built here and the
@@ -4286,6 +4357,15 @@ impl Game {
     /// persist rather than failing.
     pub fn set_ops_directory(&mut self, directory: std::path::PathBuf) {
         self.ops_directory = Some(directory);
+    }
+
+    /// World root for `playerdata/<uuid>.dat`, or `None` when this game has
+    /// no storage (some unit harnesses): without a world directory there is
+    /// nowhere to write, and the in-memory copy is the whole story.
+    fn playerdata_root(&self) -> Option<std::path::PathBuf> {
+        self.storage
+            .as_ref()
+            .map(|service| service.root().to_path_buf())
     }
 
     /// Grant `target` operator status at `level`, persisting `ops.json` (P14-02).

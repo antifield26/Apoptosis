@@ -22,5 +22,6 @@ pub mod logging;
 pub mod metrics;
 pub mod ops;
 pub mod packs;
+pub mod playerdata;
 pub mod spawn;
 pub mod storage;

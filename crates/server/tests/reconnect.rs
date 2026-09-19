@@ -22,7 +22,7 @@ struct Harness {
     game: Game,
     events: tokio::sync::mpsc::Sender<ClientEvent>,
     ids: ConnectionIds,
-    _storage: WorldService,
+    _storage: Option<WorldService>,
     dir: TempDir,
 }
 
@@ -40,7 +40,31 @@ impl Harness {
             game,
             events: tx,
             ids: ConnectionIds::new(),
-            _storage: storage,
+            _storage: Some(storage),
+            dir,
+        }
+    }
+
+    /// A harness whose game **owns** its storage handle (the production
+    /// shape): only then does the game know a world directory for
+    /// `playerdata/<uuid>.dat`. The borrowed `new` keeps no reference by
+    /// design, so file-persistence tests must use this one.
+    fn new_owned(tag: &str) -> Self {
+        let dir = TempDir::new(tag);
+        let config = mc_server::config::StorageConfig {
+            world_dir: dir.path().join("world"),
+            autosave_ticks: 0,
+        };
+        let storage = WorldService::open(&config).expect("world opens");
+        let (tx, rx) = game_channel(256);
+        let game =
+            Game::with_seed_and_storage(storage, 4, rx, mc_server::game::DEFAULT_RANDOM_SEED)
+                .expect("game builds");
+        Self {
+            game,
+            events: tx,
+            ids: ConnectionIds::new(),
+            _storage: None,
             dir,
         }
     }
@@ -198,5 +222,115 @@ fn rejoin_restores_where_the_player_left() {
         player.inventory.slot(3).count(),
         5,
         "rejoin restores the inventory"
+    );
+}
+
+/// A restart restores the player from `playerdata/<uuid>.dat` (P14-10 walk):
+/// leave writes the file, a fresh `Game` on the same directory reads it back.
+/// The in-memory copy cannot cross this boundary by construction, so this is
+/// the file's test, not the map's.
+#[test]
+fn restart_restores_the_player_from_the_playerdata_file() {
+    let mut harness = Harness::new_owned("p14-playerdata");
+    let (id, _out) = harness.join("Homer");
+    let dirt = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:dirt")
+        .expect("dirt item");
+    {
+        let player = harness.game.player_mut(id).expect("player");
+        player.position = mc_entity::player::Vec3::new(100.5, 70.0, -40.5);
+        player.health = 8.0;
+        player
+            .inventory
+            .set_slot(3, mc_entity::stack::ItemStack::new(dirt, 5).expect("stack"))
+            .expect("slot 3");
+    }
+    harness.leave(id);
+    let profile = mc_network::auth::offline_profile("Homer");
+    let dat = harness
+        .dir
+        .path()
+        .join("world")
+        .join("playerdata")
+        .join(format!("{}.dat", profile.id));
+    assert!(
+        dat.is_file(),
+        "leave must write playerdata/<uuid>.dat, missing {dat:?}"
+    );
+
+    // Full restart: drop the game (and its memory) the way a process exit
+    // does, keep the directory, reopen, rejoin.
+    let Harness { dir, .. } = harness;
+    let world_dir = dir.path().join("world");
+    let service = WorldService::open(&mc_server::config::StorageConfig {
+        world_dir: world_dir.clone(),
+        autosave_ticks: 0,
+    })
+    .expect("world reopens");
+    let (tx, rx) = game_channel(256);
+    let mut game2 =
+        Game::with_seed_and_storage(service, 3, rx, mc_server::game::DEFAULT_RANDOM_SEED)
+            .expect("game builds");
+    let ids = ConnectionIds::new();
+    let id2 = ids.next_id();
+    let (outbound, _out2) = OutboundSender::pair(id2, 8192);
+    tx.try_send(ClientEvent {
+        id: id2,
+        kind: ClientEventKind::Joined {
+            profile: mc_network::auth::offline_profile("Homer"),
+            outbound,
+        },
+    })
+    .expect("rejoin queued");
+    for _ in 0..40 {
+        game2.tick().expect("tick");
+        if game2.player_count() > 0 {
+            break;
+        }
+    }
+    let player = game2.player(id2).expect("player");
+    assert!(
+        (player.position.x - 100.5).abs() < 1e-6
+            && (player.position.y - 70.0).abs() < 1e-6
+            && (player.position.z + 40.5).abs() < 1e-6,
+        "a restart restores the leave position, got {:?}",
+        player.position
+    );
+    assert!(
+        (player.health - 8.0).abs() < f32::EPSILON,
+        "a restart restores health"
+    );
+    assert_eq!(
+        player.inventory.slot(3).count(),
+        5,
+        "a restart restores the inventory"
+    );
+}
+
+/// A corrupt playerdata file rejoins fresh at spawn (P14-10 walk): refusing
+/// the join would strand the player with no recourse on a headless Pi, so
+/// corruption warns and resets rather than bricks.
+#[test]
+fn corrupt_playerdata_rejoins_fresh() {
+    let mut harness = Harness::new("p14-playerdata-corrupt");
+    let profile = mc_network::auth::offline_profile("Homer");
+    let dir = harness.dir.path().join("world").join("playerdata");
+    std::fs::create_dir_all(&dir).expect("playerdata dir");
+    std::fs::write(dir.join(format!("{}.dat", profile.id)), b"nope").expect("garbage");
+
+    let (id, _out) = harness.join("Homer");
+    let player = harness.game.player(id).expect("player");
+    let (sx, _, _) = harness.game.spawn();
+    assert!(
+        (player.position.x - (f64::from(sx) + 0.5)).abs() < 1e-6,
+        "a corrupt file rejoins at spawn, got {:?}",
+        player.position
+    );
+    assert!(
+        (player.health - 20.0).abs() < f32::EPSILON,
+        "a corrupt file restores full health"
     );
 }
