@@ -19,15 +19,16 @@ Raspberry Pi 5 with a real Java 26.1.2 client: mixed 10-client soak (P14-06,
 pass with one noted idle spike), then the verification walk (P14-09) — far
 chunks stream, far respawns land, packless breaks drop, pickups decode,
 death respawns past the loading screen, `/time` moves the sky, placements
-consume in place, disconnects remember the player. Nine walk findings fixed
+consume in place, disconnects remember the player, rejoins keep the look
+direction and render the inventory at once, restarts restore the full player
+from `playerdata/<uuid>.dat`. Eleven walk findings fixed
 in this release (loot-seed wipe, Slot codec order, VarInt container ids,
 respawn level-load event, clock-map shape/keys/rhythm, hotbar migrate,
 player memory, silent `/time` fallback, restart persistence via
-`playerdata/<uuid>.dat`). Known gaps carried forward, not
-hidden: creeper fuse/explosions, dig progress (both P16); container screen
-half pending walk confirmation (P14-10, `/give chest` works around the
-tag-ingredient crafting gap); pistons, terrain richness, NVMe acceptance
-(P18+).
+`playerdata/<uuid>.dat`, join inventory sync, join look restore). Known gaps carried forward, not
+hidden: creeper fuse/explosions, dig progress (both P16); crafting-table
+window and grid sync robustness, chest post-restart render (P17-02);
+pistons, terrain richness, NVMe acceptance (P18+).
 
 ## Unreleased — Phase 14 (Usability & 0.2.0)
 
