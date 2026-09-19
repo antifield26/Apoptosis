@@ -196,7 +196,7 @@ dependencies = [
 
 [[package]]
 name = "mc-capture-rig"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flate2",
  "mc-protocol",
@@ -211,7 +211,7 @@ dependencies = [
 
 [[package]]
 name = "mc-command"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mc-core",
  "mc-test-support",
@@ -220,7 +220,7 @@ dependencies = [
 
 [[package]]
 name = "mc-container"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mc-core",
  "mc-data",
@@ -232,14 +232,14 @@ dependencies = [
 
 [[package]]
 name = "mc-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "mc-data"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flate2",
  "mc-core",
@@ -252,7 +252,7 @@ dependencies = [
 
 [[package]]
 name = "mc-entity"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mc-core",
  "mc-nbt",
@@ -265,7 +265,7 @@ dependencies = [
 
 [[package]]
 name = "mc-nbt"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mc-core",
  "mc-test-support",
@@ -273,7 +273,7 @@ dependencies = [
 
 [[package]]
 name = "mc-network"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mc-core",
  "mc-protocol",
@@ -287,7 +287,7 @@ dependencies = [
 
 [[package]]
 name = "mc-persistence"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flate2",
  "mc-core",
@@ -298,7 +298,7 @@ dependencies = [
 
 [[package]]
 name = "mc-protocol"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "flate2",
  "mc-core",
@@ -311,7 +311,7 @@ dependencies = [
 
 [[package]]
 name = "mc-redstone"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mc-core",
  "mc-persistence",
@@ -322,7 +322,7 @@ dependencies = [
 
 [[package]]
 name = "mc-registry"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mc-core",
  "mc-test-support",
@@ -331,7 +331,7 @@ dependencies = [
 
 [[package]]
 name = "mc-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mc-command",
  "mc-container",
@@ -360,7 +360,7 @@ dependencies = [
 
 [[package]]
 name = "mc-server-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mc-core",
  "mc-server",
@@ -370,7 +370,7 @@ dependencies = [
 
 [[package]]
 name = "mc-simulation"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mc-core",
  "mc-test-support",
@@ -379,7 +379,7 @@ dependencies = [
 
 [[package]]
 name = "mc-test-support"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mc-core",
  "mc-protocol",
@@ -390,7 +390,7 @@ dependencies = [
 
 [[package]]
 name = "mc-world"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mc-core",
  "mc-nbt",
@@ -402,7 +402,7 @@ dependencies = [
 
 [[package]]
 name = "mc-worldgen"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "mc-core",
  "mc-nbt",

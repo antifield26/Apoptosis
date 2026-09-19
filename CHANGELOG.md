@@ -7,9 +7,25 @@ git history —the pre-governance snapshot (which still contains them as files)
 is the tag **`phase-09-final`** (`git show phase-09-final:docs/phases/…`).
 
 Format follows [Keep a Changelog](https://keepachangelog.com/) in spirit. The first
-entry is the release candidate matching the workspace version (`0.1.0` in
-[Cargo.toml](Cargo.toml)); it is **published** as tag `v0.1.0-rc.1` with built
-artifacts, and no later version has been released.
+entry is the release candidate matching the workspace version at the time
+(`0.1.0` in [Cargo.toml](Cargo.toml)); it is **published** as tag `v0.1.0-rc.1`
+with built artifacts. The current workspace version is `0.2.0`, published as
+tag `v0.2.0` (see below); no later version has been released.
+
+## [0.2.0] — 2026-09-19 (tag `v0.2.0`)
+
+Verification release for the P14 usable milestone, walked end to end on a
+Raspberry Pi 5 with a real Java 26.1.2 client: mixed 10-client soak (P14-06,
+pass with one noted idle spike), then the verification walk (P14-09) — far
+chunks stream, far respawns land, packless breaks drop, pickups decode,
+death respawns past the loading screen, `/time` moves the sky, placements
+consume in place, disconnects remember the player. Nine walk findings fixed
+in this release (loot-seed wipe, Slot codec order, VarInt container ids,
+respawn level-load event, clock-map shape/keys/rhythm, hotbar migrate,
+player memory, silent `/time` fallback). Known gaps carried forward, not
+hidden: creeper fuse/explosions, dig progress, full `playerdata/<uuid>.dat`
+files (all P16); container and restart screen halves pending final
+confirmation (P14-10); pistons, terrain richness, NVMe acceptance (P18+).
 
 ## Unreleased — Phase 14 (Usability & 0.2.0)
 
