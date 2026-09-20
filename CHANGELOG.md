@@ -14,6 +14,30 @@ tag `v0.2.0` (see below); no later version has been released.
 
 ## Unreleased — Phase 15 (Observability + Core Hardening)
 
+### P15-03 — `game.rs` split into `game/{session,tick,persist}`
+
+The 7.8k-line `Game` module is now four files (`mod` 2189 / `session` 2353 /
+`tick` 2585 / `persist` 761): session types plus join/leave/intent, ops
+grants, admin mutations, menus and movement intents; the tick, all six
+phases, entity simulation, broadcast, streaming and the `PhaseRunner` impl;
+storage handles, chunk/entity serialization, chunk load paths and the save
+trio. Three commits (session, tick, persist), each behind the full gate plus
+its falsification suites — zero behavior change by construction, and the
+construction was checked: every cut tiled exactly (kept+moved reconstructs
+the original byte-for-byte), every moved method is present once in its new
+file and absent from the old, every stayer kept.
+
+Two instruments earned their keep during the split. A `//`-comment
+docwalk rule silently overlapped 36 cut ranges and deleted a method header
+(`flip_lever`, caught by a placement spot-check before any commit); the rule
+is now blank-anchored with overlap and tiling assertions. And a use-block
+copier swept `pub(crate) fn send<T>` along with its neighbour (generics-blind
+method scan); placement is now asserted in both directions. Mechanical deltas
+only: `Session`-family fields and 11 cross-called methods widened to
+`pub(crate)`; `SessionView` takes by-value `self` (Copy view type — clippy
+`trivially_copy_pass_by_ref` fires in the new module). Gate holds at
+1452/0/34/113 throughout; no test count moves because no behavior moved.
+
 ### P15-01 — overrun windows name their worst phase
 
 The 15:07 spike taught that aggregate MSPT cannot attribute an overrun, so
