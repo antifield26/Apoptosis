@@ -14,6 +14,45 @@ tag `v0.2.0` (see below); no later version has been released.
 
 ## Unreleased — Phase 15 (Observability + Core Hardening)
 
+### P15-06 — Typed errors, one `Vec3`, one error mechanism
+
+Three steps, each behind its gate. **A** removes the two hot-path
+`expect("session")` from container handling: the close-flush surfaces a
+vanished session as `ServerError::Invariant` (proven present lines above, so
+absence is a desync bug, not a routine case); the click-flush — in a `()`
+function — skips when the menu is already gone, which is also the correct
+behaviour since there is nothing left to write back. **B** unifies on
+`world::Vec3`: the type gains `ZERO`/`length`/`distance` with semantics
+copied exactly (including the `hypot` chain order), `mc-entity`'s duplicate
+is deleted, and the field-move converters in `hitbox` plus the
+`to_entity`/`to_world` boundary pair collapse to direct passes (net −88
+lines). The entity→world dependency already existed for `Aabb`, and two
+docs had anticipated the `mc_core::random` path the same way — both moves
+only made the tree honest. **C** puts all 12 error enums on `thiserror`
+(command ×4, data ×4, network ×1, worldgen ×3): `source()` chains
+(`FunctionError`/`JsonError` IO arms) are auto-derived rather than dropped,
+delegating variants (`PackError::BadMetadata`, `ProviderError::Generate`)
+keep no-source behaviour via field naming, and the one real cross-crate
+boundary — `JsonError` into `ServerError` — becomes
+`From<JsonError>` in `mc-data` (orphan rule leaves no other home),
+retiring the hand-rolled `corrupt()` in `ops.rs` with its
+Io→Operational / else→CorruptData classification intact. Command errors
+deliberately get no `From`: they surface through `CommandOutcome` into
+chat, and inventing a ServerError path for them would be speculative
+abstraction. `LimitError` is the one exception to byte-identical messages:
+it never had a `Display` at all, so its three strings are new, written to
+match the variant docs.
+
+The instrument for C is 13 message-stability tests (one per enum, three
+for `StructureError` to respect the 100-line function lint): written
+against the old code and green before the rewrite, green after — the
+transcription and the migration prove each other. `LimitError`'s test
+could not even compile pre-migration, which is its own falsification.
+Two lint lessons: `#[error]` needs explicit attributes on every variant
+(thiserror 2.x will not invent `Display`), and new items must land before
+inline `mod tests` (clippy `items_after_test_module`). Gate moves 1452 ->
+1468, exactly the 16 new stability tests; suites hold at 113.
+
 ### P15-05 — `packing` and `RandomSource` sink into `mc-core`
 
 Two leaf-ward moves, each shipped alone behind the full gate. `packing`
