@@ -5,11 +5,11 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 477 passed, 0 failed, 34 ignored** across **115 suites**, re-derived from
+Totals: **1 491 passed, 0 failed, 34 ignored** across **115 suites**, re-derived from
 `cargo test --workspace --no-fail-fast` on the current tree (`python
 tools/gates/run.py --quick`: every gate passed). The count has
 moved 1 194 -> 1 196 -> 1 206 -> 1 207 -> 1 212 -> 1 325 -> 1 344 -> 1 346 -> 1 358 ->
-1 365 -> 1 380 -> 1 384 -> 1 386 -> 1 388 -> 1 389 -> 1 392 -> 1 399 -> 1 412 -> 1 426 -> 1 428 -> 1 431 -> 1 433 -> 1 437 -> 1 440 -> 1 441 -> 1 445 -> 1 451 -> 1 452 -> 1 468 -> 1 475 -> **1 477**: three from the Audit 07 remediation, two Audit 08 coverage tests, ten from the
+1 365 -> 1 380 -> 1 384 -> 1 386 -> 1 388 -> 1 389 -> 1 392 -> 1 399 -> 1 412 -> 1 426 -> 1 428 -> 1 431 -> 1 433 -> 1 437 -> 1 440 -> 1 441 -> 1 445 -> 1 451 -> 1 452 -> 1 468 -> 1 475 -> 1 477 -> **1 491**: three from the Audit 07 remediation, two Audit 08 coverage tests, ten from the
 `mc-capture-rig` crate (P10-01), one regression test for the
 compression-transition defect (P10-02), the synced-registry work (P10-03), then
 P10-04..11 and P11-01..03, nineteen from the P11-04..09 landing, two from
@@ -81,7 +81,12 @@ from P15-07**: the region commit-order test (fails when the location word
 moves before the payload), the NBT hetero-list refusal, three fixture-env
 subprocess tests, the capture sweep, and the cow sound-variant golden, and
 **two from AUDIT-15 remediation**: the serverbound-close 128 case and the
-LpVec3 canonical 3-case (the cow exact pin adds asserts to an existing test).
+LpVec3 canonical 3-case (the cow exact pin adds asserts to an existing test),
+and **fourteen from P16-01**: seven combat numbers (sources, absorb shape,
+weapon/armour tables, reach hook, held damage, worn stats), three knockback
+(away, halve, facing fallback), one armour-bypass (melee vs falls vs
+starvation), one sword integration, one shove integration and one iron-suit
+integration.
 The 34 ignored = the 8 differential
 suites in the last section (16 tests) + `vanilla_loot` 3 + `vanilla_chunk_light` 2
 + `vanilla_light_differential` 1 + `light_update_trigger` 1 + `sky_light_surface` 2

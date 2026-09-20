@@ -12,6 +12,26 @@ entry is the release candidate matching the workspace version at the time
 with built artifacts. The current workspace version is `0.2.0`, published as
 tag `v0.2.0` (see below); no later version has been released.
 
+## Unreleased — Phase 16 (Combat & the Survival Loop)
+
+### P16-01 — Damage model: held weapons, armour, types, knockback, reach hook
+
+Swings deal the held weapon's attribute bonus over the 1.0 fist (diamond
+sword 7.0, pinned against a cow); armour absorbs per `CombatRules`
+(20-point cap, toughness, 25-way split) with fall and starvation bypassing
+per the vanilla tag lists; melee knocks mobs at the 0.4 base with
+knockback resistance, halved old motion and the grounded pop; the reach
+gate adds the item's `attack_range` hook (default zero for every item until
+components land — the gate is byte-for-byte today's). Damage is typed
+(`PlayerAttack`/`MobAttack`/`Fall`/`Starvation`); i-frame windows are
+untouched. Deliberately deferred with named reasons: enchantment combat
+math, absorption, fire/drowning/void sources, player knockback (needs the
+entity-velocity send path), per-item reach values, arrow/explosion types
+(arrive with P16-04's bow/fuse wiring). Evidence: pumpkin generated item
+data (weapon/armour attributes), generated damage-type tags
+(bypass lists), `living.rs` hurt-path knockback, `combat.rs` formulas and
+the `AttackRangeImpl` schema. Gate 1491/0/34/115.
+
 ## Unreleased — Phase 15 (Observability + Core Hardening)
 
 ### P15-08 — Hardening review sign-off (all clauses re-evidenced)
