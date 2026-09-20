@@ -156,8 +156,7 @@ impl Harness {
     /// Put the player's **feet** at `(x, y, z)` exactly, so the eye lands at
     /// `y + EYE` and the distance to a block is arithmetic rather than guesswork.
     fn place_player(&mut self, x: f64, y: f64, z: f64) {
-        self.game.player_mut(self.id).expect("player").position =
-            mc_entity::player::Vec3::new(x, y, z);
+        self.game.player_mut(self.id).expect("player").position = mc_world::Vec3::new(x, y, z);
     }
 
     /// Lay a course of stone at height `y` along `+x`, with the space above cleared,
@@ -214,7 +213,7 @@ impl Harness {
     fn summon(&mut self, kind: MobKind, x: f64, y: f64, z: f64) -> i32 {
         let id = self
             .game
-            .spawn_mob(kind, mc_entity::player::Vec3::new(x, y, z))
+            .spawn_mob(kind, mc_world::Vec3::new(x, y, z))
             .expect("the mob spawns");
         id.get()
     }

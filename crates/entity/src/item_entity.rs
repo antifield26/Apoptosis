@@ -55,8 +55,8 @@
 //!   engine keys entities by [`EntityId`], so the ids are what is stored.
 
 use crate::entity::EntityId;
-use crate::player::Vec3;
 use crate::stack::ItemStack;
+use mc_world::Vec3;
 
 /// Downward velocity added to an item every tick, in blocks per tick squared.
 ///
@@ -334,8 +334,8 @@ mod tests {
         MAX_COMPONENT, PICKUP_DELAY_TICKS,
     };
     use crate::entity::EntityId;
-    use crate::player::Vec3;
     use crate::stack::ItemStack;
+    use mc_world::Vec3;
 
     /// Physics tolerance: velocities are in blocks/tick and a tick is 50 ms, so
     /// `1e-9` is far below the smallest displacement that can matter.

@@ -29,8 +29,8 @@
 //! while the server runs, so a client can never see a stale id refer to a new
 //! entity — the classic source of visual ghosts.
 
-use crate::player::Vec3;
 use mc_core::error::{ServerError, ServerResult};
+use mc_world::Vec3;
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
@@ -224,26 +224,16 @@ impl Entity {
     #[must_use]
     pub fn hitbox(&self) -> mc_world::Aabb {
         match &self.body {
-            EntityBody::Player => mc_world::Aabb::player(mc_world::Vec3::new(
-                self.position.x,
-                self.position.y,
-                self.position.z,
-            )),
+            EntityBody::Player => mc_world::Aabb::player(self.position),
             // Items and projectiles are small cubes in this baseline: Vanilla
             // uses 0.25 for both, and neither is ever a collision partner for a
             // player in Phase 05, so one arm covers them.
-            EntityBody::Item(_) | EntityBody::Projectile(_) => mc_world::Aabb::sized(
-                mc_world::Vec3::new(self.position.x, self.position.y, self.position.z),
-                0.25,
-                0.25,
-            ),
+            EntityBody::Item(_) | EntityBody::Projectile(_) => {
+                mc_world::Aabb::sized(self.position, 0.25, 0.25)
+            }
             EntityBody::Mob(mob) => {
                 let (width, height) = mob.kind.dimensions();
-                mc_world::Aabb::sized(
-                    mc_world::Vec3::new(self.position.x, self.position.y, self.position.z),
-                    f64::from(width),
-                    f64::from(height),
-                )
+                mc_world::Aabb::sized(self.position, f64::from(width), f64::from(height))
             }
         }
     }
@@ -513,7 +503,7 @@ pub const MAX_ENTITIES: usize = 8192;
 mod tests {
     use super::{EntityBody, EntityId, EntityKind, EntityStore, MAX_ENTITIES};
     use crate::mob::{Mob, MobKind};
-    use crate::player::Vec3;
+    use mc_world::Vec3;
 
     fn store_with_mobs(count: usize) -> EntityStore {
         let mut store = EntityStore::new();

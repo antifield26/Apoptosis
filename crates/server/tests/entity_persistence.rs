@@ -147,7 +147,7 @@ fn a_saved_chunk_returns_its_mobs_and_its_drops_to_the_next_game() {
         .set_block(bx, by + 4, bz, stone)
         .expect("the marker block is set");
 
-    let zombie_at = mc_entity::player::Vec3::new(
+    let zombie_at = mc_world::Vec3::new(
         f64::from(bx) + 3.5,
         f64::from(by) + 4.0,
         f64::from(bz) + 3.5,
@@ -257,7 +257,7 @@ fn a_joining_player_is_told_about_a_resident_entity_on_the_join_tick() {
         .expect("marker");
     // At the chunk's own centre, so it is in the chunk the joining player's
     // spawn point is in however the seed happens to place that point.
-    let cow_at = mc_entity::player::Vec3::new(
+    let cow_at = mc_world::Vec3::new(
         f64::from(chunk.x * 16 + 8),
         f64::from(by) + 3.0,
         f64::from(chunk.z * 16 + 8),

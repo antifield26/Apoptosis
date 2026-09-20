@@ -37,6 +37,25 @@ impl Vec3 {
         Self { x, y, z }
     }
 
+    /// The origin.
+    pub const ZERO: Self = Self {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+    };
+
+    /// Euclidean length of this vector.
+    #[must_use]
+    pub fn length(self) -> f64 {
+        self.x.hypot(self.y).hypot(self.z)
+    }
+
+    /// Euclidean distance to `other`.
+    #[must_use]
+    pub fn distance(self, other: Self) -> f64 {
+        self.minus(other).length()
+    }
+
     /// Component-wise sum.
     #[must_use]
     pub fn plus(self, other: Self) -> Self {

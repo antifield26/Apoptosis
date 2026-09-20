@@ -565,7 +565,7 @@ fn placement_consumes_in_the_held_slot() {
         // at (sx+1) puts the block at (sx+1, sy, sz), and the placer may not
         // intersect it.
         player.position =
-            mc_entity::player::Vec3::new(f64::from(sx) + 4.5, f64::from(sy), f64::from(sz) + 0.5);
+            mc_world::Vec3::new(f64::from(sx) + 4.5, f64::from(sy), f64::from(sz) + 0.5);
     }
 
     harness.intent(PlayIntent::UseItemOn {

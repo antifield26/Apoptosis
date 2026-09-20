@@ -26,7 +26,6 @@
 )]
 
 use mc_entity::entity::{EntityBody, EntityKind};
-use mc_entity::player::Vec3 as EntityVec3;
 use mc_entity::stack::ItemStack;
 use mc_network::bridge::{
     ClientEvent, ClientEventKind, ConnectionId, InboundReceiver, OutboundSender, game_channel,
@@ -38,6 +37,7 @@ use mc_server::game::{Game, TickReport};
 use mc_server::storage::WorldService;
 use mc_simulation::TickPhase;
 use mc_test_support::fixtures::TempDir;
+use mc_world::Vec3 as EntityVec3;
 use mc_world::chunk::Chunk;
 use mc_world::{ChunkPos, OVERWORLD_MIN_SECTION_Y, OVERWORLD_SECTION_COUNT};
 use std::time::Duration;

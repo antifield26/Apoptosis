@@ -145,7 +145,7 @@ impl Harness {
         self.game
             .player_mut(self.id)
             .expect("a joined player")
-            .position = mc_entity::player::Vec3::new(x, y, z);
+            .position = mc_world::Vec3::new(x, y, z);
     }
 
     fn run(&mut self, ticks: usize) {
@@ -194,7 +194,7 @@ fn stage_chase(harness: &mut Harness, px: i32, py: i32, pz: i32) -> i32 {
         .game
         .spawn_mob(
             MobKind::Zombie,
-            mc_entity::player::Vec3::new(
+            mc_world::Vec3::new(
                 f64::from(px - START_OFFSET) + 0.5,
                 f64::from(py),
                 f64::from(pz) + 0.5,

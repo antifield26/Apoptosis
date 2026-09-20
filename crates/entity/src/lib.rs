@@ -10,7 +10,7 @@
 //! | [`stack`] | [`ItemStack`] and the resolved vanilla stack-size table |
 //! | [`inventory`] | [`PlayerInventory`]: 41 stored slots, hands, container payload |
 //! | [`profile`] | [`GameProfile`]: the identity player state is keyed by |
-//! | [`player`] | [`Player`], [`GameMode`], [`Vec3`], damage/food/experience, `playerdata` |
+//! | [`player`] | [`Player`], [`GameMode`], damage/food/experience, `playerdata` |
 //! | [`item_entity`] | [`ItemEntity`]: a dropped [`ItemStack`], its timers and its pure physics |
 //! | [`projectile`] | [`Projectile`], [`ProjectileKind`]: the arrow/snowball trajectory baseline |
 //! | [`entity`] | [`EntityId`], [`EntityKind`], [`EntityBody`], [`Entity`], [`EntityStore`] |
@@ -48,8 +48,8 @@
 //! This crate depends on `mc-core`, `mc-world`, `mc-nbt` and `mc-registry`. It
 //! deliberately does **not** depend on `mc-network` (which also defines a
 //! `GameProfile`), `mc-persistence` or `mc-protocol`: the simulation layer must
-//! not pull in Tokio, sockets or the disk format. The duplicated primitives are
-//! documented in [`player::Vec3`] and [`profile`].
+//! not pull in Tokio, sockets or the disk format. Position vectors come from
+//! [`mc_world::Vec3`]; the player-specific primitives are documented in [`profile`].
 //!
 //! The `mc-world` dependency is one-directional (world never depends on entity)
 //! and exists so the project has exactly **one** `Aabb` and one collision solver:
@@ -146,7 +146,7 @@ pub use mob::{
 pub use pathfind::{BlockView, SearchLimits, SearchStats, find_path, find_path_with_stats};
 pub use player::{
     DamageOutcome, EXHAUSTION_PER_POINT, GameMode, MAX_FOOD, MAX_HEALTH, MAX_SATURATION, Player,
-    REGEN_FOOD_THRESHOLD, STARVATION_DAMAGE, Vec3,
+    REGEN_FOOD_THRESHOLD, STARVATION_DAMAGE,
 };
 pub use profile::{GameProfile, validate_username};
 pub use projectile::{MAX_LIFETIME_ARROW, MAX_LIFETIME_SNOWBALL, Projectile, ProjectileKind};

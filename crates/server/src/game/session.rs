@@ -31,7 +31,7 @@ use super::{
     NO_BLOCK_CHANGE_SEQUENCE, OpenKind, TickReport, block_reach, chunk_of, entity_reach,
     face_offset, floor_to_i32, is_container_block, mark_block_dirty, mirror_inventory,
     open_kind_for, recompute_crafting_result, refuse_join, take_craft_result, targets_a_block,
-    to_entity, to_world, wire_stack, write_back_block, write_back_inventory,
+    wire_stack, write_back_block, write_back_inventory,
 };
 
 /// One connected player's server-side state.
@@ -129,7 +129,7 @@ pub(crate) struct Session {
 
 impl Session {
     pub(crate) fn aabb(&self) -> Aabb {
-        Aabb::player(to_world(self.player.position))
+        Aabb::player(self.player.position)
     }
 
     /// The chunk this player currently stands in.
@@ -332,11 +332,11 @@ impl Game {
         if file_tag.is_none()
             && let Some(ref former) = restored
         {
-            at = to_world(former.position);
+            at = former.position;
         }
         // The entity store allocates the id, so it is unique across every entity in
         // the dimension and never reused — the property the wire protocol needs.
-        let Ok(entity) = self.entities.spawn(EntityBody::Player, to_entity(at)) else {
+        let Ok(entity) = self.entities.spawn(EntityBody::Player, at) else {
             warn!(id = %id, "refused a join: the entity store is full");
             refuse_join(&outbound, "Server entity limit reached");
             return Ok(());
@@ -384,7 +384,7 @@ impl Game {
             ),
         };
         if !from_file {
-            player.position = to_entity(at);
+            player.position = at;
             player.game_mode = GameMode::Survival;
             if let Some(former) = restored {
                 // The menu below mirrors this inventory, and the position packet
@@ -808,8 +808,8 @@ impl Game {
                     let position = self
                         .sessions
                         .get(&id)
-                        .map_or(mc_entity::player::Vec3::default(), |s| s.player.position);
-                    let _ = self.spawn_item(leftover, to_world(position));
+                        .map_or(mc_world::Vec3::default(), |s| s.player.position);
+                    let _ = self.spawn_item(leftover, position);
                 }
                 // Restore the player menu.
                 match self.new_player_menu() {
@@ -1037,8 +1037,8 @@ impl Game {
             let position = self
                 .sessions
                 .get(&id)
-                .map_or(mc_entity::player::Vec3::default(), |s| s.player.position);
-            let _ = self.spawn_item(leftover, to_world(position));
+                .map_or(mc_world::Vec3::default(), |s| s.player.position);
+            let _ = self.spawn_item(leftover, position);
         }
         Some((count - dropped, dropped))
     }
@@ -1176,7 +1176,7 @@ impl Game {
         let resolved = self.world.find_surface(x, z, y).map_or(target, |surface| {
             Vec3::new(f64::from(x) + 0.5, f64::from(surface), f64::from(z) + 0.5)
         });
-        session.player.position = mc_entity::player::Vec3::new(resolved.x, resolved.y, resolved.z);
+        session.player.position = mc_world::Vec3::new(resolved.x, resolved.y, resolved.z);
         session.player.on_ground = false;
         session.tick_start_y = resolved.y;
         // Terrain may not be streamed for the destination yet; `stream_for` picks it up
@@ -1708,12 +1708,9 @@ impl Game {
             let position = self
                 .sessions
                 .get(&id)
-                .map_or(mc_entity::player::Vec3::default(), |session| {
-                    session.player.position
-                });
+                .map_or(mc_world::Vec3::default(), |session| session.player.position);
             // A thrown item appears just in front of the thrower's feet, which is
             // where Vanilla drops it from.
-            let position = to_world(position);
             for stack in &outcome.dropped {
                 if let Err(error) = self.spawn_item(*stack, position) {
                     warn!(id = %id, %error, "a dropped item could not be spawned");
@@ -1820,7 +1817,7 @@ impl Game {
             let Some(session) = self.sessions.get_mut(&id) else {
                 return;
             };
-            session.player.position = mc_entity::player::Vec3::new(applied.x, applied.y, applied.z);
+            session.player.position = mc_world::Vec3::new(applied.x, applied.y, applied.z);
             if let Some((yaw, pitch)) = rotation {
                 session.player.yaw = yaw;
                 session.player.pitch = pitch;
@@ -1858,7 +1855,7 @@ impl Game {
 
     /// Copy authoritative player state into the entity projection.
     pub(crate) fn project_player_entities(&mut self) {
-        let updates: Vec<(EntityId, mc_entity::player::Vec3, bool, f32, f32)> = self
+        let updates: Vec<(EntityId, mc_world::Vec3, bool, f32, f32)> = self
             .sessions
             .values()
             .map(|session| {
@@ -1886,7 +1883,7 @@ impl Game {
             // be a second, disagreeing source of truth. Zero is also what the
             // `player_position` packet tells the client. Knockback and server-side
             // player velocity (P05) will replace this with a real value.
-            projection.velocity = mc_entity::player::Vec3::ZERO;
+            projection.velocity = mc_world::Vec3::ZERO;
         }
     }
 
@@ -2233,11 +2230,8 @@ impl Game {
             // which this path no longer knows, and item entities for a death drop
             // land with the rest of P05-15. Stated, not implied.
             let dropped = session.player.respawn(false);
-            session.player.position = mc_entity::player::Vec3::new(
-                f64::from(sx) + 0.5,
-                f64::from(sy),
-                f64::from(sz) + 0.5,
-            );
+            session.player.position =
+                mc_world::Vec3::new(f64::from(sx) + 0.5, f64::from(sy), f64::from(sz) + 0.5);
             session.tick_start_y = f64::from(sy);
             session.sent_chunks.clear();
             (

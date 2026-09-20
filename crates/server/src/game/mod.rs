@@ -522,7 +522,7 @@ const FIST_ATTACK_DAMAGE: f32 = 1.0;
 struct GroundItem {
     id: EntityId,
     item: Option<i32>,
-    position: mc_entity::player::Vec3,
+    position: mc_world::Vec3,
     age: u64,
     ready: bool,
 }
@@ -1280,7 +1280,7 @@ impl Game {
     ///
     /// Read-only view for tests, metrics and the admin tooling; mutation goes
     /// through the tick pipeline like every other entity change.
-    pub fn mobs(&self) -> Vec<(mc_entity::mob::MobKind, mc_entity::Vec3)> {
+    pub fn mobs(&self) -> Vec<(mc_entity::mob::MobKind, mc_world::Vec3)> {
         self.entities
             .iter()
             .filter_map(|entity| {
@@ -1299,7 +1299,7 @@ impl Game {
     /// iterating the raw entity store would make every such test re-implement the
     /// `EntityBody::Item` match. Mutation still goes through the tick pipeline.
     #[must_use]
-    pub fn dropped_items(&self) -> Vec<(ItemStack, mc_entity::Vec3)> {
+    pub fn dropped_items(&self) -> Vec<(ItemStack, mc_world::Vec3)> {
         self.entities
             .iter()
             .filter_map(|entity| {
@@ -1371,10 +1371,9 @@ impl Game {
                 "refusing to spawn an item entity for an empty stack".to_owned(),
             ));
         }
-        let id = self.entities.spawn(
-            EntityBody::Item(ItemEntity::new(stack, owner)),
-            to_entity(position),
-        )?;
+        let id = self
+            .entities
+            .spawn(EntityBody::Item(ItemEntity::new(stack, owner)), position)?;
         // Announced in the Broadcast phase; see the field's docs for why not here.
         self.pending_entity_spawns.push(id);
         Ok(id)
@@ -1393,7 +1392,7 @@ impl Game {
     pub fn spawn_mob(
         &mut self,
         kind: mc_entity::mob::MobKind,
-        position: mc_entity::player::Vec3,
+        position: mc_world::Vec3,
     ) -> ServerResult<EntityId> {
         let id = self
             .entities
@@ -1952,20 +1951,6 @@ fn floor_to_i32(value: f64) -> i32 {
 /// The entity crate's vector, from the world crate's.
 ///
 /// `mc-entity` and `mc-world` each own a `Vec3` and neither may depend on the
-/// other (the dependency runs world ← entity), so the conversion belongs here —
-/// the one place that needs both. The two are structurally identical, so this is
-/// a field move.
-fn to_entity(vector: Vec3) -> mc_entity::player::Vec3 {
-    mc_entity::player::Vec3::new(vector.x, vector.y, vector.z)
-}
-
-/// The world crate's vector, from the entity crate's.
-///
-/// See [`to_entity`] for why the conversion lives at this boundary.
-fn to_world(vector: mc_entity::player::Vec3) -> Vec3 {
-    Vec3::new(vector.x, vector.y, vector.z)
-}
-
 /// The chunk a world position falls in.
 fn chunk_of(x: f64, z: f64) -> ChunkPos {
     ChunkPos::new(floor_to_i32(x) >> 4, floor_to_i32(z) >> 4)

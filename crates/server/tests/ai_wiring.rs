@@ -78,7 +78,7 @@ impl Harness {
     fn summon(&mut self, kind: &str, dx: i32, dy: i32, dz: i32) {
         let kind = mc_entity::mob::MobKind::from_name(kind).expect("a modeled kind");
         let (sx, sy, sz) = self.game.spawn();
-        let position = mc_entity::player::Vec3::new(
+        let position = mc_world::Vec3::new(
             f64::from(sx) + 0.5 + f64::from(dx),
             f64::from(sy) + f64::from(dy),
             f64::from(sz) + 0.5 + f64::from(dz),

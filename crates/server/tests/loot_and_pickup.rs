@@ -450,7 +450,7 @@ fn a_mob_death_rolls_its_entity_loot_table() {
     // radius, so the assertion below cannot be satisfied by an item that was
     // immediately collected.
     let (fx, fy, fz) = harness.feet();
-    let at = mc_entity::player::Vec3::new(f64::from(fx) + 2.5, f64::from(fy), f64::from(fz) + 0.5);
+    let at = mc_world::Vec3::new(f64::from(fx) + 2.5, f64::from(fy), f64::from(fz) + 0.5);
     let chicken = harness
         .game
         .spawn_mob(mc_entity::MobKind::Chicken, at)
@@ -472,7 +472,7 @@ fn a_mob_death_rolls_its_entity_loot_table() {
         if let Some(at) = harness.game.entity_store().get(chicken).map(|e| e.position)
             && let Some(player) = harness.game.player_mut(harness.id)
         {
-            player.position = mc_entity::player::Vec3::new(at.x - 2.0, at.y, at.z);
+            player.position = mc_world::Vec3::new(at.x - 2.0, at.y, at.z);
         }
         harness.intent(PlayIntent::Interact {
             entity: chicken.get(),

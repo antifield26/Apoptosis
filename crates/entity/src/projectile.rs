@@ -56,7 +56,7 @@
 //! vanilla figure).
 
 use crate::entity::EntityId;
-use crate::player::Vec3;
+use mc_world::Vec3;
 use std::fmt;
 
 /// Downward velocity added to a projectile every tick, in blocks per tick squared.
@@ -365,7 +365,7 @@ mod tests {
         PROJECTILE_MAX_COMPONENT, Projectile, ProjectileKind,
     };
     use crate::entity::EntityId;
-    use crate::player::Vec3;
+    use mc_world::Vec3;
 
     /// Trajectory tolerance, in blocks: `1e-9` is far below the smallest
     /// displacement that can matter at 20 TPS.

@@ -197,7 +197,7 @@ fn rejoin_restores_where_the_player_left() {
         .expect("dirt item");
     {
         let player = harness.game.player_mut(id).expect("player");
-        player.position = mc_entity::player::Vec3::new(100.5, 70.0, -40.5);
+        player.position = mc_world::Vec3::new(100.5, 70.0, -40.5);
         player.health = 8.0;
         player
             .inventory
@@ -243,7 +243,7 @@ fn restart_restores_the_player_from_the_playerdata_file() {
         .expect("dirt item");
     {
         let player = harness.game.player_mut(id).expect("player");
-        player.position = mc_entity::player::Vec3::new(100.5, 70.0, -40.5);
+        player.position = mc_world::Vec3::new(100.5, 70.0, -40.5);
         player.health = 8.0;
         player.yaw = 90.0;
         player.pitch = -30.0;

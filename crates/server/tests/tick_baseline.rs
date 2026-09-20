@@ -256,8 +256,8 @@ fn entity_heavy_ticks_within_the_frame_budget() {
     use mc_entity::entity::{EntityBody, EntityKind};
     use mc_entity::item_entity::ItemEntity;
     use mc_entity::mob::{Mob, MobKind};
-    use mc_entity::player::Vec3 as EntityVec3;
     use mc_entity::stack::ItemStack;
+    use mc_world::Vec3 as EntityVec3;
 
     let dir = TempDir::new("p05-entity-baseline");
     let config = mc_server::config::StorageConfig {

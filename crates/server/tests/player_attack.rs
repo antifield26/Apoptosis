@@ -122,7 +122,7 @@ impl Harness {
             && let Some(at) = self.game.entity_store().get(target).map(|e| e.position)
             && let Some(player) = self.game.player_mut(self.id)
         {
-            player.position = mc_entity::player::Vec3::new(at.x - 2.0, at.y, at.z);
+            player.position = mc_world::Vec3::new(at.x - 2.0, at.y, at.z);
         }
         self.intent(PlayIntent::Interact { entity, kind: 1 });
     }
@@ -131,7 +131,7 @@ impl Harness {
     /// any reading of the interaction range.
     fn summon_nearby(&mut self, kind: MobKind) -> mc_entity::EntityId {
         let player = self.game.player(self.id).expect("player").position;
-        let at = mc_entity::player::Vec3::new(player.x + 2.0, player.y, player.z);
+        let at = mc_world::Vec3::new(player.x + 2.0, player.y, player.z);
         self.game.spawn_mob(kind, at).expect("the mob spawns")
     }
 

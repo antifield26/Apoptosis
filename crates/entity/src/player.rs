@@ -51,6 +51,7 @@ use crate::stack::ItemStack;
 use mc_core::error::{ServerError, ServerResult};
 use mc_nbt::NbtTag;
 use mc_registry::ItemRegistry;
+use mc_world::Vec3;
 
 /// Maximum player health (10 hearts).
 pub const MAX_HEALTH: f32 = 20.0;
@@ -84,77 +85,6 @@ pub const REGEN_FOOD_THRESHOLD: i32 = 18;
 /// `mc_persistence::level::DATA_VERSION_26_1_2`). Repeated here as a literal
 /// because `mc-entity` must not depend on `mc-persistence`.
 pub const DATA_VERSION_26_1_2: i32 = 4790;
-
-/// A position or direction in world space, `f64` as the protocol uses.
-///
-/// Defined locally rather than imported: the parallel `mc-world` crate also has
-/// a `Vec3`, and this crate is deliberately self-contained (it may not depend on
-/// `mc-world`). Unifying the two is a known gap — they are structurally
-/// identical and conversion is a field move.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Vec3 {
-    /// X coordinate.
-    pub x: f64,
-    /// Y coordinate.
-    pub y: f64,
-    /// Z coordinate.
-    pub z: f64,
-}
-
-impl Vec3 {
-    /// The origin.
-    pub const ZERO: Self = Self {
-        x: 0.0,
-        y: 0.0,
-        z: 0.0,
-    };
-
-    /// Build a position.
-    #[must_use]
-    pub const fn new(x: f64, y: f64, z: f64) -> Self {
-        Self { x, y, z }
-    }
-
-    /// Component-wise sum (`self + other`).
-    #[must_use]
-    pub const fn add(self, other: Self) -> Self {
-        Self {
-            x: self.x + other.x,
-            y: self.y + other.y,
-            z: self.z + other.z,
-        }
-    }
-
-    /// Difference (`self - other`).
-    #[must_use]
-    pub const fn sub(self, other: Self) -> Self {
-        Self {
-            x: self.x - other.x,
-            y: self.y - other.y,
-            z: self.z - other.z,
-        }
-    }
-
-    /// Euclidean distance to `other`.
-    #[must_use]
-    pub fn distance(self, other: Self) -> f64 {
-        let delta = self.sub(other);
-        delta.length()
-    }
-
-    /// Euclidean length of this vector.
-    #[must_use]
-    pub fn length(self) -> f64 {
-        self.x.hypot(self.y).hypot(self.z)
-    }
-
-    /// Whether every component is finite (a hostile position packet can carry
-    /// NaN or an infinity, which must never reach the world).
-    #[must_use]
-    pub fn is_finite(self) -> bool {
-        self.x.is_finite() && self.y.is_finite() && self.z.is_finite()
-    }
-}
 
 /// Vanilla game mode, as stored in `playerGameType` (0..=3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -1624,8 +1554,8 @@ mod tests {
     fn vec3_geometry_is_finite_safe() {
         let a = Vec3::new(1.0, 2.0, 3.0);
         let b = Vec3::new(1.0, 2.0, 6.0);
-        assert_eq!(a.add(b), Vec3::new(2.0, 4.0, 9.0));
-        assert_eq!(b.sub(a), Vec3::new(0.0, 0.0, 3.0));
+        assert_eq!(a.plus(b), Vec3::new(2.0, 4.0, 9.0));
+        assert_eq!(b.minus(a), Vec3::new(0.0, 0.0, 3.0));
         assert_eq!(a.distance(b), 3.0);
         assert_eq!(Vec3::ZERO.length(), 0.0);
         assert!(a.is_finite());

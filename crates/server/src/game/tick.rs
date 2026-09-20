@@ -36,7 +36,7 @@ use super::{
     ITEM_PICKUP_RADIUS_SQR, LIGHT_UPDATES_PER_TICK, MOB_LOOKAHEAD_BLOCKS, NO_BLOCK_CHANGE_SEQUENCE,
     OpenKind, PENDING_INTENT_BUDGET, PLAINS_BIOME_ID, REST_EPSILON, TickReport,
     UNLOAD_MARGIN_CHUNKS, chunk_of, floor_to_i32, is_container_block, light_fields,
-    mark_block_dirty, mirror_inventory, open_kind_for, to_entity, to_world, wire_angle, wire_stack,
+    mark_block_dirty, mirror_inventory, open_kind_for, wire_angle, wire_stack,
 };
 
 impl Game {
@@ -731,7 +731,7 @@ impl Game {
     /// Give every ready, overdue ground stack to the nearest player within the
     /// pickup radius (P11-05), mirroring the new slot contents to that client.
     fn collect_items_into_players(&mut self) {
-        let players: Vec<(EntityId, ConnectionId, mc_entity::player::Vec3)> = self
+        let players: Vec<(EntityId, ConnectionId, mc_world::Vec3)> = self
             .sessions
             .values()
             .filter(|session| session.ready)
@@ -811,7 +811,7 @@ impl Game {
     /// the Broadcast phase announces them with their per-type registry id and
     /// their spawn health.
     fn run_spawn_cycle(&mut self) {
-        let players: Vec<mc_entity::Vec3> = self
+        let players: Vec<mc_world::Vec3> = self
             .sessions
             .values()
             .filter(|session| session.ready)
@@ -967,7 +967,7 @@ impl Game {
         let count = row.min_count as i32 + self.random.next_i32_bounded(span);
         for _ in 0..count {
             let position =
-                mc_entity::Vec3::new(f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5);
+                mc_world::Vec3::new(f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5);
             let Ok(id) = self
                 .entities
                 .spawn(EntityBody::Mob(Mob::new(row.kind)), position)
@@ -1037,7 +1037,7 @@ impl Game {
     }
 
     /// Squared distance from `position` to the nearest ready player, if any.
-    fn nearest_player_distance_sq(&self, position: mc_entity::Vec3) -> Option<f64> {
+    fn nearest_player_distance_sq(&self, position: mc_world::Vec3) -> Option<f64> {
         self.sessions
             .values()
             .filter(|session| session.ready)
@@ -1116,7 +1116,7 @@ impl Game {
     /// Three-dimensional: the AI's radii are block distances and the mob can be
     /// above or below its target. The AI applies its own range filtering, so the
     /// true nearest player is passed regardless of distance.
-    fn nearest_ready_player(&self, position: mc_entity::player::Vec3) -> Option<(EntityId, f64)> {
+    fn nearest_ready_player(&self, position: mc_world::Vec3) -> Option<(EntityId, f64)> {
         self.sessions
             .values()
             .filter(|session| session.ready)
@@ -1171,7 +1171,7 @@ impl Game {
         id: EntityId,
         kind: MobKind,
         goal: MobGoal,
-        position: mc_entity::player::Vec3,
+        position: mc_world::Vec3,
     ) {
         {
             let Some(entity) = self.entities.get_mut(id) else {
@@ -1288,12 +1288,7 @@ impl Game {
     /// * **A fluid is impassable, not fatal.** Nothing here pushes a mob *out* of
     ///   water it is already in: this refuses to *enter*, which is the whole of
     ///   M-4's water half.
-    fn mob_step_is_passable(
-        &self,
-        position: mc_entity::player::Vec3,
-        dir_x: f64,
-        dir_z: f64,
-    ) -> bool {
+    fn mob_step_is_passable(&self, position: mc_world::Vec3, dir_x: f64, dir_z: f64) -> bool {
         let here = (
             position.x.floor() as i32,
             position.y.floor() as i32,
@@ -1345,7 +1340,7 @@ impl Game {
         attacker: EntityId,
         kind: MobKind,
         target: EntityId,
-        position: mc_entity::player::Vec3,
+        position: mc_world::Vec3,
     ) {
         if kind.attack_style() != Some(MobAttackStyle::Melee) {
             return;
@@ -1441,8 +1436,8 @@ impl Game {
 
         // 2. Integrate against the world. `move_with_collision` sweeps the box, so
         //    a fast or badly-framed step cannot tunnel through a floor.
-        let result = self.world.move_with_collision(hitbox, to_world(velocity));
-        let applied = to_world(position).plus(result.delta);
+        let result = self.world.move_with_collision(hitbox, velocity);
+        let applied = position.plus(result.delta);
         // Grounded, for an entity that *falls on its own*, is deliberately
         // narrower than the player rule below. A falling entity must not be
         // declared grounded while it is still inside the air block above a floor:
@@ -1468,7 +1463,7 @@ impl Game {
             let Some(entity) = self.entities.get_mut(id) else {
                 return false;
             };
-            entity.position = to_entity(applied);
+            entity.position = applied;
             entity.on_ground = grounded;
             if result.collided[1] && velocity.y < 0.0 {
                 velocity.y = 0.0;
@@ -1944,8 +1939,8 @@ impl Game {
                             let position = self
                                 .sessions
                                 .get(&id)
-                                .map_or(mc_entity::player::Vec3::default(), |s| s.player.position);
-                            let _ = self.spawn_item(leftover, to_world(position));
+                                .map_or(mc_world::Vec3::default(), |s| s.player.position);
+                            let _ = self.spawn_item(leftover, position);
                         }
                     }
                     let _ = self.send(
@@ -2089,7 +2084,7 @@ impl Game {
             // forever.
             if session.player.position.y < f64::from(min_y - 8) {
                 warn!(id = %session.id, "player fell out of the world; returning to spawn");
-                session.player.position = mc_entity::player::Vec3::new(
+                session.player.position = mc_world::Vec3::new(
                     f64::from(spawn.0) + 0.5,
                     f64::from(spawn.1),
                     f64::from(spawn.2) + 0.5,

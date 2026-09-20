@@ -14,7 +14,7 @@ use mc_persistence::dimension::Dimension;
 use mc_world::chunk::Chunk;
 use tracing::{debug, warn};
 
-use super::{Game, chunk_of, nbt_int, to_entity};
+use super::{Game, chunk_of, nbt_int};
 
 impl Game {
     /// Give the owned world handle back (shutdown, or handing it to a save worker).
@@ -370,7 +370,7 @@ impl Game {
                 warn!(%id, "a saved entity names a kind this build does not model; skipped");
                 continue;
             };
-            if self.spawn_mob(kind, to_entity(position)).is_err() {
+            if self.spawn_mob(kind, position).is_err() {
                 warn!("a saved mob could not be spawned");
             }
         }

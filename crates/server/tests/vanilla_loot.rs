@@ -302,7 +302,7 @@ fn a_swing_kills_a_shipped_cow_and_its_table_drops() {
     let mut harness = Harness::new("p11-vanilla-loot-cow");
     harness.join("Hunter");
     let (sx, sy, sz) = harness.game.spawn();
-    let at = mc_entity::player::Vec3::new(f64::from(sx) + 2.5, f64::from(sy), f64::from(sz) + 0.5);
+    let at = mc_world::Vec3::new(f64::from(sx) + 2.5, f64::from(sy), f64::from(sz) + 0.5);
     let cow = harness
         .game
         .spawn_mob(mc_entity::mob::MobKind::Cow, at)
