@@ -15,7 +15,6 @@ tag `v0.2.0` (see below); no later version has been released.
 ## Unreleased — Phase 16 (Combat & the Survival Loop)
 
 ### P16-01 — Damage model: held weapons, armour, types, knockback, reach hook
-
 Swings deal the held weapon's attribute bonus over the 1.0 fist (diamond
 sword 7.0, pinned against a cow); armour absorbs per `CombatRules`
 (20-point cap, toughness, 25-way split) with fall and starvation bypassing
@@ -31,6 +30,21 @@ entity-velocity send path), per-item reach values, arrow/explosion types
 data (weapon/armour attributes), generated damage-type tags
 (bypass lists), `living.rs` hurt-path knockback, `combat.rs` formulas and
 the `AttackRangeImpl` schema. Gate 1491/0/34/115.
+
+### P16-02 — Experience orbs: kind, scatter, pickup, levels
+
+Orbs are a new entity kind with split bands (2477..1 top-down), 6000-tick
+lifetime and 0.03 gravity. Mob deaths scatter the kind's reward when a
+player swing lands the killing blow (environmental finishes credit nobody —
+no hurt-credit tracking exists); player deaths scatter min(7 * level, 100)
+and the bar still resets at respawn. Pickup is contact within a block with
+vanilla's per-player 2-tick throttle, into the three-branch level map with
+`SetExperience` announced the same tick; merges sum values, despawn sweeps
+at 6000, spawns announce `AddEntity` (type 49) plus the value slot
+(index 8, fixed-int serializer, modelled for this), and ground orbs persist
+across restarts. Deliberately deferred: mending, furnace XP grants, orb
+magnetism beyond contact (unmeasured), baby-animal zero rewards (no babies).
+Gate 1500/0/34/116.
 
 ## Unreleased — Phase 15 (Observability + Core Hardening)
 
