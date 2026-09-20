@@ -48,6 +48,7 @@ use crate::noise::{DEFAULT_LACUNARITY, DEFAULT_PERSISTENCE, FractalNoise};
 use crate::seed::{WorldSeed, WorldgenContext, splitmix64_mix};
 use mc_registry::BlockRegistry;
 use mc_world::{Chunk, ChunkPos, SECTION_HEIGHT, SECTION_WIDTH};
+use thiserror::Error;
 
 // ---------------------------------------------------------------- parameters
 
@@ -158,9 +159,10 @@ pub const TERRAIN_NOISE_Y: f64 = 1024.0;
 /// its block palette refuses at construction (see [`BlockPalette::resolve`]),
 /// because a chunk that silently changed its surface block would be a
 /// data-corruption bug rather than a recoverable failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum GenerationError {
     /// A block name the generator needs is not in the registry.
+    #[error("worldgen needs block {name}: {reason}")]
     UnknownBlock {
         /// The name that failed.
         name: String,
@@ -168,18 +170,6 @@ pub enum GenerationError {
         reason: String,
     },
 }
-
-impl std::fmt::Display for GenerationError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::UnknownBlock { name, reason } => {
-                write!(formatter, "worldgen needs block {name}: {reason}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for GenerationError {}
 
 // ------------------------------------------------------------------ palette
 
@@ -1145,5 +1135,15 @@ mod tests {
                 "{pos:?} must have a floor"
             );
         }
+    }
+
+    #[test]
+    fn generation_error_messages_are_stable() {
+        // P15-06: operator-visible strings; the thiserror migration must not reword them.
+        let error = GenerationError::UnknownBlock {
+            name: "minecraft:x".to_owned(),
+            reason: "nope".to_owned(),
+        };
+        assert_eq!(error.to_string(), "worldgen needs block minecraft:x: nope");
     }
 }

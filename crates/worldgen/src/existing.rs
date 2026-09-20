@@ -47,6 +47,7 @@ use crate::seed::WorldgenContext;
 use crate::terrain::{ChunkGenerator, GenerationError};
 use mc_registry::BlockRegistry;
 use mc_world::{Chunk, ChunkPos};
+use thiserror::Error;
 
 /// A chunk read from somewhere the provider does not own (disk, a cache, a test).
 ///
@@ -332,9 +333,10 @@ impl<G: ChunkGenerator, L: ChunkLookup> ChunkProvider<G, L> {
 }
 
 /// A provider call that failed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ProviderError {
     /// The storage lookup failed. **Never** treated as "nothing stored".
+    #[error("chunk ({x}, {z}) could not be read from storage: {message}", x = pos.x, z = pos.z)]
     Lookup {
         /// The position asked for.
         pos: ChunkPos,
@@ -342,6 +344,7 @@ pub enum ProviderError {
         message: String,
     },
     /// The generator could not produce the chunk.
+    #[error("chunk ({x}, {z}) could not be generated: {error}", x = pos.x, z = pos.z)]
     Generate {
         /// The position asked for.
         pos: ChunkPos,
@@ -350,33 +353,41 @@ pub enum ProviderError {
     },
 }
 
-impl std::fmt::Display for ProviderError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Lookup { pos, message } => write!(
-                formatter,
-                "chunk ({}, {}) could not be read from storage: {message}",
-                pos.x, pos.z
-            ),
-            Self::Generate { pos, error } => write!(
-                formatter,
-                "chunk ({}, {}) could not be generated: {error}",
-                pos.x, pos.z
-            ),
-        }
-    }
-}
-
-impl std::error::Error for ProviderError {}
-
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::{ChunkLookup, ChunkProvider, MapLookup, NoStorage, ProviderError, ProviderStats};
     use crate::seed::{WorldSeed, WorldgenContext};
-    use crate::terrain::{ChunkGenerator, FlatGenerator, TerrainGenerator};
+    use crate::terrain::{ChunkGenerator, FlatGenerator, GenerationError, TerrainGenerator};
     use mc_registry::{BlockRegistry, Registries};
     use mc_world::{Chunk, ChunkPos};
+
+    #[test]
+    fn provider_error_messages_are_stable() {
+        // P15-06: operator-visible strings; the thiserror migration must not reword them.
+        let cases = [
+            (
+                ProviderError::Lookup {
+                    pos: ChunkPos { x: 1, z: -2 },
+                    message: "gone".to_owned(),
+                },
+                "chunk (1, -2) could not be read from storage: gone",
+            ),
+            (
+                ProviderError::Generate {
+                    pos: ChunkPos { x: 1, z: -2 },
+                    error: GenerationError::UnknownBlock {
+                        name: "minecraft:x".to_owned(),
+                        reason: "nope".to_owned(),
+                    },
+                },
+                "chunk (1, -2) could not be generated: worldgen needs block minecraft:x: nope",
+            ),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+        }
+    }
 
     fn registry() -> BlockRegistry {
         match Registries::vanilla() {

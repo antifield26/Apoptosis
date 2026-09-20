@@ -15,19 +15,23 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use thiserror::Error;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// Per-IP token bucket capacity (a burst of quick connections).
 pub const PER_IP_BURST: f32 = 8.0;
 
 /// Why a connection was refused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum LimitError {
     /// The global connection budget is exhausted.
+    #[error("the global connection budget is exhausted")]
     Global,
     /// The source address has too many concurrent connections.
+    #[error("too many concurrent connections from this address")]
     PerIpConcurrent,
     /// The source address is reconnecting too quickly.
+    #[error("reconnecting too quickly from this address")]
     PerIpRate,
 }
 
@@ -241,5 +245,29 @@ mod tests {
         assert_eq!(gate.tracked_ips(), 1);
         drop(guard);
         assert_eq!(gate.concurrent_for(ip(1)), 0);
+    }
+
+    #[test]
+    fn limit_errors_are_stable() {
+        // P15-06: these variants previously had no Display at all; the messages
+        // below are new but follow the variant docs word for word.
+        let cases = [
+            (
+                LimitError::Global,
+                "the global connection budget is exhausted",
+            ),
+            (
+                LimitError::PerIpConcurrent,
+                "too many concurrent connections from this address",
+            ),
+            (
+                LimitError::PerIpRate,
+                "reconnecting too quickly from this address",
+            ),
+        ];
+        for error in cases {
+            let _: &dyn std::error::Error = &error.0;
+            assert_eq!(error.0.to_string(), error.1);
+        }
     }
 }

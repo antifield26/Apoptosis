@@ -106,8 +106,8 @@ use mc_core::ids::ResourceId;
 use mc_nbt::{Limits as NbtLimits, NbtTag, TagReader};
 use mc_persistence::compression::Compression;
 use mc_registry::BlockRegistry;
-use std::fmt;
 use std::path::Path;
+use thiserror::Error;
 
 // -------------------------------------------------------------------- limits
 
@@ -201,9 +201,10 @@ impl Default for StructureLimits {
 ///
 /// Every variant names what failed. There is no "other": a refusal a caller
 /// cannot act on is not a refusal (AGENTS.md §3.3).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum StructureError {
     /// The file could not be read from disk.
+    #[error("cannot read {path}: {reason}")]
     Io {
         /// The path that failed.
         path: String,
@@ -211,6 +212,7 @@ pub enum StructureError {
         reason: String,
     },
     /// The file is larger than [`StructureLimits::max_file_bytes`].
+    #[error("structure file is {size} bytes, over the {limit} byte limit")]
     FileTooLarge {
         /// Actual size in bytes.
         size: usize,
@@ -218,33 +220,40 @@ pub enum StructureError {
         limit: usize,
     },
     /// The file is empty — not gzip, so it cannot be a structure at all.
+    #[error("structure file is empty")]
     EmptyFile,
     /// The file does not start with the gzip magic `1f 8b`.
+    #[error("structure file is not gzip: expected 1f 8b, found {m0:02x} {m1:02x}", m0 = magic[0], m1 = magic[1])]
     NotGzip {
         /// The first two bytes, as read.
         magic: [u8; 2],
     },
     /// The gzip stream is truncated, corrupt, or expands past the byte budget.
+    #[error("structure gzip stream: {reason}")]
     BadGzip {
         /// The decompressor's complaint.
         reason: String,
     },
     /// The decompressed payload is not NBT this reader accepts.
+    #[error("structure NBT: {reason}")]
     BadNbt {
         /// The reader's complaint.
         reason: String,
     },
     /// The root tag is not a compound.
+    #[error("structure root tag is {found}, not a compound")]
     RootNotCompound {
         /// The tag type that was found, e.g. `TAG_List`.
         found: &'static str,
     },
     /// A required root key is missing or has the wrong tag type.
+    #[error("structure has no usable `{field}`")]
     MissingField {
         /// The key, e.g. `size`.
         field: &'static str,
     },
     /// `size` is not exactly three integers.
+    #[error("structure `size` has {found} entries, expected 3")]
     BadSizeLength {
         /// How many entries `size` held.
         found: usize,
@@ -253,6 +262,7 @@ pub enum StructureError {
     ///
     /// A structure of zero or negative extent contains no position, so placing
     /// it is meaningless; refusing is more honest than placing nothing quietly.
+    #[error("structure `size` [{x}, {y}, {z}] must be positive on every axis", x = size[0], y = size[1], z = size[2])]
     BadSizeValue {
         /// The offending `[x, y, z]`.
         size: [i32; 3],
@@ -261,6 +271,7 @@ pub enum StructureError {
     ///
     /// The hostile-input case: refused **before** any allocation proportional to
     /// the volume.
+    #[error("structure `size` [{x}, {y}, {z}] exceeds the {limit} block per-axis limit", x = size[0], y = size[1], z = size[2])]
     SizeTooLarge {
         /// The declared `[x, y, z]`.
         size: [i32; 3],
@@ -268,6 +279,7 @@ pub enum StructureError {
         limit: i32,
     },
     /// The `palette` list is longer than [`StructureLimits::max_palette`].
+    #[error("structure palette holds {size} entries, over the {limit} limit")]
     PaletteTooLarge {
         /// Declared palette length.
         size: usize,
@@ -275,6 +287,7 @@ pub enum StructureError {
         limit: usize,
     },
     /// The `blocks` list is longer than [`StructureLimits::max_blocks`].
+    #[error("structure holds {size} blocks, over the {limit} limit")]
     TooManyBlocks {
         /// Declared block count.
         size: usize,
@@ -282,11 +295,13 @@ pub enum StructureError {
         limit: usize,
     },
     /// A palette entry is not a compound, or has no string `Name`.
+    #[error("palette entry {index} is not a compound with a `Name`")]
     BadPaletteEntry {
         /// Index of the entry in `palette`.
         index: usize,
     },
     /// A palette entry's `Name` is not a valid resource id.
+    #[error("palette entry {index} names {name:?}, not a resource id: {reason}")]
     BadBlockName {
         /// Index of the entry in `palette`.
         index: usize,
@@ -296,6 +311,7 @@ pub enum StructureError {
         reason: String,
     },
     /// A palette entry's `Properties` is not a compound of scalar values.
+    #[error("palette entry {index} property {property:?} is not a scalar value")]
     BadProperties {
         /// Index of the entry in `palette`.
         index: usize,
@@ -303,6 +319,7 @@ pub enum StructureError {
         property: String,
     },
     /// A block entry is not a compound, has no `pos`, or has no integer `state`.
+    #[error("block entry {index} is not a compound with `pos` and an integer `state`")]
     BadBlockEntry {
         /// Index of the entry in `blocks`.
         index: usize,
@@ -312,6 +329,7 @@ pub enum StructureError {
     /// (The value is carried as a string rather than a `[i32; 3]` because the
     /// offending array may have any length; `i32::MIN..=i32::MAX` is not a
     /// printable diagnostic for a three-element array that has two elements.)
+    #[error("block entry {index} has position {pos}, expected three integers")]
     BadBlockPos {
         /// Index of the entry in `blocks`.
         index: usize,
@@ -323,6 +341,7 @@ pub enum StructureError {
     /// Refused **by name of the index**, never clamped to the last palette entry
     /// (AGENTS.md §3.3: a wrong block is worse than a refused file). The index is
     /// a `u64` because a hostile file may store `usize::MAX`.
+    #[error("block entry {block} has state index {state}, outside the {palette_len} entry palette")]
     PaletteIndexOutOfRange {
         /// Index of the entry in `blocks`.
         block: usize,
@@ -334,11 +353,15 @@ pub enum StructureError {
     /// The file carries `palettes` (plural) instead of `palette`.
     ///
     /// Every `shipwreck/*.nbt` does (20 files, measured). See the module docs.
+    #[error(
+        "structure declares {count} alternative `palettes`, which this reader does not implement (only `palette` is supported)"
+    )]
     UnsupportedPalettes {
         /// How many alternative palettes the file declares.
         count: usize,
     },
     /// A palette entry names a block the registry does not know.
+    #[error("structure palette names block {name}: {reason}")]
     UnknownBlock {
         /// The block name, exactly as the palette spelled it.
         name: String,
@@ -347,100 +370,6 @@ pub enum StructureError {
         reason: String,
     },
 }
-
-impl fmt::Display for StructureError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Io { path, reason } => write!(formatter, "cannot read {path}: {reason}"),
-            Self::FileTooLarge { size, limit } => write!(
-                formatter,
-                "structure file is {size} bytes, over the {limit} byte limit"
-            ),
-            Self::EmptyFile => write!(formatter, "structure file is empty"),
-            Self::NotGzip { magic } => write!(
-                formatter,
-                "structure file is not gzip: expected 1f 8b, found {:02x} {:02x}",
-                magic[0], magic[1]
-            ),
-            Self::BadGzip { reason } => write!(formatter, "structure gzip stream: {reason}"),
-            Self::BadNbt { reason } => write!(formatter, "structure NBT: {reason}"),
-            Self::RootNotCompound { found } => {
-                write!(formatter, "structure root tag is {found}, not a compound")
-            }
-            Self::MissingField { field } => {
-                write!(formatter, "structure has no usable `{field}`")
-            }
-            Self::BadSizeLength { found } => {
-                write!(
-                    formatter,
-                    "structure `size` has {found} entries, expected 3"
-                )
-            }
-            Self::BadSizeValue { size } => write!(
-                formatter,
-                "structure `size` [{}, {}, {}] must be positive on every axis",
-                size[0], size[1], size[2]
-            ),
-            Self::SizeTooLarge { size, limit } => write!(
-                formatter,
-                "structure `size` [{}, {}, {}] exceeds the {limit} block per-axis limit",
-                size[0], size[1], size[2]
-            ),
-            Self::PaletteTooLarge { size, limit } => write!(
-                formatter,
-                "structure palette holds {size} entries, over the {limit} limit"
-            ),
-            Self::TooManyBlocks { size, limit } => write!(
-                formatter,
-                "structure holds {size} blocks, over the {limit} limit"
-            ),
-            Self::BadPaletteEntry { index } => {
-                write!(
-                    formatter,
-                    "palette entry {index} is not a compound with a `Name`"
-                )
-            }
-            Self::BadBlockName {
-                index,
-                name,
-                reason,
-            } => write!(
-                formatter,
-                "palette entry {index} names {name:?}, not a resource id: {reason}"
-            ),
-            Self::BadProperties { index, property } => write!(
-                formatter,
-                "palette entry {index} property {property:?} is not a scalar value"
-            ),
-            Self::BadBlockEntry { index } => write!(
-                formatter,
-                "block entry {index} is not a compound with `pos` and an integer `state`"
-            ),
-            Self::BadBlockPos { index, pos } => write!(
-                formatter,
-                "block entry {index} has position {pos}, expected three integers"
-            ),
-            Self::PaletteIndexOutOfRange {
-                block,
-                state,
-                palette_len,
-            } => write!(
-                formatter,
-                "block entry {block} has state index {state}, outside the {palette_len} entry palette"
-            ),
-            Self::UnsupportedPalettes { count } => write!(
-                formatter,
-                "structure declares {count} alternative `palettes`, which this reader does not \
-                 implement (only `palette` is supported)"
-            ),
-            Self::UnknownBlock { name, reason } => {
-                write!(formatter, "structure palette names block {name}: {reason}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for StructureError {}
 
 // --------------------------------------------------------------------- model
 
@@ -1460,5 +1389,143 @@ mod tests {
         );
         assert_eq!(limits.nbt_limits().max_depth, 32);
         let _ = NbtLimits::DISK;
+    }
+
+    fn check(cases: &[(StructureError, &str)]) {
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), *expected);
+        }
+    }
+
+    #[test]
+    fn structure_file_errors_are_stable() {
+        // P15-06: operator-visible strings; the thiserror migration must not reword them.
+        check(&[
+            (
+                StructureError::Io {
+                    path: "x.nbt".to_owned(),
+                    reason: "nope".to_owned(),
+                },
+                "cannot read x.nbt: nope",
+            ),
+            (
+                StructureError::FileTooLarge { size: 9, limit: 8 },
+                "structure file is 9 bytes, over the 8 byte limit",
+            ),
+            (StructureError::EmptyFile, "structure file is empty"),
+            (
+                StructureError::NotGzip {
+                    magic: [0x1f, 0x00],
+                },
+                "structure file is not gzip: expected 1f 8b, found 1f 00",
+            ),
+            (
+                StructureError::BadGzip {
+                    reason: "cut".to_owned(),
+                },
+                "structure gzip stream: cut",
+            ),
+            (
+                StructureError::BadNbt {
+                    reason: "cut".to_owned(),
+                },
+                "structure NBT: cut",
+            ),
+            (
+                StructureError::RootNotCompound { found: "TAG_List" },
+                "structure root tag is TAG_List, not a compound",
+            ),
+            (
+                StructureError::MissingField { field: "size" },
+                "structure has no usable `size`",
+            ),
+            (
+                StructureError::BadSizeLength { found: 2 },
+                "structure `size` has 2 entries, expected 3",
+            ),
+            (
+                StructureError::BadSizeValue { size: [0, 1, 2] },
+                "structure `size` [0, 1, 2] must be positive on every axis",
+            ),
+            (
+                StructureError::SizeTooLarge {
+                    size: [99, 1, 1],
+                    limit: 48,
+                },
+                "structure `size` [99, 1, 1] exceeds the 48 block per-axis limit",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn structure_palette_errors_are_stable() {
+        // P15-06: operator-visible strings; the thiserror migration must not reword them.
+        check(&[
+            (
+                StructureError::PaletteTooLarge { size: 9, limit: 8 },
+                "structure palette holds 9 entries, over the 8 limit",
+            ),
+            (
+                StructureError::TooManyBlocks { size: 9, limit: 8 },
+                "structure holds 9 blocks, over the 8 limit",
+            ),
+            (
+                StructureError::BadPaletteEntry { index: 3 },
+                "palette entry 3 is not a compound with a `Name`",
+            ),
+            (
+                StructureError::BadBlockName {
+                    index: 3,
+                    name: "x".to_owned(),
+                    reason: "bad".to_owned(),
+                },
+                "palette entry 3 names \"x\", not a resource id: bad",
+            ),
+            (
+                StructureError::BadProperties {
+                    index: 3,
+                    property: "p".to_owned(),
+                },
+                "palette entry 3 property \"p\" is not a scalar value",
+            ),
+        ]);
+    }
+
+    #[test]
+    fn structure_block_errors_are_stable() {
+        // P15-06: operator-visible strings; the thiserror migration must not reword them.
+        check(&[
+            (
+                StructureError::BadBlockEntry { index: 3 },
+                "block entry 3 is not a compound with `pos` and an integer `state`",
+            ),
+            (
+                StructureError::BadBlockPos {
+                    index: 3,
+                    pos: "[0]".to_owned(),
+                },
+                "block entry 3 has position [0], expected three integers",
+            ),
+            (
+                StructureError::PaletteIndexOutOfRange {
+                    block: 3,
+                    state: 9,
+                    palette_len: 2,
+                },
+                "block entry 3 has state index 9, outside the 2 entry palette",
+            ),
+            (
+                StructureError::UnsupportedPalettes { count: 2 },
+                "structure declares 2 alternative `palettes`, which this reader does not \
+                 implement (only `palette` is supported)",
+            ),
+            (
+                StructureError::UnknownBlock {
+                    name: "minecraft:x".to_owned(),
+                    reason: "nope".to_owned(),
+                },
+                "structure palette names block minecraft:x: nope",
+            ),
+        ]);
     }
 }

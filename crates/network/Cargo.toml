@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 mc-core = { path = "../core" }
+thiserror.workspace = true
 mc-protocol = { path = "../protocol" }
 md-5.workspace = true
 serde_json.workspace = true

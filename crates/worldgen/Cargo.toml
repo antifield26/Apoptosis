@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 mc-core = { path = "../core" }
+thiserror.workspace = true
 # `WorldSeed::from_level_dat` reads the parsed world-gen document, so the NBT
 # value type is part of this crate's public API. `mc-nbt` is a leaf crate
 # (core only); no dependency cycle is possible.
