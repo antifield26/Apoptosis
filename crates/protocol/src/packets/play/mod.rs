@@ -92,8 +92,9 @@ pub use self::inventory::{
     MAX_CONTAINER_SLOTS, MAX_ITEM_COMPONENTS, MAX_METADATA_ENTRIES, MENU_FURNACE, MENU_GENERIC_9X3,
     MENU_GENERIC_9X6, MENU_HOPPER, METADATA_INDEX_HEALTH, METADATA_INDEX_ORB_VALUE,
     METADATA_TERMINATOR, METADATA_TYPE_BYTE, METADATA_TYPE_FLOAT, METADATA_TYPE_INT,
-    METADATA_TYPE_ITEM_STACK, METADATA_TYPE_VARIANTS, METADATA_TYPE_VARINT, MetadataValue,
-    OpenScreen, SetCursorItem, SetEntityData,
+    METADATA_TYPE_ITEM_STACK, METADATA_TYPE_VARIANTS, METADATA_TYPE_VARINT,
+    MOB_EFFECT_FLAG_AMBIENT, MOB_EFFECT_FLAG_ICON, MOB_EFFECT_FLAG_PARTICLES, MetadataValue,
+    OpenScreen, RemoveMobEffect, SetCursorItem, SetEntityData, UpdateMobEffect,
 };
 pub use self::light::{
     LIGHT_ARRAY_BYTES, LightData, LightUpdate, MAX_LIGHT_SECTIONS, read_light_data,
@@ -2012,8 +2013,8 @@ mod tests {
         COMMAND_MAX_CHARS, ConfigurationAcknowledged, ContainerClose, ContainerSetData,
         ForgetLevelChunk, JoinGame, KeepAlive, LightData, LightUpdate, MENU_FURNACE,
         MENU_GENERIC_9X3, MENU_GENERIC_9X6, MENU_HOPPER, OpenScreen, PlayDisconnect, PlayIntent,
-        PlayPingRequest, PlayPong, PlayerPosition, SIGNATURE_LEN, SetChunkCacheCenter,
-        SetChunkCacheRadius, SetCursorItem,
+        PlayPingRequest, PlayPong, PlayerPosition, RemoveMobEffect, SIGNATURE_LEN,
+        SetChunkCacheCenter, SetChunkCacheRadius, SetCursorItem, UpdateMobEffect,
     };
     use crate::packets::Packet;
     use crate::text::TextComponent;
@@ -3997,5 +3998,36 @@ mod tests {
         assert_eq!(body, [0x03, 0x05, 0x00, 0x00]);
         assert_eq!(SetCursorItem::decode(&body).expect("decodes"), cursor);
         assert!(SetCursorItem::decode(&[0x05]).is_err());
+    }
+
+    #[test]
+    fn mob_effect_packets_round_trip() {
+        // P16-03: field order per pumpkin's CUpdateMobEffect/CRemoveMobEffect
+        // (entity, effect, amplifier, duration, flags); no capture exists for
+        // either id, so the pin is shape-exactness through our own codec plus
+        // the trailing-byte refusal both decoders share.
+        let update = UpdateMobEffect {
+            entity_id: 7,
+            effect_id: 19,
+            amplifier: 1,
+            duration: 600,
+            flags: UpdateMobEffect::flags_for(false),
+        };
+        let body = update.encode().expect("encodes");
+        assert_eq!(body, [0x07, 0x13, 0x01, 0xD8, 0x04, 0x06]);
+        assert_eq!(UpdateMobEffect::decode(&body).expect("decodes"), update);
+        assert!(UpdateMobEffect::decode(&[0x07, 0x13]).is_err());
+        let mut padded = body.clone();
+        padded.push(0x00);
+        assert!(UpdateMobEffect::decode(&padded).is_err());
+
+        let remove = RemoveMobEffect {
+            entity_id: 7,
+            effect_id: 19,
+        };
+        let body = remove.encode().expect("encodes");
+        assert_eq!(body, [0x07, 0x13]);
+        assert_eq!(RemoveMobEffect::decode(&body).expect("decodes"), remove);
+        assert!(RemoveMobEffect::decode(&[0x07]).is_err());
     }
 }

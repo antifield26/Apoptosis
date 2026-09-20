@@ -129,6 +129,26 @@ impl EffectKind {
         }
     }
 
+    /// Recognise a `minecraft:<name>` effect id for the eight modelled kinds.
+    /// Anything else (jump boost, fire resistance, ...) is storable but has
+    /// no numeric behaviour here, so the command layer refuses it rather than
+    /// granting a dead icon.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        let bare = name.strip_prefix("minecraft:").unwrap_or(name);
+        Some(match bare {
+            "speed" => Self::Speed,
+            "slowness" => Self::Slowness,
+            "strength" => Self::Strength,
+            "weakness" => Self::Weakness,
+            "resistance" => Self::Resistance,
+            "poison" => Self::Poison,
+            "wither" => Self::Wither,
+            "regeneration" => Self::Regeneration,
+            _ => return None,
+        })
+    }
+
     /// Whether this effect damages over time.
     #[must_use]
     pub const fn is_harmful_over_time(self) -> bool {

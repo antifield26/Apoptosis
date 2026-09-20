@@ -14,7 +14,7 @@
 
 /// What dealt the damage. Only sources with a production caller exist here:
 /// an arrow or explosion variant arrives with P16-04's bow/fuse wiring, and
-/// fire/void/magic have no sources in the tree at all.
+/// fire/drowning/void/magic sources have no callers in the tree at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DamageSource {
     /// A player's melee swing.
@@ -25,6 +25,10 @@ pub enum DamageSource {
     Fall,
     /// Hunger (`starve` tag).
     Starvation,
+    /// Poison effect ticks (`poison` tag: armour applies, no knockback).
+    Poison,
+    /// Wither effect ticks (`wither` tag: bypasses armour, no knockback).
+    Wither,
 }
 
 impl DamageSource {
@@ -34,18 +38,19 @@ impl DamageSource {
     #[must_use]
     pub const fn bypasses_armor(self) -> bool {
         match self {
-            Self::PlayerAttack | Self::MobAttack => false,
-            Self::Fall | Self::Starvation => true,
+            Self::PlayerAttack | Self::MobAttack | Self::Poison => false,
+            Self::Fall | Self::Starvation | Self::Wither => true,
         }
     }
 
     /// Whether the hit shoves the victim. Melee carries vanilla's base
-    /// knockback; falls and starvation have no source direction to shove from.
+    /// knockback; falls, starvation and effect ticks have no source direction
+    /// to shove from.
     #[must_use]
     pub const fn applies_knockback(self) -> bool {
         match self {
             Self::PlayerAttack | Self::MobAttack => true,
-            Self::Fall | Self::Starvation => false,
+            Self::Fall | Self::Starvation | Self::Poison | Self::Wither => false,
         }
     }
 }
@@ -289,12 +294,16 @@ mod tests {
     fn damage_sources_classify_armor_and_knockback() {
         assert!(!DamageSource::PlayerAttack.bypasses_armor());
         assert!(!DamageSource::MobAttack.bypasses_armor());
+        assert!(!DamageSource::Poison.bypasses_armor());
         assert!(DamageSource::Fall.bypasses_armor());
         assert!(DamageSource::Starvation.bypasses_armor());
+        assert!(DamageSource::Wither.bypasses_armor());
         assert!(DamageSource::PlayerAttack.applies_knockback());
         assert!(DamageSource::MobAttack.applies_knockback());
         assert!(!DamageSource::Fall.applies_knockback());
         assert!(!DamageSource::Starvation.applies_knockback());
+        assert!(!DamageSource::Poison.applies_knockback());
+        assert!(!DamageSource::Wither.applies_knockback());
         assert_eq!(BASE_MELEE_KNOCKBACK, 0.4);
     }
 

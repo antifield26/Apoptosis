@@ -1518,6 +1518,69 @@ impl Game {
     ///
     /// Returns whether the entity was ticked. Players are not: their state lives in
     /// [`Session::player`] and is handled by the Players phase.
+    /// Collect one tick of mob effect damage over time (P16-03): poison and
+    /// wither hits summed, whether any wither contributed (it wins the damage
+    /// flags, mirroring the player path), and regeneration amplifiers.
+    /// Multiple simultaneous dots merge into one hit — the single-window
+    /// model would eat the second.
+    fn mob_effect_ticks(&self, id: EntityId) -> (f32, bool, Vec<i32>) {
+        let Some(entity) = self.entities.get(id) else {
+            return (0.0, false, Vec::new());
+        };
+        let EntityBody::Mob(_) = &entity.body else {
+            return (0.0, false, Vec::new());
+        };
+        let mut dot = 0.0f32;
+        let mut dot_wither = false;
+        let mut regen_amps = Vec::new();
+        for effect in entity.effects.values() {
+            let hit = mc_entity::effect::damage_over_time(effect, self.tick);
+            if hit > 0.0 {
+                dot += hit;
+                dot_wither =
+                    dot_wither || effect.kind() == Some(mc_entity::effect::EffectKind::Wither);
+            }
+            if effect.kind() == Some(mc_entity::effect::EffectKind::Regeneration) {
+                regen_amps.push(effect.amplifier);
+            }
+        }
+        (dot, dot_wither, regen_amps)
+    }
+
+    /// Apply one tick of collected mob effects: damage through
+    /// [`Self::damage_entity`], regeneration straight to health.
+    fn apply_mob_effect_ticks(&mut self, id: EntityId, dot: f32, dot_wither: bool, regen_amps: Vec<i32>) {
+        if dot > 0.0 {
+            let source = if dot_wither {
+                DamageSource::Wither
+            } else {
+                DamageSource::Poison
+            };
+            let mut hit = dot;
+            if !dot_wither
+                && let Some(entity) = self.entities.get(id)
+            {
+                hit = hit.min((entity.health - 1.0).max(0.0));
+            }
+            if hit > 0.0 {
+                self.damage_entity(id, hit, source, None);
+            }
+        }
+        if !regen_amps.is_empty()
+            && let Some(entity) = self.entities.get_mut(id)
+            && let EntityBody::Mob(mob) = &entity.body
+        {
+            let max = mob.kind.max_health();
+            for amplifier in regen_amps {
+                let shift = u32::try_from(amplifier.max(0)).unwrap_or(0);
+                let interval = (50u64 >> shift.min(6)).max(1);
+                if self.tick.is_multiple_of(interval) {
+                    entity.health = (entity.health + 1.0).min(max);
+                }
+            }
+        }
+    }
+
     fn tick_entity(&mut self, id: EntityId) -> bool {
         let Some(entity) = self.entities.get(id) else {
             return false;
@@ -1533,6 +1596,7 @@ impl Game {
         let mut velocity = entity.velocity;
 
         // 1. Per-kind velocity step, then the shared timers.
+        self.mob_effect_ticks(id);
         {
             let Some(entity) = self.entities.get_mut(id) else {
                 return false;
@@ -1565,6 +1629,12 @@ impl Game {
                 entity.velocity = velocity;
             }
         }
+
+        // Effect ticks (P16-03): damage through the shared path (the hurt
+        // window, armour-zero for mobs, loot/XP on death all apply), with
+        // the poison floor at half a heart; regeneration heals toward max.
+        let (dot, dot_wither, regen_amps) = self.mob_effect_ticks(id);
+        self.apply_mob_effect_ticks(id, dot, dot_wither, regen_amps);
 
         // 2. Integrate against the world. `move_with_collision` sweeps the box, so
         //    a fast or badly-framed step cannot tunnel through a floor.
@@ -2253,6 +2323,7 @@ impl Game {
         let min_y = i32::from(self.world.min_section_y()) * mc_world::SECTION_HEIGHT;
         let spawn = self.world.spawn();
         let mut messages: Vec<(ConnectionId, String)> = Vec::new();
+        let mut effect_events: Vec<(ConnectionId, i32, Vec<i32>)> = Vec::new();
         for session in self.sessions.values_mut() {
             session.tick_start_y = session.player.position.y;
             session.hurt_invuln_ticks = session.hurt_invuln_ticks.saturating_sub(1);
@@ -2276,6 +2347,20 @@ impl Game {
             if outcome.died && !session.player.is_alive() {
                 messages.push((session.id, "You died!".to_owned()));
             }
+            // Status effects tick down here, beside hunger: poison and wither
+            // deal through the shared damage path (armour-aware, floored at
+            // half a heart for poison), regeneration heals, and expired ids
+            // come back for their removal packets below.
+            let was_alive = session.player.is_alive();
+            let armor =
+                mc_entity::combat::worn_stats(&session.player.inventory, &self.registries.items);
+            let expired = session.player.tick_effects(self.tick, &armor);
+            if !expired.is_empty() {
+                effect_events.push((session.id, session.entity.get(), expired));
+            }
+            if was_alive && !session.player.is_alive() {
+                messages.push((session.id, "You died!".to_owned()));
+            }
             // Nothing below the world is standable. Void damage is P05; until then
             // a player who ends up there is returned to spawn instead of falling
             // forever.
@@ -2292,6 +2377,16 @@ impl Game {
         }
         for (id, message) in messages {
             self.send_message(id, &message);
+        }
+        let mut report = TickReport::default();
+        for (id, entity_id, expired) in effect_events {
+            for effect_id in expired {
+                let packet = mc_protocol::packets::play::RemoveMobEffect {
+                    entity_id,
+                    effect_id,
+                };
+                let _ = self.send(id, &packet, &mut report);
+            }
         }
     }
 

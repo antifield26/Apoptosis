@@ -307,6 +307,8 @@ pub mod clientbound {
         pub const SET_CHUNK_CACHE_CENTER: i32 = 94;
         /// `minecraft:remove_entities` — despawn one or more entities by id.
         pub const REMOVE_ENTITIES: i32 = 77;
+        /// `minecraft:remove_mob_effect` — clear one effect icon.
+        pub const REMOVE_MOB_EFFECT: i32 = 78;
         /// `minecraft:set_chunk_cache_radius`
         pub const SET_CHUNK_CACHE_RADIUS: i32 = 95;
         /// `minecraft:set_default_spawn_position`
@@ -331,6 +333,8 @@ pub mod clientbound {
         pub const SET_PLAYER_INVENTORY: i32 = 108;
         /// `minecraft:set_time`
         pub const SET_TIME: i32 = 113;
+        /// `minecraft:update_mob_effect` — an effect icon for the HUD.
+        pub const UPDATE_MOB_EFFECT: i32 = 132;
         /// `minecraft:start_configuration`
         pub const START_CONFIGURATION: i32 = 118;
         /// `minecraft:disguised_chat` — a server message attributed to a player.

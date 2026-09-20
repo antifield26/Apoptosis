@@ -713,3 +713,114 @@ impl Packet for SetCursorItem {
         Ok(writer.finish())
     }
 }
+
+/// Flag bit: the effect is ambient (beacon-grade, fewer particles).
+pub const MOB_EFFECT_FLAG_AMBIENT: i8 = 0x01;
+/// Flag bit: show particles.
+pub const MOB_EFFECT_FLAG_PARTICLES: i8 = 0x02;
+/// Flag bit: show the HUD icon.
+pub const MOB_EFFECT_FLAG_ICON: i8 = 0x04;
+
+/// `minecraft:update_mob_effect` (clientbound 132): one effect icon for the
+/// HUD.
+///
+/// Field order (entity, effect, amplifier, duration, flags) corroborated by
+/// pumpkin's `CUpdateMobEffect`; the 26.x shape drops 1.19's trailing blend
+/// flag. The flag bits are the long-standing wire convention
+/// (ambient/particles/icon), verified visually at acceptance rather than by
+/// a capture — no 132 body was captured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UpdateMobEffect {
+    /// Entity carrying the effect (a player, for this server).
+    pub entity_id: i32,
+    /// Effect registry id (vanilla `MobEffect` id, e.g. poison 19).
+    pub effect_id: i32,
+    /// Amplifier, 0-based.
+    pub amplifier: i32,
+    /// Remaining duration in ticks.
+    pub duration: i32,
+    /// Flag bits ([`MOB_EFFECT_FLAG_AMBIENT`] etc.).
+    pub flags: i8,
+}
+
+impl UpdateMobEffect {
+    /// Flags for an effect: ambient when it says so, particles and icon on
+    /// (this build models no hidden-icon effects).
+    #[must_use]
+    pub const fn flags_for(ambient: bool) -> i8 {
+        (if ambient { MOB_EFFECT_FLAG_AMBIENT } else { 0 })
+            | MOB_EFFECT_FLAG_PARTICLES
+            | MOB_EFFECT_FLAG_ICON
+    }
+}
+
+impl Packet for UpdateMobEffect {
+    const ID: i32 = clientbound::play::UPDATE_MOB_EFFECT;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let packet = Self {
+            entity_id: reader.read_varint()?,
+            effect_id: reader.read_varint()?,
+            amplifier: reader.read_varint()?,
+            duration: reader.read_varint()?,
+            flags: reader.read_i8()?,
+        };
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "update_mob_effect has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(packet)
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.entity_id);
+        writer.write_varint(self.effect_id);
+        writer.write_varint(self.amplifier);
+        writer.write_varint(self.duration);
+        writer.write_i8(self.flags);
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:remove_mob_effect` (clientbound 78): clear one effect icon.
+///
+/// Without this, an expired or cleared effect would stick on the HUD until
+/// relog: the icon's lifetime is bounded by this packet, not by the
+/// duration the client counts down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RemoveMobEffect {
+    /// Entity that lost the effect.
+    pub entity_id: i32,
+    /// Effect registry id.
+    pub effect_id: i32,
+}
+
+impl Packet for RemoveMobEffect {
+    const ID: i32 = clientbound::play::REMOVE_MOB_EFFECT;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let packet = Self {
+            entity_id: reader.read_varint()?,
+            effect_id: reader.read_varint()?,
+        };
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "remove_mob_effect has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(packet)
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.entity_id);
+        writer.write_varint(self.effect_id);
+        Ok(writer.finish())
+    }
+}

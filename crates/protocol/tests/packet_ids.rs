@@ -620,6 +620,12 @@ fn every_constant_we_use_matches_the_vanilla_jar() {
     check(
         "game",
         "clientbound",
+        "update_mob_effect",
+        clientbound::play::UPDATE_MOB_EFFECT,
+    );
+    check(
+        "game",
+        "clientbound",
         "set_entity_data",
         clientbound::play::SET_ENTITY_DATA,
     );
@@ -682,6 +688,12 @@ fn every_constant_we_use_matches_the_vanilla_jar() {
         "clientbound",
         "remove_entities",
         clientbound::play::REMOVE_ENTITIES,
+    );
+    check(
+        "game",
+        "clientbound",
+        "remove_mob_effect",
+        clientbound::play::REMOVE_MOB_EFFECT,
     );
     check(
         "game",

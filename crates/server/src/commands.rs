@@ -167,6 +167,19 @@ impl Game {
         add(Command::new("kill", "Kill yourself")
             .with_argument(Argument::optional("target", ArgumentKind::PlayerName))
             .requiring(PermissionLevel::Operator));
+        add(Command::new("effect", "Give or clear a status effect")
+            .with_argument(Argument::word("action"))
+            .with_argument(Argument::optional("target", ArgumentKind::PlayerName))
+            .with_argument(Argument::optional("effect", ArgumentKind::Word))
+            .with_argument(Argument::optional(
+                "seconds",
+                ArgumentKind::Integer(ValueRange::new(1, 1_000_000)),
+            ))
+            .with_argument(Argument::optional(
+                "amplifier",
+                ArgumentKind::Integer(ValueRange::new(0, 255)),
+            ))
+            .requiring(PermissionLevel::Operator));
         add(Command::new("seed", "Show the world seed").requiring(PermissionLevel::Operator));
         add(Command::new("difficulty", "Query or set the difficulty")
             .with_argument(Argument::optional("difficulty", ArgumentKind::Word))
@@ -311,6 +324,7 @@ impl Game {
             "deop" => Ok(self.command_deop(id, parsed)),
             "gamemode" => Ok(self.command_gamemode(id, parsed)),
             "give" => Ok(self.command_give(id, parsed)),
+            "effect" => Ok(self.command_effect(id, parsed, report)),
             "kill" => Ok(self.command_kill(id, parsed)),
             "seed" => Ok(self.command_seed()),
             "difficulty" => Ok(self.command_difficulty(parsed)),
@@ -675,6 +689,119 @@ impl Game {
             }
             Some(_) => CommandResult::message(format!("{} is already dead", parsed.source.name)),
         }
+    }
+
+    /// `/effect give <target> <effect> [seconds] [amplifier]` /
+    /// `/effect clear [<target> [<effect>]]` (P16-03).
+    ///
+    /// The operator-visible source for status effects: no natural source
+    /// exists in the tree yet (no eating, no witch, no beacon), so a command
+    /// is what puts an effect on a player — the same way vanilla's command
+    /// does. Like `give`/`kill`, only the invoking player may be targeted.
+    /// Unmodelled effect names are refused with the modelled list rather
+    /// than granted as dead icons.
+    fn command_effect(
+        &mut self,
+        id: mc_network::bridge::ConnectionId,
+        parsed: &mc_command::dispatch::ParsedCommand,
+        report: &mut TickReport,
+    ) -> CommandResult {
+        let action = parsed.string(0).unwrap_or("");
+        let target = parsed.string(1).unwrap_or(&parsed.source.name);
+        if !target.eq_ignore_ascii_case(&parsed.source.name) {
+            return CommandResult::message(format!(
+                "Cannot affect {target:?}: this build only targets the invoking player"
+            ));
+        }
+        match action {
+            "give" => self.command_effect_give(id, parsed, report),
+            "clear" => self.command_effect_clear(id, parsed, report),
+            _ => CommandResult::message(
+                "Usage: /effect <give|clear> <target> [<effect> [seconds] [amplifier]]",
+            ),
+        }
+    }
+
+    /// `/effect give` arm: resolve, store, announce, confirm.
+    fn command_effect_give(
+        &mut self,
+        id: mc_network::bridge::ConnectionId,
+        parsed: &mc_command::dispatch::ParsedCommand,
+        report: &mut TickReport,
+    ) -> CommandResult {
+        let Some(name) = parsed.string(2) else {
+            return CommandResult::message(
+                "Usage: /effect give <target> <effect> [seconds] [amplifier]",
+            );
+        };
+        let Some(kind) = mc_entity::effect::EffectKind::from_name(name) else {
+            return CommandResult::message(format!(
+                "Unknown effect {name:?}: this build models speed, slowness, strength, weakness, resistance, poison, wither and regeneration"
+            ));
+        };
+        let seconds = parsed.integer(3).unwrap_or(30).clamp(1, 1_000_000);
+        let amplifier =
+            i32::try_from(parsed.integer(4).unwrap_or(0).clamp(0, 255)).unwrap_or(0);
+        let duration = seconds.saturating_mul(20).min(i64::from(i32::MAX));
+        let duration = i32::try_from(duration).unwrap_or(i32::MAX);
+        let Some(session) = self.sessions.get_mut(&id) else {
+            return CommandResult::message("You are not online.");
+        };
+        session.player.give_effect(kind.id(), amplifier, duration);
+        let packet = mc_protocol::packets::play::UpdateMobEffect {
+            entity_id: session.entity.get(),
+            effect_id: kind.id(),
+            amplifier,
+            duration,
+            flags: mc_protocol::packets::play::UpdateMobEffect::flags_for(false),
+        };
+        let _ = self.send(id, &packet, report);
+        CommandResult::message(format!(
+            "Gave {} {} ({}s) to {}",
+            name, amplifier, seconds, parsed.source.name
+        ))
+    }
+
+    /// `/effect clear` arm: one id or everything, each with its removal packet.
+    fn command_effect_clear(
+        &mut self,
+        id: mc_network::bridge::ConnectionId,
+        parsed: &mc_command::dispatch::ParsedCommand,
+        report: &mut TickReport,
+    ) -> CommandResult {
+        let Some(session) = self.sessions.get_mut(&id) else {
+            return CommandResult::message("You are not online.");
+        };
+        let entity_id = session.entity.get();
+        let removed: Vec<i32> = if let Some(name) = parsed.string(2) {
+            let Some(kind) = mc_entity::effect::EffectKind::from_name(name) else {
+                return CommandResult::message(format!("Unknown effect {name:?}"));
+            };
+            session
+                .player
+                .clear_effect(kind.id())
+                .then_some(kind.id())
+                .into_iter()
+                .collect()
+        } else {
+            let ids: Vec<i32> = session.player.effects.keys().copied().collect();
+            for effect_id in &ids {
+                session.player.clear_effect(*effect_id);
+            }
+            ids
+        };
+        for effect_id in &removed {
+            let packet = mc_protocol::packets::play::RemoveMobEffect {
+                entity_id,
+                effect_id: *effect_id,
+            };
+            let _ = self.send(id, &packet, report);
+        }
+        CommandResult::message(format!(
+            "Cleared {} effect(s) from {}",
+            removed.len(),
+            parsed.source.name
+        ))
     }
 
     /// `/seed`

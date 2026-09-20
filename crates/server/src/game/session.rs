@@ -399,6 +399,10 @@ impl Game {
                 player.food = former.food;
                 player.inventory = former.inventory;
                 player.game_mode = former.game_mode;
+                // Active effects ride along too, or a rejoin would keep the
+                // server-side timers (fresh player has none — wrong either
+                // way) while the join sync below found nothing to announce.
+                player.effects = former.effects;
             }
         }
 
@@ -536,6 +540,26 @@ impl Game {
             report,
         )?;
         self.send_vitals(id, report)?;
+        // Active effects ride the join like every other HUD state (P16-03):
+        // without this a rejoining player keeps the server-side effect but
+        // loses the icon until something re-sends it.
+        if let Some(session) = self.sessions.get(&id) {
+            for (effect_id, effect) in &session.player.effects {
+                self.send(
+                    id,
+                    &mc_protocol::packets::play::UpdateMobEffect {
+                        entity_id: session.entity.get(),
+                        effect_id: *effect_id,
+                        amplifier: effect.amplifier,
+                        duration: effect.duration,
+                        flags: mc_protocol::packets::play::UpdateMobEffect::flags_for(
+                            effect.ambient,
+                        ),
+                    },
+                    report,
+                )?;
+            }
+        }
         // The join-time full clock sync (`sendLevelInfo` on vanilla): without
         // an absolute seed the client's overworld instance advances locally
         // from zero forever, and no later entry can fix a sky that never

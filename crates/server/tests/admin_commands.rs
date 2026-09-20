@@ -673,3 +673,85 @@ fn op_rolls_back_when_the_file_write_fails() {
         "and nothing lingers in memory either"
     );
 }
+
+#[test]
+fn effect_give_reaches_the_hud_and_clear_removes_it() {
+    // P16-03: the operator-visible source. Giving poison announces
+    // update_mob_effect (132) with the wire id; clearing announces
+    // remove_mob_effect (78); the server state matches both packets.
+    let mut harness = Harness::new("p16-effect", ops_for("Chief", 4));
+    let (id, mut out) = harness.join("Chief");
+    let lines = harness.command(id, &mut out, "effect give Chief minecraft:poison 60");
+    assert!(
+        lines.iter().any(|line| line.contains("poison")),
+        "the give confirms, saw {lines:?}"
+    );
+    let player = harness.game.player(id).expect("player");
+    let effect = player.effects.get(&19).expect("poison stored");
+    assert_eq!((effect.amplifier, effect.duration), (0, 1200));
+    // The icon packet itself: re-run the give on a fresh drain and read the
+    // raw id, because `command()` consumes non-chat packets while draining.
+    let mut report = TickReport::default();
+    harness
+        .game
+        .dispatch_command(id, "effect give Chief minecraft:poison 60", &mut report)
+        .expect("answered");
+    let mut updates = 0;
+    while let Some(raw) = out.try_recv() {
+        if raw.id == clientbound::play::UPDATE_MOB_EFFECT {
+            updates += 1;
+            let body =
+                mc_protocol::packets::play::UpdateMobEffect::decode(&raw.payload).expect("decodes");
+            assert_eq!(
+                (body.effect_id, body.amplifier, body.duration),
+                (19, 0, 1200),
+                "the HUD packet carries the stored effect"
+            );
+        }
+    }
+    assert_eq!(updates, 1, "exactly one icon packet");
+
+    let mut report = TickReport::default();
+    harness
+        .game
+        .dispatch_command(id, "effect clear Chief minecraft:poison", &mut report)
+        .expect("answered");
+    assert!(
+        harness.game.player(id).expect("player").effects.is_empty(),
+        "cleared server-side"
+    );
+    let mut removals = 0;
+    while let Some(raw) = out.try_recv() {
+        if raw.id == clientbound::play::REMOVE_MOB_EFFECT {
+            removals += 1;
+        }
+    }
+    assert_eq!(removals, 1, "exactly one removal packet");
+}
+
+#[test]
+fn effect_refuses_unknown_names_and_strangers() {
+    // P16-03: unmodelled effects are refused with the modelled list, and
+    // targeting anyone but self is refused like give/kill.
+    let mut harness = Harness::new("p16-effect-refuse", ops_for("Chief", 4));
+    let (id, mut out) = harness.join("Chief");
+    let lines = harness.command(id, &mut out, "effect give Chief minecraft:jump_boost");
+    assert!(
+        lines.iter().any(|line| line.contains("Unknown effect")),
+        "jump_boost is storable but has no behaviour here, saw {lines:?}"
+    );
+    assert!(
+        harness.game.player(id).expect("player").effects.is_empty(),
+        "refused effects store nothing"
+    );
+    let lines = harness.command(id, &mut out, "effect give Rookie minecraft:poison");
+    assert!(
+        lines.iter().any(|line| line.contains("invoking player")),
+        "cross-player targeting refused, saw {lines:?}"
+    );
+    let lines = harness.command(id, &mut out, "effect frobnicate");
+    assert!(
+        lines.iter().any(|line| line.contains("Usage")),
+        "unknown verbs get usage, saw {lines:?}"
+    );
+}

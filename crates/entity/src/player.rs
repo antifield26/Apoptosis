@@ -50,6 +50,7 @@
 //!   (see [`crate::inventory`]).
 
 use crate::combat::{CombatStats, DamageSource};
+use crate::effect::ActiveEffect;
 use crate::inventory::PlayerInventory;
 use crate::profile::GameProfile;
 use crate::stack::ItemStack;
@@ -57,6 +58,7 @@ use mc_core::error::{ServerError, ServerResult};
 use mc_nbt::NbtTag;
 use mc_registry::ItemRegistry;
 use mc_world::Vec3;
+use std::collections::BTreeMap;
 
 /// Maximum player health (10 hearts).
 pub const MAX_HEALTH: f32 = 20.0;
@@ -266,6 +268,9 @@ pub struct Player {
     pub total_experience: i32,
     /// Inventory (slots 0..=40).
     pub inventory: PlayerInventory,
+    /// Active status effects, keyed by effect id (ascending, deterministic),
+    /// mirroring [`crate::entity::Entity::effects`] for mobs.
+    pub effects: BTreeMap<i32, ActiveEffect>,
     /// Uninterpreted `playerdata` entries, preserved verbatim.
     pub extra: Vec<(String, NbtTag)>,
 }
@@ -288,6 +293,7 @@ impl PartialEq for Player {
             && self.experience == other.experience
             && self.level == other.level
             && self.total_experience == other.total_experience
+            && self.effects == other.effects
             && self.inventory == other.inventory
             && self.extra == other.extra
     }
@@ -326,6 +332,7 @@ impl Player {
             level: 0,
             total_experience: 0,
             inventory,
+            effects: BTreeMap::new(),
             extra: Vec::new(),
         }
     }
@@ -445,6 +452,90 @@ impl Player {
             dealt,
             health: self.health,
         }
+    }
+
+    /// Give (or refresh) a status effect: a higher amplifier wins, and at
+    /// equal amplifier the longer duration wins (vanilla's combine rule).
+    /// A non-positive duration is a refusal, not a zero-tick effect.
+    pub fn give_effect(&mut self, id: i32, amplifier: i32, duration: i32) {
+        if duration <= 0 {
+            return;
+        }
+        let incoming = ActiveEffect {
+            id,
+            amplifier: amplifier.max(0),
+            duration,
+            ambient: false,
+        };
+        match self.effects.get(&id) {
+            Some(current)
+                if current.amplifier > incoming.amplifier
+                    || (current.amplifier == incoming.amplifier
+                        && current.duration >= incoming.duration) =>
+            {
+                // The incumbent is strictly better; the refresh fizzles.
+            }
+            _ => {
+                self.effects.insert(id, incoming);
+            }
+        }
+    }
+
+    /// Clear one effect by id, reporting whether one was present.
+    pub fn clear_effect(&mut self, id: i32) -> bool {
+        self.effects.remove(&id).is_some()
+    }
+
+    /// Tick every active effect down by one and apply the over-time ones.
+    ///
+    /// Poison and wither deal [`damage_over_time`](crate::effect::damage_over_time)
+    /// through [`Self::apply_damage`] with their mapped sources (poison floors
+    /// at 1.0 health via [`can_kill`](crate::effect::can_kill)); regeneration
+    /// heals 1.0 every `max(50 >> amplifier, 1)` ticks, the documented vanilla
+    /// cadence. Returns the ids that expired this tick, so the caller can
+    /// announce their removal.
+    pub fn tick_effects(&mut self, tick: u64, armor: &CombatStats) -> Vec<i32> {
+        use crate::effect::{can_kill, damage_over_time};
+        let mut expired = Vec::new();
+        let mut done: Vec<(i32, ActiveEffect)> = Vec::new();
+        for (id, effect) in &mut self.effects {
+            if effect.duration <= 1 {
+                expired.push(*id);
+            } else {
+                effect.duration -= 1;
+            }
+            done.push((*id, *effect));
+        }
+        for id in &expired {
+            self.effects.remove(id);
+        }
+        for (_, effect) in done {
+            if !self.is_alive() {
+                break;
+            }
+            let hit = damage_over_time(&effect, tick);
+            if hit > 0.0 {
+                let source = match effect.kind() {
+                    Some(crate::effect::EffectKind::Wither) => DamageSource::Wither,
+                    _ => DamageSource::Poison,
+                };
+                let mut hit = hit;
+                if !can_kill(&effect) {
+                    hit = hit.min((self.health - 1.0).max(0.0));
+                }
+                if hit > 0.0 {
+                    self.apply_damage(hit, source, armor);
+                }
+            }
+            if effect.kind() == Some(crate::effect::EffectKind::Regeneration) {
+                let shift = u32::try_from(effect.amplifier.max(0)).unwrap_or(0);
+                let interval = (50u64 >> shift.min(6)).max(1);
+                if tick.is_multiple_of(interval) {
+                    self.heal(1.0);
+                }
+            }
+        }
+        expired
     }
 
     /// Set the food level, clamped into `0..=20`, and re-clamp saturation to it.
@@ -717,6 +808,7 @@ const KNOWN_PLAYER_KEYS: &[&str] = &[
     "XpLevel",
     "XpP",
     "XpTotal",
+    "active_effects",
     "foodExhaustionLevel",
     "foodLevel",
     "foodSaturationLevel",
@@ -814,6 +906,7 @@ impl Player {
             level: 0,
             total_experience: 0,
             inventory,
+            effects: BTreeMap::new(),
             extra: Vec::new(),
         };
 
@@ -838,6 +931,7 @@ impl Player {
         player.level = root.get_i32("XpLevel").unwrap_or(0).max(0);
         player.experience = in_range_f32(root.get_f64("XpP"), 0.0, 1.0, 0.0, 0.0);
         player.total_experience = root.get_i32("XpTotal").unwrap_or(0).max(0);
+        player.effects = read_effects(root);
         player.inventory = read_inventory(root, items)?;
         if let Some(slot) = root.get_i32("SelectedItemSlot") {
             player.inventory.set_selected_hotbar_tolerant(slot);
@@ -916,6 +1010,22 @@ impl Player {
             ("XpLevel".to_owned(), NbtTag::Int(self.level)),
             ("XpP".to_owned(), NbtTag::Float(self.experience)),
             ("XpTotal".to_owned(), NbtTag::Int(self.total_experience)),
+            (
+                "active_effects".to_owned(),
+                NbtTag::List(
+                    self.effects
+                        .values()
+                        .map(|effect| {
+                            NbtTag::compound([
+                                ("id".to_owned(), NbtTag::Int(effect.id)),
+                                ("amplifier".to_owned(), NbtTag::Int(effect.amplifier)),
+                                ("duration".to_owned(), NbtTag::Int(effect.duration)),
+                                ("ambient".to_owned(), NbtTag::Byte(i8::from(effect.ambient))),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ),
         ];
         let mut inventory: Vec<NbtTag> = Vec::new();
         for index in 0..self.inventory.stored_slots() {
@@ -972,6 +1082,55 @@ impl Player {
 /// row in a long inventory must not cost the player the other 40. An unknown
 /// item **name** is fatal — that is a registry/client mismatch, and silently
 /// dropping the item would destroy player property (AGENTS.md section 3.3).
+fn read_effects(root: &NbtTag) -> BTreeMap<i32, ActiveEffect> {
+    let mut effects = BTreeMap::new();
+    // Tolerantly, like rows above: one malformed entry is skipped rather than
+    // failing the whole player load (a buff is transient; the player is not).
+    // Durations and amplifiers are clamped non-negative, matching
+    // `ActiveEffect::new`.
+    if let Some(entries) = root.get_list("active_effects") {
+        for entry in entries {
+            let NbtTag::Compound(fields) = entry else {
+                continue;
+            };
+            let get = |name: &str| {
+                fields
+                    .iter()
+                    .find(|(key, _)| key == name)
+                    .map(|(_, value)| value)
+            };
+            let (Some(id), Some(amplifier), Some(duration)) = (
+                get("id")
+                    .and_then(NbtTag::as_i64)
+                    .and_then(|v| i32::try_from(v).ok()),
+                get("amplifier")
+                    .and_then(NbtTag::as_i64)
+                    .and_then(|v| i32::try_from(v).ok()),
+                get("duration")
+                    .and_then(NbtTag::as_i64)
+                    .and_then(|v| i32::try_from(v).ok()),
+            ) else {
+                continue;
+            };
+            if duration <= 0 {
+                continue;
+            }
+            let ambient = get("ambient")
+                .and_then(NbtTag::as_i64)
+                .is_some_and(|v| v != 0);
+            effects.insert(
+                id,
+                ActiveEffect {
+                    id,
+                    amplifier: amplifier.max(0),
+                    duration,
+                    ambient,
+                },
+            );
+        }
+    }
+    effects
+}
 fn read_inventory(root: &NbtTag, items: &ItemRegistry) -> ServerResult<PlayerInventory> {
     let mut inventory = crate::inventory::inventory_for_registry(items)?;
     let Some(list) = root.get_list("Inventory") else {
@@ -1684,6 +1843,98 @@ mod tests {
         assert_eq!(decoded.inventory.selected_hotbar(), 4);
         // And it stays equal through a second cycle.
         assert_eq!(decoded.to_nbt(&items).expect("re-encodes"), root);
+    }
+
+    #[test]
+    fn effects_round_trip_through_playerdata() {
+        let items = registry();
+        let mut player = survivor();
+        player.give_effect(crate::effect::effect_id::POISON, 1, 200);
+        player.give_effect(crate::effect::effect_id::SPEED, 0, 600);
+        let root = player.to_nbt(&items).expect("encodes");
+        let decoded = Player::from_nbt(&root, profile(), 7, &items).expect("loads");
+        assert_eq!(decoded.effects, player.effects);
+        assert_eq!(decoded, player);
+        assert_eq!(decoded.to_nbt(&items).expect("re-encodes"), root);
+    }
+
+    #[test]
+    fn give_effect_refresh_follows_better_wins() {
+        use crate::effect::effect_id::POISON;
+        let mut player = survivor();
+        player.give_effect(POISON, 0, 100);
+        // Weaker amplifier never displaces.
+        player.give_effect(POISON, 0, 50);
+        assert_eq!(player.effects[&POISON].duration, 100);
+        // Longer duration at equal amplifier refreshes.
+        player.give_effect(POISON, 0, 200);
+        assert_eq!(player.effects[&POISON].duration, 200);
+        // Higher amplifier wins even when shorter.
+        player.give_effect(POISON, 1, 10);
+        assert_eq!(player.effects[&POISON].amplifier, 1);
+        // Non-positive durations are refused, not stored.
+        player.give_effect(POISON, 5, 0);
+        assert_eq!(player.effects[&POISON].amplifier, 1);
+        assert!(player.clear_effect(POISON));
+        assert!(!player.clear_effect(POISON));
+        assert!(player.effects.is_empty());
+    }
+
+    #[test]
+    fn poison_ticks_damage_and_floors_at_half_a_heart() {
+        use crate::combat::CombatStats;
+        use crate::effect::effect_id::POISON;
+        let mut player = survivor();
+        player.give_effect(POISON, 0, 1000);
+        // Amplifier 0 hits every 25th tick; run a window with exactly four.
+        player.tick_effects(24, &CombatStats::ZERO);
+        assert_eq!(player.health, MAX_HEALTH, "tick 24 is quiet");
+        player.tick_effects(25, &CombatStats::ZERO);
+        assert_eq!(player.health, MAX_HEALTH - 1.0);
+        // Near death the floor holds: poison never kills.
+        player.set_health(1.0);
+        for tick in 26..60 {
+            player.tick_effects(tick, &CombatStats::ZERO);
+        }
+        assert_eq!(player.health, 1.0, "poison stops at half a heart");
+        assert!(player.is_alive());
+    }
+
+    #[test]
+    fn wither_ticks_can_kill_and_regeneration_heals() {
+        use crate::combat::CombatStats;
+        use crate::effect::{effect_id::REGENERATION, effect_id::WITHER};
+        let mut player = survivor();
+        player.set_health(3.0);
+        player.give_effect(WITHER, 4, 100);
+        // Amplifier 4 hits every tick (25 >> 4 = 1).
+        player.tick_effects(7, &CombatStats::ZERO);
+        assert_eq!(player.health, 2.0);
+        player.tick_effects(8, &CombatStats::ZERO);
+        player.tick_effects(9, &CombatStats::ZERO);
+        assert_eq!(player.health, 0.0);
+        assert!(!player.is_alive(), "wither finishes the job");
+
+        let mut player = survivor();
+        player.set_health(10.0);
+        player.give_effect(REGENERATION, 0, 200);
+        // Amplifier 0 heals every 50th tick.
+        player.tick_effects(49, &CombatStats::ZERO);
+        assert_eq!(player.health, 10.0, "tick 49 is quiet");
+        let expired = player.tick_effects(50, &CombatStats::ZERO);
+        assert_eq!(player.health, 11.0);
+        assert!(expired.is_empty(), "nothing expired yet");
+    }
+
+    #[test]
+    fn expired_effects_come_back_for_removal() {
+        use crate::combat::CombatStats;
+        use crate::effect::effect_id::SPEED;
+        let mut player = survivor();
+        player.give_effect(SPEED, 0, 2);
+        assert!(player.tick_effects(1, &CombatStats::ZERO).is_empty());
+        assert_eq!(player.tick_effects(2, &CombatStats::ZERO), vec![SPEED]);
+        assert!(player.effects.is_empty());
     }
 
     #[test]
