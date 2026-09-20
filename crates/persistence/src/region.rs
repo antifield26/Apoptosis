@@ -271,6 +271,12 @@ pub struct RegionFile {
     header: RegionHeader,
     bitmap: SectorBitmap,
     readonly: bool,
+    /// Test-only write journal: every `(offset, len)` passed to `write_all_at`,
+    /// in order. Compiled out of production builds; it exists so the
+    /// commit-point ordering test can observe *sequence*, which no end-state
+    /// read can see (AUDIT-09 B-02).
+    #[cfg(test)]
+    journal: Vec<(u64, usize)>,
 }
 
 impl RegionFile {
@@ -319,6 +325,8 @@ impl RegionFile {
             header: RegionHeader::empty(),
             bitmap: SectorBitmap::from_header(&RegionHeader::empty(), FIRST_CHUNK_SECTOR),
             readonly,
+            #[cfg(test)]
+            journal: Vec::new(),
         };
         let len = this.length()?;
         if len == 0 {
@@ -634,6 +642,8 @@ impl RegionFile {
     }
 
     fn write_all_at(&mut self, offset: u64, bytes: &[u8]) -> ServerResult<()> {
+        #[cfg(test)]
+        self.journal.push((offset, bytes.len()));
         self.file
             .seek(SeekFrom::Start(offset))
             .map_err(|e| ServerError::Operational(format!("seek {}: {e}", self.path.display())))?;
@@ -648,6 +658,18 @@ impl RegionFile {
 
     fn write_i32_at(&mut self, offset: u64, value: i32) -> ServerResult<()> {
         self.write_all_at(offset, &value.to_be_bytes())
+    }
+
+    /// Snapshot the test-only write journal (order of `write_all_at` calls).
+    #[cfg(test)]
+    fn write_journal(&self) -> Vec<(u64, usize)> {
+        self.journal.clone()
+    }
+
+    /// Clear the test-only write journal.
+    #[cfg(test)]
+    fn clear_write_journal(&mut self) {
+        self.journal.clear();
     }
 
     /// Sectors currently allocated (including the 2-sector header).
@@ -910,6 +932,40 @@ mod tests {
             .expect("present");
         assert_eq!(stored.data, b"second-payload");
         assert_eq!(stored.timestamp, 2);
+    }
+
+    #[test]
+    fn location_word_is_written_after_payload() {
+        // AUDIT-09 B-02: the end-state test above passes under a reordered
+        // write (both orders reach the same bytes when nothing crashes
+        // between them). This one observes the *sequence* through the
+        // test-only journal: the location word (offset `slot * 4`, 4 bytes)
+        // must land after the payload write. A crash between payload and
+        // commit then leaves the old word pointing at the old payload —
+        // never a new word pointing at a torn one.
+        let (_dir, path) = temp_region("region-commit-order");
+        let mut region = RegionFile::open(&path).expect("opens");
+        region
+            .write_chunk(ChunkPos::new(0, 0), b"first", Compression::Zlib, 1)
+            .expect("writes");
+        region.clear_write_journal();
+        region
+            .write_chunk(ChunkPos::new(0, 0), b"second-payload", Compression::Zlib, 2)
+            .expect("rewrites");
+        let journal = region.write_journal();
+        let slot_offset = (ChunkPos::new(0, 0).slot() * 4) as u64;
+        let location = journal
+            .iter()
+            .position(|&(offset, len)| offset == slot_offset && len == 4)
+            .expect("a location-word write is journalled");
+        let payload = journal
+            .iter()
+            .position(|&(offset, len)| offset != 0 && len >= SECTOR_BYTES)
+            .expect("a payload write is journalled");
+        assert!(
+            location > payload,
+            "location word at journal index {location} must follow the payload write at {payload}: {journal:?}"
+        );
     }
 
     #[test]
