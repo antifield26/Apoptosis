@@ -376,3 +376,43 @@ fn value_ranges_validate_and_test_membership() {
     assert!(full.contains(i64::from(i32::MAX)));
     assert!(!full.contains(i64::from(i32::MAX) + 1));
 }
+
+#[test]
+fn parse_error_messages_are_stable() {
+    // P15-06: player-visible strings; the thiserror migration must not reword them.
+    let cases = [
+        (
+            ParseError::MissingArgument { name: "count" },
+            "expected a value for <count>",
+        ),
+        (
+            ParseError::Invalid {
+                name: "n",
+                expected: "an integer",
+                found: "abc".to_owned(),
+            },
+            "<n> expects an integer, got \"abc\"",
+        ),
+        (
+            ParseError::OutOfRange {
+                name: "n",
+                value: 99,
+                min: 0,
+                max: 10,
+            },
+            "<n> must be between 0 and 10, got 99",
+        ),
+        (ParseError::UnterminatedQuote, "unterminated quoted string"),
+        (
+            ParseError::TooLong {
+                length: 5000,
+                limit: 256,
+            },
+            "command is 5000 characters, limit is 256",
+        ),
+        (ParseError::Empty, "empty command"),
+    ];
+    for (error, expected) in cases {
+        assert_eq!(error.to_string(), expected);
+    }
+}

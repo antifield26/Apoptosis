@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 mc-core = { path = "../core" }
+thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

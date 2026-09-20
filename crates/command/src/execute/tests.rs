@@ -406,3 +406,43 @@ fn every_error_has_a_message_so_none_is_a_silent_failure() {
         let _: &dyn std::error::Error = &error;
     }
 }
+
+#[test]
+fn execute_error_messages_are_stable() {
+    // P15-06: player-visible strings; the thiserror migration must not reword them.
+    let cases = [
+        (
+            ExecuteError::MissingRun,
+            "an execute chain must end with `run <command>`",
+        ),
+        (ExecuteError::EmptyRun, "`run` needs a command after it"),
+        (
+            ExecuteError::UnsupportedModifier("as".to_owned()),
+            "the `as` modifier is not supported by this build",
+        ),
+        (
+            ExecuteError::UnsupportedCondition("x".to_owned()),
+            "the `x` condition is not supported by this build",
+        ),
+        (
+            ExecuteError::MissingArgument {
+                modifier: "at".to_owned(),
+            },
+            "`at` is missing an argument",
+        ),
+        (
+            ExecuteError::BadValue {
+                modifier: "at".to_owned(),
+                reason: "bad".to_owned(),
+            },
+            "`at`: bad",
+        ),
+        (
+            ExecuteError::TooLong { count: 9, limit: 8 },
+            "an execute chain has at most 8 modifiers, found 9",
+        ),
+    ];
+    for (error, expected) in cases {
+        assert_eq!(error.to_string(), expected);
+    }
+}

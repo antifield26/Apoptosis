@@ -558,3 +558,46 @@ fn game_modes_and_selector_kinds_have_names() {
     assert!(SelectorKind::NearestEntity.defaults_to_entities());
     assert!(!SelectorKind::AllPlayers.defaults_to_entities());
 }
+
+#[test]
+fn selector_error_messages_are_stable() {
+    // P15-06: player-visible strings; the thiserror migration must not reword them.
+    let cases = [
+        (
+            SelectorError::NotASelector("foo".to_owned()),
+            "\"foo\" is not a selector",
+        ),
+        (SelectorError::UnknownSelector('x'), "@x is not a selector"),
+        (
+            SelectorError::UnterminatedOptions,
+            "a selector's [ is never closed",
+        ),
+        (
+            SelectorError::MalformedOption("a".to_owned()),
+            "option \"a\" has no value",
+        ),
+        (
+            SelectorError::UnsupportedOption("tag".to_owned()),
+            "tag= is not supported by this build",
+        ),
+        (
+            SelectorError::BadValue {
+                option: "limit".to_owned(),
+                reason: "bad".to_owned(),
+            },
+            "limit=: bad",
+        ),
+        (
+            SelectorError::DuplicateOption("type".to_owned()),
+            "type= is given twice",
+        ),
+        (
+            SelectorError::LimitOnSingleEntity("@p".to_owned()),
+            "@p names one entity, so limit= is a contradiction",
+        ),
+        (SelectorError::EmptyOption, "a selector has an empty option"),
+    ];
+    for (error, expected) in cases {
+        assert_eq!(error.to_string(), expected);
+    }
+}

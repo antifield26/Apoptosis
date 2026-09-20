@@ -42,6 +42,7 @@
 //! with no world at all, which is where the parser's hostile-input tests live.
 
 use crate::selector::{self, Selector};
+use thiserror::Error;
 
 /// Longest chain of modifiers accepted.
 ///
@@ -197,22 +198,28 @@ impl ExecuteChain {
 }
 
 /// Why an `execute` chain could not be parsed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ExecuteError {
     /// `run` was never reached, so there is no command to execute.
+    #[error("an execute chain must end with `run <command>`")]
     MissingRun,
     /// `run` was given with nothing after it.
+    #[error("`run` needs a command after it")]
     EmptyRun,
     /// A modifier keyword this build does not model, named so the caller can see which.
+    #[error("the `{0}` modifier is not supported by this build")]
     UnsupportedModifier(String),
     /// An `if`/`unless` condition this build does not model.
+    #[error("the `{0}` condition is not supported by this build")]
     UnsupportedCondition(String),
     /// A modifier was missing its arguments.
+    #[error("`{modifier}` is missing an argument")]
     MissingArgument {
         /// The modifier.
         modifier: String,
     },
     /// A modifier's argument was malformed.
+    #[error("`{modifier}`: {reason}")]
     BadValue {
         /// The modifier.
         modifier: String,
@@ -220,6 +227,7 @@ pub enum ExecuteError {
         reason: String,
     },
     /// The chain is longer than [`MAX_MODIFIERS`].
+    #[error("an execute chain has at most {limit} modifiers, found {count}")]
     TooLong {
         /// How many modifiers were written.
         count: usize,
@@ -227,33 +235,6 @@ pub enum ExecuteError {
         limit: usize,
     },
 }
-
-impl std::fmt::Display for ExecuteError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::MissingRun => write!(f, "an execute chain must end with `run <command>`"),
-            Self::EmptyRun => write!(f, "`run` needs a command after it"),
-            Self::UnsupportedModifier(name) => {
-                write!(f, "the `{name}` modifier is not supported by this build")
-            }
-            Self::UnsupportedCondition(name) => {
-                write!(f, "the `{name}` condition is not supported by this build")
-            }
-            Self::MissingArgument { modifier } => {
-                write!(f, "`{modifier}` is missing an argument")
-            }
-            Self::BadValue { modifier, reason } => write!(f, "`{modifier}`: {reason}"),
-            Self::TooLong { count, limit } => {
-                write!(
-                    f,
-                    "an execute chain has at most {limit} modifiers, found {count}"
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for ExecuteError {}
 
 /// Modifier keywords this build recognises but does not implement.
 ///

@@ -14,16 +14,19 @@
 //! half-read command is worse than a refused one.
 
 use mc_core::ids::ResourceId;
+use thiserror::Error;
 
 /// Why an argument could not be parsed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ParseError {
     /// The input ran out before a required argument was supplied.
+    #[error("expected a value for <{name}>")]
     MissingArgument {
         /// The argument's name.
         name: &'static str,
     },
     /// The token was not the kind the argument needed.
+    #[error("<{name}> expects {expected}, got {found:?}")]
     Invalid {
         /// The argument's name.
         name: &'static str,
@@ -33,6 +36,7 @@ pub enum ParseError {
         found: String,
     },
     /// A number was outside the argument's declared range.
+    #[error("<{name}> must be between {min} and {max}, got {value}")]
     OutOfRange {
         /// The argument's name.
         name: &'static str,
@@ -44,8 +48,10 @@ pub enum ParseError {
         max: i64,
     },
     /// The text ended inside a quoted section.
+    #[error("unterminated quoted string")]
     UnterminatedQuote,
     /// The command string was longer than [`crate::MAX_COMMAND_CHARS`].
+    #[error("command is {length} characters, limit is {limit}")]
     TooLong {
         /// Its length in characters.
         length: usize,
@@ -53,34 +59,9 @@ pub enum ParseError {
         limit: usize,
     },
     /// The whole command was empty or whitespace.
+    #[error("empty command")]
     Empty,
 }
-
-impl std::fmt::Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::MissingArgument { name } => write!(f, "expected a value for <{name}>"),
-            Self::Invalid {
-                name,
-                expected,
-                found,
-            } => write!(f, "<{name}> expects {expected}, got {found:?}"),
-            Self::OutOfRange {
-                name,
-                value,
-                min,
-                max,
-            } => write!(f, "<{name}> must be between {min} and {max}, got {value}"),
-            Self::UnterminatedQuote => write!(f, "unterminated quoted string"),
-            Self::TooLong { length, limit } => {
-                write!(f, "command is {length} characters, limit is {limit}")
-            }
-            Self::Empty => write!(f, "empty command"),
-        }
-    }
-}
-
-impl std::error::Error for ParseError {}
 
 /// An inclusive numeric range an argument accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

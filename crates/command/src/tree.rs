@@ -6,19 +6,23 @@
 //! once, at construction, and the errors name the offending command.
 
 use crate::argument::{Argument, ArgumentKind};
+use thiserror::Error;
 
 /// Why a tree is not usable.
 ///
 /// All of these are *construction* errors: the tree is built by the server, so a bad one
 /// is a programming mistake rather than hostile input. Reporting them as values rather
 /// than panicking means a plugin or a test can assert on them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum TreeError {
     /// A command's name is empty.
+    #[error("a command needs a name")]
     EmptyName,
     /// Two commands share a root literal.
+    #[error("two commands are named {0:?}")]
     DuplicateName(String),
     /// A command has more arguments than [`crate::MAX_ARGUMENTS`].
+    #[error("{command} declares {count} arguments, limit is {limit}")]
     TooManyArguments {
         /// The command.
         command: String,
@@ -28,6 +32,9 @@ pub enum TreeError {
         limit: usize,
     },
     /// A required argument appears after an optional one.
+    #[error(
+        "{command}: <{optional}> is optional but <{required}> follows it, which makes the grammar ambiguous"
+    )]
     OptionalBeforeRequired {
         /// The command.
         command: String,
@@ -40,6 +47,7 @@ pub enum TreeError {
     ///
     /// A greedy argument consumes the rest of the input, so anything after it could
     /// never be supplied.
+    #[error("{command}: <{argument}> consumes the rest of the input, so nothing may follow it")]
     GreedyNotLast {
         /// The command.
         command: String,
@@ -47,11 +55,13 @@ pub enum TreeError {
         argument: &'static str,
     },
     /// An argument has an empty name.
+    #[error("{command} has an argument with no name")]
     EmptyArgumentName {
         /// The command.
         command: String,
     },
     /// Two arguments in one command share a name.
+    #[error("{command} declares <{argument}> twice")]
     DuplicateArgument {
         /// The command.
         command: String,
@@ -59,6 +69,7 @@ pub enum TreeError {
         argument: &'static str,
     },
     /// A numeric range is inverted (`min > max`).
+    #[error("{command}: <{argument}> has min > max")]
     InvertedRange {
         /// The command.
         command: String,
@@ -66,6 +77,7 @@ pub enum TreeError {
         argument: &'static str,
     },
     /// A double range is inverted or non-finite.
+    #[error("{command}: <{argument}> has a non-finite or inverted range")]
     InvalidDoubleRange {
         /// The command.
         command: String,
@@ -73,51 +85,6 @@ pub enum TreeError {
         argument: &'static str,
     },
 }
-
-impl std::fmt::Display for TreeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::EmptyName => write!(f, "a command needs a name"),
-            Self::DuplicateName(name) => write!(f, "two commands are named {name:?}"),
-            Self::TooManyArguments {
-                command,
-                count,
-                limit,
-            } => write!(f, "{command} declares {count} arguments, limit is {limit}"),
-            Self::OptionalBeforeRequired {
-                command,
-                optional,
-                required,
-            } => write!(
-                f,
-                "{command}: <{optional}> is optional but <{required}> follows it, which \
-                 makes the grammar ambiguous"
-            ),
-            Self::GreedyNotLast { command, argument } => write!(
-                f,
-                "{command}: <{argument}> consumes the rest of the input, so nothing may \
-                 follow it"
-            ),
-            Self::EmptyArgumentName { command } => {
-                write!(f, "{command} has an argument with no name")
-            }
-            Self::DuplicateArgument { command, argument } => {
-                write!(f, "{command} declares <{argument}> twice")
-            }
-            Self::InvertedRange { command, argument } => {
-                write!(f, "{command}: <{argument}> has min > max")
-            }
-            Self::InvalidDoubleRange { command, argument } => {
-                write!(
-                    f,
-                    "{command}: <{argument}> has a non-finite or inverted range"
-                )
-            }
-        }
-    }
-}
-
-impl std::error::Error for TreeError {}
 
 /// One command: a name, its arguments, and what it requires to run.
 ///
@@ -417,5 +384,75 @@ impl CommandTree {
             command.validate()?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TreeError;
+
+    #[test]
+    fn tree_error_messages_are_stable() {
+        // P15-06: operator-visible strings; the thiserror migration must not reword them.
+        let cases = [
+            (TreeError::EmptyName, "a command needs a name"),
+            (
+                TreeError::DuplicateName("say".to_owned()),
+                "two commands are named \"say\"",
+            ),
+            (
+                TreeError::TooManyArguments {
+                    command: "c".to_owned(),
+                    count: 5,
+                    limit: 3,
+                },
+                "c declares 5 arguments, limit is 3",
+            ),
+            (
+                TreeError::OptionalBeforeRequired {
+                    command: "c".to_owned(),
+                    optional: "a",
+                    required: "b",
+                },
+                "c: <a> is optional but <b> follows it, which makes the grammar ambiguous",
+            ),
+            (
+                TreeError::GreedyNotLast {
+                    command: "c".to_owned(),
+                    argument: "g",
+                },
+                "c: <g> consumes the rest of the input, so nothing may follow it",
+            ),
+            (
+                TreeError::EmptyArgumentName {
+                    command: "c".to_owned(),
+                },
+                "c has an argument with no name",
+            ),
+            (
+                TreeError::DuplicateArgument {
+                    command: "c".to_owned(),
+                    argument: "a",
+                },
+                "c declares <a> twice",
+            ),
+            (
+                TreeError::InvertedRange {
+                    command: "c".to_owned(),
+                    argument: "a",
+                },
+                "c: <a> has min > max",
+            ),
+            (
+                TreeError::InvalidDoubleRange {
+                    command: "c".to_owned(),
+                    argument: "a",
+                },
+                "c: <a> has a non-finite or inverted range",
+            ),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+        }
     }
 }

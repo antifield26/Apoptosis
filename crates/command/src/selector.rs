@@ -44,6 +44,7 @@
 //! reasoning as `mc-data`'s unmodelled recipe counting, applied to a parse.
 
 use mc_core::ids::ResourceId;
+use thiserror::Error;
 
 /// A numeric bound with the range syntax Vanilla uses.
 ///
@@ -364,19 +365,25 @@ impl Selector {
 }
 
 /// Why a selector could not be parsed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SelectorError {
     /// The text did not begin with `@`.
+    #[error("{0:?} is not a selector")]
     NotASelector(String),
     /// The character after `@` was not a known selector letter.
+    #[error("@{0} is not a selector")]
     UnknownSelector(char),
     /// A `[` was not closed.
+    #[error("a selector's [ is never closed")]
     UnterminatedOptions,
     /// An option had no `=`.
+    #[error("option {0:?} has no value")]
     MalformedOption(String),
     /// An option this build does not model, named so the caller can see which.
+    #[error("{0}= is not supported by this build")]
     UnsupportedOption(String),
     /// An option was well formed but its value was wrong.
+    #[error("{option}=: {reason}")]
     BadValue {
         /// The option.
         option: String,
@@ -384,34 +391,15 @@ pub enum SelectorError {
         reason: String,
     },
     /// The same option was given twice, where Vanilla takes one.
+    #[error("{0}= is given twice")]
     DuplicateOption(String),
     /// A `limit` on a selector that can only name one entity.
+    #[error("{0} names one entity, so limit= is a contradiction")]
     LimitOnSingleEntity(String),
     /// A `[` with nothing in it, or a trailing comma.
+    #[error("a selector has an empty option")]
     EmptyOption,
 }
-
-impl std::fmt::Display for SelectorError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotASelector(text) => write!(f, "{text:?} is not a selector"),
-            Self::UnknownSelector(c) => write!(f, "@{c} is not a selector"),
-            Self::UnterminatedOptions => write!(f, "a selector's [ is never closed"),
-            Self::MalformedOption(text) => write!(f, "option {text:?} has no value"),
-            Self::UnsupportedOption(name) => {
-                write!(f, "{name}= is not supported by this build")
-            }
-            Self::BadValue { option, reason } => write!(f, "{option}=: {reason}"),
-            Self::DuplicateOption(name) => write!(f, "{name}= is given twice"),
-            Self::LimitOnSingleEntity(select) => {
-                write!(f, "{select} names one entity, so limit= is a contradiction")
-            }
-            Self::EmptyOption => write!(f, "a selector has an empty option"),
-        }
-    }
-}
-
-impl std::error::Error for SelectorError {}
 
 /// Options this build recognises but does not implement.
 ///
