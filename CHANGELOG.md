@@ -64,7 +64,7 @@ path is used), and the real directory loads identically to a direct load
 plus a scrubbed-environment rerun (proving no hidden env dependency). The
 probe binary self-builds on filtered runs.
 
-**A-03** (capture sweep): 6 273 bodies walk every decoder. Serverbound play
+**A-03** (capture sweep): 6 258 bodies walk every decoder. Serverbound play
 refuses trailing bytes inside `PlayIntent::decode` — the audit's finding,
 now product behaviour — with the single documented exemption
 (`ContainerClick`'s intentionally-unread `HashedStack` pair). Three observed

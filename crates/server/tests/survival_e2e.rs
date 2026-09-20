@@ -1727,7 +1727,7 @@ fn closing_a_chest_returns_the_cursor() {
         .menu_window_id(harness.id)
         .expect("a chest window");
     harness.intent(PlayIntent::ContainerClose {
-        window_id: window_u8,
+        window_id: i32::from(window_u8),
     });
     assert_eq!(
         harness.game.menu_window_id(harness.id),

@@ -26,7 +26,7 @@
 //!
 //! AUDIT-09 A-03 proposed exactly this experiment ("feed every captured
 //! packet body to its decoder and assert the reader is exhausted"); the lane
-//! estimated 19 000 packets, this corpus holds 6 273.
+//! estimated 19 000 packets, this corpus holds 6 258.
 
 use mc_protocol::packets::Packet;
 use mc_protocol::packets::config::{

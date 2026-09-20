@@ -243,8 +243,8 @@ mod numeric {
 /// The randomness a roll may consume.
 ///
 /// This is the crate boundary in the same way `mc_entity::mob::Rng` is: `mc-data` may not
-/// depend on `mc-simulation`, which owns the seeded `java.util.Random` clone, so the
-/// contract is named here and wired up by whoever owns the generator.
+/// depend on `mc-simulation`, and the seeded `java.util.Random` clone lives in `mc-core`,
+/// so the contract is named here and wired up by whoever owns the generator.
 ///
 /// Implementations **must** be a pure function of their own state: the same seed has to
 /// produce the same sequence, or a loot roll cannot be reproduced (AGENTS.md §3.6).

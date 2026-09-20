@@ -768,7 +768,7 @@ impl Game {
                     return Ok(());
                 }
                 if let Some(expected) = current_window
-                    && window_id != expected
+                    && window_id != i32::from(expected)
                 {
                     debug!(id = %id, window_id, "ignoring a close for a stale window");
                     return Ok(());

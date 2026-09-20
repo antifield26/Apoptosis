@@ -1281,6 +1281,12 @@ mod tests {
         assert_eq!(MobKind::Spider.max_health(), 16.0);
         assert_eq!(MobKind::Spider.attack_damage(), 2.0);
         assert_eq!(MobKind::Spider.dimensions(), (1.4, 0.9));
+        // Cow speed is jar-measured (AUDIT-09 D-01), not the 0.25 the table
+        // carried before; pinned exactly like the zombie rows above.
+        assert_eq!(
+            MobKind::Cow.movement_speed_attribute(),
+            0.200_000_002_980_232_24
+        );
     }
 
     #[test]

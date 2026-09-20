@@ -1780,8 +1780,9 @@ pub enum PlayIntent {
     },
     /// Container/window close.
     ContainerClose {
-        /// Window id (0 is the player inventory).
-        window_id: u8,
+        /// Window id (0 is the player inventory), vanilla `CONTAINER_ID`
+        /// (`VarInt`, same codec as the clientbound close).
+        window_id: i32,
     },
     /// A click inside an open container window.
     ///
@@ -1963,7 +1964,7 @@ impl PlayIntent {
                 slot: reader.read_i16()?,
             }),
             serverbound::play::CONTAINER_CLOSE => Some(Self::ContainerClose {
-                window_id: reader.read_u8()?,
+                window_id: reader.read_varint()?,
             }),
             // Field order verified from the jar (see the variant's doc comment).
             // The two trailing `HashedStack` fields are intentionally left unread.
@@ -2493,6 +2494,29 @@ mod tests {
         );
         assert!(
             PlayIntent::decode(crate::ids::serverbound::play::MOVE_PLAYER_POS, &[0x00]).is_err()
+        );
+    }
+
+    #[test]
+    // AUDIT-15: the close window id is vanilla `CONTAINER_ID` (`VarInt`,
+    // same codec as the clientbound close). A two-byte id must decode to
+    // 128, not read one byte and drop the other.
+    fn container_close_reads_a_varint_window_id() {
+        let intent = PlayIntent::decode(
+            crate::ids::serverbound::play::CONTAINER_CLOSE,
+            &[0x80, 0x01],
+        )
+        .expect("decodes")
+        .expect("recognized");
+        assert!(
+            matches!(intent, PlayIntent::ContainerClose { window_id: 128 }),
+            "{intent:?}"
+        );
+        assert!(
+            PlayIntent::decode(crate::ids::serverbound::play::CONTAINER_CLOSE, &[0x05])
+                .expect("decodes")
+                .expect("recognized")
+                == PlayIntent::ContainerClose { window_id: 5 }
         );
     }
 

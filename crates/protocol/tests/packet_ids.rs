@@ -360,6 +360,12 @@ fn every_constant_we_use_matches_the_vanilla_jar() {
     check(
         "game",
         "serverbound",
+        "chunk_batch_received",
+        serverbound::play::CHUNK_BATCH_RECEIVED,
+    );
+    check(
+        "game",
+        "serverbound",
         "client_command",
         serverbound::play::CLIENT_COMMAND,
     );

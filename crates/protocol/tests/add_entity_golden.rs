@@ -19,6 +19,7 @@
 //! rig in `tools/surface-capture/`.
 
 use mc_protocol::packets::play::AddEntity;
+use mc_protocol::packets::play::{read_lp_vec3, write_lp_vec3};
 use mc_protocol::wire::{PacketReader, PacketWriter};
 
 /// The captured body, from the committed fixture.
@@ -146,4 +147,32 @@ fn a_truncated_body_is_refused_rather_than_padded() {
             "a {cut}-byte prefix decoded, so the decoder is padding what the wire did not send"
         );
     }
+}
+
+#[test]
+fn lp_vec3_uses_the_canonical_short_form() {
+    // AUDIT-15: the VarInt magnitude tail rides only when the magnitude has
+    // bits above the low two (`magnitude >> 2 != 0`). An empty tail byte was
+    // never on the wire (85 sweep mismatches); a multiple of 4 without its
+    // tail misreads the pitch as a VarInt.
+    fn encoded(movement: (f64, f64, f64)) -> Vec<u8> {
+        let mut writer = PacketWriter::new();
+        write_lp_vec3(&mut writer, &movement).expect("encodes");
+        writer.finish()
+    }
+    // Stationary is one zero byte.
+    assert_eq!(encoded((0.0, 0.0, 0.0)), vec![0x00]);
+    // Magnitude 3 fits the low two bits: low + scale/deltas, no tail.
+    let three = encoded((0.0, 3.0, 0.0));
+    assert_eq!(three.len(), 6, "1 low + 1 scale + 4 high, no VarInt tail");
+    let mut reader = PacketReader::new(&three);
+    assert_eq!(read_lp_vec3(&mut reader).expect("decodes"), (0.0, 3.0, 0.0));
+    assert_eq!(reader.remaining(), 0);
+    // Magnitude 4 needs the tail, carrying `4 >> 2 == 1`.
+    let four = encoded((0.0, 4.0, 0.0));
+    assert_eq!(four.len(), 7, "tail byte present");
+    assert_eq!(four[four.len() - 1], 0x01, "tail carries magnitude >> 2");
+    let mut reader = PacketReader::new(&four);
+    assert_eq!(read_lp_vec3(&mut reader).expect("decodes"), (0.0, 4.0, 0.0));
+    assert_eq!(reader.remaining(), 0);
 }
