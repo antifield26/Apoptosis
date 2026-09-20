@@ -14,6 +14,53 @@ tag `v0.2.0` (see below); no later version has been released.
 
 ## Unreleased — Phase 15 (Observability + Core Hardening)
 
+### P15-07 — Four audit test gaps closed (B-02, D-07, E-02, A-03)
+
+**B-02** (region commit order): the end-state test passed under a reordered
+write, so the write sequence is now journalled — a `cfg(test)` record in the
+single funnel `write_all_at`, compiled out of production — and
+`location_word_is_written_after_payload` asserts the commit word lands after
+the payload. Perturbation-verified: with the word moved first the new test
+fails (journal `[(0, 4), (12288, 4096), …]`) while the end-state test stays
+green, exactly the audit's predicted blind spot.
+
+**D-07** (heterogeneous NBT lists): the writer took the element type from the
+first item and never checked the rest; it now refuses with `Invariant`,
+naming both types, before writing anything (output stays untouched like
+every other write failure). The taxonomy is deliberate: a mixed list is a
+caller-construction bug, not the environment.
+
+**E-02** (`MC_FIXTURE_DIR` behaviour): a `fixture_probe` example loads
+`Registries::vanilla` end to end, driven by three subprocess cases — garbage
+`blocks.tsv` fails instead of falling back (proving the variable is read and
+wins precedence), a deleted table names the override directory (proving the
+path is used), and the real directory loads identically to a direct load
+plus a scrubbed-environment rerun (proving no hidden env dependency). The
+probe binary self-builds on filtered runs.
+
+**A-03** (capture sweep): 6 273 bodies walk every decoder. Serverbound play
+refuses trailing bytes inside `PlayIntent::decode` — the audit's finding,
+now product behaviour — with the single documented exemption
+(`ContainerClick`'s intentionally-unread `HashedStack` pair). Three observed
+serverbound ids get modelled instead of ignored (`keep_alive`,
+`chunk_batch_received` as `f32`, empty `player_loaded`), routed to the
+existing silent-intent arm with zero game delta. The sweep paid for itself
+four times over: (1) `write_lp_vec3` emitted a non-canonical `0x00` VarInt
+tail for magnitudes 1..3 and corrupt bytes for multiples of 4 — fixed to the
+canonical short form, 85 mismatches to zero; (2) two cow bodies refused on
+metadata type 24, identified as `COW_SOUND_VARIANT` three ways (pumpkin's
+v26_1 serializer table, the entity resolving to a cow with 10 health, the
+1-byte `VarInt` payload) and modelled as a registry-variant holder alongside
+its eleven siblings, with a cow golden plus a TSV row; (3) two brand-channel
+custom payloads framed as identifier-plus-opaque-rest (no channel semantics
+guessed); (4) `chunk_batch_finished`/`start` modelled from 20 consistent
+bodies plus pumpkin's shapes. One trailing `0x00` on `client_information`
+(seven sessions, all zero) is *not* modelled — an unknown client setting is
+not a field — but pinned to exactly one zero byte in the sweep, so any
+change forces its identification. Eighteen genuinely unmodelled s2c packets
+stay on an exact-set closed list with jar names, owned by P18 breadth: a new
+unmodelled id fails the sweep by design.
+
 ### P15-06 — Typed errors, one `Vec3`, one error mechanism
 
 Three steps, each behind its gate. **A** removes the two hot-path
