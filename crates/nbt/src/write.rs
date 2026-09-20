@@ -20,7 +20,8 @@ use mc_core::error::ServerResult;
 ///
 /// # Errors
 ///
-/// [`ServerError::Operational`] when a string exceeds the encodable length.
+/// [`ServerError::Operational`] when a string exceeds the encodable length,
+/// [`ServerError::Invariant`] when a list mixes element types (AUDIT-09 D-07).
 pub fn write_named(name: &str, tag: &NbtTag, out: &mut Vec<u8>) -> ServerResult<()> {
     let start = out.len();
     out.push(tag.tag_id());
@@ -35,7 +36,8 @@ pub fn write_named(name: &str, tag: &NbtTag, out: &mut Vec<u8>) -> ServerResult<
 ///
 /// # Errors
 ///
-/// [`ServerError::Operational`] when a string exceeds the encodable length.
+/// [`ServerError::Operational`] when a string exceeds the encodable length,
+/// [`ServerError::Invariant`] when a list mixes element types (AUDIT-09 D-07).
 pub fn write_unnamed(tag: &NbtTag, out: &mut Vec<u8>) -> ServerResult<()> {
     let start = out.len();
     out.push(tag.tag_id());
@@ -61,9 +63,18 @@ fn write_payload(tag: &NbtTag, out: &mut Vec<u8>) -> ServerResult<()> {
         NbtTag::String(value) => write_modified_utf8(value, out)?,
         NbtTag::List(items) => {
             // Vanilla writes the list's element type in the header: TAG_End for
-            // an empty list, otherwise the type of every element (they are
-            // homogeneous by construction).
+            // an empty list, otherwise the type of every element. Homogeneity
+            // is enforced here rather than assumed of the callers (AUDIT-09
+            // D-07): a reader taking the header's type would decode a mistyped
+            // element as garbage of the wrong width.
             let element_id = items.first().map_or(tag::END, NbtTag::tag_id);
+            if let Some(bad) = items.iter().position(|item| item.tag_id() != element_id) {
+                return Err(mc_core::error::ServerError::Invariant(format!(
+                    "NBT list mixes {} at index 0 with {} at index {bad}",
+                    tag::name(element_id),
+                    tag::name(items[bad].tag_id())
+                )));
+            }
             out.push(element_id);
             write_len(items.len(), "list", out)?;
             for item in items {
@@ -226,6 +237,37 @@ mod tests {
         let mut bytes = Vec::new();
         write_unnamed(&NbtTag::List(Vec::new()), &mut bytes).expect("encodes");
         assert_eq!(bytes, [tag::LIST, tag::END, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn heterogeneous_lists_are_refused_before_anything_is_written() {
+        // AUDIT-09 D-07: the header declares one element type, so a mixed
+        // list would decode as garbage of the wrong width. Refuse at the
+        // boundary, leaving `out` untouched like every other write failure.
+        let hetero = NbtTag::List(vec![NbtTag::Int(1), NbtTag::String("two".to_owned())]);
+        let mut bytes = Vec::new();
+        let error = write_unnamed(&hetero, &mut bytes).expect_err("must refuse");
+        assert!(
+            matches!(error, mc_core::error::ServerError::Invariant(_)),
+            "a caller-construction bug, not the environment: {error:?}"
+        );
+        assert!(
+            error.to_string().contains("TAG_Int") && error.to_string().contains("TAG_String"),
+            "{error}"
+        );
+        assert!(
+            bytes.is_empty(),
+            "partial output must not survive a refusal"
+        );
+        let mut named = Vec::new();
+        assert!(
+            write_named("Data", &hetero, &mut named).is_err(),
+            "the disk encoding refuses too"
+        );
+        assert!(named.is_empty());
+        // Nesting is no escape hatch: each level checks its own elements.
+        let nested = NbtTag::List(vec![NbtTag::List(vec![NbtTag::Int(1), NbtTag::Long(2)])]);
+        assert!(write_unnamed(&nested, &mut Vec::new()).is_err());
     }
 
     #[test]
