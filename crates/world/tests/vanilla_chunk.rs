@@ -191,8 +191,8 @@ fn an_unknown_block_name_is_refused_rather_than_becoming_air() {
     values[0] = mc_persistence::chunk::BlockState::new("minecraft:not_a_real_block");
     section.block_states = mc_persistence::chunk::PalettedContainer::from_values(
         values,
-        mc_persistence::packing::BLOCK_ENTRIES,
-        mc_persistence::packing::BLOCK_MIN_BITS,
+        mc_core::packing::BLOCK_ENTRIES,
+        mc_core::packing::BLOCK_MIN_BITS,
     )
     .expect("repacks");
 

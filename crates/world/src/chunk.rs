@@ -4,11 +4,11 @@
 //! caller has to know that section `y >> 4` holds `y & 15`.
 
 use mc_core::error::{ServerError, ServerResult};
+use mc_core::packing::{BIOME_ENTRIES, BIOME_MIN_BITS, BLOCK_ENTRIES, BLOCK_MIN_BITS};
 use mc_nbt::NbtTag;
 use mc_persistence::chunk::{
     BlockState as DiskBlockState, ChunkData, LIGHT_BYTES, PalettedContainer, SectionData,
 };
-use mc_persistence::packing::{BIOME_ENTRIES, BIOME_MIN_BITS, BLOCK_ENTRIES, BLOCK_MIN_BITS};
 use mc_registry::BlockRegistry;
 
 /// Re-export so callers do not need `mc_persistence` for the coordinate type.
@@ -381,8 +381,7 @@ impl Chunk {
         // Vanilla's heightmap packing: 9 bits per entry, 7 per long, never spanning
         // a long boundary (64 / 9 = 7), so 256 entries need 37 longs. Reuse the
         // shared, fixture-verified packer rather than repeating the arithmetic here.
-        mc_persistence::packing::pack(&values, HEIGHTMAP_BITS)
-            .expect("9 bits is a valid packing width")
+        mc_core::packing::pack(&values, HEIGHTMAP_BITS).expect("9 bits is a valid packing width")
     }
 
     /// Mark the chunk clean (after a successful save).

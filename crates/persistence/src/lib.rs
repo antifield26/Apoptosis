@@ -65,7 +65,6 @@ pub mod compression;
 pub mod dimension;
 pub mod dirty;
 pub mod level;
-pub mod packing;
 pub mod region;
 pub mod save;
 pub mod world;

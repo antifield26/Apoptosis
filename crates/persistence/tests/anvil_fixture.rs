@@ -23,12 +23,13 @@
 )]
 
 use mc_core::error::ServerError;
+use mc_core::packing;
+use mc_core::packing::{BIOME_ENTRIES, BLOCK_ENTRIES};
 use mc_nbt::{Limits, TagReader};
-use mc_persistence::chunk::{BIOME_ENTRIES, BLOCK_ENTRIES, ChunkData, ChunkPos, LIGHT_BYTES};
+use mc_persistence::chunk::{ChunkData, ChunkPos, LIGHT_BYTES};
 use mc_persistence::compression::Compression;
 use mc_persistence::dimension::Dimension;
 use mc_persistence::level::{DATA_VERSION_26_1_2, Difficulty, LEVEL_VERSION_26_1_2, LevelDat};
-use mc_persistence::packing;
 use mc_persistence::region::RegionFile;
 use mc_persistence::save::decode_gzip_nbt;
 use mc_persistence::world::WorldStorage;

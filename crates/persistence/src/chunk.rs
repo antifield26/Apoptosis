@@ -25,10 +25,10 @@
 //! vanilla chunk never silently drops data.
 
 use crate::dimension::Dimension;
-pub use crate::packing::{
+use mc_core::error::{ServerError, ServerResult};
+use mc_core::packing::{
     BIOME_ENTRIES, BIOME_MIN_BITS, BLOCK_ENTRIES, BLOCK_MIN_BITS, bits_for, pack, unpack,
 };
-use mc_core::error::{ServerError, ServerResult};
 use mc_nbt::{Limits, NbtTag};
 use tracing::warn;
 
@@ -303,7 +303,7 @@ impl<T: Clone + PartialEq> PalettedContainer<T> {
             None => 0,
             Some(data) => {
                 let bits = self.bits;
-                let per_long = crate::packing::values_per_long(bits);
+                let per_long = mc_core::packing::values_per_long(bits);
                 let slot = index / per_long;
                 let offset = ((index % per_long) as u32) * bits;
                 let mask = (1u64 << bits) - 1;
@@ -344,7 +344,7 @@ impl<T: Clone + PartialEq> PalettedContainer<T> {
                 // Materialise the array on the first write. Every existing entry
                 // is palette index 0, so zeros are the correct initial content.
                 self.bits = target_bits;
-                let needed = crate::packing::longs_needed(self.entries, target_bits);
+                let needed = mc_core::packing::longs_needed(self.entries, target_bits);
                 self.data = Some(vec![0i64; needed]);
             }
             Some(data) => {
@@ -358,8 +358,8 @@ impl<T: Clone + PartialEq> PalettedContainer<T> {
             }
         }
         let bits = self.bits;
-        let per_long = crate::packing::values_per_long(bits);
-        let needed = crate::packing::longs_needed(self.entries, bits);
+        let per_long = mc_core::packing::values_per_long(bits);
+        let needed = mc_core::packing::longs_needed(self.entries, bits);
         let data = self.data.get_or_insert_with(|| vec![0i64; needed]);
         if data.len() < needed {
             data.resize(needed, 0);
@@ -1100,7 +1100,7 @@ mod tests {
         let data = data.expect("packed data once >1 palette entry");
         assert_eq!(
             data.len(),
-            crate::packing::longs_needed(BLOCK_ENTRIES, 5),
+            mc_core::packing::longs_needed(BLOCK_ENTRIES, 5),
             "repacked to the new width"
         );
     }

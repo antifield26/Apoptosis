@@ -7,7 +7,7 @@ use crate::ids::clientbound;
 use crate::nbt::Nbt;
 use crate::wire::{PacketReader, PacketWriter};
 use mc_core::error::{ServerError, ServerResult};
-use mc_persistence::packing;
+use mc_core::packing;
 
 use super::super::Packet;
 use super::{
@@ -17,7 +17,7 @@ use super::{
 /// Largest palette accepted in a network paletted container.
 ///
 /// A block-state palette cannot exceed one entry per block state in the
-/// registry, and `bits` is capped at [`mc_persistence::packing::MAX_BITS`] = 32
+/// registry, and `bits` is capped at [`mc_core::packing::MAX_BITS`] = 32
 /// anyway; the explicit cap keeps a hostile length from being used as an
 /// allocation hint before the bits check rejects it.
 pub const MAX_PALETTE_LEN: usize = 1 << 16;
@@ -52,7 +52,7 @@ pub const BIOMES_PER_SECTION: usize = packing::BIOME_ENTRIES;
 
 /// Minimum bit width for a **network** biome palette.
 ///
-/// The disk form uses 1 ([`mc_persistence::packing::BIOME_MIN_BITS`]) but the
+/// The disk form uses 1 ([`mc_core::packing::BIOME_MIN_BITS`]) but the
 /// network `Strategy.createForBiomes` uses **2**
 /// (`docs/protocol/chunk-wire-format.md` section 7), so a disk container's width
 /// must not be reused verbatim on the wire. Block states agree at 4 in both
@@ -85,7 +85,7 @@ pub const NETWORK_BIOME_MIN_BITS: u32 = 2;
 /// `palette` and `values` are the **decompressed** form: exactly
 /// [`BLOCKS_PER_SECTION`] (or [`BIOMES_PER_SECTION`]) palette indices, one per
 /// cell, which is what the world layer works with. Packing is delegated to
-/// [`mc_persistence::packing`] — LSB-first, values never spanning a `long`
+/// [`mc_core::packing`] — LSB-first, values never spanning a `long`
 /// boundary — rather than reimplemented here, so the disk and network forms
 /// cannot drift apart (P03-10).
 ///
@@ -111,11 +111,11 @@ impl PalettedContainer {
     /// a biome section — is encoded as the **single-value** form: `bits = 0` with
     /// the one global palette id and **no** index array. That form is not a
     /// minimum-width choice, it is a different layout, which is why
-    /// [`mc_persistence::packing::bits_for`]'s `max(min_bits, …)` result is
+    /// [`mc_core::packing::bits_for`]'s `max(min_bits, …)` result is
     /// ignored for it: a palette of one still yields a 4-bit width there, and a
     /// 4-bit width *does* carry an array.
     ///
-    /// `min_bits` is [`mc_persistence::packing::BLOCK_MIN_BITS`] for block
+    /// `min_bits` is [`mc_core::packing::BLOCK_MIN_BITS`] for block
     /// states and `BIOME_MIN_BITS` for biomes.
     #[must_use]
     pub fn new(palette: Vec<u32>, values: Vec<u32>, min_bits: u32) -> Self {

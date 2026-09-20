@@ -61,7 +61,7 @@ pub(crate) fn packed_len(len: usize) -> ServerResult<i32> {
         .map_err(|_| ServerError::Invariant(format!("length {len} does not fit a VarInt")))
 }
 
-/// Re-layer a [`mc_persistence::packing`] failure as malformed wire input.
+/// Re-layer a [`mc_core::packing`] failure as malformed wire input.
 ///
 /// The packing module reports `CorruptData` because its primary caller reads
 /// disk chunks; the same condition arriving here came off the network, and
@@ -2644,7 +2644,7 @@ mod tests {
     };
     use crate::nbt::Nbt;
     use crate::wire::PacketWriter;
-    use mc_persistence::packing;
+    use mc_core::packing;
 
     /// A section whose whole volume is one block state and one biome, i.e. the
     /// single-value paletted form (`bits == 0`, no data array).

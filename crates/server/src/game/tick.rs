@@ -2513,7 +2513,7 @@ impl Game {
                 values.push(index as u32);
             }
             let block_states =
-                WireContainer::new(palette, values, mc_persistence::packing::BLOCK_MIN_BITS);
+                WireContainer::new(palette, values, mc_core::packing::BLOCK_MIN_BITS);
             // One plains biome fills every cell, and the id is the one the client's own registry gives
             // plains — see [`PLAINS_BIOME_ID`]. Per-column biomes are not modelled yet, and the values array
             // is still the full cell count because the encoder validates the container's geometry.

@@ -20,7 +20,7 @@
 //! `ceil(log2(n))` uses `usize::BITS - (n - 1).leading_zeros()`: a palette of 16
 //! needs 4 bits, 17 needs 5.
 
-use mc_core::error::{ServerError, ServerResult};
+use crate::error::{ServerError, ServerResult};
 
 /// Block states per chunk section (16×16×16).
 pub const BLOCK_ENTRIES: usize = 4096;
@@ -186,7 +186,7 @@ mod tests {
 
     #[test]
     fn out_of_range_bit_width_is_an_error_not_a_panic() {
-        use mc_core::error::ServerError;
+        use crate::error::ServerError;
         assert!(matches!(
             pack(&[1, 2, 3], 0),
             Err(ServerError::Invariant(_))
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn short_or_malformed_arrays_are_rejected() {
-        use mc_core::error::ServerError;
+        use crate::error::ServerError;
         assert!(matches!(
             unpack(&[0i64; 3], 8, BLOCK_ENTRIES),
             Err(ServerError::CorruptData(_))
