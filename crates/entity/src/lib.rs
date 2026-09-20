@@ -119,6 +119,7 @@
     clippy::cast_lossless
 )]
 
+pub mod combat;
 pub mod effect;
 pub mod entity;
 pub mod identity;
