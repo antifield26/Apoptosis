@@ -2512,11 +2512,11 @@ mod tests {
             matches!(intent, PlayIntent::ContainerClose { window_id: 128 }),
             "{intent:?}"
         );
-        assert!(
+        assert_eq!(
             PlayIntent::decode(crate::ids::serverbound::play::CONTAINER_CLOSE, &[0x05])
                 .expect("decodes")
-                .expect("recognized")
-                == PlayIntent::ContainerClose { window_id: 5 }
+                .expect("recognized"),
+            PlayIntent::ContainerClose { window_id: 5 }
         );
     }
 
