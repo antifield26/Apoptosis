@@ -276,6 +276,34 @@ ms): the mixed workload streams far more chunks (≤ 649 vs 289 held) on a tree
 that has since gained furnace/hopper ticking, persistence and viewer resyncs —
 that is the re-soak §4 step 6 asked for, and the headroom is still ~15×.
 
+### P15-Pi — the INFO-level re-soak on the P15 tree (P15-02, executed 2026-09-20)
+
+The re-run P15-02 calls for: same workload as §P14-Pi, one log level down
+(INFO, not DEBUG), on the tree that now attributes overruns. Verdict:
+**spike not reproduced, and every overrun attributed** — 60 loaded windows
+sit an order of magnitude under budget (medians 2.97/2.96/3.09/3.16 ms
+mean/p50/p95/p99); lifetime overruns total 6, each carrying its phase.
+
+| Field | Value |
+|---|---|
+| Date | 2026-09-20 (server log 02:50–03:32; client window ~02:55–03:25, 1800 s; sampler 10 s cadence) |
+| Hardware / OS / toolchain | same Pi 5 Model B, Debian 13 trixie aarch64, pinned 1.98.1 (see §P09-Pi) |
+| Commit | `659e434` (P15-01 worst-phase fields), release profile, built on-device (40 s incremental) |
+| Server config | `~/soak/config.toml` unchanged: bind `0.0.0.0:25566`, view distance 8; world `~/soak/world` (reused); `MC_LOG=info` |
+| Workload | 10 × `tools/pi-bench/soak_client_v2.py` (127.0.0.1:25566, 1800 s, 20 Hz movement + rotating `/list`) — all scripted this time, no owner in the mix (boundary, not a regression: the question is spike reproduction, not client mix) |
+| Clients | `~/soak/soak_clients_p15.log`: 10/10 reached PLAY, 1802.3 s elapsed, 1191 keepalives answered, 18000 teleports acked, 3600 commands sent, 2890 chunks received, **failures: []** |
+| TPS | 20 TPS held; 82 `tick metrics` windows, 60 with all 10 players |
+| MSPT, loaded (10 players, n=60) | window-mean median **2.97 ms**; p50/p95/p99 medians **2.96 / 3.09 / 3.16 ms**; worst 331.5 ms (join burst) |
+| Overruns | lifetime **6**: +5 join burst, each warn carrying `worst_phase="broadcast"` at ~entire-tick cost (chunk streaming, as suspected); **+1 at 03:25:42** (tick 42651, 97.3 ms, `worst_phase="network"`) coinciding with the mass client departure at the end of the 1800 s runs; zero new overruns in the ~6 min idle tail after (idle mean 0.38–0.43 ms) |
+| Busiest phase | `"entities"` throughout (cumulative mean 1.6 → 2.1 ms over the run) |
+| Spike verdict | **not reproduced**: no near-idle multi-overrun window anywhere in the log. Caveat, stated: the idle tail here is ~6 min while §P14-Pi's spike arrived ~30 min after departure — absence in this window does not prove absence. The difference this run makes is instrumented: a recurrence now lands with its phase attached instead of unattributed |
+| CPU | PID sampler `~/soak/soak_metrics_p15.csv` (200 rows, same shape and jiffy-delta semantics as `soak_sampler.py`, which reads the systemd service PID and cannot see a standalone soak server — script at `~/soak_sampler_pid.py`): p50 **6.7 %**, p95 **7.3 %**, max 27.3 % of one core |
+| RSS | 14 MB at start → **151 MB** max, flat at the end (no leak signal inside the window; lower than §P14-Pi's 337 MB — all-scripted clients hold fewer chunks) |
+| Raw data | `~/soak/soak_p15.log` (61 KB at INFO — vs 32 MB at DEBUG last time), `~/soak/soak_metrics_p15.csv`, `~/soak/soak_clients_p15.log` on the Pi |
+
+**Boundary:** all-scripted (this run asks about the spike, not the client mix),
+loopback, microSD — same three as §P14-Pi.
+
 ## 2. Planned workloads
 
 1. `idle` — empty server, tick overhead floor.

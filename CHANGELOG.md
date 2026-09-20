@@ -26,6 +26,18 @@ a synthetic-window test (a 290 ms entities overload names entities at
 290 ms; the all-zero tick names network at zero) that fails when the
 tie-break flips.
 
+### P15-02 — INFO-level re-soak: spike not reproduced, overruns attributed
+
+Same 10-scripted-client workload as §P14-Pi, one level down (`MC_LOG=info`,
+61 KB vs 32 MB), on `659e434`: 60 loaded windows at 2.97/2.96/3.09/3.16 ms
+mean/p50/p95/p99; lifetime overruns 6 — five join-burst, each self-attributing
+`worst_phase="broadcast"`, plus one `worst_phase="network"` 97 ms coinciding
+with the mass client departure; zero new overruns in the idle tail, busiest
+phase `"entities"` throughout. The §P14-Pi idle spike did not recur in this
+window (idle tail ~6 min, so absence is bounded, not proven — but a recurrence
+now arrives with its phase attached). Full record: `BENCHMARK-BASELINE.md`
+§P15-Pi. Clients 10/10 PLAY, `failures: []`; CPU p50 6.7 %, RSS 151 MB flat.
+
 ## [0.2.0] — 2026-09-19 (tag `v0.2.0`)
 
 Verification release for the P14 usable milestone, walked end to end on a
