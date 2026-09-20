@@ -42,6 +42,15 @@ pub struct OperationalSnapshot {
     pub worst_ms: f64,
     /// Ticks that exceeded the 50 ms budget.
     pub overruns: u64,
+    /// Busiest phase since construction, by cumulative cost (P15-01).
+    ///
+    /// `"none"` when no tick has been recorded yet — the same empty-window
+    /// convention as the zero MSPT fields, so a fresh server's row reads
+    /// `busiest_phase="none", busiest_phase_ms=0.0` rather than naming a
+    /// phase that cost nothing.
+    pub busiest_phase: &'static str,
+    /// Mean cost of the busiest phase since construction, in milliseconds.
+    pub busiest_phase_ms: f64,
     /// Connected players.
     pub players: usize,
     /// Live entities in the store.
@@ -68,6 +77,10 @@ impl OperationalSnapshot {
             p99_ms: as_ms(metrics.percentile(0.99)),
             worst_ms: as_ms(metrics.worst()),
             overruns: metrics.overruns(),
+            busiest_phase: metrics
+                .busiest_phase()
+                .map_or("none", |(phase, _)| phase.name()),
+            busiest_phase_ms: metrics.busiest_phase().map_or(0.0, |(_, mean)| as_ms(mean)),
             players: game.player_count(),
             entities: game.entity_store().len(),
             chunks: game.world().chunk_count(),
@@ -87,6 +100,8 @@ impl OperationalSnapshot {
             p99_ms = self.p99_ms,
             worst_ms = self.worst_ms,
             overruns = self.overruns,
+            busiest_phase = self.busiest_phase,
+            busiest_phase_ms = self.busiest_phase_ms,
             players = self.players,
             entities = self.entities,
             chunks = self.chunks,
@@ -133,6 +148,8 @@ mod tests {
         assert_eq!(snapshot.dirty_chunks, 0);
         assert_eq!(snapshot.mean_ms, 0.0);
         assert_eq!(snapshot.p95_ms, 0.0);
+        assert_eq!(snapshot.busiest_phase, "none");
+        assert_eq!(snapshot.busiest_phase_ms, 0.0);
     }
 
     #[test]
@@ -155,6 +172,10 @@ mod tests {
         );
         assert!(snapshot.mean_ms >= 0.0);
         assert!(snapshot.worst_ms >= snapshot.p99_ms, "{snapshot:?}");
+        // Five real ticks ran every phase, so some phase is busiest — the
+        // row must name it rather than fall back to "none" (P15-01).
+        assert_ne!(snapshot.busiest_phase, "none");
+        assert!(snapshot.busiest_phase_ms >= 0.0);
     }
 
     #[test]

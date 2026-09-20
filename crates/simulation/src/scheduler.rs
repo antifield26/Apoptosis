@@ -177,10 +177,16 @@ impl Scheduler {
 
         let overrun = stats.total_nanos > self.metrics.budget().as_nanos() as u64;
         if overrun && self.log_overruns {
+            // The worst phase rides along so the next 15:07-class spike is
+            // attributable from the log alone (P15-01): aggregate MSPT cannot
+            // say which phase blew the budget.
+            let (worst_phase, worst_nanos) = stats.worst_phase();
             warn!(
                 tick,
                 total_ms = stats.total_nanos as f64 / 1e6,
                 budget_ms = self.metrics.budget().as_secs_f64() * 1e3,
+                worst_phase = worst_phase.name(),
+                worst_phase_ms = worst_nanos.as_secs_f64() * 1e3,
                 "tick exceeded its budget"
             );
         }

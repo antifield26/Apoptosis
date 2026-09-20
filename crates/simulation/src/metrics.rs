@@ -44,6 +44,24 @@ impl TickStats {
     pub fn phase_sum(&self) -> Duration {
         Duration::from_nanos(self.phase_nanos.iter().sum())
     }
+
+    /// The costliest phase of this tick and its cost (P15-01).
+    ///
+    /// Ties resolve to the earlier phase in [`PHASE_ORDER`], so the answer is
+    /// deterministic — including the all-zero tick, whose worst phase is
+    /// `Network` at zero rather than "none", because every tick ran every
+    /// phase (or broke out of one, which still cost time).
+    #[must_use]
+    pub fn worst_phase(&self) -> (TickPhase, Duration) {
+        let mut best = (TickPhase::Network, 0u64);
+        for phase in PHASE_ORDER {
+            let nanos = self.phase_nanos[phase.index()];
+            if nanos > best.1 {
+                best = (phase, nanos);
+            }
+        }
+        (best.0, Duration::from_nanos(best.1))
+    }
 }
 
 /// Rolling tick statistics.
@@ -319,6 +337,30 @@ mod tests {
         assert_eq!(stats.phase_sum(), Duration::from_millis(3));
         assert_eq!(stats.total(), Duration::from_millis(5));
         assert_eq!(stats.phase(TickPhase::Entities), Duration::from_millis(1));
+    }
+
+    #[test]
+    fn worst_phase_names_the_costliest_phase_of_one_tick() {
+        // Synthetic overload: entities dominate, players second. The field
+        // the overrun warn will carry must name entities with its cost —
+        // this is the attribution the 15:07 spike lacked (P15-01).
+        let mut stats = TickStats {
+            total_nanos: 301_000_000,
+            ..TickStats::default()
+        };
+        stats.phase_nanos[TickPhase::Entities.index()] = 290_000_000;
+        stats.phase_nanos[TickPhase::Players.index()] = 5_000_000;
+        assert_eq!(
+            stats.worst_phase(),
+            (TickPhase::Entities, Duration::from_millis(290))
+        );
+        // Ties resolve to the earlier phase, deterministically — including
+        // the all-zero tick, which reports Network at zero rather than
+        // inventing a busier phase.
+        assert_eq!(
+            TickStats::default().worst_phase(),
+            (TickPhase::Network, Duration::ZERO)
+        );
     }
 
     #[test]

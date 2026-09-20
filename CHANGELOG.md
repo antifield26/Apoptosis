@@ -12,6 +12,20 @@ entry is the release candidate matching the workspace version at the time
 with built artifacts. The current workspace version is `0.2.0`, published as
 tag `v0.2.0` (see below); no later version has been released.
 
+## Unreleased — Phase 15 (Observability + Core Hardening)
+
+### P15-01 — overrun windows name their worst phase
+
+The 15:07 spike taught that aggregate MSPT cannot attribute an overrun, so
+each one now carries its costliest phase: `TickStats::worst_phase` (ties go
+to the earlier phase, deterministically) rides the scheduler's overrun warn
+as `worst_phase`/`worst_phase_ms`, and the 30 s `tick metrics` row gains
+`busiest_phase`/`busiest_phase_ms` from the cumulative means (`"none"`/0.0
+on an empty window, the same convention as the zero MSPT fields). Pinned by
+a synthetic-window test (a 290 ms entities overload names entities at
+290 ms; the all-zero tick names network at zero) that fails when the
+tie-break flips.
+
 ## [0.2.0] — 2026-09-19 (tag `v0.2.0`)
 
 Verification release for the P14 usable milestone, walked end to end on a
