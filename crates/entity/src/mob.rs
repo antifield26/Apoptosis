@@ -484,6 +484,22 @@ impl MobKind {
         }
     }
 
+    /// Experience points scattered as orbs when a player kills one, flat per
+    /// kind (pumpkin-data generated `entity_type`, `experience_reward`):
+    /// zombie/skeleton/spider/creeper 5, cow/pig 3, chicken 2, sheep 1.
+    /// Pumpkin mirrors no per-kill randomness here, so neither does this
+    /// build; baby animals drop nothing in vanilla, but this build has no
+    /// babies, so the rule is vacuous rather than unmodelled.
+    #[must_use]
+    pub const fn experience_reward(self) -> u32 {
+        match self {
+            Self::Zombie | Self::Skeleton | Self::Spider | Self::Creeper => 5,
+            Self::Cow | Self::Pig => 3,
+            Self::Chicken => 2,
+            Self::Sheep => 1,
+        }
+    }
+
     /// The raw Vanilla `MovementSpeedAttribute` base value.
     ///
     /// Exposed so that a verified attribute → blocks/tick conversion can replace

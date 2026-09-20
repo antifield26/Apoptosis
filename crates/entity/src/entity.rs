@@ -82,6 +82,8 @@ pub enum EntityKind {
     Mob,
     /// A projectile (any of [`ProjectileKind`]).
     Projectile,
+    /// An experience orb (any value).
+    Orb,
 }
 
 impl EntityKind {
@@ -93,6 +95,7 @@ impl EntityKind {
             Self::Item => "item",
             Self::Mob => "mob",
             Self::Projectile => "projectile",
+            Self::Orb => "orb",
         }
     }
 
@@ -124,6 +127,8 @@ pub enum EntityBody {
     Mob(crate::mob::Mob),
     /// A projectile.
     Projectile(crate::projectile::Projectile),
+    /// An experience orb.
+    Orb(crate::orb::Orb),
 }
 
 impl EntityBody {
@@ -135,6 +140,7 @@ impl EntityBody {
             Self::Item(_) => EntityKind::Item,
             Self::Mob(_) => EntityKind::Mob,
             Self::Projectile(_) => EntityKind::Projectile,
+            Self::Orb(_) => EntityKind::Orb,
         }
     }
 }
@@ -187,7 +193,7 @@ impl Entity {
         let health = match &body {
             EntityBody::Player => crate::player::MAX_HEALTH,
             EntityBody::Mob(mob) => mob.kind.max_health(),
-            EntityBody::Item(_) | EntityBody::Projectile(_) => 0.0,
+            EntityBody::Item(_) | EntityBody::Projectile(_) | EntityBody::Orb(_) => 0.0,
         };
         Self {
             id,
@@ -225,12 +231,14 @@ impl Entity {
     pub fn hitbox(&self) -> mc_world::Aabb {
         match &self.body {
             EntityBody::Player => mc_world::Aabb::player(self.position),
-            // Items and projectiles are small cubes in this baseline: Vanilla
-            // uses 0.25 for both, and neither is ever a collision partner for a
-            // player in Phase 05, so one arm covers them.
+            // Items, projectiles and orbs are small cubes in this baseline:
+            // Vanilla uses 0.25 for items and 0.5 for orbs, and none is ever a
+            // collision partner for a player in Phase 05, so items share one
+            // arm and orbs take their half-block.
             EntityBody::Item(_) | EntityBody::Projectile(_) => {
                 mc_world::Aabb::sized(self.position, 0.25, 0.25)
             }
+            EntityBody::Orb(_) => mc_world::Aabb::sized(self.position, 0.5, 0.5),
             EntityBody::Mob(mob) => {
                 let (width, height) = mob.kind.dimensions();
                 mc_world::Aabb::sized(self.position, f64::from(width), f64::from(height))

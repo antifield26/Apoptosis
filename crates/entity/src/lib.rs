@@ -130,6 +130,7 @@ pub mod identity;
 pub mod inventory;
 pub mod item_entity;
 pub mod mob;
+pub mod orb;
 pub mod pathfind;
 pub mod player;
 pub mod profile;

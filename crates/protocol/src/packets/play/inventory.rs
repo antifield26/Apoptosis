@@ -18,6 +18,10 @@ pub const METADATA_TYPE_BYTE: i32 = 0;
 /// Wire type id for [`MetadataValue::VarInt`].
 pub const METADATA_TYPE_VARINT: i32 = 1;
 
+/// Wire type id for [`MetadataValue::Int`]: a fixed-width big-endian `i32`,
+/// as the experience-orb value slot carries it.
+pub const METADATA_TYPE_INT: i32 = 2;
+
 /// Wire type id for [`MetadataValue::Float`].
 pub const METADATA_TYPE_FLOAT: i32 = 3;
 
@@ -50,10 +54,19 @@ pub const METADATA_TERMINATOR: u8 = 0xFF;
 /// `crates/protocol/tests/entity_metadata_golden.rs` pins both the constant and two whole captured bodies.
 pub const METADATA_INDEX_HEALTH: u8 = 9;
 
+/// The metadata slot index an experience orb's value rides on: **8**, with
+/// [`METADATA_TYPE_INT`].
+///
+/// From the 26.x tracked-data table (pumpkin `experience_orb.DATA_VALUE`,
+/// index 8, `INT` serializer); orbs in this build always carry exactly this
+/// one entry, so the constant is asserted by construction in the announce
+/// path rather than by a capture (no orb-value body was captured).
+pub const METADATA_INDEX_ORB_VALUE: u8 = 8;
+
 /// One entity metadata value.
 ///
-/// Byte, `VarInt`, float, item-stack and registry-variant-holder shapes are
-/// modelled. Vanilla's remaining type ids (2, 4, 5, 6, …: `VarLong`, string,
+/// Byte, `VarInt`, fixed-int, float, item-stack and registry-variant-holder
+/// shapes are modelled. Vanilla's remaining type ids (4, 5, 6, …: string,
 /// component, …) are deliberately **not** decoded here: a wrong guess would
 /// silently misparse a later entry and desynchronise the rest of the list, so
 /// [`SetEntityData::decode`] rejects them with an explicit error instead
@@ -65,6 +78,8 @@ pub enum MetadataValue {
     Byte(u8),
     /// Type id [`METADATA_TYPE_VARINT`].
     VarInt(i32),
+    /// Type id [`METADATA_TYPE_INT`]: a fixed big-endian `i32` (not a VarInt).
+    Int(i32),
     /// Type id [`METADATA_TYPE_FLOAT`].
     Float(f32),
     /// One of [`METADATA_TYPE_VARIANTS`]: a registry-variant holder, the
@@ -97,6 +112,7 @@ impl MetadataValue {
         match self {
             Self::Byte(_) => METADATA_TYPE_BYTE,
             Self::VarInt(_) => METADATA_TYPE_VARINT,
+            Self::Int(_) => METADATA_TYPE_INT,
             Self::Float(_) => METADATA_TYPE_FLOAT,
             Self::Variant { kind, .. } => kind,
             Self::ItemStack { .. } => METADATA_TYPE_ITEM_STACK,
@@ -108,6 +124,7 @@ impl MetadataValue {
         match self {
             Self::Byte(value) => writer.write_u8(value),
             Self::VarInt(value) => writer.write_varint(value),
+            Self::Int(value) => writer.write_i32(value),
             Self::Float(value) => writer.write_f32(value),
             Self::Variant { id, .. } => writer.write_varint(id),
             Self::ItemStack { count, item_id } => {
@@ -130,6 +147,7 @@ impl MetadataValue {
         match type_id {
             METADATA_TYPE_BYTE => Ok(Self::Byte(reader.read_u8()?)),
             METADATA_TYPE_VARINT => Ok(Self::VarInt(reader.read_varint()?)),
+            METADATA_TYPE_INT => Ok(Self::Int(reader.read_i32()?)),
             METADATA_TYPE_FLOAT => Ok(Self::Float(reader.read_f32()?)),
             METADATA_TYPE_ITEM_STACK => {
                 let count = reader.read_varint()?;
