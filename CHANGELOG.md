@@ -46,6 +46,17 @@ across restarts. Deliberately deferred: mending, furnace XP grants, orb
 magnetism beyond contact (unmeasured), baby-animal zero rewards (no babies).
 Gate 1500/0/34/116.
 
+### P16-03 — Status effects with sources and HUD encoding
+
+Effects tick on players and mobs (poison/wither damage with the floor and
+bypass rules, regeneration heals); `/effect give|clear` (operator-only,
+self-only, modelled names only) is the source; `update_mob_effect` (132)
+and `remove_mob_effect` (78) carry icons to the HUD — on give, on join
+sync, on expiry; player effects persist in `playerdata`. Deliberately
+deferred: natural sources (no eating, witch, beacon), instant effects,
+milk, speed/strength application, particles control, mob-effect chunk
+persistence. Gate 1513/0/34/117.
+
 ## Unreleased — Phase 15 (Observability + Core Hardening)
 
 ### P15-08 — Hardening review sign-off (all clauses re-evidenced)
