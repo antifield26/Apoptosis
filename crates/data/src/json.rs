@@ -15,8 +15,9 @@
 //! The error type carries the **path** as well as the reason: with 758 tag files in
 //! vanilla alone, "invalid JSON" without a filename is not a usable diagnosis.
 
-use std::fmt;
+use mc_core::error::ServerError;
 use std::path::{Path, PathBuf};
+use thiserror::Error;
 
 /// Ceilings applied to every data file.
 ///
@@ -63,9 +64,10 @@ impl Default for Limits {
 }
 
 /// Why a data file could not be read.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum JsonError {
     /// The file could not be opened or read.
+    #[error("{p}: {source}", p = path.display())]
     Io {
         /// The file.
         path: PathBuf,
@@ -73,6 +75,7 @@ pub enum JsonError {
         source: std::io::Error,
     },
     /// The file is larger than the configured ceiling.
+    #[error("{p}: {bytes} bytes exceeds the {limit}-byte limit", p = path.display())]
     TooLarge {
         /// The file.
         path: PathBuf,
@@ -82,6 +85,7 @@ pub enum JsonError {
         limit: u64,
     },
     /// The file is not valid JSON, or not the shape the caller expected.
+    #[error("{p}: {reason}", p = path.display())]
     Invalid {
         /// The file.
         path: PathBuf,
@@ -98,29 +102,6 @@ impl JsonError {
             Self::Io { path, .. } | Self::TooLarge { path, .. } | Self::Invalid { path, .. } => {
                 path
             }
-        }
-    }
-}
-
-impl fmt::Display for JsonError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Io { path, source } => write!(f, "{}: {source}", path.display()),
-            Self::TooLarge { path, bytes, limit } => write!(
-                f,
-                "{}: {bytes} bytes exceeds the {limit}-byte limit",
-                path.display()
-            ),
-            Self::Invalid { path, reason } => write!(f, "{}: {reason}", path.display()),
-        }
-    }
-}
-
-impl std::error::Error for JsonError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Io { source, .. } => Some(source),
-            _ => None,
         }
     }
 }
@@ -335,6 +316,15 @@ pub fn required_array<'a>(
     }
 }
 
+impl From<JsonError> for ServerError {
+    fn from(error: JsonError) -> Self {
+        match &error {
+            JsonError::Io { .. } => Self::Operational(error.to_string()),
+            _ => Self::CorruptData(error.to_string()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -495,5 +485,54 @@ mod tests {
         let deep = "[".repeat(400) + &"]".repeat(400);
         let result = parse_json(&deep, path());
         assert!(result.is_err(), "400 levels of nesting must be refused");
+    }
+
+    #[test]
+    fn json_error_messages_are_stable() {
+        // P15-06: operator-visible strings; the thiserror migration must not reword them.
+        use std::path::PathBuf;
+        let path = PathBuf::from("data/test.json");
+        let cases = [
+            (
+                JsonError::Io {
+                    path: path.clone(),
+                    source: std::io::Error::new(std::io::ErrorKind::NotFound, "nope"),
+                },
+                "data/test.json: nope",
+            ),
+            (
+                JsonError::TooLarge {
+                    path: path.clone(),
+                    bytes: 9000,
+                    limit: 1000,
+                },
+                "data/test.json: 9000 bytes exceeds the 1000-byte limit",
+            ),
+            (
+                JsonError::Invalid {
+                    path,
+                    reason: "not JSON".to_owned(),
+                },
+                "data/test.json: not JSON",
+            ),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn json_io_errors_keep_their_source() {
+        // P15-06: thiserror auto-sources the `source` field; pin the chain.
+        use std::error::Error;
+        use std::path::PathBuf;
+        let error = JsonError::Io {
+            path: PathBuf::from("data/test.json"),
+            source: std::io::Error::new(std::io::ErrorKind::NotFound, "nope"),
+        };
+        assert_eq!(
+            error.source().map(ToString::to_string).as_deref(),
+            Some("nope")
+        );
     }
 }

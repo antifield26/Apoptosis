@@ -445,3 +445,82 @@ fn a_file_with_a_million_lines_is_refused_cheaply() {
     .expect_err("must refuse");
     assert!(error.to_string().contains("huge.mcfunction"), "{error}");
 }
+
+#[test]
+fn function_error_messages_are_stable() {
+    // P15-06: operator-visible strings; the thiserror migration must not reword them.
+    use std::path::PathBuf;
+    let path = PathBuf::from("cmds/a.mcfunction");
+    let io = |msg: &str| FunctionError::Io {
+        path: path.clone(),
+        source: std::io::Error::new(std::io::ErrorKind::NotFound, msg.to_owned()),
+    };
+    let cases = [
+        (io("nope"), "cmds/a.mcfunction: nope"),
+        (
+            FunctionError::TooLarge {
+                path: path.clone(),
+                bytes: 1500,
+                limit: 1000,
+            },
+            "cmds/a.mcfunction: 1500 bytes exceeds the 1000-byte function limit",
+        ),
+        (
+            FunctionError::TooManyLines {
+                path: path.clone(),
+                lines: 300,
+                limit: 200,
+            },
+            "cmds/a.mcfunction: 300 lines exceeds the 200-line function limit",
+        ),
+        (
+            FunctionError::LineTooLong {
+                path: path.clone(),
+                line: 7,
+                bytes: 500,
+                limit: 100,
+            },
+            "cmds/a.mcfunction:7: 500 bytes exceeds the 100-byte line limit",
+        ),
+        (
+            FunctionError::NotUtf8 {
+                path: path.clone(),
+                source: String::from_utf8(vec![0xff]).expect_err("not UTF-8"),
+            },
+            "cmds/a.mcfunction: not UTF-8: invalid utf-8 sequence of 1 bytes from index 0",
+        ),
+        (
+            FunctionError::BadName {
+                path,
+                reason: "bad".to_owned(),
+            },
+            "cmds/a.mcfunction: bad",
+        ),
+    ];
+    for (error, expected) in cases {
+        assert_eq!(error.to_string(), expected);
+    }
+}
+
+#[test]
+fn function_io_errors_keep_their_source() {
+    // P15-06: thiserror auto-sources the `source` field; pin the chain.
+    use std::error::Error;
+    use std::path::PathBuf;
+    let error = FunctionError::Io {
+        path: PathBuf::from("cmds/a.mcfunction"),
+        source: std::io::Error::new(std::io::ErrorKind::NotFound, "nope"),
+    };
+    assert_eq!(
+        error.source().map(ToString::to_string).as_deref(),
+        Some("nope")
+    );
+    assert!(
+        FunctionError::BadName {
+            path: PathBuf::from("x"),
+            reason: String::new(),
+        }
+        .source()
+        .is_none()
+    );
+}

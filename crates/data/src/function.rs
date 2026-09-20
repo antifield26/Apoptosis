@@ -56,8 +56,8 @@
 
 use mc_core::ids::ResourceId;
 use std::collections::BTreeMap;
-use std::fmt;
 use std::path::Path;
+use thiserror::Error;
 
 /// Ceilings applied to every function file.
 ///
@@ -118,9 +118,10 @@ impl Default for FunctionLimits {
 }
 
 /// Why a function file could not be loaded.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum FunctionError {
     /// The file could not be opened or read.
+    #[error("{p}: {source}", p = path.display())]
     Io {
         /// The file.
         path: std::path::PathBuf,
@@ -128,6 +129,7 @@ pub enum FunctionError {
         source: std::io::Error,
     },
     /// The file is larger than [`FunctionLimits::max_bytes`].
+    #[error("{p}: {bytes} bytes exceeds the {limit}-byte function limit", p = path.display())]
     TooLarge {
         /// The file.
         path: std::path::PathBuf,
@@ -137,6 +139,7 @@ pub enum FunctionError {
         limit: u64,
     },
     /// The file has more lines than [`FunctionLimits::max_lines`].
+    #[error("{p}: {lines} lines exceeds the {limit}-line function limit", p = path.display())]
     TooManyLines {
         /// The file.
         path: std::path::PathBuf,
@@ -146,6 +149,7 @@ pub enum FunctionError {
         limit: usize,
     },
     /// A line is longer than [`FunctionLimits::max_line_bytes`].
+    #[error("{p}:{line}: {bytes} bytes exceeds the {limit}-byte line limit", p = path.display())]
     LineTooLong {
         /// The file.
         path: std::path::PathBuf,
@@ -157,6 +161,7 @@ pub enum FunctionError {
         limit: usize,
     },
     /// The text is not valid UTF-8.
+    #[error("{p}: not UTF-8: {source}", p = path.display())]
     NotUtf8 {
         /// The file.
         path: std::path::PathBuf,
@@ -164,6 +169,7 @@ pub enum FunctionError {
         source: std::string::FromUtf8Error,
     },
     /// The file name is not a usable resource id.
+    #[error("{p}: {reason}", p = path.display())]
     BadName {
         /// The file.
         path: std::path::PathBuf,
@@ -183,48 +189,6 @@ impl FunctionError {
             | Self::LineTooLong { path, .. }
             | Self::NotUtf8 { path, .. }
             | Self::BadName { path, .. } => path,
-        }
-    }
-}
-
-impl fmt::Display for FunctionError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Io { path, source } => write!(f, "{}: {source}", path.display()),
-            Self::TooLarge { path, bytes, limit } => write!(
-                f,
-                "{}: {bytes} bytes exceeds the {limit}-byte function limit",
-                path.display()
-            ),
-            Self::TooManyLines { path, lines, limit } => write!(
-                f,
-                "{}: {lines} lines exceeds the {limit}-line function limit",
-                path.display()
-            ),
-            Self::LineTooLong {
-                path,
-                line,
-                bytes,
-                limit,
-            } => write!(
-                f,
-                "{}:{line}: {bytes} bytes exceeds the {limit}-byte line limit",
-                path.display()
-            ),
-            Self::NotUtf8 { path, source } => {
-                write!(f, "{}: not UTF-8: {source}", path.display())
-            }
-            Self::BadName { path, reason } => write!(f, "{}: {reason}", path.display()),
-        }
-    }
-}
-
-impl std::error::Error for FunctionError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Io { source, .. } => Some(source),
-            Self::NotUtf8 { source, .. } => Some(source),
-            _ => None,
         }
     }
 }

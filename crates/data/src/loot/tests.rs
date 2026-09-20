@@ -1298,3 +1298,49 @@ fn baseline_silk_touch_takes_the_first_branch() {
         assert_eq!(out[0].item, id(drop), "{block} with silk");
     }
 }
+
+#[test]
+fn roll_error_messages_are_stable() {
+    // P15-06: operator-visible strings; the thiserror migration must not reword them.
+    let refusal = Refusal {
+        kind: "entry",
+        type_name: "minecraft:foo".to_owned(),
+        reason: "nope",
+    };
+    let cases = [
+        (
+            RollError::Unexecutable {
+                refusals: vec![refusal.clone()],
+            },
+            "the table cannot be rolled: entry minecraft:foo (nope)",
+        ),
+        (
+            RollError::Unexecutable {
+                refusals: vec![refusal.clone(), refusal.clone()],
+            },
+            "the table cannot be rolled: entry minecraft:foo (nope); entry minecraft:foo (nope)",
+        ),
+        (
+            RollError::UnknownTable {
+                name: id("minecraft:x"),
+            },
+            "no loot table named minecraft:x was supplied",
+        ),
+        (
+            RollError::TooDeep {
+                path: vec!["a".to_owned(), "b".to_owned()],
+                limit: 1,
+            },
+            "loot table references nest deeper than 1: a -> b",
+        ),
+        (
+            RollError::Cyclic {
+                path: vec!["a".to_owned(), "a".to_owned()],
+            },
+            "loot table cycle: a -> a",
+        ),
+    ];
+    for (error, expected) in cases {
+        assert_eq!(error.to_string(), expected);
+    }
+}

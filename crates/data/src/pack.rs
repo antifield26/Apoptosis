@@ -29,6 +29,7 @@
 //!   `level.dat → DataPacks` list is not read, so every discovered pack is loaded.
 
 use std::path::{Path, PathBuf};
+use thiserror::Error;
 
 use crate::json::{JsonError, Limits, optional_i64, optional_str, read_json_object};
 
@@ -80,27 +81,18 @@ impl PackMetadata {
 }
 
 /// Why a pack could not be used.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum PackError {
     /// The directory does not exist or is not readable.
+    #[error("{p}: not a readable directory", p = path.display())]
     Missing {
         /// The path.
         path: PathBuf,
     },
     /// `pack.mcmeta` exists but is malformed.
+    #[error("{0}")]
     BadMetadata(JsonError),
 }
-
-impl std::fmt::Display for PackError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Missing { path } => write!(f, "{}: not a readable directory", path.display()),
-            Self::BadMetadata(error) => write!(f, "{error}"),
-        }
-    }
-}
-
-impl std::error::Error for PackError {}
 
 /// One data pack root.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -379,5 +371,35 @@ impl DataPackSet {
             }
         }
         plan
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PackError;
+    use crate::json::JsonError;
+    use std::path::PathBuf;
+
+    #[test]
+    fn pack_error_messages_are_stable() {
+        // P15-06: operator-visible strings; the thiserror migration must not reword them.
+        let cases = [
+            (
+                PackError::Missing {
+                    path: PathBuf::from("world/datapacks/x"),
+                },
+                "world/datapacks/x: not a readable directory",
+            ),
+            (
+                PackError::BadMetadata(JsonError::Invalid {
+                    path: PathBuf::from("world/datapacks/x/pack.mcmeta"),
+                    reason: "not JSON".to_owned(),
+                }),
+                "world/datapacks/x/pack.mcmeta: not JSON",
+            ),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+        }
     }
 }

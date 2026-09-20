@@ -123,6 +123,7 @@ use mc_core::ids::ResourceId;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
+use thiserror::Error;
 
 use crate::json::{
     JsonError, Limits, optional_f64, optional_i64, optional_str, read_json_object, required_array,
@@ -1241,20 +1242,23 @@ pub fn roll_scoped(
 }
 
 /// Why a roll could not be completed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum RollError {
     /// The table uses a feature this build does not execute.
+    #[error("the table cannot be rolled: {joined}", joined = join_refusals(refusals))]
     Unexecutable {
         /// Every distinct reason found, sorted and de-duplicated so the message is
         /// deterministic. One run tells the whole story rather than only the first problem.
         refusals: Vec<Refusal>,
     },
     /// A `minecraft:loot_table` entry names a table the caller did not supply.
+    #[error("no loot table named {name} was supplied")]
     UnknownTable {
         /// The name that could not be resolved.
         name: ResourceId,
     },
     /// References nested deeper than [`MAX_TABLE_NESTING`].
+    #[error("loot table references nest deeper than {limit}: {chain}", chain = path.join(" -> "))]
     TooDeep {
         /// The chain followed, outermost first.
         path: Vec<String>,
@@ -1262,39 +1266,24 @@ pub enum RollError {
         limit: usize,
     },
     /// A table references itself, directly or transitively.
+    #[error("loot table cycle: {chain}", chain = path.join(" -> "))]
     Cyclic {
         /// The cycle, in order, starting and ending at the same table.
         path: Vec<String>,
     },
 }
 
-impl fmt::Display for RollError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unexecutable { refusals } => {
-                write!(f, "the table cannot be rolled: ")?;
-                for (index, refusal) in refusals.iter().enumerate() {
-                    if index > 0 {
-                        write!(f, "; ")?;
-                    }
-                    write!(f, "{refusal}")?;
-                }
-                Ok(())
-            }
-            Self::UnknownTable { name } => write!(f, "no loot table named {name} was supplied"),
-            Self::TooDeep { path, limit } => write!(
-                f,
-                "loot table references nest deeper than {limit}: {}",
-                path.join(" -> ")
-            ),
-            Self::Cyclic { path } => {
-                write!(f, "loot table cycle: {}", path.join(" -> "))
-            }
-        }
-    }
+/// Render refusal lists the way [`RollError::Unexecutable`] reports them:
+///
+/// every refusal joined with `"; "`, so one run tells the whole story rather
+/// than only the first problem.
+fn join_refusals(refusals: &[Refusal]) -> String {
+    refusals
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ")
 }
-
-impl std::error::Error for RollError {}
 
 /// One reason a roll was refused.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

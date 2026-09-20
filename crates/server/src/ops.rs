@@ -123,7 +123,7 @@ impl OperatorList {
         // limit, and carries the path in every error — so the whole policy is applied by one
         // call. Using it rather than `serde_json` directly is deliberate: this is an
         // operator-supplied file, and the project has one policy for those.
-        let value = read_json(&path, LIMITS).map_err(|error| corrupt(&error))?;
+        let value = read_json(&path, LIMITS).map_err(ServerError::from)?;
         Self::from_value(&value, &path)
     }
 
@@ -135,7 +135,7 @@ impl OperatorList {
     pub fn parse(text: &str, path: &Path) -> ServerResult<Self> {
         // No size check here: the text is already in memory, so `parse_json` is the right
         // entry point and the limit belongs to `load`, which is where a file is involved.
-        let value = mc_data::json::parse_json(text, path).map_err(|error| corrupt(&error))?;
+        let value = mc_data::json::parse_json(text, path).map_err(ServerError::from)?;
         Self::from_value(&value, path)
     }
 
@@ -409,19 +409,6 @@ fn parse_entry(entry: &Value, path: &Path, index: usize) -> ServerResult<Operato
         level,
         bypasses_player_limit,
     })
-}
-
-/// Turn a JSON-boundary error into a server error naming the file.
-///
-/// A file that cannot be **read** is the environment failing, which is `Operational`; a file
-/// that cannot be **understood** is the data being wrong, which is `CorruptData`. The JSON
-/// boundary distinguishes the two and this preserves the distinction rather than flattening
-/// both into one variant.
-fn corrupt(error: &mc_data::json::JsonError) -> ServerError {
-    match error {
-        mc_data::json::JsonError::Io { .. } => ServerError::Operational(error.to_string()),
-        _ => ServerError::CorruptData(error.to_string()),
-    }
 }
 
 /// A JSON value's type, for a message that says what was found.
