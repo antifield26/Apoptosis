@@ -775,7 +775,18 @@ impl Game {
                 }
                 // Flush the block half before discarding the menu.
                 if let Some(pos) = open {
-                    let menu = &self.sessions.get(&id).expect("session").menu;
+                    // `open` came out of this same session map lines above, so
+                    // absence here is a desync bug, surfaced as a typed error
+                    // rather than the `expect` this replaced (AGENTS.md §9).
+                    let menu = &self
+                        .sessions
+                        .get(&id)
+                        .ok_or_else(|| {
+                            ServerError::Invariant(format!(
+                                "container close for {id:?} with no session"
+                            ))
+                        })?
+                        .menu;
                     if let Some(entity) = self.block_entities.get_mut(pos) {
                         write_back_block(menu, entity);
                         mark_block_dirty(&mut self.world, pos.x, pos.z);
@@ -1719,10 +1730,16 @@ impl Game {
             write_back_inventory(&session.menu, &mut session.player.inventory);
         }
         if let Some(pos) = self.sessions.get(&id).and_then(|s| s.open_block) {
-            let menu = &self.sessions.get(&id).expect("session").menu;
-            if let Some(entity) = self.block_entities.get_mut(pos) {
-                write_back_block(menu, entity);
-                mark_block_dirty(&mut self.world, pos.x, pos.z);
+            // The session was present two statements up (`get_mut` wrote the
+            // inventory back through it); if it vanished since, there is no
+            // menu left to flush, so skipping beats the `expect` this
+            // replaced — and the signature stays `()` (AGENTS.md §9).
+            if let Some(session) = self.sessions.get(&id) {
+                let menu = &session.menu;
+                if let Some(entity) = self.block_entities.get_mut(pos) {
+                    write_back_block(menu, entity);
+                    mark_block_dirty(&mut self.world, pos.x, pos.z);
+                }
             }
         }
 
