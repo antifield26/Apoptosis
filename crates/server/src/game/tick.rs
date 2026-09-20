@@ -13,6 +13,7 @@ use mc_entity::entity::{EntityBody, EntityId, EntityKind};
 use mc_entity::mob::{
     ATTACK_RANGE, Mob, MobAttackStyle, MobGoal, MobKind, MobObservation, MobSighting,
 };
+use mc_entity::pathfind::{BlockView, SearchLimits, find_path};
 
 use mc_entity::player::DamageOutcome;
 use mc_network::bridge::{ClientEvent, ClientEventKind, ConnectionId};
@@ -29,6 +30,7 @@ use mc_protocol::packets::play::{
 use mc_protocol::text::TextComponent;
 use mc_simulation::{PhaseRunner, TickPhase};
 use mc_world::Vec3;
+use mc_world::World;
 use mc_world::chunk::Chunk;
 use std::collections::{BTreeMap, BTreeSet};
 use tracing::{debug, trace, warn};
@@ -41,6 +43,17 @@ use super::{
     UNLOAD_MARGIN_CHUNKS, chunk_of, floor_to_i32, is_container_block, light_fields,
     mark_block_dirty, mirror_inventory, open_kind_for, wire_angle, wire_stack,
 };
+
+/// The live world as a pathfinding view: solidity is movement-blocking
+/// (exactly [`BlockView`]'s contract), unloaded cells read back unknown and
+/// therefore solid, so no path routes through ungenerated void.
+struct WorldView<'a>(&'a World);
+
+impl BlockView for WorldView<'_> {
+    fn is_solid(&self, x: i32, y: i32, z: i32) -> bool {
+        self.0.is_solid(x, y, z)
+    }
+}
 
 impl Game {
     /// Run one tick: the six phases, in order, each timed.
@@ -1245,18 +1258,88 @@ impl Game {
             .min_by(|a, b| a.1.total_cmp(&b.1))
     }
 
+    /// Steer a chase along its A* path, head-first.
+    ///
+    /// Computes a path when the current one is empty and falls back to direct
+    /// steering when the search fails (P16-04).
+    ///
+    /// Waypoints are feet cells; a waypoint within 0.6 blocks is consumed.
+    /// A path whose final cell drifted more than two blocks from the target's
+    /// cell is dropped, so a kiting target re-searches instead of trailing
+    /// stale cells. The per-step passability check downstream still applies,
+    /// so a path through a freshly placed block degrades to standing, not to
+    /// phasing.
+    fn chase_steer(
+        &mut self,
+        id: EntityId,
+        kind: MobKind,
+        position: mc_world::Vec3,
+        target: mc_world::Vec3,
+    ) -> (f64, f64, i32) {
+        let from = (
+            position.x.floor() as i32,
+            position.y.floor() as i32,
+            position.z.floor() as i32,
+        );
+        let goal = (
+            target.x.floor() as i32,
+            target.y.floor() as i32,
+            target.z.floor() as i32,
+        );
+        let mut direct = (target.x - position.x, target.z - position.z, 0);
+        let Some(entity) = self.entities.get_mut(id) else {
+            return direct;
+        };
+        let EntityBody::Mob(mob) = &mut entity.body else {
+            return direct;
+        };
+        while let Some(&(wx, _, wz)) = mob.ai.path.first() {
+            let dx = f64::from(wx) + 0.5 - position.x;
+            let dz = f64::from(wz) + 0.5 - position.z;
+            if dx * dx + dz * dz < 0.36 {
+                mob.ai.path.remove(0);
+            } else {
+                break;
+            }
+        }
+        if let Some(&(lx, ly, lz)) = mob.ai.path.last() {
+            let drift = (lx - goal.0).abs() + (ly - goal.1).abs() + (lz - goal.2).abs();
+            if drift > 2 {
+                mob.ai.path.clear();
+            }
+        }
+        if mob.ai.path.is_empty() {
+            let view = WorldView(&self.world);
+            let mut limits = SearchLimits::new();
+            limits.clearance = kind.clearance();
+            if let Some(path) = find_path(&view, from, goal, limits) {
+                mob.ai.path = path;
+            }
+        }
+        if let Some(&(wx, _, wz)) = mob.ai.path.first() {
+            direct = (
+                f64::from(wx) + 0.5 - position.x,
+                f64::from(wz) + 0.5 - position.z,
+                0,
+            );
+        }
+        direct
+    }
+
     /// Act on the goal `decide` returned.
     ///
     /// The idle counter climbs on an [`MobGoal::Idle`] and resets on any other
     /// goal — the meaning P11-01's despawn pass documented for it once goal
-    /// activity existed. Movement is **direct steering**: the horizontal
-    /// velocity points at the goal at the kind's walk speed and the yaw faces
-    /// it, with the existing physics phase integrating and colliding.
+    /// activity existed. Movement is **direct steering**, except for
+    /// [`MobGoal::Chase`], which follows an A* path when the search finds one
+    /// (P16-04): the horizontal velocity points at the goal at the kind's walk
+    /// speed and the yaw faces it, with the existing physics phase integrating
+    /// and colliding.
     ///
     /// ## The one-cell lookahead (M-4)
     ///
-    /// Steering is still direct — **this is not pathfinding** — but it is no longer
-    /// blind. Before a steer is applied, the cell the mob's centre would reach after
+    /// Steering is still direct for wander and flee — **that is not
+    /// pathfinding** — but it is no longer blind. Before a steer is applied, the cell the mob's centre would reach after
     /// [`MOB_LOOKAHEAD_BLOCKS`] at that heading is checked for passability
     /// ([`Self::mob_step_is_passable`]): a solid block at the mob's feet or head, or
     /// a fluid, refuses the step. The owner's acceptance round saw mobs walk into
@@ -1266,15 +1349,16 @@ impl Game {
     /// * a **blocked wander stops and re-targets**: the walk is abandoned, so the
     ///   AI rolls a new destination at its next decision boundary instead of
     ///   pressing into the same wall until the walk's timer expires;
-    /// * a **blocked chase or flee just stops**: it has nothing to re-target
+    /// * a **blocked flee just stops**: it has nothing to re-target
     ///   towards, and grinding at a wall while facing the player is worse than
-    ///   standing still.
+    ///   standing still (a blocked chase searches instead — see below).
     ///
     /// What it deliberately does **not** do, so that the gap does not read as
     /// solved:
     ///
-    /// * no path around an obstacle — a wall between a mob and its target stops the
-    ///   mob, it does not route it;
+    /// * no path around an obstacle for wander/flee — a wall between a
+    ///   wandering mob and its target stops it, it does not route it (chase
+    ///   alone searches);
     /// * no ledge or fall handling. Refusing a step with no ground under it would
     ///   stop mobs walking down any hill, which vanilla mobs do constantly, so the
     ///   check only refuses *occupancy*, not *support*;
@@ -1311,19 +1395,24 @@ impl Game {
                 f64::from(target.2) + 0.5 - position.z,
                 0,
             )),
-            MobGoal::Chase { target } | MobGoal::Flee { from: target } => {
+            MobGoal::Chase { target } => {
                 let Some(other) = self.entities.get(*target) else {
                     return;
                 };
                 // A gone target is the end of the goal this tick; `decide`
                 // re-chooses next tick.
-                let sign = match &goal {
-                    MobGoal::Flee { .. } => -1,
-                    _ => 1,
+                let target_pos = other.position;
+                Some(self.chase_steer(id, kind, position, target_pos))
+            }
+            MobGoal::Flee { from: target } => {
+                let Some(other) = self.entities.get(*target) else {
+                    return;
                 };
+                // Fleeing has no destination to path to; direct steering
+                // stands, as documented above.
                 Some((
-                    (other.position.x - position.x) * f64::from(sign),
-                    (other.position.z - position.z) * f64::from(sign),
+                    (position.x - other.position.x),
+                    (position.z - other.position.z),
                     0,
                 ))
             }

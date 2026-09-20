@@ -437,6 +437,29 @@ impl World {
         ray_cast(self, select, origin, direction, max_distance)
     }
 
+    /// Whether `to` is visible from `from`: no solid block in between (P16-04).
+    ///
+    /// The solidity test is the movement one ([`is_solid_or_unknown`]), which
+    /// treats glass and leaves as blockers — matching vanilla's visual-shape
+    /// rule for the common blocks, documented as an approximation for the
+    /// rest. Unloaded cells read back unknown, and unknown counts as solid:
+    /// seeing across ungenerated void would let mobs target through nothing.
+    /// A zero-length ray reads as visible: overlapping entities are touching,
+    /// and a point-blank shot must not be blocked by this check.
+    #[must_use]
+    pub fn has_line_of_sight(&self, from: Vec3, to: Vec3) -> bool {
+        let delta = to.minus(from);
+        let distance = (delta.x * delta.x + delta.y * delta.y + delta.z * delta.z).sqrt();
+        if !distance.is_finite() || distance <= f64::EPSILON {
+            return true;
+        }
+        let registry = &self.registry;
+        self.ray_cast(from, delta, distance, &mut |id| {
+            is_solid_or_unknown(registry, id)
+        })
+        .is_none()
+    }
+
     /// Move `box` by `delta`, stopping at solid blocks, per axis.
     ///
     /// Axis order is Vanilla's, bytecode-read from the 26.1.2 jar
@@ -960,5 +983,23 @@ mod tests {
         world.set_block(100, 70, 100, 1).expect("sets");
         assert!(world.is_loaded(ChunkPos::new(6, 6)));
         assert_eq!(world.get_block(100, 70, 100), 1);
+    }
+
+    #[test]
+    fn line_of_sight_needs_clear_air() {
+        // P16-04: open air sees, a stone wall between blinds, and an
+        // endpoint inside stone reads as blocked.
+        let mut world = world();
+        let a = Vec3::new(0.5, 70.0, 0.5);
+        let b = Vec3::new(10.5, 70.0, 0.5);
+        assert!(world.has_line_of_sight(a, b));
+        assert!(world.has_line_of_sight(a, a));
+        for y in 64..72 {
+            world.set_block(5, y, 0, 1).expect("wall");
+        }
+        assert!(!world.has_line_of_sight(a, b));
+        // A ray starting inside the wall still leaves it: the exit face is
+        // a solid crossing.
+        assert!(!world.has_line_of_sight(Vec3::new(5.5, 70.0, 0.5), Vec3::new(10.5, 70.0, 0.5)));
     }
 }

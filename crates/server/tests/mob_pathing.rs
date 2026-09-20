@@ -314,30 +314,99 @@ fn a_chasing_mob_stops_at_the_edge_of_lava() {
     );
 }
 
-/// The lookahead must not be confused with the thing it replaced: a **solid** wall
-/// between the two still stops the mob, and now the mob also does not keep
-/// pressing into it. The wall half is weaker evidence than the fluid half — the
-/// collision pass already refused the cell — so this test asserts the part that is
-/// new: the mob stays put rather than sliding along the face.
+/// A solid wall with no way around still stops the mob: with no route the
+/// search fails every tick and the chase degrades to the old halt, never to
+/// phasing. The wall half is weaker evidence than the fluid half — the
+/// collision pass already refused the cell — so this test asserts the part
+/// that is new: the mob stays put rather than sliding along the face.
 #[test]
-fn a_wall_stops_a_chasing_mob_without_it_sliding_along() {
+fn a_chasing_mob_never_phases_through_solid_cells() {
+    // NOTE: in an open world a 3-wide wall always has a way around its ends,
+    // so "no route" is not constructible here — the fluid tests pin halting,
+    // and this test pins the invariant that survives routing: no visited
+    // feet cell is ever solid, while the mob demonstrably walks up to the
+    // wall (so a stationary mob cannot pass vacuously).
     let mut harness = Harness::new("m4-wall");
     let (sx, sy, sz) = harness.game.spawn();
     let _ = stage_chase(&mut harness, sx, sy, sz);
 
     let wall_x = sx - 2;
-    for dy in 0..=1 {
-        harness.put(wall_x, sy + dy, sz, "minecraft:stone");
+    for dz in -1..=1 {
+        for dy in 0..=2 {
+            harness.put(wall_x, sy + dy, sz + dz, "minecraft:stone");
+        }
     }
 
-    let track = harness.mob_track(MobKind::Zombie, COURSE_TICKS);
+    let mut visited: Vec<(i32, i32, i32)> = Vec::with_capacity(COURSE_TICKS);
+    for _ in 0..COURSE_TICKS {
+        harness.game.tick().expect("tick");
+        visited.push(
+            harness
+                .mob_cell(MobKind::Zombie)
+                .expect("the zombie exists"),
+        );
+    }
+    let reached_wall = visited
+        .iter()
+        .any(|(x, _, _)| (f64::from(*x) - f64::from(wall_x)).abs() <= 1.0);
     assert!(
-        track.iter().all(|(x, _z)| *x != wall_x),
-        "the zombie must never occupy the wall's cell; track={track:?}"
+        reached_wall,
+        "the zombie must walk up to the wall, not idle at spawn; visited={visited:?}"
     );
-    let last_ten: Vec<(i32, i32)> = track[track.len() - 10..].to_vec();
+    for (x, y, z) in &visited {
+        // Feet and headroom: solid at either means the mob is inside the
+        // wall, not on top of it (a standable top reads air at both). An
+        // unloaded cell counts as solid — a mob standing nowhere loadable is
+        // itself the defect.
+        for dy in 0..=1 {
+            let solid = harness
+                .game
+                .world()
+                .get_block_loaded(*x, y + dy, *z)
+                .is_some_and(|block| {
+                    mc_world::collision::is_solid(&harness.game.registries().blocks, block)
+                        .unwrap_or(true)
+                });
+            assert!(
+                !solid,
+                "the zombie phased into ({x}, {y}, {z}); visited={visited:?}"
+            );
+        }
+    }
+}
+
+/// The same wall with one open column: the chase searches around it and the
+/// track proves the route went through the gap, not through stone.
+#[test]
+fn a_chasing_mob_routes_around_a_wall_through_its_gap() {
+    let mut harness = Harness::new("p16-gap");
+    let (sx, sy, sz) = harness.game.spawn();
+    let px = stage_chase(&mut harness, sx, sy, sz);
+
+    // Two of three columns walled, three high; the third column stays course
+    // (floor below, air above) so exactly one route exists.
+    let wall_x = sx - 3;
+    for dz in [-1, 0] {
+        for dy in 0..=2 {
+            harness.put(wall_x, sy + dy, sz + dz, "minecraft:stone");
+        }
+    }
+
+    let track = harness.mob_track(MobKind::Zombie, COURSE_TICKS + 90);
+    // Passage proof: the track reaches the wall's column only in the gap.
     assert!(
-        last_ten.windows(2).all(|w| w[0] == w[1]),
-        "a blocked mob halts where it is rather than sliding along the wall: {last_ten:?}"
+        track.iter().any(|(x, z)| *x == wall_x && *z == sz + 1),
+        "the zombie must pass the wall through its gap column; track={track:?}"
+    );
+    assert!(
+        track.iter().all(|(x, z)| *x != wall_x || *z == sz + 1),
+        "...and never through stone; track={track:?}"
+    );
+    // And it still arrives: routing is not wandering.
+    let player_x = f64::from(px) + 0.5;
+    let (end_x, _) = track[track.len() - 1];
+    assert!(
+        (player_x - f64::from(end_x)).abs() <= mc_entity::mob::ATTACK_RANGE + 1.75,
+        "the zombie must arrive within melee range after routing: player at x={player_x:.3}, zombie cell x={end_x}"
     );
 }

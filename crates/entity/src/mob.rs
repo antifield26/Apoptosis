@@ -106,11 +106,10 @@
 //!   caller must resolve or refuse. In particular
 //!   [`MobKind::Creeper`]'s [`MobKind::attack_damage`] is the documented
 //!   point-blank **explosion** damage, not a melee value.
-//! - **No per-mob follow range.** [`AGGRO_RADIUS`] is jar-measured as Vanilla's
-//!   *default* `FOLLOW_RANGE` (`Mob.createMobAttributes` = 16.0), but the per-kind
-//!   overrides are not modelled: `Zombie.createAttributes` sets 35.0, so a zombie
-//!   here acquires a target at 16 where Vanilla's does at 35. Recorded as an open
-//!   product decision in AUDIT-09 D-04 rather than retargeted silently.
+//! - **No per-mob follow range beyond the zombie.** [`MobKind::follow_range`]
+//!   wires the one jar-measured override (`Zombie.createAttributes` = 35.0,
+//!   closing AUDIT-09 D-04); every other kind inherits the 16.0 default, and
+//!   further overrides land when measured, not guessed.
 //! - **No line of sight, light level, day/night, difficulty scaling, anger or
 //!   panic sources, baby variants, jockeys or equipment.**
 //! - **Passive mobs flee on lost health rather than on being damaged.** Vanilla's
@@ -198,23 +197,20 @@ pub const SPEED_BLOCKS_PER_SECOND_PER_ATTRIBUTE: f64 = 30.41;
 ///
 /// **Jar-measured as Vanilla's default.** `Mob.createMobAttributes` adds
 /// `FOLLOW_RANGE = 16.0`, and every mob inherits it unless it overrides it, so
-/// 16.0 is the right number for "a mob with no override".
-///
-/// **The override is what is missing** (AUDIT-09 D-04, OPEN). `Zombie.createAttributes`
-/// adds `FOLLOW_RANGE = 35.0`, also jar-measured, and this crate applies one
-/// radius to every kind — so a zombie here notices a player at 16 blocks where
-/// Vanilla's notices one at 35, which makes our hostiles *less* aggressive than
-/// Vanilla's. That is a product decision and not a silent one: retargeting the
-/// zombie would change the difficulty of every night, so it is recorded as an
-/// open decision rather than applied. Per-kind overrides need a table, and the
-/// sweep that would fill it is named in the module documentation.
+/// 16.0 is the right number for "a mob with no override". Per-kind overrides
+/// live on [`MobKind::follow_range`] — the zombie's 35.0 (`Zombie.createAttributes`,
+/// also jar-measured, wired by P16-04 closing AUDIT-09 D-04).
 pub const AGGRO_RADIUS: f64 = 16.0;
+
+/// Margin added to a kind's follow range for target retention (see
+/// [`MobKind::lose_range`]).
+pub const LOSE_RADIUS_MARGIN: f64 = 8.0;
 
 /// Distance in blocks at which a hostile mob gives up a target it already has.
 ///
 /// **This crate's own design choice, not a Vanilla rule.** Vanilla acquires and
 /// retains on the same follow range; a wider retention radius is used here so a
-/// player standing exactly on [`AGGRO_RADIUS`] cannot make the mob flicker
+/// player standing exactly on the acquire radius cannot make the mob flicker
 /// between `Chase` and `Wander` every tick.
 pub const TARGET_LOSE_RADIUS: f64 = 24.0;
 
@@ -450,6 +446,28 @@ impl MobKind {
             Self::Creeper => Some(MobAttackStyle::Explosive),
             Self::Cow | Self::Pig | Self::Sheep | Self::Chicken => None,
         }
+    }
+
+    /// Follow range in blocks: how far away this kind notices a player.
+    ///
+    /// The default is jar-measured vanilla (`Mob.createMobAttributes`,
+    /// `FOLLOW_RANGE = 16.0`); the zombie overrides it to 35.0
+    /// (`Zombie.createAttributes`, also jar-measured — P16-04 closes
+    /// AUDIT-09 D-04 by wiring it). No other kind has a measured override,
+    /// so no other kind gets one.
+    #[must_use]
+    pub const fn follow_range(self) -> f64 {
+        match self {
+            Self::Zombie => 35.0,
+            _ => AGGRO_RADIUS,
+        }
+    }
+
+    /// Retention radius in blocks: the follow range plus the anti-flicker
+    /// margin ([`LOSE_RADIUS_MARGIN`]).
+    #[must_use]
+    pub const fn lose_range(self) -> f64 {
+        self.follow_range() + LOSE_RADIUS_MARGIN
     }
 
     /// Damage this kind's attack deals to a player on **Normal** difficulty,
@@ -852,6 +870,10 @@ pub struct MobAi {
     pub cooldown: u32,
     /// Most recent entity a goal was about.
     pub last_target: Option<EntityId>,
+    /// Waypoints of the current chase path, feet cells head-first (P16-04).
+    /// Empty means "no path": the chase arm computes one, follows it to the
+    /// end, and falls back to direct steering when the search fails.
+    pub path: Vec<(i32, i32, i32)>,
 }
 
 impl MobAi {
@@ -863,6 +885,7 @@ impl MobAi {
             wander_target: None,
             cooldown: 0,
             last_target: None,
+            path: Vec::new(),
         }
     }
 
@@ -882,8 +905,8 @@ impl MobAi {
     ///
     /// 1. **Timers.** The walk timer and any attack cooldown lose one tick.
     /// 2. **Hostile target.** The nearest player is a target when it is inside
-    ///    [`AGGRO_RADIUS`], or inside [`TARGET_LOSE_RADIUS`] *and* already
-    ///    [`MobAi::last_target`]. Inside [`ATTACK_RANGE`] the goal is
+    ///    the kind's [`MobKind::follow_range`], or inside [`MobKind::lose_range`]
+    ///    *and* already [`MobAi::last_target`]. Inside [`ATTACK_RANGE`] the goal is
     ///    [`MobGoal::Attack`], otherwise [`MobGoal::Chase`].
     /// 3. **Passive threat.** A player inside [`FLEE_RADIUS`] while health is at
     ///    or below [`FLEE_HEALTH_FRACTION`] gives [`MobGoal::Flee`].
@@ -905,9 +928,9 @@ impl MobAi {
         let threat = observation.threat().filter(|sighting| match behaviour {
             MobBehaviour::Hostile => {
                 let radius = if self.last_target == Some(sighting.id) {
-                    TARGET_LOSE_RADIUS
+                    kind.lose_range()
                 } else {
-                    AGGRO_RADIUS
+                    kind.follow_range()
                 };
                 sighting.distance <= radius
             }
@@ -1346,13 +1369,13 @@ mod tests {
             ),
             MobGoal::Chase { target: player() }
         );
-        // Beyond it, with no prior target: back to a walk (or idling on the way
-        // to one). Never a chase.
+        // Beyond the zombie's own 35.0, with no prior target: back to a walk
+        // (or idling on the way to one). Never a chase.
         for tick in 0..DECISION_INTERVAL_TICKS * 4 {
             let mut ai = MobAi::new();
             let goal = ai.decide(
                 MobKind::Zombie,
-                observation(Some(AGGRO_RADIUS + 0.1), 1.0, tick),
+                observation(Some(35.1), 1.0, tick),
                 &mut rng,
             );
             assert!(
@@ -1364,6 +1387,46 @@ mod tests {
         let mut ai = MobAi::new();
         let goal = ai.decide(MobKind::Cow, observation(None, 1.0, 0), &mut rng);
         assert!(matches!(goal, MobGoal::Idle | MobGoal::Wander { .. }));
+    }
+
+    #[test]
+    fn the_zombie_noticed_far_away_and_others_do_not() {
+        // P16-04 closes AUDIT-09 D-04: the zombie's jar-measured 35.0 follow
+        // range is wired; every other kind keeps the 16.0 default.
+        let mut rng = SeededRandom::new(21);
+        assert_eq!(MobKind::Zombie.follow_range(), 35.0);
+        assert_eq!(MobKind::Zombie.lose_range(), 43.0);
+        assert_eq!(MobKind::Skeleton.follow_range(), AGGRO_RADIUS);
+        let mut ai = MobAi::new();
+        assert_eq!(
+            ai.decide(MobKind::Zombie, observation(Some(20.0), 1.0, 1), &mut rng),
+            MobGoal::Chase { target: player() },
+            "a zombie notices at 20 blocks"
+        );
+        let mut ai = MobAi::new();
+        assert_eq!(
+            ai.decide(MobKind::Zombie, observation(Some(35.0), 1.0, 1), &mut rng),
+            MobGoal::Chase { target: player() },
+            "inclusive at exactly 35"
+        );
+        for kind in [MobKind::Skeleton, MobKind::Spider, MobKind::Creeper] {
+            let mut ai = MobAi::new();
+            assert!(
+                matches!(
+                    ai.decide(kind, observation(Some(20.0), 1.0, 1), &mut rng),
+                    MobGoal::Idle | MobGoal::Wander { .. }
+                ),
+                "{kind:?} still acquires at 16, not 20"
+            );
+        }
+        // Retention follows the same per-kind radii (43 for the zombie).
+        let mut ai = MobAi::new();
+        ai.last_target = Some(player());
+        assert_eq!(
+            ai.decide(MobKind::Zombie, observation(Some(40.0), 1.0, 1), &mut rng),
+            MobGoal::Chase { target: player() },
+            "a known target is kept to 43"
+        );
     }
 
     #[test]
@@ -1430,19 +1493,21 @@ mod tests {
 
     #[test]
     fn a_hostile_mob_keeps_a_target_inside_the_retention_radius_only() {
+        // Skeleton: the default 16.0/24.0 radii (the zombie's 35/43 pair has
+        // its own test below).
         let mut rng = SeededRandom::new(3);
         let mut ai = MobAi::new();
-        ai.decide(MobKind::Zombie, observation(Some(10.0), 1.0, 1), &mut rng);
+        ai.decide(MobKind::Skeleton, observation(Some(10.0), 1.0, 1), &mut rng);
         assert_eq!(ai.last_target, Some(player()));
         // 20 blocks is outside the aggro radius but inside retention.
         assert_eq!(
-            ai.decide(MobKind::Zombie, observation(Some(20.0), 1.0, 2), &mut rng),
+            ai.decide(MobKind::Skeleton, observation(Some(20.0), 1.0, 2), &mut rng),
             MobGoal::Chase { target: player() }
         );
         // Past retention the chase ends. (`TARGET_LOSE_RADIUS > AGGRO_RADIUS` is
         // asserted at compile time next to the two constants.)
         let goal = ai.decide(
-            MobKind::Zombie,
+            MobKind::Skeleton,
             observation(Some(TARGET_LOSE_RADIUS + 0.1), 1.0, 3),
             &mut rng,
         );
@@ -1451,7 +1516,7 @@ mod tests {
         let mut fresh = MobAi::new();
         let sighting = MobSighting::new(other_player(), 20.0);
         let far = MobObservation::new((0, 64, 0), Some(sighting), 1.0, 1);
-        let goal = fresh.decide(MobKind::Zombie, far, &mut rng);
+        let goal = fresh.decide(MobKind::Skeleton, far, &mut rng);
         assert!(matches!(goal, MobGoal::Idle | MobGoal::Wander { .. }));
     }
 
