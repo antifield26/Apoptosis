@@ -1,0 +1,16 @@
+# set_entity_data body for a naturally spawned minecraft:cow,
+# captured from a vanilla 26.1.2 dedicated server.
+#
+# Provenance: the ambient vanilla capture,
+# target/vanilla-capture/bodies/000104_s2c_play_99.bin (a second identical
+# body sits at 000751_s2c_play_99.bin). The cow carries its health plus a
+# cow-sound-variant slot — the body that closed AUDIT-09 D-07's sibling gap
+# for serializer 24 (P15-07 A-03).
+#
+# 1f                 entity id 31 (VarInt)
+# 09 03              index 9, serializer 3 (float)
+# 41 20 00 00        10.0 — the cow's max health, big-endian IEEE 754
+# 13 18              index 19, serializer 24 (cow sound variant)
+# 01                 variant registry id 1 (VarInt)
+# ff                 terminator
+1f 09 03 41 20 00 00 13 18 01 ff

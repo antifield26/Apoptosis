@@ -828,3 +828,61 @@ impl Packet for SectionBlocksUpdate {
         Ok(writer.finish())
     }
 }
+
+/// `minecraft:chunk_batch_finished` (clientbound 11): the number of chunks
+/// in the batch that just finished.
+///
+/// Shape corroborated three ways: twelve 1-byte capture bodies reading 5..13
+/// (plausible batch sizes, and a multi-byte `VarInt` would show longer
+/// bodies), pumpkin's `CChunkBatchEnd.batch_size: VarInt`, and the jar id
+/// table. This server sends no batches, so the type is decode-side only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChunkBatchFinished {
+    /// Chunks in the finished batch.
+    pub batch_size: i32,
+}
+
+impl Packet for ChunkBatchFinished {
+    const ID: i32 = clientbound::play::CHUNK_BATCH_FINISHED;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let batch_size = reader.read_varint()?;
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "chunk_batch_finished has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self { batch_size })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.batch_size);
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:chunk_batch_start` (clientbound 12): an empty signal opening a
+/// chunk batch. Eight captured bodies, every one empty.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ChunkBatchStart;
+
+impl Packet for ChunkBatchStart {
+    const ID: i32 = clientbound::play::CHUNK_BATCH_START;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        if !payload.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "chunk_batch_start must be empty, got {} bytes",
+                payload.len()
+            )));
+        }
+        Ok(Self)
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        Ok(Vec::new())
+    }
+}

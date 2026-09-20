@@ -238,3 +238,38 @@ fn the_health_constant_agrees_with_every_captured_kind() {
         );
     }
 }
+
+#[test]
+fn a_natural_cow_carries_health_and_its_sound_variant() {
+    // P15-07 A-03: the capture-sweep body that solved serializer 24. A
+    // naturally spawned cow sends health at index 9 plus a cow-sound-variant
+    // slot at index 19 — the first variant-family body this decoder walks
+    // end to end, and the re-encode proof that the family rides VarInt ids.
+    let text = include_str!("../../test-support/fixtures/protocol/set_entity_data_cow.hex");
+    let hex: String = text
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .flat_map(|line| line.split_whitespace())
+        .collect();
+    let bytes: Vec<u8> = (0..hex.len() / 2)
+        .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).expect("hex"))
+        .collect();
+    let packet = SetEntityData::decode(&bytes).expect("the captured body decodes");
+    assert_eq!(packet.entity_id, 31);
+    assert_eq!(
+        packet.entries,
+        vec![
+            (9, mc_protocol::packets::play::MetadataValue::Float(10.0)),
+            (
+                19,
+                mc_protocol::packets::play::MetadataValue::Variant { kind: 24, id: 1 }
+            ),
+        ],
+        "health at 9, cow sound variant 1 at 19"
+    );
+    assert_eq!(
+        packet.encode().expect("encodes"),
+        bytes,
+        "the variant body round-trips"
+    );
+}

@@ -66,5 +66,6 @@ minecraft:sheep	18	0	1	byte slot, value 15 observed on one natural sheep
 minecraft:cow	6	20	?	on every fresh spawn
 minecraft:cow	9	3	4	health
 minecraft:cow	18	23	?	variant slot (26.x cow variants); width unsolved
+minecraft:cow	19	24	V	cow sound variant (26.x); value 1 in vanilla-capture 000104/000751
 minecraft:slime	9	3	4	health = (size slot)^2 at the two measured sizes
 minecraft:slime	16	1	V	size slot = NBT Size + 1

@@ -235,6 +235,74 @@ impl Packet for ConfigPong {
     }
 }
 
+/// `minecraft:custom_payload` (configuration serverbound 2): a branded
+/// channel plus its opaque bytes.
+///
+/// The channel decides the payload layout, and channels are mod/plugin
+/// territory this build does not interpret — so the frame (identifier, then
+/// the unread rest) is what is modelled, not any channel's semantics. The
+/// only body the capture holds is the client's `minecraft:brand`. Server-side
+/// handling is deliberately unwired (unknown configuration packets are
+/// ignored); this type exists so the capture sweep proves the frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct C2sCustomPayload {
+    /// Channel, e.g. `minecraft:brand`.
+    pub channel: String,
+    /// The channel payload, uninterrupted.
+    pub data: Vec<u8>,
+}
+
+impl Packet for C2sCustomPayload {
+    const ID: i32 = serverbound::config::CUSTOM_PAYLOAD;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let channel = reader.read_string(crate::MAX_IDENTIFIER_LEN)?;
+        Ok(Self {
+            channel,
+            data: reader.remaining_slice().to_vec(),
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_string(&self.channel)?;
+        writer.write_bytes(&self.data);
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:custom_payload` (configuration clientbound 1): the same frame
+/// as [`C2sCustomPayload`], server to client. The capture holds the server's
+/// `minecraft:brand` answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct S2cCustomPayload {
+    /// Channel, e.g. `minecraft:brand`.
+    pub channel: String,
+    /// The channel payload, uninterrupted.
+    pub data: Vec<u8>,
+}
+
+impl Packet for S2cCustomPayload {
+    const ID: i32 = clientbound::config::CUSTOM_PAYLOAD;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let channel = reader.read_string(crate::MAX_IDENTIFIER_LEN)?;
+        Ok(Self {
+            channel,
+            data: reader.remaining_slice().to_vec(),
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_string(&self.channel)?;
+        writer.write_bytes(&self.data);
+        Ok(writer.finish())
+    }
+}
+
 /// `minecraft:update_enabled_features` (clientbound 12).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FeatureFlags {

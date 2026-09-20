@@ -115,6 +115,9 @@ pub mod serverbound {
         pub const CHAT_COMMAND_SIGNED: i32 = 8;
         /// `minecraft:chat`
         pub const CHAT: i32 = 9;
+        /// `minecraft:chunk_batch_received` — the client's chunk-batch
+        /// flow-control ack (desired chunks per tick, `f32`).
+        pub const CHUNK_BATCH_RECEIVED: i32 = 11;
         /// `minecraft:client_tick_end` — a client closing its own tick.
         ///
         /// **Not an intent**, and the reason is worth stating: a server that does not wait on a client's tick

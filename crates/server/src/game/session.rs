@@ -835,7 +835,14 @@ impl Game {
             // The three arms beside it are silent for their own reasons.
             PlayIntent::Swing { .. }
             | PlayIntent::AcceptTeleportation { .. }
-            | PlayIntent::ClientTickEnd => {}
+            | PlayIntent::ClientTickEnd
+            // A-03 additions, all decoded-but-unacted: this server sends no
+            // keep-alives to answer, batches no chunks to throttle, and needs
+            // no signal for load completion. Modelling them keeps the capture
+            // sweep total without changing what the game does.
+            | PlayIntent::KeepAlive { .. }
+            | PlayIntent::ChunkBatchReceived { .. }
+            | PlayIntent::PlayerLoaded => {}
         }
         Ok(())
     }

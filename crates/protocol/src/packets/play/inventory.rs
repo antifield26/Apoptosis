@@ -27,6 +27,17 @@ pub const METADATA_TYPE_FLOAT: i32 = 3;
 /// carries `08 07` -- index 8, this type -- followed by the stack.
 pub const METADATA_TYPE_ITEM_STACK: i32 = 7;
 
+/// Wire type ids for [`MetadataValue::Variant`]: the data-driven registry
+/// variants and their sound siblings (`cat` 21/22, `cow` 23/24, `wolf` 25/26,
+/// `frog` 27, `pig` 28/29, `chicken` 30/31, `zombie-nautilus` 32, painting 34).
+///
+/// Names and ids from the 26.1 serializer table (pumpkin's generated
+/// `meta_data_type`, `v26_1` column); the shared shape — a `VarInt` registry
+/// id — is the registry-holder mechanism every member uses, the same shape
+/// `cat` variants have ridden since 1.14. Directly evidenced for 24: two
+/// vanilla-capture cow bodies carry index 19, this type, one `0x01` byte.
+pub const METADATA_TYPE_VARIANTS: &[i32] = &[21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34];
+
 /// Terminator that ends a metadata entry list.
 pub const METADATA_TERMINATOR: u8 = 0xFF;
 
@@ -41,10 +52,10 @@ pub const METADATA_INDEX_HEALTH: u8 = 9;
 
 /// One entity metadata value.
 ///
-/// Only the three shapes Phase 04 sends are modelled. Vanilla's remaining type
-/// ids (2, 4, 5, 6, 7, …: `VarLong`, string, component, item stack, …) are
-/// deliberately **not** decoded here: a wrong guess would silently misparse a
-/// later entry and desynchronise the rest of the list, so
+/// Byte, `VarInt`, float, item-stack and registry-variant-holder shapes are
+/// modelled. Vanilla's remaining type ids (2, 4, 5, 6, …: `VarLong`, string,
+/// component, …) are deliberately **not** decoded here: a wrong guess would
+/// silently misparse a later entry and desynchronise the rest of the list, so
 /// [`SetEntityData::decode`] rejects them with an explicit error instead
 /// (AGENTS.md section 3.3). Adding one is a new variant plus its `type_id`
 /// arm.
@@ -56,6 +67,15 @@ pub enum MetadataValue {
     VarInt(i32),
     /// Type id [`METADATA_TYPE_FLOAT`].
     Float(f32),
+    /// One of [`METADATA_TYPE_VARIANTS`]: a registry-variant holder, the
+    /// variant's registry id as a `VarInt`. `kind` round-trips which family
+    /// member it is, so re-encoding a decoded body reproduces the wire bytes.
+    Variant {
+        /// The wire type id this value arrived with.
+        kind: i32,
+        /// Variant registry id.
+        id: i32,
+    },
     /// Type id [`METADATA_TYPE_ITEM_STACK`]: an item and a count.
     ///
     /// **Data components are not modelled.** The wire carries a patch of added and removed components after the
@@ -78,6 +98,7 @@ impl MetadataValue {
             Self::Byte(_) => METADATA_TYPE_BYTE,
             Self::VarInt(_) => METADATA_TYPE_VARINT,
             Self::Float(_) => METADATA_TYPE_FLOAT,
+            Self::Variant { kind, .. } => kind,
             Self::ItemStack { .. } => METADATA_TYPE_ITEM_STACK,
         }
     }
@@ -88,6 +109,7 @@ impl MetadataValue {
             Self::Byte(value) => writer.write_u8(value),
             Self::VarInt(value) => writer.write_varint(value),
             Self::Float(value) => writer.write_f32(value),
+            Self::Variant { id, .. } => writer.write_varint(id),
             Self::ItemStack { count, item_id } => {
                 // The component patch: nothing added, nothing removed. A captured stack with no components sends
                 // exactly these two bytes, and a dropped item is a stack with no components.
@@ -124,6 +146,10 @@ impl MetadataValue {
                 }
                 Ok(Self::ItemStack { count, item_id })
             }
+            other if METADATA_TYPE_VARIANTS.contains(&other) => Ok(Self::Variant {
+                kind: other,
+                id: reader.read_varint()?,
+            }),
             other => Err(ServerError::Protocol(format!(
                 "unmodelled entity metadata type id {other}"
             ))),

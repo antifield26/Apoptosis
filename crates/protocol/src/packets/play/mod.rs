@@ -80,19 +80,19 @@ mod light;
 mod position;
 
 pub use self::chunk::{
-    BIOMES_PER_SECTION, BLOCKS_PER_SECTION, BlockChangedAck, BlockUpdate, ChunkSection,
-    HEIGHTMAP_MOTION_BLOCKING, HEIGHTMAP_MOTION_BLOCKING_NO_LEAVES, HEIGHTMAP_OCEAN_FLOOR,
-    HEIGHTMAP_OCEAN_FLOOR_WG, HEIGHTMAP_WORLD_SURFACE, HEIGHTMAP_WORLD_SURFACE_WG, Heightmap,
-    LevelChunkWithLight, MAX_BLOCK_ENTITIES, MAX_CHUNK_SECTIONS, MAX_HEIGHTMAP_LONGS,
-    MAX_HEIGHTMAPS, MAX_PALETTE_LEN, MAX_SECTION_UPDATES, NETWORK_BIOME_MIN_BITS,
-    OVERWORLD_SECTIONS, PalettedContainer, SectionBlocksUpdate,
+    BIOMES_PER_SECTION, BLOCKS_PER_SECTION, BlockChangedAck, BlockUpdate, ChunkBatchFinished,
+    ChunkBatchStart, ChunkSection, HEIGHTMAP_MOTION_BLOCKING, HEIGHTMAP_MOTION_BLOCKING_NO_LEAVES,
+    HEIGHTMAP_OCEAN_FLOOR, HEIGHTMAP_OCEAN_FLOOR_WG, HEIGHTMAP_WORLD_SURFACE,
+    HEIGHTMAP_WORLD_SURFACE_WG, Heightmap, LevelChunkWithLight, MAX_BLOCK_ENTITIES,
+    MAX_CHUNK_SECTIONS, MAX_HEIGHTMAP_LONGS, MAX_HEIGHTMAPS, MAX_PALETTE_LEN, MAX_SECTION_UPDATES,
+    NETWORK_BIOME_MIN_BITS, OVERWORLD_SECTIONS, PalettedContainer, SectionBlocksUpdate,
 };
 pub use self::inventory::{
     ContainerClose, ContainerSetContent, ContainerSetData, ContainerSetSlot, ItemStack,
     MAX_CONTAINER_SLOTS, MAX_ITEM_COMPONENTS, MAX_METADATA_ENTRIES, MENU_FURNACE, MENU_GENERIC_9X3,
     MENU_GENERIC_9X6, MENU_HOPPER, METADATA_INDEX_HEALTH, METADATA_TERMINATOR, METADATA_TYPE_BYTE,
-    METADATA_TYPE_FLOAT, METADATA_TYPE_ITEM_STACK, METADATA_TYPE_VARINT, MetadataValue, OpenScreen,
-    SetCursorItem, SetEntityData,
+    METADATA_TYPE_FLOAT, METADATA_TYPE_ITEM_STACK, METADATA_TYPE_VARIANTS, METADATA_TYPE_VARINT,
+    MetadataValue, OpenScreen, SetCursorItem, SetEntityData,
 };
 pub use self::light::{
     LIGHT_ARRAY_BYTES, LightData, LightUpdate, MAX_LIGHT_SECTIONS, read_light_data,
@@ -576,14 +576,15 @@ pub fn write_lp_vec3(writer: &mut PacketWriter, movement: &(f64, f64, f64)) -> S
         return Ok(());
     }
     let magnitude = abs_max.ceil() as i64;
-    // The two low bits carry `(scale & 3)`; a scale whose low bits are nonzero
-    // sets the `| 4` continuation marker, and the rest rides the `VarInt`.
-    let has_extra = (magnitude & 3) != 0;
-    let low = if has_extra {
-        (magnitude & 3) | 4
-    } else {
-        magnitude
-    };
+    // The two low bits carry `(scale & 3)`; the rest rides the `VarInt` when
+    // nonzero. `has_extra` is *not* `(magnitude & 3) != 0`: a magnitude of 1..3
+    // fits the low bits with nothing left for the tail, and writing an empty
+    // `0x00` tail emits bytes vanilla never sends (6258-body capture sweep,
+    // P15-07 A-03). Worse, a multiple of 4 with no tail sets bit 2 while the
+    // tail is absent, so a decoder reads the pitch as a VarInt.
+    let low_bits = magnitude & 3;
+    let has_extra = (magnitude >> 2) != 0;
+    let low = if has_extra { low_bits | 4 } else { low_bits };
     // `pack`: 15 bits of `[-1, 1]` as `round((d * 0.5 + 0.5) * 32766)`.
     let pack = |value: f64| ((value * 0.5 + 0.5) * 32_766.0).round() as i64;
     let combined = low
@@ -1812,6 +1813,23 @@ pub enum PlayIntent {
     /// captured bodies, every one empty). The server's tick is its own clock,
     /// so this is decoded and deliberately unacted.
     ClientTickEnd,
+    /// Serverbound keep-alive response (play 28): the `i64` the server sent.
+    /// This server never sends keep-alives, so a response is decoded (so the
+    /// trailing-byte guard covers it) and deliberately unacted.
+    KeepAlive {
+        /// The echoed keep-alive id.
+        id: i64,
+    },
+    /// The client's chunk-batch flow-control ack (serverbound play 11):
+    /// desired chunks per tick. Decoded so the capture sweep covers it;
+    /// unacted — chunk sending is not batched.
+    ChunkBatchReceived {
+        /// Desired chunks per tick.
+        desired_chunks_per_tick: f32,
+    },
+    /// The client finished loading (serverbound play 44, empty). Decoded and
+    /// deliberately unacted.
+    PlayerLoaded,
 }
 
 impl PlayIntent {
@@ -1960,16 +1978,28 @@ impl PlayIntent {
             // (911 captured bodies, every one empty). The server's tick is its
             // own clock, so the intent is deliberately unacted -- modelled so
             // the per-tick arrival is silent instead of a debug flood.
-            serverbound::play::CLIENT_TICK_END => {
-                if !reader.is_empty() {
-                    return Err(ServerError::Protocol(
-                        "client_tick_end must be empty".to_owned(),
-                    ));
-                }
-                Some(Self::ClientTickEnd)
-            }
+            serverbound::play::CLIENT_TICK_END => Some(Self::ClientTickEnd),
+            serverbound::play::KEEP_ALIVE => Some(Self::KeepAlive {
+                id: reader.read_i64()?,
+            }),
+            serverbound::play::CHUNK_BATCH_RECEIVED => Some(Self::ChunkBatchReceived {
+                desired_chunks_per_tick: reader.read_f32()?,
+            }),
+            serverbound::play::PLAYER_LOADED => Some(Self::PlayerLoaded),
             _ => None,
         };
+        // AUDIT-09 A-03: a recognized packet must be consumed exactly. Any
+        // trailing byte is either a hostile probe or a field this build does
+        // not model — both are refused rather than silently accepted. The one
+        // exemption is `CONTAINER_CLICK`, whose two trailing `HashedStack`
+        // fields are a documented parity gap (see the variant's docs): the
+        // frame is length-delimited, so the unread bytes are discarded safely.
+        if intent.is_some() && id != serverbound::play::CONTAINER_CLICK && !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "serverbound play packet {id} has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
         Ok(intent)
     }
 }
