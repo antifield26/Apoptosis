@@ -78,7 +78,7 @@ pub enum MetadataValue {
     Byte(u8),
     /// Type id [`METADATA_TYPE_VARINT`].
     VarInt(i32),
-    /// Type id [`METADATA_TYPE_INT`]: a fixed big-endian `i32` (not a VarInt).
+    /// Type id [`METADATA_TYPE_INT`]: a fixed big-endian `i32` (not a `VarInt`).
     Int(i32),
     /// Type id [`METADATA_TYPE_FLOAT`].
     Float(f32),

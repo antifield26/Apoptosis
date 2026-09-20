@@ -1356,6 +1356,46 @@ impl Game {
         self.spawn_item_owned(stack, position, None)
     }
 
+    /// Spawn an experience orb worth `value` points at `position`.
+    ///
+    /// Announced in the Broadcast phase like every other spawn. Non-positive
+    /// values are refused: a zero-value orb is invisible and unkillable, the
+    /// same leak class as an empty-stack drop.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::InvalidAction`] for a non-positive value,
+    /// [`ServerError::Invariant`] when the entity store refuses, exactly as
+    /// [`Self::spawn_item`] reports.
+    pub fn spawn_orb(&mut self, value: i32, position: Vec3) -> ServerResult<EntityId> {
+        if value <= 0 {
+            return Err(ServerError::InvalidAction(format!(
+                "refusing to spawn an experience orb worth {value} points"
+            )));
+        }
+        let id = self
+            .entities
+            .spawn(EntityBody::Orb(mc_entity::orb::Orb::new(value)), position)?;
+        // Announced in the Broadcast phase; see the field's docs for why not here.
+        self.pending_entity_spawns.push(id);
+        Ok(id)
+    }
+
+    /// Scatter `total` XP points as orbs around `centre`, splitting from the
+    /// top band down (P16-02). Offsets come from the seeded simulation source,
+    /// so the same seed scatters identically (AGENTS.md section 3.6).
+    pub(crate) fn scatter_experience(&mut self, centre: Vec3, total: u32) {
+        for value in mc_entity::orb::split_orb_value(i32::try_from(total).unwrap_or(i32::MAX)) {
+            let position = Vec3::new(
+                centre.x + f64::from(self.random.next_f32_between(-0.5, 0.5)),
+                centre.y + 0.5,
+                centre.z + f64::from(self.random.next_f32_between(-0.5, 0.5)),
+            );
+            if let Err(error) = self.spawn_orb(value, position) {
+                warn!(%error, value, "could not scatter an experience orb");
+            }
+        }
+    }
     /// Spawn a dropped item with an owner, for the player-drop path.
     fn spawn_item_owned(
         &mut self,

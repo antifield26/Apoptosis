@@ -107,6 +107,9 @@ pub(crate) struct Session {
     /// window is refused, exactly like `Entity::invulnerable_ticks` for
     /// non-players, which the authoritative `Player` does not carry.
     pub(crate) hurt_invuln_ticks: u32,
+    /// Ticks until this session may pick up another experience orb (vanilla's
+    /// per-player 2-tick throttle; orbs themselves carry no pickup delay).
+    pub(crate) xp_pickup_cooldown: u8,
     /// Where this player last died, as `(dimension key, packed block position)`.
     ///
     /// Recorded in [`Game::after_damage`] and sent in [`Respawn`]'s
@@ -446,6 +449,7 @@ impl Game {
                 open_block: None,
                 ready: false,
                 hurt_invuln_ticks: 0,
+                xp_pickup_cooldown: 0,
                 last_death_location: None,
                 ack_block_changes_up_to: NO_BLOCK_CHANGE_SEQUENCE,
             },

@@ -266,6 +266,15 @@ impl Game {
                             ]),
                         ));
                     }
+                    EntityBody::Orb(orb) => {
+                        // Vanilla orb persistence is the value (plus the
+                        // shared Pos/Motion every entry carries below).
+                        fields.push((
+                            "id".to_owned(),
+                            mc_nbt::NbtTag::String("minecraft:experience_orb".to_owned()),
+                        ));
+                        fields.push(("Value".to_owned(), mc_nbt::NbtTag::Int(orb.value)));
+                    }
                     EntityBody::Player | EntityBody::Projectile(_) => {}
                 }
                 fields.push((
@@ -332,6 +341,16 @@ impl Game {
                 }
             };
             let kind = MobKind::from_name(id.strip_prefix("minecraft:").unwrap_or(id));
+            if id == "minecraft:experience_orb" {
+                let Some(NbtTag::Int(value)) = get("Value") else {
+                    warn!("a saved orb has no `Value` int; skipped");
+                    continue;
+                };
+                if self.spawn_orb(*value, position).is_err() {
+                    warn!("a saved orb could not be spawned");
+                }
+                continue;
+            }
             if id == "minecraft:item" {
                 let Some(mc_nbt::NbtTag::Compound(item_fields)) = get("Item") else {
                     warn!("a saved item has no `Item` compound; skipped");

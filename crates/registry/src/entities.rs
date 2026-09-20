@@ -40,6 +40,9 @@ pub const PLAYER: &str = "minecraft:player";
 /// `minecraft:item`, the type a dropped stack is carried by.
 pub const ITEM: &str = "minecraft:item";
 
+/// `minecraft:experience_orb`, the type an XP value is carried by.
+pub const EXPERIENCE_ORB: &str = "minecraft:experience_orb";
+
 /// Entity-type lookup table.
 #[derive(Debug, Clone)]
 pub struct EntityTypeRegistry {

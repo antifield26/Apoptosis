@@ -638,6 +638,8 @@ impl Game {
     fn merge_and_collect_items(&mut self) {
         self.merge_ground_stacks();
         self.collect_items_into_players();
+        self.merge_orbs();
+        self.collect_orbs_into_players();
     }
 
     /// Merge adjacent same-item ground stacks into the older entity (P11-09).
@@ -802,6 +804,116 @@ impl Game {
                 ground_stack.stack = leftover;
             }
             self.sync_menu_from_inventory(connection, &mut TickReport::default());
+        }
+    }
+
+    /// Merge adjacent orbs into the older entity, summing values (P16-02).
+    ///
+    /// Same contact scale as drops (half a block); orb-specific merge radii
+    /// are unmeasured, and inventing a second constant for the same contact
+    /// would be guessing. Values only grow, so no cap applies.
+    fn merge_orbs(&mut self) {
+        let orbs: Vec<(EntityId, i32, mc_world::Vec3, u32)> = self
+            .entities
+            .iter()
+            .filter_map(|entity| match &entity.body {
+                EntityBody::Orb(orb) => Some((entity.id, orb.value, entity.position, orb.age)),
+                _ => None,
+            })
+            .collect();
+        for a in 0..orbs.len() {
+            for b in (a + 1)..orbs.len() {
+                let (first, second) = (orbs[a], orbs[b]);
+                let dx = first.2.x - second.2.x;
+                let dy = first.2.y - second.2.y;
+                let dz = first.2.z - second.2.z;
+                if dx * dx + dy * dy + dz * dz > ITEM_MERGE_RADIUS_SQR {
+                    continue;
+                }
+                let (keep, drop) = if first.3 <= second.3 {
+                    (first.0, second.0)
+                } else {
+                    (second.0, first.0)
+                };
+                let Some(drop_entity) = self.entities.get(drop) else {
+                    continue;
+                };
+                let EntityBody::Orb(drop_orb) = &drop_entity.body else {
+                    continue;
+                };
+                let incoming = drop_orb.value;
+                let Some(keep_entity) = self.entities.get_mut(keep) else {
+                    continue;
+                };
+                let EntityBody::Orb(keep_orb) = &mut keep_entity.body else {
+                    continue;
+                };
+                keep_orb.value = keep_orb.value.saturating_add(incoming);
+                let Some(drop_entity) = self.entities.get_mut(drop) else {
+                    continue;
+                };
+                drop_entity.removed = true;
+            }
+        }
+    }
+
+    /// Give every orb a ready player overlaps to that player (P16-02).
+    ///
+    /// Same one-block reach as drops. Orbs carry no pickup delay of their
+    /// own; instead each picker throttles to one orb per two ticks (vanilla's
+    /// per-player rule), and a pickup pushes vitals so the client sees the
+    /// new level at once.
+    fn collect_orbs_into_players(&mut self) {
+        let players: Vec<(EntityId, ConnectionId, mc_world::Vec3)> = self
+            .sessions
+            .values()
+            .filter(|session| session.ready)
+            .map(|session| (session.entity, session.id, session.player.position))
+            .collect();
+        let orbs: Vec<(EntityId, i32, mc_world::Vec3)> = self
+            .entities
+            .iter()
+            .filter_map(|entity| match &entity.body {
+                EntityBody::Orb(orb) => Some((entity.id, orb.value, entity.position)),
+                _ => None,
+            })
+            .collect();
+        for orb in orbs {
+            let Some((_, connection, _)) = players
+                .iter()
+                .copied()
+                .min_by(|a, b| {
+                    let da = (a.2.x - orb.2.x).powi(2)
+                        + (a.2.y - orb.2.y).powi(2)
+                        + (a.2.z - orb.2.z).powi(2);
+                    let db = (b.2.x - orb.2.x).powi(2)
+                        + (b.2.y - orb.2.y).powi(2)
+                        + (b.2.z - orb.2.z).powi(2);
+                    da.total_cmp(&db)
+                })
+                .filter(|(_, _, position)| {
+                    let dx = position.x - orb.2.x;
+                    let dy = position.y - orb.2.y;
+                    let dz = position.z - orb.2.z;
+                    dx * dx + dy * dy + dz * dz <= ITEM_PICKUP_RADIUS_SQR
+                })
+            else {
+                continue;
+            };
+            let Some(session) = self.sessions.get_mut(&connection) else {
+                continue;
+            };
+            if session.xp_pickup_cooldown > 0 {
+                continue;
+            }
+            session.xp_pickup_cooldown = 2;
+            let gained = session.player.add_experience(orb.1);
+            debug!(player = %connection, value = orb.1, gained, "experience orb picked up");
+            let Some(entity) = self.entities.get_mut(orb.0) else {
+                continue;
+            };
+            entity.removed = true;
+            let _ = self.send_vitals(connection, &mut TickReport::default());
         }
     }
 
@@ -1437,6 +1549,17 @@ impl Game {
                     entity.removed = true;
                     return true;
                 }
+            } else if let EntityBody::Orb(orb) = &mut entity.body {
+                // Orbs ride the same motion shape with their own gravity
+                // constant (P16-02); despawn and sweep like drops.
+                orb.on_ground = on_ground;
+                velocity = orb.tick_physics(velocity);
+                orb.tick_age();
+                entity.velocity = velocity;
+                if orb.should_despawn() {
+                    entity.removed = true;
+                    return true;
+                }
             } else {
                 velocity.y -= ENTITY_GRAVITY;
                 entity.velocity = velocity;
@@ -1581,6 +1704,18 @@ impl Game {
         };
         let position = entity.position;
         entity.removed = true;
+        // Experience scatter (P16-02): vanilla awards XP only for player
+        // kills. This function's player-driven caller is the swing path
+        // (`attacker.is_some()`); falls and any future non-player caller
+        // scatter nothing. A mob finished off by the environment after a
+        // player hit keeps its XP — no hurt-credit tracking exists to award
+        // it, and that limitation is stated, not hidden.
+        if let (Some(kind), Some(_)) = (kind, attacker) {
+            let reward = kind.experience_reward();
+            if reward > 0 {
+                self.scatter_experience(position, reward);
+            }
+        }
         // P11-04: a dead mob's loot table is the drop authority, same as
         // blocks. Looting-enchanted bonuses are not modelled (the level map is
         // empty), so a looting-gated rare pool reads level 0 and stays closed.
@@ -1823,6 +1958,10 @@ impl Game {
                     let full = format!("minecraft:{}", mob.kind.name());
                     self.registries.entities.id(&full)?
                 }
+                mc_entity::EntityBody::Orb(_) => self
+                    .registries
+                    .entities
+                    .id(mc_registry::entities::EXPERIENCE_ORB)?,
                 mc_entity::EntityBody::Item(_)
                 | mc_entity::EntityBody::Player
                 | mc_entity::EntityBody::Projectile(_) => item,
@@ -1882,6 +2021,17 @@ impl Game {
                         entries: vec![(
                             mc_protocol::packets::play::METADATA_INDEX_HEALTH,
                             mc_protocol::packets::play::MetadataValue::Float(mob.kind.max_health()),
+                        )],
+                    }
+                    .to_raw()?;
+                    self.broadcast_all(&contents, report);
+                }
+                mc_entity::EntityBody::Orb(orb) => {
+                    let contents = mc_protocol::packets::play::SetEntityData {
+                        entity_id: id.get(),
+                        entries: vec![(
+                            mc_protocol::packets::play::METADATA_INDEX_ORB_VALUE,
+                            mc_protocol::packets::play::MetadataValue::Int(orb.value),
                         )],
                     }
                     .to_raw()?;
@@ -2106,6 +2256,7 @@ impl Game {
         for session in self.sessions.values_mut() {
             session.tick_start_y = session.player.position.y;
             session.hurt_invuln_ticks = session.hurt_invuln_ticks.saturating_sub(1);
+            session.xp_pickup_cooldown = session.xp_pickup_cooldown.saturating_sub(1);
             // Vanilla heals on a 4-second timer (`foodTickTimer`), not every tick.
             // Calling this every tick made regeneration ~20x too fast and meant
             // exhaustion never accrued, so food never depleted in play (Audit 03).
@@ -2160,7 +2311,7 @@ impl Game {
             // `respawn` call finds an empty inventory and drops nothing twice.
             // Experience orbs are not an entity kind here (named gap), so the
             // experience reset happens at respawn with nothing on the ground.
-            let (position, stacks) = match self.sessions.get_mut(&id) {
+            let (position, stacks, level) = match self.sessions.get_mut(&id) {
                 Some(session) => {
                     let p = session.player.position;
                     let position = mc_world::Vec3::new(p.x, p.y, p.z);
@@ -2175,7 +2326,11 @@ impl Game {
                             p.z.floor() as i32,
                         ),
                     ));
-                    (position, session.player.inventory.drain_all())
+                    (
+                        position,
+                        session.player.inventory.drain_all(),
+                        session.player.level,
+                    )
                 }
                 None => return,
             };
@@ -2184,6 +2339,17 @@ impl Game {
                     Ok(entity) => debug!(id = %id, %entity, "death drop spawned"),
                     Err(error) => warn!(id = %id, %error, "could not spawn a death drop"),
                 }
+            }
+            // Experience scatter (P16-02): vanilla drops min(7 * level, 100)
+            // points as orbs. No keepInventory gamerule exists here, so the
+            // scatter is unconditional — and the later `respawn` still resets
+            // the bar, which is now correct instead of lossy.
+            let dropped = u32::try_from(level.max(0))
+                .unwrap_or(0)
+                .saturating_mul(7)
+                .min(100);
+            if dropped > 0 {
+                self.scatter_experience(position, dropped);
             }
         }
         if outcome.died {
@@ -2348,6 +2514,10 @@ impl Game {
                 let full = format!("minecraft:{}", mob.kind.name());
                 self.registries.entities.id(&full)?
             }
+            mc_entity::EntityBody::Orb(_) => self
+                .registries
+                .entities
+                .id(mc_registry::entities::EXPERIENCE_ORB)?,
             _ => self.registries.entities.id(mc_registry::entities::ITEM)?,
         };
         let position = entity.position;
@@ -2392,6 +2562,20 @@ impl Game {
                         entries: vec![(
                             mc_protocol::packets::play::METADATA_INDEX_HEALTH,
                             mc_protocol::packets::play::MetadataValue::Float(mob.kind.max_health()),
+                        )],
+                    }
+                    .to_raw()?,
+                );
+            }
+            mc_entity::EntityBody::Orb(orb) => {
+                // The orb's value rides the tracked slot, mirroring the
+                // item-contents second packet above.
+                out.push(
+                    mc_protocol::packets::play::SetEntityData {
+                        entity_id: id.get(),
+                        entries: vec![(
+                            mc_protocol::packets::play::METADATA_INDEX_ORB_VALUE,
+                            mc_protocol::packets::play::MetadataValue::Int(orb.value),
                         )],
                     }
                     .to_raw()?,
