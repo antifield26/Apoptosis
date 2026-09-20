@@ -6,6 +6,9 @@
 
 use mc_core::error::ServerResult;
 use mc_core::tick::Tick;
+use mc_entity::combat::{
+    Attacker, BASE_MELEE_KNOCKBACK, CombatStats, DamageSource, armor_absorb, worn_stats,
+};
 use mc_entity::entity::{EntityBody, EntityId, EntityKind};
 use mc_entity::mob::{
     ATTACK_RANGE, Mob, MobAttackStyle, MobGoal, MobKind, MobObservation, MobSighting,
@@ -1376,7 +1379,13 @@ impl Game {
         }
         let outcome = self.sessions.get_mut(&session_id).map(|session| {
             session.hurt_invuln_ticks = INVULNERABLE_TICKS;
-            session.player.apply_damage(kind.attack_damage())
+            // Armour is the victim's worn set (P16-01); knockback does not
+            // apply — projections carry no velocity under client-driven
+            // motion, so there is nowhere honest to put the shove.
+            let armor = worn_stats(&session.player.inventory, &self.registries.items);
+            session
+                .player
+                .apply_damage(kind.attack_damage(), DamageSource::MobAttack, &armor)
         });
         let Some(outcome) = outcome else {
             return;
@@ -1485,7 +1494,7 @@ impl Game {
             }
         }
         if damage > 0.0 {
-            let died = self.damage_entity(id, damage);
+            let died = self.damage_entity(id, damage, mc_entity::combat::DamageSource::Fall, None);
             debug!(%id, damage, died, "entity fall damage");
         }
         true
@@ -1494,8 +1503,17 @@ impl Game {
     /// Apply damage to a living entity, flagging it removed when it dies.
     ///
     /// Returns whether this hit was lethal. Non-living entities are immune rather
-    /// than silently damaged: an item entity has no health to reduce.
-    pub(crate) fn damage_entity(&mut self, id: EntityId, amount: f32) -> bool {
+    /// than silently damaged: an item entity has no health to reduce. `source`
+    /// drives armour bypass and knockback (P16-01); `attacker` carries the
+    /// knockback direction. Mobs wear no armour; a player-body victim reads the
+    /// owning session's worn set, because projections carry no inventory.
+    pub(crate) fn damage_entity(
+        &mut self,
+        id: EntityId,
+        raw: f32,
+        source: DamageSource,
+        attacker: Option<Attacker>,
+    ) -> bool {
         let Some(entity) = self.entities.get_mut(id) else {
             return false;
         };
@@ -1508,12 +1526,40 @@ impl Game {
         if entity.invulnerable_ticks > 0 {
             return false;
         }
+        // Knockback past the window (vanilla order: the shove lands before
+        // armour and resistance are figured), mobs only — player projections
+        // carry no velocity under client-driven motion, so shoving one would
+        // be bytes into a field nothing reads.
+        if source.applies_knockback()
+            && let (Some(atk), EntityBody::Mob(_)) = (attacker, &entity.body)
+        {
+            // Mobs wear nothing, so no resistance scales this; the
+            // constant is vanilla's hurt-path base (see combat docs).
+            entity.apply_knockback(atk.pos, atk.yaw, BASE_MELEE_KNOCKBACK);
+        }
+        // Armour before resistance (vanilla order). Mobs wear none; a
+        // player-body victim borrows its owner's worn set.
+        let stats = match &entity.body {
+            EntityBody::Player => self
+                .sessions
+                .values()
+                .find(|session| session.entity == id)
+                .map_or(CombatStats::ZERO, |session| {
+                    worn_stats(&session.player.inventory, &self.registries.items)
+                }),
+            _ => CombatStats::ZERO,
+        };
+        let armored = if source.bypasses_armor() {
+            raw
+        } else {
+            armor_absorb(raw, stats.armor, stats.toughness)
+        };
         // Resistance and the other damage modifiers, which nothing applied before.
         let effects: Vec<mc_entity::effect::ActiveEffect> =
             entity.effects.values().copied().collect();
         let multiplier = mc_entity::effect::damage_taken_multiplier(&effects);
-        let amount = if amount.is_finite() && amount > 0.0 {
-            amount * multiplier as f32
+        let amount = if armored.is_finite() && armored > 0.0 {
+            armored * multiplier as f32
         } else {
             return false;
         };

@@ -514,9 +514,6 @@ pub const CHUNKS_PER_TICK: usize = 64;
 const PENDING_INTENT_BUDGET: usize = 256;
 
 /// `player_action` status: start digging.
-/// The bare-hand attack damage (vanilla 1.0); a held sword's bonus is not
-/// modelled, because the item table carries no damage column (named gap).
-const FIST_ATTACK_DAMAGE: f32 = 1.0;
 /// One ground item's snapshot for the merge/pickup passes (P11-05, P11-09).
 #[derive(Clone, Copy)]
 struct GroundItem {

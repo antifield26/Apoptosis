@@ -24,10 +24,14 @@
 //! ## Known gaps (AGENTS.md section 3.3 — exhaustive, not implied away)
 //!
 //! - **No difficulty scaling.** Starvation damage is 1.0, the normal/hard value;
-//!   peaceful, easy scaling, mob damage scaling and `DamageSource` typing are
-//!   not modelled.
-//! - **No armour, enchantments, absorption, resistance, invulnerability
-//!   frames, knockback or fire.** [`Player::apply_damage`] takes a raw float.
+//!   peaceful, easy scaling and mob damage scaling are not modelled.
+//! - **No enchantments, absorption or fire.** [`Player::apply_damage`] takes a
+//!   [`DamageSource`](crate::combat::DamageSource) plus armour stats: melee,
+//!   fall and starvation typing and armour/toughness absorb are modelled;
+//!   knockback lands on entity-store victims (mob bodies), not on player
+//!   projections, which carry no velocity under client-driven motion;
+//!   enchantment math, absorption hearts and fire/drowning/void sources are
+//!   not.
 //! - **No natural health regeneration.** [`Player::tick_food`] models the food
 //!   *budget* (exhaustion/saturation/regen/starve) but there is no per-tick
 //!   simulation driver, no `foodTickTimer` phase, and no peaceful-mode instant
@@ -45,6 +49,7 @@
 //! - The 41..=45 crafting slots and all container interaction are out of scope
 //!   (see [`crate::inventory`]).
 
+use crate::combat::{CombatStats, DamageSource};
 use crate::inventory::PlayerInventory;
 use crate::profile::GameProfile;
 use crate::stack::ItemStack;
@@ -406,7 +411,12 @@ impl Player {
     ///
     /// `amount` is damage after armour and effects, which this crate does not
     /// model (see the module gap list).
-    pub fn apply_damage(&mut self, amount: f32) -> DamageOutcome {
+    pub fn apply_damage(
+        &mut self,
+        amount: f32,
+        source: DamageSource,
+        armor: &CombatStats,
+    ) -> DamageOutcome {
         let unchanged = DamageOutcome {
             applied: false,
             died: false,
@@ -416,6 +426,14 @@ impl Player {
         if !amount.is_finite() || amount <= 0.0 || self.is_invulnerable() || !self.is_alive() {
             return unchanged;
         }
+        // Armour first (vanilla order: absorb before resistance effects), unless
+        // the source bypasses it. I-frame windows are owned by the callers, as
+        // before: this function applies an amount, it does not gate one.
+        let amount = if source.bypasses_armor() {
+            amount
+        } else {
+            crate::combat::armor_absorb(amount, armor.armor, armor.toughness)
+        };
         let dealt = amount.min(self.health);
         self.health -= dealt;
         if self.health <= 0.0 {
@@ -519,7 +537,11 @@ impl Player {
         }
 
         if self.food == 0 {
-            return self.apply_damage(STARVATION_DAMAGE);
+            return self.apply_damage(
+                STARVATION_DAMAGE,
+                DamageSource::Starvation,
+                &CombatStats::ZERO,
+            );
         }
         DamageOutcome {
             applied: false,
@@ -1066,6 +1088,7 @@ mod tests {
         DamageOutcome, EXHAUSTION_PER_POINT, GameMode, MAX_FOOD, MAX_HEALTH, MAX_SATURATION,
         Player, REGEN_FOOD_THRESHOLD, STARVATION_DAMAGE, Vec3,
     };
+    use crate::combat::{CombatStats, DamageSource};
     use crate::inventory::{LAST_STORED_SLOT, PlayerInventory, inventory_for_registry};
     use crate::profile::GameProfile;
     use crate::stack::ItemStack;
@@ -1137,7 +1160,7 @@ mod tests {
         for mode in [GameMode::Creative, GameMode::Spectator] {
             let mut player = survivor();
             player.game_mode = mode;
-            let outcome = player.apply_damage(1000.0);
+            let outcome = player.apply_damage(1000.0, DamageSource::MobAttack, &CombatStats::ZERO);
             assert_eq!(
                 outcome,
                 DamageOutcome {
@@ -1152,28 +1175,32 @@ mod tests {
             assert!(player.is_invulnerable());
         }
         let mut survival = survivor();
-        assert!(survival.apply_damage(1.0).applied);
+        assert!(
+            survival
+                .apply_damage(1.0, DamageSource::MobAttack, &CombatStats::ZERO)
+                .applied
+        );
         assert!(!survival.is_invulnerable());
     }
 
     #[test]
     fn lethal_damage_reports_death_exactly_once() {
         let mut player = survivor();
-        let outcome = player.apply_damage(MAX_HEALTH);
+        let outcome = player.apply_damage(MAX_HEALTH, DamageSource::MobAttack, &CombatStats::ZERO);
         assert_eq!(outcome.dealt, MAX_HEALTH);
         assert_eq!(outcome.health, 0.0);
         assert!(outcome.applied);
         assert!(outcome.died, "the call that reaches 0 reports the death");
         assert!(!player.is_alive());
 
-        let again = player.apply_damage(5.0);
+        let again = player.apply_damage(5.0, DamageSource::MobAttack, &CombatStats::ZERO);
         assert!(!again.applied);
         assert!(!again.died, "death is reported exactly once");
         assert_eq!(again.health, 0.0);
 
         // Overshooting damage is capped at the health actually present.
         let mut player = survivor();
-        let outcome = player.apply_damage(1000.0);
+        let outcome = player.apply_damage(1000.0, DamageSource::MobAttack, &CombatStats::ZERO);
         assert_eq!(outcome.dealt, MAX_HEALTH);
         assert_eq!(player.health, 0.0);
         assert!(outcome.died);
@@ -1190,7 +1217,7 @@ mod tests {
         ] {
             let mut player = survivor();
             player.game_mode = mode;
-            player.apply_damage(7.0);
+            player.apply_damage(7.0, DamageSource::MobAttack, &CombatStats::ZERO);
             let before = player.health;
             let outcome = player.kill();
             assert_eq!(outcome.dealt, before, "{mode:?}");
@@ -1209,11 +1236,11 @@ mod tests {
         player.heal(1000.0);
         assert_eq!(player.health, MAX_HEALTH);
         for _ in 0..50 {
-            player.apply_damage(0.25);
+            player.apply_damage(0.25, DamageSource::MobAttack, &CombatStats::ZERO);
         }
         assert_eq!(player.health, 7.5);
         for _ in 0..40 {
-            player.apply_damage(1.0);
+            player.apply_damage(1.0, DamageSource::MobAttack, &CombatStats::ZERO);
         }
         assert_eq!(player.health, 0.0);
         assert!(player.health >= 0.0);
@@ -1221,13 +1248,13 @@ mod tests {
         // Hostile damage amounts are ignored, not propagated.
         for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -1.0, 0.0] {
             let mut victim = survivor();
-            let outcome = victim.apply_damage(bad);
+            let outcome = victim.apply_damage(bad, DamageSource::MobAttack, &CombatStats::ZERO);
             assert!(!outcome.applied, "{bad} must not apply");
             assert_eq!(victim.health, MAX_HEALTH);
         }
         // Heal cannot resurrect, and non-positive healing does nothing.
         let mut dead = survivor();
-        dead.apply_damage(1000.0);
+        dead.apply_damage(1000.0, DamageSource::MobAttack, &CombatStats::ZERO);
         dead.heal(5.0);
         assert_eq!(dead.health, 0.0);
         let mut alive = survivor();
@@ -1238,6 +1265,31 @@ mod tests {
         assert_eq!(alive.health, 10.0);
         alive.heal(3.0);
         assert_eq!(alive.health, 13.0);
+    }
+
+    #[test]
+    fn armour_blunts_melee_but_not_falls_or_starvation() {
+        // P16-01: full iron (15 points, no toughness) turns a 7.0 melee hit
+        // into 3.78; falls and starvation bypass armour entirely (vanilla
+        // `bypasses_armor` tag), so the same kit changes nothing for them.
+        let iron = CombatStats {
+            armor: 15.0,
+            toughness: 0.0,
+            knockback_resistance: 0.0,
+        };
+        let mut player = survivor();
+        let outcome = player.apply_damage(7.0, DamageSource::MobAttack, &iron);
+        assert!((outcome.dealt - 3.78).abs() < 1e-3, "got {}", outcome.dealt);
+        assert!((player.health - (MAX_HEALTH - 3.78)).abs() < 1e-3);
+
+        let mut player = survivor();
+        let outcome = player.apply_damage(10.0, DamageSource::Fall, &iron);
+        assert_eq!(outcome.dealt, 10.0, "falls ignore armour");
+        assert_eq!(player.health, MAX_HEALTH - 10.0);
+
+        let mut player = survivor();
+        let outcome = player.apply_damage(1.0, DamageSource::Starvation, &iron);
+        assert_eq!(outcome.dealt, 1.0, "starvation ignores armour");
     }
 
     #[test]

@@ -35,8 +35,12 @@
 //!
 //! // A hostile packet claims hotbar slot 200: rejected, never wrapped.
 //! assert!(player.inventory.select(200).is_err());
-//! // 20 points of damage on a survival player at full health.
-//! let outcome = player.apply_damage(20.0);
+//! // 20 points of melee damage on a survival player at full health.
+//! let outcome = player.apply_damage(
+//!     20.0,
+//!     mc_entity::combat::DamageSource::MobAttack,
+//!     &mc_entity::combat::CombatStats::ZERO,
+//! );
 //! assert!(outcome.died && !player.is_alive());
 //! player.respawn(false);
 //! assert_eq!(player.health, 20.0);

@@ -609,7 +609,11 @@ fn death_and_respawn_restore_the_player() {
 
     {
         let player = harness.game.player_mut(harness.id).expect("player");
-        let outcome = player.apply_damage(100.0);
+        let outcome = player.apply_damage(
+            100.0,
+            mc_entity::combat::DamageSource::MobAttack,
+            &mc_entity::combat::CombatStats::ZERO,
+        );
         assert!(outcome.died, "100 damage must be lethal");
         assert!(!player.is_alive());
     }
@@ -701,7 +705,11 @@ fn tp_above_surface_does_not_embed_and_death_respawns_from_there() {
     // Lethal damage from there, then the same respawn path as the P04 test.
     {
         let player = harness.game.player_mut(harness.id).expect("player");
-        let outcome = player.apply_damage(100.0);
+        let outcome = player.apply_damage(
+            100.0,
+            mc_entity::combat::DamageSource::MobAttack,
+            &mc_entity::combat::CombatStats::ZERO,
+        );
         assert!(outcome.died, "100 damage must be lethal from the air");
     }
     let _ = Harness::drain_ids(&mut out);

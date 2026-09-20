@@ -71,7 +71,7 @@ pub fn armor_absorb(damage: f32, armor: f32, toughness: f32) -> f32 {
 }
 
 /// The player's base attack damage with an empty hand (vanilla 1.0; the same
-/// figure `FIST_ATTACK_DAMAGE` carries, now as the floor under the bonus).
+/// figure [`FIST_DAMAGE`] carries, now as the floor under the bonus).
 pub const FIST_DAMAGE: f32 = 1.0;
 
 /// Melee bonus of a held item, added to [`FIST_DAMAGE`].
@@ -84,6 +84,9 @@ pub const FIST_DAMAGE: f32 = 1.0;
 /// holding an unregistered id is hostile or corrupt input, and the safe
 /// fallback is the fist, not a refusal mid-swing.
 #[must_use]
+#[allow(clippy::match_same_arms)] // A data table, not logic: distinct items
+// share values (wooden and golden swords are both 3.0), and grouping arms by
+// value would hide which vanilla fact each row is.
 pub fn melee_damage_bonus(item_name: &str) -> f32 {
     match item_name {
         "minecraft:wooden_sword" => 3.0,
@@ -147,14 +150,18 @@ pub struct ArmorPiece {
 /// wear it, and no mob equipment system exists to read it. Unknown names
 /// yield `None` (no phantom armour for hostile input).
 #[must_use]
+#[allow(clippy::match_same_arms)] // Same rationale as above: per-piece facts.
 pub fn armor_of(item_name: &str) -> Option<ArmorPiece> {
     let (points, toughness, knockback_resistance) = match item_name {
         "minecraft:leather_helmet" => (1.0, 0.0, 0.0),
         "minecraft:leather_chestplate" => (3.0, 0.0, 0.0),
         "minecraft:leather_leggings" => (2.0, 0.0, 0.0),
         "minecraft:leather_boots" => (1.0, 0.0, 0.0),
-        "minecraft:golden_helmet" | "minecraft:chainmail_helmet" | "minecraft:copper_helmet"
-        | "minecraft:iron_helmet" | "minecraft:turtle_helmet" => (2.0, 0.0, 0.0),
+        "minecraft:golden_helmet"
+        | "minecraft:chainmail_helmet"
+        | "minecraft:copper_helmet"
+        | "minecraft:iron_helmet"
+        | "minecraft:turtle_helmet" => (2.0, 0.0, 0.0),
         "minecraft:golden_chestplate" | "minecraft:chainmail_chestplate" => (5.0, 0.0, 0.0),
         "minecraft:copper_chestplate" => (4.0, 0.0, 0.0),
         "minecraft:iron_chestplate" => (6.0, 0.0, 0.0),
@@ -162,10 +169,9 @@ pub fn armor_of(item_name: &str) -> Option<ArmorPiece> {
         "minecraft:chainmail_leggings" => (4.0, 0.0, 0.0),
         "minecraft:copper_leggings" => (3.0, 0.0, 0.0),
         "minecraft:iron_leggings" => (5.0, 0.0, 0.0),
-        "minecraft:golden_boots"
-        | "minecraft:chainmail_boots"
-        | "minecraft:copper_boots"
-        | "minecraft:leather_boots" => (1.0, 0.0, 0.0),
+        "minecraft:golden_boots" | "minecraft:chainmail_boots" | "minecraft:copper_boots" => {
+            (1.0, 0.0, 0.0)
+        }
         "minecraft:iron_boots" => (2.0, 0.0, 0.0),
         "minecraft:diamond_helmet" | "minecraft:diamond_boots" => (3.0, 2.0, 0.0),
         "minecraft:diamond_chestplate" => (8.0, 2.0, 0.0),
@@ -217,11 +223,66 @@ pub fn attack_range_bonus(_item_name: &str) -> f64 {
     0.0
 }
 
+use crate::inventory::{ARMOR_SLOTS, ARMOR_START, PlayerInventory};
+use mc_registry::ItemRegistry;
+use mc_world::Vec3;
+
+/// Who dealt a melee hit: knockback pushes away from `pos`, falling back to
+/// the `yaw` facing when attacker and victim share x/z (deterministic where
+/// vanilla nudges randomly — see `Entity::apply_knockback`).
+#[derive(Debug, Clone, Copy)]
+pub struct Attacker {
+    /// Attacker eye/feet-agnostic position (only x/z steer the shove).
+    pub pos: Vec3,
+    /// Attacker yaw in degrees, vanilla facing convention.
+    pub yaw: f32,
+}
+
+/// Total melee damage for a swing with what `inv` holds: [`FIST_DAMAGE`] plus
+/// the held weapon's bonus. An empty hand, a non-weapon, or an id the
+/// registry does not know all fall back to the fist — the safe default for
+/// hostile or corrupt inventory states, never a refusal mid-swing.
+#[must_use]
+pub fn held_damage(inv: &PlayerInventory, items: &ItemRegistry) -> f32 {
+    let Some(id) = inv.selected_item().item_id() else {
+        return FIST_DAMAGE;
+    };
+    let Ok(name) = items.name(id) else {
+        return FIST_DAMAGE;
+    };
+    FIST_DAMAGE + melee_damage_bonus(name)
+}
+
+/// Summed combat stats of what `inv` wears: the four armour slots starting
+/// at [`ARMOR_START`]. Unknown ids contribute nothing (same fallback rule as
+/// [`held_damage`]).
+#[must_use]
+pub fn worn_stats(inv: &PlayerInventory, items: &ItemRegistry) -> CombatStats {
+    let mut stats = CombatStats::ZERO;
+    for slot in ARMOR_START..ARMOR_START + ARMOR_SLOTS {
+        let Some(id) = inv.slot(slot).item_id() else {
+            continue;
+        };
+        let Ok(name) = items.name(id) else {
+            continue;
+        };
+        if let Some(piece) = armor_of(name) {
+            stats.armor += piece.points;
+            stats.toughness += piece.toughness;
+            stats.knockback_resistance += piece.knockback_resistance;
+        }
+    }
+    stats
+}
+
 #[cfg(test)]
+// Table values must be bit-identical to the modifiers they mirror, so exact
+// float equality here is the assertion doing its job, not sloppiness.
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::{
-        BASE_MELEE_KNOCKBACK, CombatStats, DamageSource, armor_absorb, armor_of, attack_range_bonus,
-        melee_damage_bonus,
+        BASE_MELEE_KNOCKBACK, CombatStats, DamageSource, armor_absorb, armor_of,
+        attack_range_bonus, held_damage, melee_damage_bonus, worn_stats,
     };
 
     #[test]
@@ -274,7 +335,14 @@ mod tests {
     #[test]
     fn armor_values_match_the_attribute_modifiers() {
         let diamond = armor_of("minecraft:diamond_chestplate").expect("diamond plate");
-        assert_eq!((diamond.points, diamond.toughness, diamond.knockback_resistance), (8.0, 2.0, 0.0));
+        assert_eq!(
+            (
+                diamond.points,
+                diamond.toughness,
+                diamond.knockback_resistance
+            ),
+            (8.0, 2.0, 0.0)
+        );
         let netherite = armor_of("minecraft:netherite_boots").expect("netherite boots");
         assert_eq!(
             (
@@ -304,5 +372,57 @@ mod tests {
         ] {
             assert_eq!(attack_range_bonus(name), 0.0);
         }
+    }
+
+    /// The real item table: combat numbers must resolve against the names the
+    /// game actually holds (same pattern as the inventory tests).
+    fn registry() -> mc_registry::ItemRegistry {
+        mc_registry::ItemRegistry::load(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../crates/test-support/fixtures/registry/items.tsv"),
+        )
+        .expect("items fixture loads")
+    }
+
+    fn stocked_inventory() -> crate::inventory::PlayerInventory {
+        crate::inventory::inventory_for_registry(&registry()).expect("table resolves")
+    }
+
+    #[test]
+    fn held_damage_adds_the_weapon_bonus_over_the_fist() {
+        use crate::stack::ItemStack;
+        let items = registry();
+        let mut inv = stocked_inventory();
+        assert_eq!(held_damage(&inv, &items), 1.0);
+        let sword = items.id("minecraft:diamond_sword").expect("sword");
+        inv.set_slot(0, ItemStack::new(sword, 1).expect("sword"))
+            .expect("set");
+        assert_eq!(held_damage(&inv, &items), 7.0);
+        let stick = items.id("minecraft:stick").expect("stick");
+        inv.set_slot(0, ItemStack::new(stick, 1).expect("stick"))
+            .expect("set");
+        assert_eq!(held_damage(&inv, &items), 1.0);
+    }
+
+    #[test]
+    fn worn_stats_sum_only_what_the_armour_slots_hold() {
+        use crate::inventory::{ARMOR_START, PlayerInventory};
+        use crate::stack::ItemStack;
+        let items = registry();
+        let mut inv: PlayerInventory = stocked_inventory();
+        assert_eq!(worn_stats(&inv, &items), CombatStats::ZERO);
+        let plate = items.id("minecraft:iron_chestplate").expect("plate");
+        inv.set_slot(ARMOR_START + 1, ItemStack::new(plate, 1).expect("plate"))
+            .expect("set");
+        let stats = worn_stats(&inv, &items);
+        assert_eq!(
+            (stats.armor, stats.toughness, stats.knockback_resistance),
+            (6.0, 0.0, 0.0)
+        );
+        // A sword in an armour slot is not armour.
+        let sword = items.id("minecraft:diamond_sword").expect("sword");
+        inv.set_slot(ARMOR_START, ItemStack::new(sword, 1).expect("sword"))
+            .expect("set");
+        assert_eq!(worn_stats(&inv, &items).armor, 6.0);
     }
 }

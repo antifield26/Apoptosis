@@ -141,6 +141,45 @@ fn a_summoned_zombie_closes_on_the_player() {
 }
 
 #[test]
+fn an_iron_suit_blunts_the_zombies_melee() {
+    // P16-01: full iron (15 armour, no toughness) turns the zombie's 3.0
+    // into 1.38 a hit. Ninety ticks land two to four hits through the
+    // cooldown and the hurt window; unarmoured that is 6..12 damage, armoured
+    // 2.76..5.52 — so anything above 11.0 proves the armour worked while
+    // anything below 20.0 proves the hits still landed.
+    let mut harness = Harness::new("p16-armor", "Tester");
+    harness.join();
+    let registries = mc_registry::Registries::vanilla().expect("registry");
+    let player = harness.game.player_mut(harness.id).expect("player");
+    for (slot, name) in [
+        (36, "minecraft:iron_boots"),
+        (37, "minecraft:iron_leggings"),
+        (38, "minecraft:iron_chestplate"),
+        (39, "minecraft:iron_helmet"),
+    ] {
+        let id = registries.items.id(name).expect("armor piece");
+        player
+            .inventory
+            .set_slot(
+                slot,
+                mc_entity::stack::ItemStack::new(id, 1).expect("stack"),
+            )
+            .expect("equips");
+    }
+    harness.summon("zombie", 2, 1, 0);
+    harness.run(90);
+    let health = harness.health();
+    assert!(
+        health < 20.0,
+        "the zombie's melee still lands through iron, saw {health}"
+    );
+    assert!(
+        health > 11.0,
+        "iron must blunt 3.0-hits below unarmoured pace (3 hits = 11.0), saw {health}"
+    );
+}
+
+#[test]
 fn a_zombie_in_range_swings_and_the_player_hurts() {
     let mut harness = Harness::new("p11-ai-melee", "Tester");
     let mut out = harness.join();

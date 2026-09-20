@@ -6,6 +6,7 @@
 //! `super` keeps the struct, the tick and the persistence.
 
 use mc_core::error::{ServerError, ServerResult};
+use mc_entity::combat::FIST_DAMAGE;
 use mc_entity::entity::{EntityBody, EntityId};
 use mc_entity::inventory::Hand;
 
@@ -27,11 +28,11 @@ use tracing::{debug, info, warn};
 use super::{
     ACTION_DROP_ITEM, ACTION_FINISH_DESTROY_BLOCK, ACTION_START_DESTROY_BLOCK,
     ACTION_SWAP_ITEM_WITH_OFFHAND, CHAT_TYPE_CHAT, CLIENT_COMMAND_RESPAWN, EYE_HEIGHT,
-    FALL_DAMAGE_THRESHOLD, FIST_ATTACK_DAMAGE, GAME_EVENT_LEVEL_CHUNKS_LOAD_START, Game,
-    NO_BLOCK_CHANGE_SEQUENCE, OpenKind, TickReport, block_reach, chunk_of, entity_reach,
-    face_offset, floor_to_i32, is_container_block, mark_block_dirty, mirror_inventory,
-    open_kind_for, recompute_crafting_result, refuse_join, take_craft_result, targets_a_block,
-    wire_stack, write_back_block, write_back_inventory,
+    FALL_DAMAGE_THRESHOLD, GAME_EVENT_LEVEL_CHUNKS_LOAD_START, Game, NO_BLOCK_CHANGE_SEQUENCE,
+    OpenKind, TickReport, block_reach, chunk_of, entity_reach, face_offset, floor_to_i32,
+    is_container_block, mark_block_dirty, mirror_inventory, open_kind_for,
+    recompute_crafting_result, refuse_join, take_craft_result, targets_a_block, wire_stack,
+    write_back_block, write_back_inventory,
 };
 
 /// One connected player's server-side state.
@@ -672,8 +673,30 @@ impl Game {
                             debug!(id = %id, target = %target, "rejected attack outside entity reach");
                             return Ok(());
                         }
-                        let damage = FIST_ATTACK_DAMAGE;
-                        let died = self.damage_entity(target, damage);
+                        // Held-item damage (P16-01): fist plus the weapon's
+                        // bonus, resolved against the registry like every
+                        // other item lookup on this path.
+                        let damage = self
+                            .sessions
+                            .get(&id)
+                            .map_or(FIST_DAMAGE, |session| {
+                                mc_entity::combat::held_damage(
+                                    &session.player.inventory,
+                                    &self.registries.items,
+                                )
+                            });
+                        let attacker = self.sessions.get(&id).map(|session| {
+                            mc_entity::combat::Attacker {
+                                pos: session.player.position,
+                                yaw: session.player.yaw,
+                            }
+                        });
+                        let died = self.damage_entity(
+                            target,
+                            damage,
+                            mc_entity::combat::DamageSource::PlayerAttack,
+                            attacker,
+                        );
                         debug!(id = %id, target = %target, damage, died, "player attack");
                     }
                 }
@@ -1850,7 +1873,15 @@ impl Game {
                     dealt: 0.0,
                     health: 0.0,
                 },
-                |session| session.player.apply_damage(fell_damage),
+                // Falls bypass armour (vanilla `bypasses_armor` tag), so the
+                // zero set documents the bypass rather than measuring kit.
+                |session| {
+                    session.player.apply_damage(
+                        fell_damage,
+                        mc_entity::combat::DamageSource::Fall,
+                        &mc_entity::combat::CombatStats::ZERO,
+                    )
+                },
             );
             debug!(id = %id, damage = fell_damage, health = outcome.health, "fall damage");
             self.after_damage(id, outcome);
@@ -2363,7 +2394,15 @@ impl Game {
             session.player.position.y + EYE_HEIGHT,
             session.player.position.z,
         );
-        let reach = entity_reach();
+        // The held item's `attack_range` component extends this gate once
+        // components land (P18); until then the hook reports zero for every
+        // item and the gate is byte-for-byte today's.
+        let held = session.player.inventory.selected_item();
+        let bonus = held
+            .item_id()
+            .and_then(|held_id| self.registries.items.name(held_id).ok())
+            .map_or(0.0, mc_entity::combat::attack_range_bonus);
+        let reach = entity_reach() + bonus;
         entity.hitbox().distance_to_sqr(eye) < reach * reach
     }
 

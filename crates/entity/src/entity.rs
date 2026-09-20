@@ -260,6 +260,43 @@ impl Entity {
         );
     }
 
+    /// Melee knockback from `from`, facing `attacker_yaw`, at `strength`.
+    ///
+    /// Vanilla `Entity.knockback`: the horizontal direction is normalized (a
+    /// zero-length direction falls back to the attacker's facing — this build
+    /// uses the facing deterministically where vanilla nudges randomly, a
+    /// measure-zero edge traded for AGENTS.md §3.6 reproducibility), the old
+    /// velocity is halved, and a grounded victim pops up to at most 0.4.
+    /// `strength <= 0.0` is a no-op, so a fully resisted shove still slows
+    /// nothing. Callers pre-scale by knockback resistance; see
+    /// [`crate::combat::BASE_MELEE_KNOCKBACK`].
+    pub fn apply_knockback(&mut self, from: Vec3, attacker_yaw: f32, strength: f64) {
+        if strength <= 0.0 {
+            return;
+        }
+        // From the victim toward the attacker; the subtraction below turns it
+        // into a shove away, matching vanilla's caller convention (attacker
+        // facing or attacker-minus-victim position).
+        let (mut dx, mut dz) = (from.x - self.position.x, from.z - self.position.z);
+        if dx * dx + dz * dz < 1.0e-5 {
+            let yaw = f64::from(attacker_yaw).to_radians();
+            dx = yaw.sin();
+            dz = -yaw.cos();
+        }
+        let len = (dx * dx + dz * dz).sqrt();
+        let (dx, dz) = (dx / len, dz / len);
+        let y = if self.on_ground {
+            (self.velocity.y / 2.0 + strength).min(0.4)
+        } else {
+            self.velocity.y
+        };
+        self.velocity = Vec3::new(
+            self.velocity.x / 2.0 - dx * strength,
+            y,
+            self.velocity.z / 2.0 - dz * strength,
+        );
+    }
+
     /// Ticks down the per-entity timers by one.
     pub fn tick_timers(&mut self) {
         self.age = self.age.saturating_add(1);
@@ -818,5 +855,68 @@ mod tests {
             .spawn(EntityBody::Player, Vec3::default())
             .expect("spawn");
         assert!(next.get() > last.get());
+    }
+
+    #[test]
+    fn knockback_shoves_away_from_the_attacker() {
+        // Attacker two blocks west (-x); the victim must gain +x velocity of
+        // exactly the strength on flat ground, plus the grounded pop.
+        let mut store = EntityStore::new();
+        let id = store
+            .spawn(
+                EntityBody::Mob(Mob::new(MobKind::Zombie)),
+                Vec3::new(0.0, 64.0, 0.0),
+            )
+            .expect("spawn");
+        let victim = store.get_mut(id).expect("victim");
+        victim.on_ground = true;
+        victim.apply_knockback(Vec3::new(-2.0, 64.0, 0.0), 0.0, 0.4);
+        let velocity = store.get(id).expect("victim").velocity;
+        assert_eq!(velocity.x, 0.4, "full strength along +x, away from -x");
+        assert_eq!(velocity.z, 0.0);
+        assert_eq!(velocity.y, 0.4, "grounded pop caps at 0.4");
+    }
+
+    #[test]
+    fn knockback_halves_existing_motion_and_skips_dead_strength() {
+        let mut store = EntityStore::new();
+        let id = store
+            .spawn(
+                EntityBody::Mob(Mob::new(MobKind::Zombie)),
+                Vec3::new(0.0, 64.0, 0.0),
+            )
+            .expect("spawn");
+        let victim = store.get_mut(id).expect("victim");
+        victim.on_ground = false;
+        victim.velocity = Vec3::new(1.0, 2.0, 0.0);
+        victim.apply_knockback(Vec3::new(-2.0, 64.0, 0.0), 0.0, 0.4);
+        let velocity = store.get(id).expect("victim").velocity;
+        assert_eq!(velocity.x, 0.9, "old motion halved, shove added away");
+        assert_eq!(velocity.y, 2.0, "airborne y untouched");
+        // Zero strength is a no-op: it must not even halve.
+        let victim = store.get_mut(id).expect("victim");
+        victim.apply_knockback(Vec3::new(-2.0, 64.0, 0.0), 0.0, 0.0);
+        assert_eq!(store.get(id).expect("victim").velocity, velocity);
+    }
+
+    #[test]
+    fn knockback_atop_the_victim_falls_back_to_facing() {
+        // Attacker exactly overhead: the position direction degenerates, so
+        // the attacker's facing steers. yaw 0 gives facing (sin0, -cos0) =
+        // (0, -1) exactly (no float dust), negated by the shove to (0, +0.4).
+        let mut store = EntityStore::new();
+        let id = store
+            .spawn(
+                EntityBody::Mob(Mob::new(MobKind::Zombie)),
+                Vec3::new(0.0, 64.0, 0.0),
+            )
+            .expect("spawn");
+        let victim = store.get_mut(id).expect("victim");
+        victim.on_ground = true;
+        victim.apply_knockback(Vec3::new(0.0, 64.0, 0.0), 0.0, 0.4);
+        let velocity = store.get(id).expect("victim").velocity;
+        assert_eq!(velocity.x, 0.0);
+        assert_eq!(velocity.z, 0.4);
+        assert_eq!(velocity.y, 0.4);
     }
 }

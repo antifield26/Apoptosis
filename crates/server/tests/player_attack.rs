@@ -10,7 +10,8 @@
 //!
 //! The rules pinned here, all of which are jar-derived:
 //!
-//! - a fist does **1.0** damage ([`mc_server::game`]'s `FIST_ATTACK_DAMAGE`);
+//! - a fist does **1.0** damage (`mc_entity::combat::FIST_DAMAGE`); a held
+//!   weapon adds its attribute bonus on top (P16-01);
 //! - a hit lands at most once per **10-tick** window
 //!   (`INVULNERABLE_TICKS`), which is vanilla's `invulnerableTime`;
 //! - a **non-living** entity is immune rather than silently damaged.
@@ -158,6 +159,70 @@ fn a_swing_takes_the_fist_damage_off_a_mob() {
         before - 1.0,
         "one fist swing is one point of damage; saw {before} -> {after}"
     );
+}
+
+#[test]
+fn a_swing_with_a_diamond_sword_deals_seven() {
+    // P16-01: the held weapon's attribute bonus replaces the fist figure.
+    let mut harness = Harness::new("p16-sword");
+    harness.join("Knight");
+    let registries = mc_registry::Registries::vanilla().expect("registry");
+    let sword = registries
+        .items
+        .id("minecraft:diamond_sword")
+        .expect("sword");
+    harness
+        .game
+        .player_mut(harness.id)
+        .expect("player")
+        .inventory
+        .set_slot(
+            0,
+            mc_entity::stack::ItemStack::new(sword, 1).expect("sword"),
+        )
+        .expect("sword equipped");
+    let cow = harness.summon_nearby(MobKind::Cow);
+
+    let before = harness.health(cow).expect("the cow is alive");
+    assert_eq!(before, 10.0, "a cow spawns with 10 health");
+    harness.swing(cow.get());
+
+    assert_eq!(
+        harness.health(cow),
+        Some(3.0),
+        "diamond sword is fist 1.0 plus the +6.0 attribute bonus; saw {before} -> {:?}",
+        harness.health(cow)
+    );
+}
+
+#[test]
+fn a_swing_shoves_the_mob_away_from_the_attacker() {
+    // P16-01: vanilla base knockback (0.4) along the attacker-to-victim line.
+    // The victim here is fresh (zero velocity, hurt window open) so the shove
+    // reads exactly; gravity acts afterwards, so only the horizontal part and
+    // the direction are pinned, not the full tick's motion.
+    let mut harness = Harness::new("p16-knockback");
+    harness.join("Pusher");
+    let zombie = harness.summon_nearby(MobKind::Zombie);
+    harness.swing(zombie.get());
+
+    let velocity = harness
+        .game
+        .entity_store()
+        .get(zombie)
+        .expect("victim")
+        .velocity;
+    // The harness swings from 2 blocks west (-x) of the target: the shove
+    // must point +x with the base magnitude, and leave y to gravity.
+    assert!(
+        velocity.x > 0.3,
+        "shove points away from the attacker, got {velocity:?}"
+    );
+    assert!(
+        velocity.x <= 0.4 + 1e-9,
+        "base knockback is 0.4, got {velocity:?}"
+    );
+    assert_eq!(velocity.z, 0.0, "no sideways component on an axis swing");
 }
 
 #[test]

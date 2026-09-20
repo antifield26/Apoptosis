@@ -59,8 +59,10 @@
 //! That a real client's aim and this server's idea of "the aimed block" agree — the
 //! acceptance round is what would. That the *entity* buffer of 3.0 is the right one
 //! for a held weapon in 26.1.2 (vanilla also has `isWithinAttackRange` over the
-//! item's `AttackRange` component, which this build does not model); the check here
-//! is the interaction-range gate vanilla applies before branching on the action.
+//! item's `AttackRange` component): since P16-01 the gate adds the component hook
+//! (`mc_entity::combat::attack_range_bonus`, default zero for every item until
+//! components land), so the check here is the interaction-range gate plus a hook
+//! that currently changes nothing — pinned by the hook's own unit test.
 
 #![allow(clippy::cast_possible_truncation)]
 
