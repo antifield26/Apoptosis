@@ -14,6 +14,40 @@ tag `v0.2.0` (see below); no later version has been released.
 
 ## Unreleased — Phase 15 (Observability + Core Hardening)
 
+### P15-05 — `packing` and `RandomSource` sink into `mc-core`
+
+Two leaf-ward moves, each shipped alone behind the full gate. `packing`
+(paletted-container bit packing, P03-10) moves `mc-persistence` →
+`mc-core` byte-identical — its only dependency was already `mc-core`'s
+error type. Users in persistence/protocol/server/world repoint to
+`mc_core::packing`, the `chunk` re-export of packing names is deleted (its
+only external user was persistence's own fixture test), and `mc-protocol`
+drops its `mc-persistence` dependency: the protocol→persistence edge is
+gone, asserted by grep, not by inspection. `RandomSource` (the
+JDK-verified `java.util.Random` clone) moves `mc-simulation` → `mc-core`
+byte-identical — pure `std`, no import fixes needed. Server and worldgen
+repoint to `mc_core::random::RandomSource`; it was worldgen's only
+simulation use, so the worldgen→simulation edge goes with it. Both moves
+are renames (98–100% similarity); gate holds at 1452/0/34/113 throughout —
+the 8 packing and 10 random unit tests now run under `mc-core`, so the
+total cannot move without someone noticing.
+
+Two instruments earned their keep. Crate-level pedantic-cast allows do not
+travel with a moved file: `packing` tripped truncation/wrap/sign-loss and
+`random` tripped precision-loss under `mc-core`'s clean lint set, exactly
+the exemptions `mc-protocol`/`mc-nbt`/`mc-persistence` already document —
+`mc-core` now carries the same documented allow, extended with the reason
+each module needs it, instead of rewriting working bit code to please the
+lint. And the import pruner plus the compiler caught every path-shaped
+straggler: `crate::packing` internals, a braced `mc_simulation::{…}` import
+the repointer's substring missed, and doc links (`mc_persistence::packing`
+in three files, `mc_simulation::RandomSource` in `seed.rs`) — all repointed,
+none left for `cargo doc` to trip on later. Stale ownership prose in
+`loot.rs`, `loot/tests.rs` and the simulation/worldgen comments was
+rewritten to say where the generator lives now; two docs
+(`noise.rs`, `game/mod.rs`) had anticipated the `mc_core::random` path
+ahead of the move and needed no change.
+
 ### P15-04 — `play.rs` split into `play/{chunk,light,inventory,position}`
 
 The 5.9k-line play-packet module is now five files (`mod` 3946 / `chunk`
