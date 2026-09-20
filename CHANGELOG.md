@@ -14,6 +14,32 @@ tag `v0.2.0` (see below); no later version has been released.
 
 ## Unreleased — Phase 15 (Observability + Core Hardening)
 
+### P15-08 — Hardening review sign-off (all clauses re-evidenced)
+
+Every P15 EXIT-GATE clause was re-run on the final tree, not trusted from
+step logs. Full quick gate fresh green: **1475/0/34/115**. Per-step probes
+re-run green: worst-phase synthetic (`mc-simulation`), packing/random unit
+plus anvil fixture plus edge asserts (`mc_persistence::packing`,
+`mc-simulation` in worldgen, protocol→persistence dep all absent),
+14 message-stability plus 2 source-chain pins, container/inventory e2e,
+entity/world units, region/nbt/fixture-env/sweep/cow-golden, and the six
+named falsification suites (`admin_commands` 13, `chunk_streaming` 3,
+`reconnect` 5, `command_e2e` 13, `survival_e2e` 27, `pack_loading_e2e`
+covered in the gate). The B-02 perturbation was re-applied and reverted
+under review: new test red, end-state test green, tree byte-identical
+afterwards. Split integrity re-scanned (`game/*`, `play/*`): no duplicate
+definitions (two `pub const fn` scanner hits confirmed distinct by eye).
+Test-count walk 1452 → 1468 → 1475 is additions only (+16 stability, +7
+gap closures), suites 113 → 115 are the two new harnesses; no test was
+removed or weakened. Deliberate behavior deltas, each covered: unreachable
+`expect` paths typed, `Vec3` renames with identical arithmetic, PlayIntent
+trailing refusal proven safe on 391 real bodies (ContainerClick exempt),
+three new intents into the silent arm (was debug-logged no-op), LpVec3
+canonical form (plus fixing corrupt multiples-of-4), variant metadata
+parsed where it errored (s2c-only; our sends unchanged), hetero-NBT
+refusal (no in-tree hetero writers; gate green), decode-only new types the
+server still ignores. Zero observable gameplay delta: signed.
+
 ### P15-07 — Four audit test gaps closed (B-02, D-07, E-02, A-03)
 
 **B-02** (region commit order): the end-state test passed under a reordered
