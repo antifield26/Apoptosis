@@ -14,6 +14,34 @@ tag `v0.2.0` (see below); no later version has been released.
 
 ## Unreleased — Phase 15 (Observability + Core Hardening)
 
+### P15-04 — `play.rs` split into `play/{chunk,light,inventory,position}`
+
+The 5.9k-line play-packet module is now five files (`mod` 3946 / `chunk`
+830 / `inventory` 671 / `light` 302 / `position` 278): 92 top-level items
+partitioned with no overlaps and exact tiling — kept+moved reconstructs the
+original up to the mechanical deltas below. Chunk palettes, sections,
+heightmaps and full chunk bodies; light masks, arrays and live updates;
+stacks, slots, windows and entity metadata; position packing, teleports and
+entity moves. `ChunkBlockEntity` stays in `mod` (imported by `chunk`).
+
+Mechanical deltas only: `read_count`/`packed_len` plus the three
+test-exercised light helpers (`decode_light_arrays`, `read_light_mask`,
+`write_light_mask`) widened to `pub(crate)`; one `super::config` path gains
+its extra hop; tests address the light helpers at their new home
+(`super::light::…`) and import `packing` directly instead of via `super::`.
+Gate holds at 1452/0/34/113; the protocol round-trip and hostile-input
+suites pass unchanged — no behavior moved, so no test count moves.
+
+Three instruments earned their keep again. The item scanner went blind on
+`pub const fn` (read `fn` as the name) and stranded `block_position` /
+`unpack_block_position` plus their neighbours; placement is now asserted via
+parsed item-name sets, never regexes. The import-prune path regex only
+matched `crates/server/…` and reported "clean" while 17 protocol imports
+stood unused; it now matches any path in the file set. And the pruner twice
+ate imports the lib unit doesn't use but the test unit does (`packing`,
+two light helpers) — lib-unit `unused_imports` is a false positive there,
+fixed by direct test imports rather than `allow` attributes.
+
 ### P15-03 — `game.rs` split into `game/{session,tick,persist}`
 
 The 7.8k-line `Game` module is now four files (`mod` 2189 / `session` 2353 /
