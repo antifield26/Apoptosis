@@ -57,6 +57,22 @@ deferred: natural sources (no eating, witch, beacon), instant effects,
 milk, speed/strength application, particles control, mob-effect chunk
 persistence. Gate 1513/0/34/117.
 
+### P16-04 — Mob-AI wiring: A* chase, line of sight, follow ranges, bows, fuses
+
+Step A: chase follows searched A* paths with direct fallback (waypoints on
+`MobAi`, drift/drop rules, per-step passability still applies),
+`World::has_line_of_sight` on the movement solidity rule, and per-kind
+follow ranges — the zombie's jar-measured 35.0 wired, closing AUDIT-09 D-04.
+Step B: skeleton bow shots within 15 blocks with line of sight (1.6 speed,
+difficulty-scaled damage/spread, 20-tick cooldown) landing through the new
+`Arrow` damage source with owner immunity and hurt-window respect; creeper
+30-tick fuse (ignite inside 3, stand down past 7, flash state on index 16
+announced on transitions only) detonating through the new `Explosion`
+source with linear falloff and a binary LOS gate — no block damage, suicide
+drops nothing. Deliberately deferred: criticals/arrow pickup, per-kind
+flight tuning (shared gravity still moves arrows), exposure fractions,
+charged creepers, block destruction. Gate 1520/0/34/118.
+
 ## Unreleased — Phase 15 (Observability + Core Hardening)
 
 ### P15-08 — Hardening review sign-off (all clauses re-evidenced)

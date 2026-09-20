@@ -238,6 +238,19 @@ pub const FLEE_HEALTH_FRACTION: f32 = 0.5;
 /// cooldown and `attackInterval`), which depends on the mob and its equipment.
 pub const ATTACK_COOLDOWN_TICKS: u32 = 20;
 
+/// Ticks a lit creeper burns before detonating (P16-04).
+///
+/// Vanilla/pumpkin `DEFAULT_FUSE_TIME = 30`; the ignite/defuse radii below
+/// come from pumpkin's `CreeperIgniteGoal` (`< 9.0` dist-sqr to light,
+/// `> 49.0` to stand down).
+pub const CREEPER_FUSE_TICKS: u8 = 30;
+/// Distance in blocks at which a creeper lights its fuse.
+pub const CREEPER_IGNITE_RANGE: f64 = 3.0;
+/// Distance in blocks beyond which a lit creeper stands down one tick at a time.
+pub const CREEPER_DEFUSE_RANGE: f64 = 7.0;
+/// Blast radius in blocks for a creeper detonation (Normal difficulty).
+pub const CREEPER_BLAST_RADIUS: f64 = 3.0;
+
 /// Ticks between AI decision boundaries.
 ///
 /// A mob only considers *starting a walk* on these boundaries, so the draws that
@@ -304,7 +317,8 @@ pub trait Rng {
 pub enum MobKind {
     /// Undead melee mob, burns in daylight (daylight is not modelled).
     Zombie,
-    /// Undead ranged mob (the bow is not modelled; see [`MobAttackStyle`]).
+    /// Undead ranged mob (bow shots resolve through the tick loop's ranged
+    /// arm; see [`MobAttackStyle`]).
     Skeleton,
     /// Passive source of leather and beef.
     Cow,
@@ -316,7 +330,8 @@ pub enum MobKind {
     Chicken,
     /// Hostile mob that can climb walls in Vanilla (climbing is not modelled).
     Spider,
-    /// Hostile mob that destroys blocks on detonation (the explosion is not modelled).
+    /// Hostile mob that destroys blocks on detonation (block destruction is
+    /// not modelled; the blast damages players and mobs with falloff).
     Creeper,
 }
 
@@ -490,13 +505,15 @@ impl MobKind {
             Self::Zombie => 3.0,
             Self::Spider => 2.0,
             // Vanilla skeletons fight with a bow (1..=4 at Normal difficulty);
-            // this is the skeleton's melee `ATTACK_DAMAGE` attribute instead,
-            // because the bow is not modelled. Approximation.
+            // this is the skeleton's melee `ATTACK_DAMAGE` attribute, kept
+            // for the damage table (the bow arm computes its own
+            // power-scaled damage at release). Approximation.
             Self::Skeleton => 2.0,
             // Vanilla's creeper has no melee attack: 49.0 is the Normal-difficulty
             // explosion damage with the player adjacent, from community
-            // documentation. An explosion implementation must not treat it as a
-            // melee value. Approximation.
+            // documentation. It is the blast's point-blank figure (the fuse
+            // arm falls it off with distance), never a melee value.
+            // Approximation.
             Self::Creeper => 49.0,
             Self::Cow | Self::Pig | Self::Sheep | Self::Chicken => 0.0,
         }
@@ -575,9 +592,11 @@ impl std::fmt::Display for MobKind {
 pub enum MobAttackStyle {
     /// A direct hit at melee range for [`MobKind::attack_damage`].
     Melee,
-    /// A projectile (Vanilla: a bow). **Not implemented**: no projectile code.
+    /// A projectile (Vanilla: a bow). Resolved by the tick loop's ranged arm
+    /// (P16-04: skeleton bow shots within range and line of sight).
     Ranged,
-    /// An area explosion (Vanilla: the creeper's fuse). **Not implemented**.
+    /// An area explosion (Vanilla: the creeper's fuse). Resolved by the tick
+    /// loop's fuse arm (P16-04: ignite, 30-tick fuse, blast damage).
     Explosive,
 }
 
@@ -596,7 +615,9 @@ impl MobAttackStyle {
     ///
     /// `true` for [`MobAttackStyle::Melee`] only. Callers must check this before
     /// applying [`MobKind::attack_damage`]: the ranged and explosive numbers are
-    /// documented Vanilla figures, not melee damage.
+    /// documented Vanilla figures, not melee damage. Ranged and explosive
+    /// intents resolve through their own arms (`resolve_mob_ranged`, the
+    /// creeper fuse), never through the melee path.
     #[must_use]
     pub const fn is_implemented(self) -> bool {
         matches!(self, Self::Melee)
@@ -874,6 +895,9 @@ pub struct MobAi {
     /// Empty means "no path": the chase arm computes one, follows it to the
     /// end, and falls back to direct steering when the search fails.
     pub path: Vec<(i32, i32, i32)>,
+    /// Creeper fuse ticks lit so far; `0` means unlit (P16-04). Only the
+    /// creeper kind ever leaves zero; every other kind ignores this field.
+    pub fuse: u8,
 }
 
 impl MobAi {
@@ -886,6 +910,7 @@ impl MobAi {
             cooldown: 0,
             last_target: None,
             path: Vec::new(),
+            fuse: 0,
         }
     }
 

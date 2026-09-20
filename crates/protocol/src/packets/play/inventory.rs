@@ -63,6 +63,14 @@ pub const METADATA_INDEX_HEALTH: u8 = 9;
 /// path rather than by a capture (no orb-value body was captured).
 pub const METADATA_INDEX_ORB_VALUE: u8 = 8;
 
+/// The metadata slot index a creeper's fuse/state rides on: **16**, with
+/// [`METADATA_TYPE_VARINT`] (`0` unlit, `1` lit).
+///
+/// From `crates/test-support/fixtures/registry/entity_metadata.tsv`
+/// (`minecraft:creeper 16 1 V fuse/state varint`); the announce path asserts
+/// it by construction when a fuse lights or stands down.
+pub const METADATA_INDEX_CREEPER_FUSE: u8 = 16;
+
 /// One entity metadata value.
 ///
 /// Byte, `VarInt`, fixed-int, float, item-stack and registry-variant-holder

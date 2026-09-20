@@ -169,24 +169,43 @@ fn a_mob_spawn_is_announced_and_then_given_its_health() {
 
     let mut ids = Vec::new();
     while let Some(raw) = out.try_recv() {
-        ids.push(raw.id);
+        ids.push(raw);
     }
-    let adds = ids
+    // Arrows announce with `add_entity` but carry no second packet (P16-04):
+    // partition the adds by decoded type so the mob invariant below is not
+    // polluted by bow shots. A decode failure here is a test bug, not a
+    // server one — the bytes came from our own encoder.
+    let arrow_type = harness
+        .game
+        .registries()
+        .entities
+        .id(mc_registry::entities::ARROW)
+        .expect("arrow is a known entity type");
+    let mut mob_adds = 0;
+    for raw in ids
         .iter()
-        .filter(|id| **id == clientbound::play::ADD_ENTITY)
-        .count();
+        .filter(|raw| raw.id == clientbound::play::ADD_ENTITY)
+    {
+        let body = mc_protocol::packets::play::AddEntity::decode(&mut raw.reader())
+            .expect("add_entity decodes");
+        if body.type_id != arrow_type {
+            mob_adds += 1;
+        }
+    }
     let datas = ids
         .iter()
-        .filter(|id| **id == clientbound::play::SET_ENTITY_DATA)
+        .filter(|id| id.id == clientbound::play::SET_ENTITY_DATA)
         .count();
     let mobs = harness.game.mobs().len();
     assert!(mobs > 0, "the night spawned mobs to announce");
     assert_eq!(
-        adds, mobs,
-        "every mob is announced once (saw {adds} adds for {mobs} mobs)"
+        datas, mob_adds,
+        "every mob announcement is followed by its spawn-health set_entity_data \
+         (arrows announce alone; saw {mob_adds} mob adds with {datas} datas)"
     );
-    assert_eq!(
-        datas, adds,
-        "every announcement is followed by its spawn-health set_entity_data"
+    assert!(
+        mob_adds >= mobs,
+        "every surviving mob was announced (saw {mob_adds} mob adds for {mobs} survivors; \
+         the surplus, if any, is mobs that died after announcing — e.g. detonated creepers)"
     );
 }

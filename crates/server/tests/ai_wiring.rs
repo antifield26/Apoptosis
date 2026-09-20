@@ -8,13 +8,13 @@
 //! - **a zombie in aggro range closes on the player** and, in range, swings —
 //!   the player's authoritative health drops through `apply_damage` and
 //!   vitals follow;
-//! - **a creeper never melees**: its [`MobAttackStyle::Explosive`] intent is
-//!   refused, so an adjacent creeper cannot hurt anyone until explosions exist;
+//! - **a creeper never melees but does fuse**: no direct hit lands while the
+//!   fuse burns, and the detonation hurts after ~30 ticks (P16-04);
 //! - **a cow never closes on a player**: passives have no aggro;
 //! - **an idle mob halts**: no goal, no horizontal velocity.
 //!
-//! What these do not prove: pathfinding (direct steering walks into walls —
-//! the named simplification), skeleton bows, creeper fuses, and real-client
+//! What these do not prove: skeleton bows beyond the melee-arcade (see
+//! `ranged_explosive.rs` for the bow/fuse end-to-end), and real-client
 //! rendering of the movement (P11-03/P11-10).
 
 #![allow(clippy::float_cmp)]
@@ -204,16 +204,24 @@ fn a_zombie_in_range_swings_and_the_player_hurts() {
 }
 
 #[test]
-fn an_adjacent_creeper_never_melees() {
+fn an_adjacent_creeper_fuses_instead_of_meleeing() {
+    // P16-04: the creeper still never lands a direct melee hit — but an
+    // adjacent creeper now lights its 30-tick fuse and detonates. Both
+    // halves are pinned: full health while the fuse burns, damage after.
     let mut harness = Harness::new("p11-ai-creeper", "Tester");
     harness.join();
     harness.summon("creeper", 1, 1, 0);
-    harness.run(120);
+    harness.run(10);
     assert_eq!(
         harness.health(),
         20.0,
-        "the creeper's explosive attack intent is refused; a melee resolution would be the \
-         explosion damage figure hitting as a direct hit"
+        "no melee resolution: the explosion figure never hits as a direct hit"
+    );
+    harness.run(40);
+    assert!(
+        harness.health() < 20.0,
+        "the lit fuse detonates at ~30 ticks, health={}",
+        harness.health()
     );
 }
 

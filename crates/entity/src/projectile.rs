@@ -212,6 +212,9 @@ pub struct Projectile {
     pub owner: Option<EntityId>,
     /// Ticks of life remaining, counted down by [`Projectile::tick`].
     pub life: u32,
+    /// Damage dealt on a hit, set by the firer (skeleton arrows compute it
+    /// from power and difficulty at release; snowballs stay 0.0).
+    pub damage: f32,
 }
 
 impl Projectile {
@@ -222,6 +225,7 @@ impl Projectile {
             kind,
             owner,
             life: kind.max_lifetime(),
+            damage: 0.0,
         }
     }
 

@@ -9,11 +9,11 @@
 //! rules come from the vanilla damage-type tags (`bypasses_armor` membership
 //! as listed in pumpkin-data's generated damage-type tag table). Where this
 //! build knowingly stops — enchantments, absorption, per-item attack reach,
-//! projectiles, fire/void sources — the item says so instead of guessing
-//! (AGENTS.md section 3.3).
+//! fire/drowning/void/magic sources — the item says so instead of guessing
+//! (AGENTS.md section 3.3). P16-04 added the Arrow/Explosion sources with
+//! the bow and the creeper fuse as production callers.
 
 /// What dealt the damage. Only sources with a production caller exist here:
-/// an arrow or explosion variant arrives with P16-04's bow/fuse wiring, and
 /// fire/drowning/void/magic sources have no callers in the tree at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DamageSource {
@@ -29,6 +29,11 @@ pub enum DamageSource {
     Poison,
     /// Wither effect ticks (`wither` tag: bypasses armour, no knockback).
     Wither,
+    /// A skeleton's arrow (`arrow` tag: armour applies, knockback applies).
+    Arrow,
+    /// A creeper explosion (`explosion` tag: armour applies, but the hurt
+    /// path carries no knockback — vanilla flings separately).
+    Explosion,
 }
 
 impl DamageSource {
@@ -38,19 +43,21 @@ impl DamageSource {
     #[must_use]
     pub const fn bypasses_armor(self) -> bool {
         match self {
-            Self::PlayerAttack | Self::MobAttack | Self::Poison => false,
+            Self::PlayerAttack | Self::MobAttack | Self::Poison | Self::Arrow | Self::Explosion => {
+                false
+            }
             Self::Fall | Self::Starvation | Self::Wither => true,
         }
     }
 
-    /// Whether the hit shoves the victim. Melee carries vanilla's base
-    /// knockback; falls, starvation and effect ticks have no source direction
-    /// to shove from.
+    /// Whether the hit shoves the victim. Melee and arrows carry vanilla's
+    /// base knockback; falls, starvation, effect ticks and explosions have no
+    /// source direction (explosions fling separately) to shove from.
     #[must_use]
     pub const fn applies_knockback(self) -> bool {
         match self {
-            Self::PlayerAttack | Self::MobAttack => true,
-            Self::Fall | Self::Starvation | Self::Poison | Self::Wither => false,
+            Self::PlayerAttack | Self::MobAttack | Self::Arrow => true,
+            Self::Fall | Self::Starvation | Self::Poison | Self::Wither | Self::Explosion => false,
         }
     }
 }
@@ -295,15 +302,19 @@ mod tests {
         assert!(!DamageSource::PlayerAttack.bypasses_armor());
         assert!(!DamageSource::MobAttack.bypasses_armor());
         assert!(!DamageSource::Poison.bypasses_armor());
+        assert!(!DamageSource::Arrow.bypasses_armor());
+        assert!(!DamageSource::Explosion.bypasses_armor());
         assert!(DamageSource::Fall.bypasses_armor());
         assert!(DamageSource::Starvation.bypasses_armor());
         assert!(DamageSource::Wither.bypasses_armor());
         assert!(DamageSource::PlayerAttack.applies_knockback());
         assert!(DamageSource::MobAttack.applies_knockback());
+        assert!(DamageSource::Arrow.applies_knockback());
         assert!(!DamageSource::Fall.applies_knockback());
         assert!(!DamageSource::Starvation.applies_knockback());
         assert!(!DamageSource::Poison.applies_knockback());
         assert!(!DamageSource::Wither.applies_knockback());
+        assert!(!DamageSource::Explosion.applies_knockback());
         assert_eq!(BASE_MELEE_KNOCKBACK, 0.4);
     }
 

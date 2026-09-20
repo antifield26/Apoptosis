@@ -632,6 +632,9 @@ impl Game {
             if self.tick_entity(id) {
                 report.entities_ticked += 1;
             }
+            // Arrows check their hits after moving, like items check pickup
+            // after theirs: same phase, same ordering rationale.
+            self.resolve_projectile_hit(id);
         }
         self.merge_and_collect_items();
     }
@@ -1188,10 +1191,10 @@ impl Game {
     /// in-range [`MobGoal::Attack`], and the idle counter the despawn pass
     /// reads.
     ///
-    /// [`MobGoal::Attack`] intents from [`MobAttackStyle::Ranged`] and
-    /// [`MobAttackStyle::Explosive`] mobs (skeleton, creeper) are **refused**:
-    /// the bow and the fuse are not modelled, and the creeper's damage figure
-    /// is the explosion value, not a melee one (see `mob.rs`'s gap list).
+    /// [`MobGoal::Attack`] intents dispatch by [`MobAttackStyle`]: melee
+    /// swings, skeleton bow shots, and the creeper fuse (P16-04). The
+    /// creeper's damage figure stays the explosion value, never a melee one
+    /// (see `mob.rs`'s gap list).
     fn tick_entity_ai(&mut self, id: EntityId) {
         // Observation first: these read through `&self`, so no entity borrow is
         // live when `decide` needs `&mut self.entities`.
@@ -1467,8 +1470,22 @@ impl Game {
             cooldown: 0,
         } = goal
         {
-            self.resolve_mob_melee(id, kind, target, position);
+            // Style dispatch lives here so each arm reads as its own rule;
+            // `resolve_mob_melee` keeps its internal melee check as
+            // defense in depth.
+            match kind.attack_style() {
+                Some(MobAttackStyle::Melee) => {
+                    self.resolve_mob_melee(id, kind, target, position);
+                }
+                Some(MobAttackStyle::Ranged) => {
+                    self.resolve_mob_ranged(id, kind, target, position);
+                }
+                Some(MobAttackStyle::Explosive) | None => {}
+            }
         }
+        // The fuse runs every tick regardless of goal: a creeper lights at
+        // three blocks even before the 2-block Attack goal engages.
+        self.tick_creeper_fuse(id, kind, position);
     }
 
     /// Whether a mob standing at `position` and heading `(dir_x, dir_z)` may take
@@ -1528,10 +1545,441 @@ impl Game {
         true
     }
 
+    /// Resolve one bow shot against a player (P16-04).
+    ///
+    /// Skeletons only (the one Ranged kind): within 15 blocks with line of
+    /// sight, an arrow flies at 1.6 toward the player's torso with
+    /// difficulty-scaled spread, dealing power-scaled damage on contact. The
+    /// Attack cooldown (20 ticks) paces shots; a blind or distant skeleton
+    /// holds fire rather than wasting arrows. Draw timing is folded into the
+    /// cooldown (vanilla draws ~20 ticks, then fires on roughly the same
+    /// rhythm), and criticals/arrow pickup stay unmodelled.
+    fn resolve_mob_ranged(
+        &mut self,
+        id: EntityId,
+        kind: MobKind,
+        target: EntityId,
+        position: mc_world::Vec3,
+    ) {
+        // The eye the arrow leaves from (skeleton torso height, documented
+        // approximation — exact per-kind eyes are unmodelled).
+        const SHOOTER_EYE: f64 = 1.5;
+        // Bow range, one flat number (pumpkin `BowAttackGoal::new` range).
+        const BOW_RANGE: f64 = 15.0;
+        // Cooldown between shots in ticks (same source).
+        const BOW_COOLDOWN: u32 = 20;
+        // Arrow speed in blocks per tick (same source).
+        const ARROW_SPEED: f64 = 1.6;
+        let Some(session_id) = self
+            .sessions
+            .values()
+            .find(|session| session.entity == target)
+            .map(|session| session.id)
+        else {
+            return;
+        };
+        let (target_pos, target_eye) = match self.sessions.get(&session_id) {
+            Some(session) => {
+                let p = session.player.position;
+                (p, p.y + 0.6)
+            }
+            None => return,
+        };
+        let dx = target_pos.x - position.x;
+        let dy = target_eye - (position.y + SHOOTER_EYE);
+        let dz = target_pos.z - position.z;
+        let horizontal = (dx * dx + dz * dz).sqrt();
+        if horizontal > BOW_RANGE {
+            return;
+        }
+        let from = Vec3::new(position.x, position.y + SHOOTER_EYE, position.z);
+        let to = Vec3::new(target_pos.x, target_eye, target_pos.z);
+        if !self.world.has_line_of_sight(from, to) {
+            return;
+        }
+        // Damage: power-scaled with a triangular draw, mirroring vanilla
+        // `AbstractSkeleton::performRangedAttack` via pumpkin
+        // (`set_base_damage_from_mob`): `power * 2 + triangular(diff * 0.11,
+        // 0.57425)`, drawn from the seeded source for determinism.
+        let difficulty = self.difficulty.legacy_id() as f64;
+        let r1 = self.random.next_f64();
+        let r2 = self.random.next_f64();
+        let damage = (ARROW_SPEED * 2.0 + (difficulty * 0.11 + (r1 - r2) * 0.57425)) as f32;
+        // Spread: per-axis triangular deflection scaled by
+        // `14 - difficulty * 4` (same source), then normalized to speed.
+        let divergence = 14.0 - difficulty * 4.0;
+        let r3 = self.random.next_f64();
+        let r4 = self.random.next_f64();
+        let r5 = self.random.next_f64();
+        let r6 = self.random.next_f64();
+        let r7 = self.random.next_f64();
+        let r8 = self.random.next_f64();
+        let jitter = 0.0075 * divergence;
+        let mut vx = dx + (r3 - r4) * jitter;
+        let mut vy = horizontal.mul_add(0.2, dy) + (r5 - r6) * jitter;
+        let mut vz = dz + (r7 - r8) * jitter;
+        let len = (vx * vx + vy * vy + vz * vz).sqrt().max(1e-6);
+        vx = vx / len * ARROW_SPEED;
+        vy = vy / len * ARROW_SPEED;
+        vz = vz / len * ARROW_SPEED;
+        let yaw = (-vx).atan2(vz).to_degrees() as f32;
+        let pitch = (-vy / (vx * vx + vz * vz).sqrt().max(1e-6))
+            .atan()
+            .to_degrees() as f32;
+        let Ok(arrow) = self.entities.spawn(
+            EntityBody::Projectile(mc_entity::Projectile {
+                kind: mc_entity::ProjectileKind::Arrow,
+                owner: Some(id),
+                life: mc_entity::ProjectileKind::Arrow.max_lifetime(),
+                damage,
+            }),
+            from,
+        ) else {
+            return;
+        };
+        if let Some(entity) = self.entities.get_mut(arrow) {
+            entity.velocity = Vec3::new(vx, vy, vz);
+            entity.yaw = yaw;
+            entity.pitch = pitch;
+        }
+        self.pending_entity_spawns.push(arrow);
+        // The bow is spent for this cycle whether or not anything was hit.
+        if let Some(entity) = self.entities.get_mut(id)
+            && let EntityBody::Mob(mob) = &mut entity.body
+            && kind == mob.kind
+        {
+            mob.ai.goal = MobGoal::Attack {
+                target,
+                cooldown: BOW_COOLDOWN,
+            };
+        }
+        debug!(%id, target = %target, damage, "skeleton looses an arrow");
+    }
+
+    /// Resolve one flying arrow's hits after its move (P16-04).
+    ///
+    /// Arrows only (snowballs stay harmless): the arrow's lifetime counts
+    /// down and it despawns at zero; an arrow inside a solid block sticks
+    /// and despawns without further hits (a one-tick simplification of the
+    /// stuck-arrow state). Otherwise the first overlapping victim takes the
+    /// arrow's release-time damage through [`DamageSource::Arrow`] — players
+    /// through the authoritative `Player` plus vitals, mobs through
+    /// [`Self::damage_entity`] with the shooter as the knockback attacker —
+    /// and the arrow is consumed. Owner immunity holds: a shot never hits
+    /// the mob that loosed it. A victim inside its hurt window is skipped
+    /// and the arrow flies on rather than being eaten by invulnerability.
+    /// Flight integration stays the shared entity gravity: the per-kind
+    /// drag/gravity model in `mc_entity::projectile` is not what moves
+    /// arrows yet (approximation, stated).
+    fn resolve_projectile_hit(&mut self, id: EntityId) {
+        let (position, damage, owner, is_arrow) = match self.entities.get(id) {
+            Some(entity) => match &entity.body {
+                EntityBody::Projectile(projectile) => (
+                    entity.position,
+                    projectile.damage,
+                    projectile.owner,
+                    projectile.kind == mc_entity::ProjectileKind::Arrow,
+                ),
+                _ => return,
+            },
+            None => return,
+        };
+        if !is_arrow {
+            return;
+        }
+        if self.tick_arrow_lifetime(id, position) {
+            return;
+        }
+        if self.hit_player_with_arrow(id, position, damage, owner) {
+            return;
+        }
+        self.hit_mob_with_arrow(id, position, damage, owner);
+    }
+
+    /// One lifetime tick for an arrow: expiry or burial removes it.
+    ///
+    /// Returns `true` when the arrow was removed and the caller is done.
+    fn tick_arrow_lifetime(&mut self, id: EntityId, position: mc_world::Vec3) -> bool {
+        let stuck_or_spent = match self.entities.get_mut(id) {
+            Some(entity) => {
+                let EntityBody::Projectile(projectile) = &mut entity.body else {
+                    return true;
+                };
+                projectile.tick();
+                if projectile.is_expired() {
+                    true
+                } else {
+                    let cell = (
+                        position.x.floor() as i32,
+                        position.y.floor() as i32,
+                        position.z.floor() as i32,
+                    );
+                    self.world
+                        .get_block_loaded(cell.0, cell.1, cell.2)
+                        .is_some_and(|block| {
+                            mc_world::collision::is_solid_or_unknown(&self.registries.blocks, block)
+                        })
+                }
+            }
+            None => return true,
+        };
+        if stuck_or_spent {
+            if let Some(entity) = self.entities.get_mut(id) {
+                entity.removed = true;
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Arrow-vs-player hit test: first overlapping ready session takes the
+    /// damage through the authoritative `Player` plus vitals.
+    ///
+    /// Returns `true` when an arrow was consumed by a hit (or skipped past a
+    /// hurt window, in which case the arrow flies on and the caller is still
+    /// done for this tick).
+    fn hit_player_with_arrow(
+        &mut self,
+        id: EntityId,
+        position: mc_world::Vec3,
+        damage: f32,
+        owner: Option<EntityId>,
+    ) -> bool {
+        // The skeleton arm only targets players, so the player hit is the
+        // common case and the falsification probe's shape.
+        let hit_player = self
+            .sessions
+            .values()
+            .filter(|session| Some(session.entity) != owner && session.ready)
+            .map(|session| (session.id, session.entity, session.player.position))
+            .find(|(_, _, at)| {
+                mc_world::collision::Aabb::player(*at).distance_to_sqr(position) == 0.0
+            });
+        let Some((session_id, _, _)) = hit_player else {
+            return false;
+        };
+        if self
+            .sessions
+            .get(&session_id)
+            .is_some_and(|session| session.hurt_invuln_ticks > 0)
+        {
+            return true;
+        }
+        let outcome = self.sessions.get_mut(&session_id).map(|session| {
+            session.hurt_invuln_ticks = INVULNERABLE_TICKS;
+            let armor = worn_stats(&session.player.inventory, &self.registries.items);
+            session
+                .player
+                .apply_damage(damage, DamageSource::Arrow, &armor)
+        });
+        if let Some(outcome) = outcome {
+            if outcome.applied {
+                debug!(arrow = %id, dealt = outcome.dealt, "arrow hit a player");
+            }
+            self.after_damage(session_id, outcome);
+        }
+        if let Some(entity) = self.entities.get_mut(id) {
+            entity.removed = true;
+        }
+        true
+    }
+
+    /// Arrow-vs-mob hit test (friendly fire is real: a skeleton can hit a
+    /// zombie) through [`Self::damage_entity`] with the shooter as the
+    /// knockback attacker.
+    fn hit_mob_with_arrow(
+        &mut self,
+        id: EntityId,
+        position: mc_world::Vec3,
+        damage: f32,
+        owner: Option<EntityId>,
+    ) {
+        let hit_mob = self
+            .entities
+            .iter()
+            .filter(|entity| {
+                entity.id != id
+                    && Some(entity.id) != owner
+                    && !entity.removed
+                    && matches!(&entity.body, EntityBody::Mob(_))
+            })
+            .find(|entity| entity.hitbox().distance_to_sqr(position) == 0.0)
+            .map(|entity| entity.id);
+        if let Some(victim) = hit_mob {
+            let attacker = owner
+                .and_then(|shooter| self.entities.get(shooter))
+                .map(|shooter| Attacker {
+                    pos: shooter.position,
+                    yaw: shooter.yaw,
+                })
+                .or(Some(Attacker {
+                    pos: position,
+                    yaw: 0.0,
+                }));
+            self.damage_entity(victim, damage, DamageSource::Arrow, attacker);
+            if let Some(entity) = self.entities.get_mut(id) {
+                entity.removed = true;
+            }
+        }
+    }
+
+    /// Tick a creeper's fuse and detonate at the end of it (P16-04).
+    ///
+    /// Lit when a ready player is within [`CREEPER_IGNITE_RANGE`] (3 blocks,
+    /// pumpkin `CreeperIgniteGoal`); a lit fuse counts up every tick and
+    /// stands down one tick at a time past [`CREEPER_DEFUSE_RANGE`] (7
+    /// blocks), mirroring vanilla's fuse-speed `-1`. At
+    /// [`CREEPER_FUSE_TICKS`] (30) the creeper detonates: itself removed with
+    /// no loot (a suicide drops nothing — consistent with the no-credit XP
+    /// rule), blast damage to players and mobs inside
+    /// [`CREEPER_BLAST_RADIUS`] with linear falloff from the kind's
+    /// point-blank figure, gated by line of sight (binary exposure: a wall
+    /// between blocks the blast entirely, where vanilla scales it — stated,
+    /// not hidden). No blocks break and no crater forms (gap).
+    fn tick_creeper_fuse(&mut self, id: EntityId, kind: MobKind, position: mc_world::Vec3) {
+        use mc_entity::mob::{CREEPER_DEFUSE_RANGE, CREEPER_FUSE_TICKS, CREEPER_IGNITE_RANGE};
+        if kind != MobKind::Creeper {
+            return;
+        }
+        let nearest = self
+            .nearest_ready_player(position)
+            .map(|(_, distance)| distance);
+        let mut detonate = false;
+        let (mut fuse_before, mut fuse_now) = (0, 0);
+        if let Some(entity) = self.entities.get_mut(id) {
+            let EntityBody::Mob(mob) = &mut entity.body else {
+                return;
+            };
+            fuse_before = mob.ai.fuse;
+            match nearest {
+                Some(distance) if distance <= CREEPER_IGNITE_RANGE => {
+                    if mob.ai.fuse == 0 {
+                        mob.ai.fuse = 1;
+                    } else if mob.ai.fuse < CREEPER_FUSE_TICKS {
+                        mob.ai.fuse += 1;
+                    }
+                }
+                Some(distance) if distance > CREEPER_DEFUSE_RANGE && mob.ai.fuse > 0 => {
+                    mob.ai.fuse -= 1;
+                }
+                _ => {
+                    if mob.ai.fuse > 0 && mob.ai.fuse < CREEPER_FUSE_TICKS {
+                        mob.ai.fuse += 1;
+                    }
+                }
+            }
+            fuse_now = mob.ai.fuse;
+            detonate = mob.ai.fuse >= CREEPER_FUSE_TICKS;
+        }
+        // Announce flash-state transitions only (lit, stood down, gone): the
+        // icon's lifetime is bounded by these packets, and a per-tick
+        // re-send would spam every client for every unlit creeper.
+        if detonate || (fuse_before == 0) != (fuse_now == 0) {
+            // Lit, stood down, or gone: the client tracks the flash state.
+            let state = i32::from(detonate || fuse_now > 0);
+            let packet = mc_protocol::packets::play::SetEntityData {
+                entity_id: id.get(),
+                entries: vec![(
+                    mc_protocol::packets::play::METADATA_INDEX_CREEPER_FUSE,
+                    mc_protocol::packets::play::MetadataValue::VarInt(state),
+                )],
+            }
+            .to_raw();
+            if let Ok(raw) = packet {
+                let mut report = TickReport::default();
+                self.broadcast_all(&raw, &mut report);
+            }
+        }
+        if detonate {
+            self.explode_creeper(id, position);
+        }
+    }
+
+    /// Detonate a lit creeper: blast damage with falloff, then self-removal.
+    fn explode_creeper(&mut self, id: EntityId, position: mc_world::Vec3) {
+        use mc_entity::mob::CREEPER_BLAST_RADIUS;
+        let centre = Vec3::new(position.x, position.y + 0.5, position.z);
+        let base = MobKind::Creeper.attack_damage();
+        // Players: torso distance for falloff, eye line for the LOS gate.
+        let victims: Vec<(ConnectionId, f32)> = self
+            .sessions
+            .values()
+            .filter(|session| session.ready)
+            .filter_map(|session| {
+                let p = session.player.position;
+                let torso = Vec3::new(p.x, p.y + 0.9, p.z);
+                let dx = torso.x - centre.x;
+                let dy = torso.y - centre.y;
+                let dz = torso.z - centre.z;
+                let distance = (dx * dx + dy * dy + dz * dz).sqrt();
+                if distance > CREEPER_BLAST_RADIUS {
+                    return None;
+                }
+                let eye = Vec3::new(p.x, p.y + 1.62, p.z);
+                if !self.world.has_line_of_sight(centre, eye) {
+                    return None;
+                }
+                let amount = base * (1.0 - distance as f32 / CREEPER_BLAST_RADIUS as f32);
+                (amount > 0.0).then_some((session.id, amount))
+            })
+            .collect();
+        for (session_id, amount) in victims {
+            if self
+                .sessions
+                .get(&session_id)
+                .is_some_and(|session| session.hurt_invuln_ticks > 0)
+            {
+                continue;
+            }
+            let outcome = self.sessions.get_mut(&session_id).map(|session| {
+                session.hurt_invuln_ticks = INVULNERABLE_TICKS;
+                let armor = worn_stats(&session.player.inventory, &self.registries.items);
+                session
+                    .player
+                    .apply_damage(amount, DamageSource::Explosion, &armor)
+            });
+            if let Some(outcome) = outcome {
+                self.after_damage(session_id, outcome);
+            }
+        }
+        // Mobs in the blast (the creeper excluded): same falloff and LOS.
+        let mob_victims: Vec<(EntityId, f32)> = self
+            .entities
+            .iter()
+            .filter(|entity| {
+                entity.id != id && !entity.removed && matches!(&entity.body, EntityBody::Mob(_))
+            })
+            .filter_map(|entity| {
+                let at = entity.position;
+                let torso = Vec3::new(at.x, at.y + 0.5, at.z);
+                let dx = torso.x - centre.x;
+                let dy = torso.y - centre.y;
+                let dz = torso.z - centre.z;
+                let distance = (dx * dx + dy * dy + dz * dz).sqrt();
+                if distance > CREEPER_BLAST_RADIUS {
+                    return None;
+                }
+                if !self.world.has_line_of_sight(centre, torso) {
+                    return None;
+                }
+                let amount = base * (1.0 - distance as f32 / CREEPER_BLAST_RADIUS as f32);
+                (amount > 0.0).then_some((entity.id, amount))
+            })
+            .collect();
+        for (victim, amount) in mob_victims {
+            self.damage_entity(victim, amount, DamageSource::Explosion, None);
+        }
+        if let Some(entity) = self.entities.get_mut(id) {
+            entity.removed = true;
+        }
+        debug!(%id, "creeper detonated");
+    }
+
     /// Resolve one melee swing against a player.
     ///
-    /// Only [`MobAttackStyle::Melee`] resolves; ranged and explosive intents
-    /// are refused (see [`Self::tick_entity_ai`]'s doc). The swing re-checks
+    /// Only [`MobAttackStyle::Melee`] reaches here (the style dispatch in
+    /// [`Self::tick_entity_ai`] routes ranged and explosive intents to their
+    /// own arms). The swing re-checks
     /// the range at resolution time — the target may have moved since the
     /// decision — and the attack cooldown restarts through
     /// [`MobAi::note_attack_landed`] whether or not the hit landed, because the
@@ -2125,9 +2573,13 @@ impl Game {
                     .registries
                     .entities
                     .id(mc_registry::entities::EXPERIENCE_ORB)?,
-                mc_entity::EntityBody::Item(_)
-                | mc_entity::EntityBody::Player
-                | mc_entity::EntityBody::Projectile(_) => item,
+                mc_entity::EntityBody::Projectile(projectile) => match projectile.kind {
+                    mc_entity::ProjectileKind::Arrow => {
+                        self.registries.entities.id(mc_registry::entities::ARROW)?
+                    }
+                    mc_entity::ProjectileKind::Snowball => item,
+                },
+                mc_entity::EntityBody::Item(_) | mc_entity::EntityBody::Player => item,
             };
             let position = entity.position;
             let (yaw, pitch) = (entity.yaw, entity.pitch);
@@ -2706,6 +3158,16 @@ impl Game {
                 .registries
                 .entities
                 .id(mc_registry::entities::EXPERIENCE_ORB)?,
+            mc_entity::EntityBody::Projectile(projectile) => match projectile.kind {
+                // Arrows announce as arrows; snowballs keep their historical
+                // item-type announcement (pre-existing quirk, out of scope).
+                mc_entity::ProjectileKind::Arrow => {
+                    self.registries.entities.id(mc_registry::entities::ARROW)?
+                }
+                mc_entity::ProjectileKind::Snowball => {
+                    self.registries.entities.id(mc_registry::entities::ITEM)?
+                }
+            },
             _ => self.registries.entities.id(mc_registry::entities::ITEM)?,
         };
         let position = entity.position;
