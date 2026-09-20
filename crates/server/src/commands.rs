@@ -740,8 +740,7 @@ impl Game {
             ));
         };
         let seconds = parsed.integer(3).unwrap_or(30).clamp(1, 1_000_000);
-        let amplifier =
-            i32::try_from(parsed.integer(4).unwrap_or(0).clamp(0, 255)).unwrap_or(0);
+        let amplifier = i32::try_from(parsed.integer(4).unwrap_or(0).clamp(0, 255)).unwrap_or(0);
         let duration = seconds.saturating_mul(20).min(i64::from(i32::MAX));
         let duration = i32::try_from(duration).unwrap_or(i32::MAX);
         let Some(session) = self.sessions.get_mut(&id) else {

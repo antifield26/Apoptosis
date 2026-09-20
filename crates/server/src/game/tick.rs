@@ -1549,7 +1549,13 @@ impl Game {
 
     /// Apply one tick of collected mob effects: damage through
     /// [`Self::damage_entity`], regeneration straight to health.
-    fn apply_mob_effect_ticks(&mut self, id: EntityId, dot: f32, dot_wither: bool, regen_amps: Vec<i32>) {
+    fn apply_mob_effect_ticks(
+        &mut self,
+        id: EntityId,
+        dot: f32,
+        dot_wither: bool,
+        regen_amps: Vec<i32>,
+    ) {
         if dot > 0.0 {
             let source = if dot_wither {
                 DamageSource::Wither
@@ -1557,9 +1563,7 @@ impl Game {
                 DamageSource::Poison
             };
             let mut hit = dot;
-            if !dot_wither
-                && let Some(entity) = self.entities.get(id)
-            {
+            if !dot_wither && let Some(entity) = self.entities.get(id) {
                 hit = hit.min((entity.health - 1.0).max(0.0));
             }
             if hit > 0.0 {
