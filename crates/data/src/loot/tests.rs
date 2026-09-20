@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 
 /// A deterministic stand-in for `java.util.Random`, for tests only.
 ///
-/// It is **not** claimed to be `java.util.Random`: the real one is `mc-simulation`'s
+/// It is **not** claimed to be `java.util.Random`: the real one is `mc-core`'s
 /// `RandomSource`, which is verified against the JDK, and the trait boundary in the module
 /// documentation is what lets that one be wired up in production. What matters here is that
 /// the sequence is fixed, so a test can say "this seed produces this loot" and mean it.

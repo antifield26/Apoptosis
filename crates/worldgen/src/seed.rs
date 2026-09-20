@@ -223,7 +223,7 @@ pub const fn pack_chunk_pos(pos: ChunkPos) -> u64 {
 pub struct ChunkSeed(i64);
 
 impl ChunkSeed {
-    /// The raw value, for feeding [`mc_simulation::RandomSource::new`].
+    /// The raw value, for feeding [`mc_core::random::RandomSource::new`].
     #[must_use]
     pub const fn raw(self) -> i64 {
         self.0

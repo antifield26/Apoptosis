@@ -84,7 +84,7 @@
 //! 4. **chunk streaming is sorted by (distance, x, z)** before it is truncated to
 //!    the per-tick budget.
 //!
-//! Randomness comes from a single seeded [`mc_simulation::RandomSource`] owned by
+//! Randomness comes from a single seeded [`mc_core::random::RandomSource`] owned by
 //! `Game` and chosen through [`Game::with_seed`]; nothing here draws from the
 //! clock or from any other source. `tests/entity_lifecycle.rs` asserts that two
 //! games built with the same seed and fed the same intents produce the same
@@ -174,6 +174,7 @@ impl mc_data::loot::Rng for LootRng<'_> {
         u32::from_ne_bytes(self.0.next_i32().to_ne_bytes())
     }
 }
+use mc_core::random::RandomSource;
 use mc_entity::player::Player;
 use mc_entity::stack::ItemStack;
 use mc_network::bridge::{ConnectionId, GameEvents, OutboundSender};
@@ -185,7 +186,7 @@ use mc_protocol::packets::Packet;
 use mc_protocol::packets::play::{PlayDisconnect, PlayIntent, SetExperience, SetHealth};
 use mc_protocol::text::TextComponent;
 use mc_registry::Registries;
-use mc_simulation::{RandomSource, Scheduler, TickMetrics};
+use mc_simulation::{Scheduler, TickMetrics};
 use mc_world::light::LightArray;
 use mc_world::{Vec3, World};
 use std::collections::{BTreeMap, BTreeSet};

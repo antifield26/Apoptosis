@@ -20,10 +20,9 @@ mc-nbt = { path = "../nbt" }
 # from the dimension model rather than hard-coding them.
 mc-persistence = { path = "../persistence" }
 mc-registry = { path = "../registry" }
-# `mc-simulation` owns `RandomSource`, the JDK-verified `java.util.Random` clone.
+# `mc-core` owns `RandomSource`, the JDK-verified `java.util.Random` clone.
 # Using it here (rather than a fresh PRNG) is what makes generation reproducible
 # and keeps one random-draw implementation in the workspace.
-mc-simulation = { path = "../simulation" }
 # `mc-world` owns the runtime `Chunk`/`Section` this crate generates into.
 mc-world = { path = "../world" }
 tracing.workspace = true

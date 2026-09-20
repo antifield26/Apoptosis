@@ -407,7 +407,6 @@ dependencies = [
  "mc-nbt",
  "mc-persistence",
  "mc-registry",
- "mc-simulation",
  "mc-world",
  "tracing",
 ]

@@ -35,7 +35,7 @@
 //! ## Determinism
 //!
 //! The permutation table is the only state, it is built once from
-//! [`mc_simulation::RandomSource`] (the JDK-verified `java.util.Random` clone)
+//! [`mc_core::random::RandomSource`] (the JDK-verified `java.util.Random` clone)
 //! and never mutated afterwards, so [`PerlinNoise`] is immutable after
 //! construction and `Send + Sync`. The same seed and coordinate always give the
 //! same `f64` — bit for bit — because every operation is plain IEEE-754
@@ -51,7 +51,7 @@
 //!   `i32::MAX`, `i32::MIN`, ±∞ and NaN are all safe inputs.
 //! - Nothing here allocates per sample: the tables are built once.
 
-use mc_simulation::RandomSource;
+use mc_core::random::RandomSource;
 
 /// Largest octave count any configuration may use.
 ///

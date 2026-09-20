@@ -83,8 +83,8 @@
     clippy::cast_possible_wrap
 )]
 
+use mc_core::random::RandomSource;
 use mc_entity::MobKind;
-use mc_simulation::RandomSource;
 
 /// `NaturalSpawner.SPAWN_DISTANCE_CHUNK` minus one, doubled, plus one: the
 /// full chunk ring a cycle sweeps, exactly vanilla's shape.

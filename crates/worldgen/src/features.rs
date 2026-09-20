@@ -84,8 +84,8 @@
 use crate::biome::Biome;
 use crate::seed::{OVERWORLD_SEA_LEVEL, pack_chunk_pos, splitmix64_mix};
 use crate::terrain::{BlockPalette, MOUNTAIN_HEIGHT};
+use mc_core::random::RandomSource;
 use mc_registry::BlockRegistry;
-use mc_simulation::RandomSource;
 use mc_world::{Chunk, ChunkPos, SECTION_WIDTH};
 
 /// Smallest trunk height, in blocks.

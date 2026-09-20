@@ -105,8 +105,9 @@
 //!
 //! ## Randomness is injected, never invented (AGENTS.md section 3.6)
 //!
-//! `mc-data` sits below `mc-simulation`, which owns the JDK-verified `RandomSource`; depending
-//! on it would invert the layering. So [`Rng`] is a trait defined here in the same shape as
+//! The JDK-verified generator lives in `mc-core` — but loot rolls must speak the
+//! same contract as mob drops (`mc_entity::mob::Rng`), and the wiring belongs to
+//! the crate that owns the seeded source. So [`Rng`] is a trait defined here in the same shape as
 //! `mc_entity::mob::Rng` — a trait naming the contract, with one `impl` in the crate that owns
 //! the concrete generator. It exposes `next_f32`/`next_f64` alongside `next_u32` because loot
 //! chances are floats, and faking a float out of an integer draw would change the distribution.

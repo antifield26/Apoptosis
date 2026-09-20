@@ -28,9 +28,9 @@
 //!    tick's complete result rather than a partial one.
 //!
 //! Determinism also needs a controllable source of randomness, since mob spawning
-//! and AI make random choices. [`RandomSource`] is a seeded `java.util.Random`
-//! clone, so a scenario replays identically and the sequence is the same one
-//! Vanilla would draw (useful for later differential work).
+//! and AI make random choices. [`mc_core::random::RandomSource`] is a seeded
+//! `java.util.Random` clone, so a scenario replays identically and the sequence
+//! is the same one Vanilla would draw (useful for later differential work).
 //!
 //! ## Threading (AGENTS.md section 8)
 //!
@@ -41,12 +41,8 @@
 #![forbid(unsafe_code)]
 // Tick accounting converts between durations and integers constantly; every site is
 // a saturating conversion of a monotonic clock reading, bounded by `WINDOW`.
-//
-// The `RandomSource` casts are not incidental: a 48-bit LCG produces *bit
-// patterns*, and Java's `nextInt` reinterprets 32 bits as a signed int while
-// `nextLong` sign-extends each half. The sign reinterpretation is the algorithm
-// being reproduced, which is why it is allowed here with that justification
-// rather than hidden behind a helper that would obscure the correspondence.
+// (`RandomSource`'s bit-reinterpretation casts moved with it to `mc-core`, whose
+// own allow carries that justification.)
 #![allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
@@ -57,10 +53,8 @@
 
 pub mod metrics;
 pub mod phase;
-pub mod random;
 pub mod scheduler;
 
 pub use metrics::{TickMetrics, TickStats};
 pub use phase::{PHASE_COUNT, PHASE_ORDER, TickPhase};
-pub use random::RandomSource;
 pub use scheduler::{PhaseRunner, Scheduler, TickOutcome};
