@@ -186,6 +186,24 @@ the crafting-table window and grid sync (Step C), the real-client session
 (owner half). Falsification: never-join and flipped order each fail their
 probe. Gate 1565/0/35/124.
 
+### P17-02 — Containers round-up, Step C: crafting-table window and grid sync
+
+Right-click opens the 3×3 window (`MenuType` 12 from the jar table,
+"Crafting Table", ephemeral grid, no block entity); grid clicks recompute
+through the shared take/consume path with the width riding the grid size
+(4 is 2×2, 9 is 3×3 — a 1×3 slab row cannot match 2-wide, pinning the
+split); closing returns the grid to the inventory, spilling overflow at
+the feet. Found-and-fixed along the way: shift-clicking the result moved
+the batch without consuming the grid, and the recompute refilled the slot
+from the intact grid — infinite minting, now one consume per take (exact
+because the slot never holds more than one craft). The P14-10 grid ghosts
+(placements, empty-then-restored output) are covered at the click level
+by the new suite; on-screen confirmation waits on the owner session.
+Deliberately deferred: tag ingredients and next recipe kinds (P17-03),
+repeated-craft shift-click (one consume per click instead of per batch —
+same totals, more clicks). Falsification: hardcoded width 2 and
+unconsumed shift-take each fail their probe. Gate 1570/0/35/125.
+
 ## Unreleased — Phase 15 (Observability + Core Hardening)
 
 ### P15-08 — Hardening review sign-off (all clauses re-evidenced)

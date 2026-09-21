@@ -3318,13 +3318,18 @@ impl Game {
                     .and_then(open_kind_for)
             {
                 let entity_kind = match kind {
-                    OpenKind::Chest => mc_container::BlockEntityKind::Container,
-                    OpenKind::Furnace => mc_container::BlockEntityKind::Furnace,
-                    OpenKind::Hopper => mc_container::BlockEntityKind::Hopper,
-                    OpenKind::Dispenser => mc_container::BlockEntityKind::Dispenser,
+                    OpenKind::Chest => Some(mc_container::BlockEntityKind::Container),
+                    OpenKind::Furnace => Some(mc_container::BlockEntityKind::Furnace),
+                    OpenKind::Hopper => Some(mc_container::BlockEntityKind::Hopper),
+                    OpenKind::Dispenser => Some(mc_container::BlockEntityKind::Dispenser),
+                    // Crafting tables never reach this path (no block
+                    // entity); skipping keeps the mapping exhaustive.
+                    OpenKind::Crafting => None,
                 };
-                self.block_entities
-                    .insert(mc_container::BlockEntity::new(pos, entity_kind));
+                if let Some(entity_kind) = entity_kind {
+                    self.block_entities
+                        .insert(mc_container::BlockEntity::new(pos, entity_kind));
+                }
             } else if !new_is_container && let Some(retired) = self.block_entities.remove(pos) {
                 // P12-06: breaking a container drops its contents (closes the P06
                 // "items lost on break" gap). Each non-empty stack becomes a ground

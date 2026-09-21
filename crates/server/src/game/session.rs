@@ -16,10 +16,10 @@ use mc_persistence::chunk::ChunkPos;
 use mc_persistence::level::Difficulty;
 use mc_protocol::packets::Packet;
 use mc_protocol::packets::play::{
-    BlockDestruction, ContainerSetContent, ContainerSetSlot, GameEvent, MENU_FURNACE,
-    MENU_GENERIC_3X3, MENU_GENERIC_9X3, MENU_GENERIC_9X6, MENU_HOPPER, OpenScreen, PlayIntent,
-    PlayerPosition, Respawn, SetDefaultSpawnPosition, SetHeldSlot, SetTime, block_position,
-    unpack_block_position,
+    BlockDestruction, ContainerSetContent, ContainerSetSlot, GameEvent, MENU_CRAFTING,
+    MENU_FURNACE, MENU_GENERIC_3X3, MENU_GENERIC_9X3, MENU_GENERIC_9X6, MENU_HOPPER, OpenScreen,
+    PlayIntent, PlayerPosition, Respawn, SetDefaultSpawnPosition, SetHeldSlot, SetTime,
+    block_position, unpack_block_position,
 };
 use mc_protocol::text::TextComponent;
 use mc_world::{Aabb, Vec3};
@@ -103,6 +103,13 @@ pub(crate) struct Session {
     pub(crate) next_window: u8,
     /// Which block entity the open window belongs to, when it is a block menu.
     pub(crate) open_block: Option<mc_container::BlockPos>,
+    /// Which kind of window is open, when the menu is not the player inventory.
+    ///
+    /// Needed because the menu shape alone does not always say: a crafting
+    /// table has no block entity, so its grid must be returned to the
+    /// inventory on close (vanilla behaviour) rather than flushed nowhere.
+    /// Set on open, cleared when the player menu is restored.
+    pub(crate) open_kind: Option<OpenKind>,
     /// Whether this player may receive world packets.
     pub(crate) ready: bool,
     /// Ticks of shared hurt invulnerability left (P11-06): a mob hit inside the
@@ -497,6 +504,7 @@ impl Game {
                 menu,
                 next_window: 1,
                 open_block: None,
+                open_kind: None,
                 ready: false,
                 hurt_invuln_ticks: 0,
                 xp_pickup_cooldown: 0,
@@ -903,12 +911,22 @@ impl Game {
                         mark_block_dirty(&mut self.world, pos.x, pos.z);
                     }
                 }
+                // A crafting table returns its grid on close (P17-02 Step C):
+                // vanilla hands the grid contents back, spilling what does
+                // not fit at the player's feet like the cursor below.
+                if self
+                    .sessions
+                    .get(&id)
+                    .and_then(|s| s.open_kind)
+                    .is_some_and(|kind| kind == OpenKind::Crafting)
+                {
+                    self.return_craft_grid(id);
+                }
                 // Cursor first, so a failed inventory write can still drop it.
                 let cursor = self
                     .sessions
                     .get(&id)
-                    .map_or(mc_entity::stack::ItemStack::EMPTY, |s| s.menu.cursor());
-                let leftover = if cursor.is_empty() {
+                    .map_or(mc_entity::stack::ItemStack::EMPTY, |s| s.menu.cursor());                let leftover = if cursor.is_empty() {
                     mc_entity::stack::ItemStack::EMPTY
                 } else if let Some(session) = self.sessions.get_mut(&id) {
                     session.player.inventory.add_stack(cursor)
@@ -932,6 +950,7 @@ impl Game {
                             menu.set_cursor(mc_entity::stack::ItemStack::EMPTY);
                             session.menu = menu;
                             session.open_block = None;
+                            session.open_kind = None;
                         }
                     }
                     Err(error) => {
@@ -1456,6 +1475,149 @@ impl Game {
         mc_container::Menu::player(mc_container::PLAYER_WINDOW_ID, container, stack_sizes)
     }
 
+    /// Open a crafting table: the 3×3 window with an empty grid (P17-02 Step C).
+    ///
+    /// No block entity backs the grid — it is ephemeral like vanilla's, so
+    /// `open_block` records the position (for break awareness) while
+    /// `open_kind` records the shape (for the click gate and the close
+    /// grid-return). Every open starts empty; leftovers from a previous
+    /// window were already returned on its close.
+    fn open_crafting_table(
+        &mut self,
+        id: ConnectionId,
+        x: i32,
+        y: i32,
+        z: i32,
+        report: &mut TickReport,
+    ) {
+        let window = {
+            let Some(session) = self.sessions.get_mut(&id) else {
+                return;
+            };
+            let window = session.next_window;
+            session.next_window = if window >= 127 { 1 } else { window + 1 };
+            window
+        };
+        let stack_sizes = match mc_entity::stack::StackSizeTable::resolve(&self.registries.items) {
+            Ok(sizes) => sizes,
+            Err(error) => {
+                debug!(id = %id, %error, "could not resolve stack sizes for crafting");
+                return;
+            }
+        };
+        let player_inventory_slots = match self.sessions.get(&id) {
+            Some(session) => session.player.inventory.stored_slots(),
+            None => return,
+        };
+        let player_container = match mc_container::Container::new(
+            mc_container::ContainerKind::Player,
+            player_inventory_slots,
+        ) {
+            Ok(container) => container,
+            Err(error) => {
+                debug!(id = %id, %error, "could not build the player half of crafting");
+                return;
+            }
+        };
+        let grid = match mc_container::Container::new(mc_container::ContainerKind::Crafting, 9) {
+            Ok(container) => container,
+            Err(error) => {
+                debug!(id = %id, %error, "could not build a crafting grid");
+                return;
+            }
+        };
+        let mut menu =
+            match mc_container::Menu::crafting_table(window, grid, player_container, stack_sizes) {
+                Ok(menu) => menu,
+                Err(error) => {
+                    debug!(id = %id, %error, "could not build a crafting menu");
+                    return;
+                }
+            };
+        let pos = mc_container::BlockPos::new(x, y, z);
+        let (contents, state, cursor, wire_window) = {
+            let Some(session) = self.sessions.get_mut(&id) else {
+                return;
+            };
+            mirror_inventory(&mut menu, &session.player.inventory);
+            session.menu = menu;
+            session.open_block = Some(pos);
+            session.open_kind = Some(OpenKind::Crafting);
+            let contents: Vec<mc_protocol::packets::play::ItemStack> = session
+                .menu
+                .full_contents()
+                .iter()
+                .copied()
+                .map(wire_stack)
+                .collect();
+            (
+                contents,
+                session.menu.state_id(),
+                session.menu.cursor(),
+                i32::from(session.menu.window_id()),
+            )
+        };
+        if let Err(error) = self.send(
+            id,
+            &OpenScreen {
+                window_id: wire_window,
+                menu_type: MENU_CRAFTING,
+                title: TextComponent::literal("Crafting Table"),
+            },
+            report,
+        ) {
+            debug!(id = %id, %error, "could not send crafting open_screen");
+            return;
+        }
+        let content = ContainerSetContent {
+            window_id: wire_window,
+            state_id: state,
+            slots: contents,
+            carried: wire_stack(cursor),
+        };
+        if let Err(error) = self.send(id, &content, report) {
+            debug!(id = %id, %error, "could not send crafting contents");
+        }
+    }
+
+    /// Return a crafting grid to the player's inventory, spilling leftovers
+    /// at the feet (P17-02 Step C).
+    ///
+    /// The grid lives in menu container 2 in both crafting windows (player
+    /// 2×2 and table 3×3); anything else is left alone.
+    fn return_craft_grid(&mut self, id: ConnectionId) {
+        let grid: Vec<mc_entity::stack::ItemStack> = self
+            .sessions
+            .get(&id)
+            .and_then(|s| s.menu.container(2))
+            .map(|c| (0..c.len()).map(|i| c.get(i)).collect())
+            .unwrap_or_default();
+        if grid.iter().all(mc_entity::stack::ItemStack::is_empty) {
+            return;
+        }
+        let position = self
+            .sessions
+            .get(&id)
+            .map(|s| s.player.position)
+            .unwrap_or_default();
+        let leftovers = match self.sessions.get_mut(&id) {
+            Some(session) => grid
+                .into_iter()
+                .filter_map(|stack| {
+                    if stack.is_empty() {
+                        return None;
+                    }
+                    let leftover = session.player.inventory.add_stack(stack);
+                    (!leftover.is_empty()).then_some(leftover)
+                })
+                .collect::<Vec<_>>(),
+            None => return,
+        };
+        for stack in leftovers {
+            let _ = self.spawn_item(stack, position);
+        }
+    }
+
     /// Block name at a loaded position, for the container-open check.
     fn clicked_block_name(&self, x: i32, y: i32, z: i32) -> Option<String> {
         let state = self.world.get_block_loaded(x, y, z)?;
@@ -1493,6 +1655,10 @@ impl Game {
                 OpenKind::Furnace => mc_container::BlockEntityKind::Furnace,
                 OpenKind::Hopper => mc_container::BlockEntityKind::Hopper,
                 OpenKind::Dispenser => mc_container::BlockEntityKind::Dispenser,
+                // Crafting tables never reach this path (no block entity);
+                // matching here keeps the entity mapping exhaustive if a
+                // caller ever routes one through.
+                OpenKind::Crafting => return,
             };
             self.block_entities
                 .insert(mc_container::BlockEntity::new(pos, entity_kind));
@@ -1552,6 +1718,9 @@ impl Game {
             }
         };
         let (mut menu, menu_type, title) = match kind {
+            // Crafting tables never reach this path (their own open needs
+            // no entity); the arm keeps the mapping exhaustive.
+            OpenKind::Crafting => return,
             OpenKind::Chest => {
                 // Real chests refuse when covered (either half); barrels
                 // ignore cover like vanilla.
@@ -1676,6 +1845,7 @@ impl Game {
             mirror_inventory(&mut menu, &session.player.inventory);
             session.menu = menu;
             session.open_block = Some(pos);
+            session.open_kind = Some(kind);
 
             let contents: Vec<mc_protocol::packets::play::ItemStack> = session
                 .menu
@@ -1754,21 +1924,39 @@ impl Game {
             }
         };
 
-        // P12-07: player crafting grid. The menu owns the grid/result slots but
-        // knows no recipes; the server recomputes the result from its table
-        // after every grid change and consumes the grid when the result is
-        // taken. A stale result take (no match) resyncs instead of duplicating.
-        if session.menu.window_id() == mc_container::PLAYER_WINDOW_ID {
+        // P12-07 player crafting grid, P17-02 Step C crafting table. The
+        // menu owns the grid/result slots but knows no recipes; the server
+        // recomputes the result from its table after every grid change and
+        // consumes the grid when the result is taken. A stale result take
+        // (no match) resyncs instead of duplicating. The table window shares
+        // the player menu's container indices (1 result, 2 grid); only the
+        // width and the slot span differ (0..=4 vs 0..=9).
+        let table_open = session.open_kind == Some(OpenKind::Crafting);
+        if session.menu.window_id() == mc_container::PLAYER_WINDOW_ID || table_open {
+            let grid_end: usize = if table_open { 10 } else { 5 };
+            // A result take consumes the grid — including shift-click takes
+            // (P17-02 Step C found-and-fixed): `click_quick_move` moves the
+            // result without touching the grid, and the recompute below would
+            // refill the emptied slot from the intact grid, minting items.
+            // One consume per take is exact because the slot never holds
+            // more than one craft (every recompute overwrites it). A
+            // shift-click on an empty result moved nothing (only slot 0 is
+            // marked) and consumes nothing.
             let is_result_take = raw.slot == 0
-                && raw.click_type == mc_container::ClickType::Pickup.id()
                 // A stale click applied nothing (`full_resync`): consuming the
                 // grid now would lose ingredients for no result (AUDIT-12 F2).
-                && !outcome.full_resync;
-            let touches_crafting =
-                outcome.changed_slots.iter().any(|s| (0..=4).contains(s)) || is_result_take;
+                && !outcome.full_resync
+                && (raw.click_type == mc_container::ClickType::Pickup.id()
+                    || (raw.click_type == mc_container::ClickType::QuickMove.id()
+                        && outcome.changed_slots.iter().any(|s| *s != 0)));
+            let touches_crafting = outcome
+                .changed_slots
+                .iter()
+                .any(|s| (0..grid_end as u16).contains(s))
+                || is_result_take;
             if touches_crafting {
                 // Snapshot result/grid menu slots to extend the delta set below.
-                let before: Vec<mc_entity::stack::ItemStack> = (0..5)
+                let before: Vec<mc_entity::stack::ItemStack> = (0..grid_end)
                     .map(|slot| session.menu.display_stack(slot))
                     .collect();
                 let mut resync = false;
@@ -3280,6 +3468,12 @@ impl Game {
                 || mc_redstone::blocks::is_fence_gate(&name))
         {
             self.toggle_door_like(id, x, y, z, &name);
+            return;
+        }
+        // Crafting tables open on right-click (P17-02 Step C): the window is
+        // the interaction, so a held block must not place through the table.
+        if self.clicked_block_name(x, y, z).as_deref() == Some("minecraft:crafting_table") {
+            self.open_crafting_table(id, x, y, z, report);
             return;
         }
         let hand = Hand::from_id(u8::try_from(hand).unwrap_or(0)).unwrap_or(Hand::Main);

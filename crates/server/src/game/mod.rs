@@ -2076,10 +2076,10 @@ fn write_back_block(menu: &mc_container::Menu, entity: &mut mc_container::BlockE
     }
 }
 
-/// Recompute the player menu's crafting result from the grid (P12-07).
+/// Recompute a crafting result from the grid (P12-07 player menu, P17-02 table).
 ///
-/// Reads grid container 2 (4 slots at width 2), writes result container 1.
-/// Returns `Ok(true)` when the result slot changed.
+/// Reads grid container 2 (4 slots at width 2, 9 at width 3), writes result
+/// container 1. Returns `Ok(true)` when the result slot changed.
 fn recompute_crafting_result(
     menu: &mut mc_container::Menu,
     registry: &mc_container::RecipeRegistry,
@@ -2090,7 +2090,15 @@ fn recompute_crafting_result(
         Some(container) => (0..container.len()).map(|i| container.get(i)).collect(),
         None => return Ok(false),
     };
-    let result = registry.recompute_result(&grid, 2, items, sizes)?;
+    // Player 2x2 and crafting-table 3x3 share containers 1 (result) and 2
+    // (grid); the width rides the grid size. Anything else is not a
+    // crafting window, so there is nothing to recompute.
+    let width = match grid.len() {
+        4 => 2,
+        9 => 3,
+        _ => return Ok(false),
+    };
+    let result = registry.recompute_result(&grid, width, items, sizes)?;
     let changed = match menu.container(1) {
         Some(container) => container.get(0) != result,
         None => false,
@@ -2101,8 +2109,9 @@ fn recompute_crafting_result(
     Ok(changed)
 }
 
-/// Consume one craft from the player menu's grid (P12-07).
+/// Consume one craft from a crafting grid (P12-07 player menu, P17-02 table).
 ///
+/// The grid is container 2 in both windows; the width rides its size.
 /// Returns `Ok(true)` when a recipe matched and the grid was consumed.
 /// `Ok(false)` means the grid matches nothing — the result take was stale.
 fn take_craft_result(
@@ -2114,7 +2123,12 @@ fn take_craft_result(
         Some(container) => (0..container.len()).map(|i| container.get(i)).collect(),
         None => return Ok(false),
     };
-    if registry.craft(&mut grid, 2, items)?.is_none() {
+    let width = match grid.len() {
+        4 => 2,
+        9 => 3,
+        _ => return Ok(false),
+    };
+    if registry.craft(&mut grid, width, items)?.is_none() {
         return Ok(false);
     }
     if let Some(container) = menu.container_mut(2) {
@@ -2184,13 +2198,15 @@ pub fn face_offset(face: i32) -> (i32, i32, i32) {
 type ChestHalves = ((i32, i32, i32), (i32, i32, i32));
 
 /// Which block window to open. Double chests open the 54-slot window
-/// (P17-02 Step B); every other kind opens its own size.
+/// (P17-02 Step B); every other kind opens its own size. Crafting tables
+/// open a window with no block entity (P17-02 Step C).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OpenKind {
+pub(crate) enum OpenKind {
     Chest,
     Furnace,
     Hopper,
     Dispenser,
+    Crafting,
 }
 
 /// The eight copper-chest variants in 26.1 (plain, exposed, weathered,

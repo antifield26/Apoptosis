@@ -953,6 +953,24 @@ fn block_menus_have_the_vanilla_slot_counts_and_player_container() {
         )
         .is_err()
     );
+    let crafting = Menu::crafting_table(
+        5,
+        Container::new(ContainerKind::Crafting, 9).expect("grid"),
+        player(),
+        sizes(),
+    )
+    .expect("crafting table");
+    assert_eq!(crafting.slot_count(), 46);
+    assert_eq!(crafting.player_container_index(), 0);
+    assert!(
+        Menu::crafting_table(
+            5,
+            Container::new(ContainerKind::Crafting, 4).expect("grid"),
+            player(),
+            sizes()
+        )
+        .is_err()
+    );
 }
 
 /// P12-01: a click in a chest menu conserves items across block + player.

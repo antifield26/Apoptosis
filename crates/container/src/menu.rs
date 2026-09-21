@@ -611,6 +611,78 @@ impl Menu {
         )
     }
 
+    /// Build a crafting-table menu: result plus the 3×3 grid plus 36 player
+    /// slots (P17-02 Step C, vanilla `CraftingMenu` shape).
+    ///
+    /// Menu `0` is the result, `1..=9` the grid left to right, top to
+    /// bottom, `10..=36` main inventory and `37..=45` the hotbar. Container
+    /// indices mirror the player menu — 0 player, 1 result, 2 grid — so the
+    /// shared recompute/take helpers read the same slots (the width rides
+    /// the grid size: 4 is 2×2, 9 is 3×3). The grid is ephemeral — no block
+    /// entity backs it — so closing returns it (the server's close path
+    /// owns that, not this constructor).
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Invariant`] when `grid_slots` is not 9, when
+    /// `player_slots` is not 41, or when [`Menu::new`] rejects the layout.
+    pub fn crafting_table(
+        window_id: u8,
+        grid_slots: Container,
+        player_slots: Container,
+        stack_sizes: StackSizeTable,
+    ) -> ServerResult<Self> {
+        if grid_slots.len() != 9 {
+            return Err(ServerError::Invariant(format!(
+                "a crafting grid needs 9 slots, got {}",
+                grid_slots.len()
+            )));
+        }
+        if grid_slots.kind() != ContainerKind::Crafting {
+            return Err(ServerError::Invariant(format!(
+                "a crafting grid must be Crafting, got {}",
+                grid_slots.kind()
+            )));
+        }
+        if player_slots.len() != 41 {
+            return Err(ServerError::Invariant(format!(
+                "a crafting menu needs 41 player slots, got {}",
+                player_slots.len()
+            )));
+        }
+        let result = Container::new(ContainerKind::Crafting, 1)?;
+        let mut slots = Vec::with_capacity(46);
+        // 0: the result (container 1).
+        slots.push(SlotMapping::with_role(1, 0, SlotRole::CraftingResult));
+        // 1..=9: the 3x3 grid (container 2).
+        for slot in 0..9u16 {
+            slots.push(SlotMapping::with_role(2, slot, SlotRole::CraftingInput));
+        }
+        // 10..=36: main inventory (container 0 slots 9..=35).
+        for slot in 9..36u16 {
+            slots.push(SlotMapping::storage(0, slot));
+        }
+        // 37..=45: hotbar (container 0 slots 0..=8).
+        for slot in 0..9u16 {
+            slots.push(SlotMapping::storage(0, slot));
+        }
+        let layout = MenuLayout {
+            groups: vec![
+                SlotRange::new(0, 10),
+                SlotRange::new(10, 37),
+                SlotRange::new(37, 46),
+            ],
+            player_container: 0,
+        };
+        Self::new(
+            window_id,
+            vec![player_slots, result, grid_slots],
+            slots,
+            layout,
+            stack_sizes,
+        )
+    }
+
     /// The current state id, which the client must echo back.
     #[must_use]
     pub const fn state_id(&self) -> i32 {

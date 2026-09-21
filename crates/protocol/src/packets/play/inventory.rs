@@ -557,6 +557,9 @@ pub const MENU_HOPPER: i32 = 16;
 /// Dispenser, dropper and crafter 3×3 (9 slots, P17-01).
 pub const MENU_GENERIC_3X3: i32 = 6;
 
+/// Crafting table 3×3 plus result (P17-02 Step C, same jar table).
+pub const MENU_CRAFTING: i32 = 12;
+
 /// `minecraft:open_screen` (clientbound play 59).
 ///
 /// Body, from `javap -c -p` on
