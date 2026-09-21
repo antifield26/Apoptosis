@@ -72,7 +72,6 @@ source with linear falloff and a binary LOS gate — no block damage, suicide
 drops nothing. Deliberately deferred: criticals/arrow pickup, per-kind
 flight tuning (shared gravity still moves arrows), exposure fractions,
 charged creepers, block destruction. Gate 1520/0/34/118.
-
 ### P16-05 — Digging progress: hardness, tool speeds, per-tick accumulation, abort
 Step A: four fixtures extracted from pumpkin's vanilla-derived data
 (`target/extract_mining.py`) — block hardness + tool requirement, mineable
@@ -107,6 +106,16 @@ geometry plus a point-blank positive control. Deliberately deferred: the
 mob one-cell lookahead stays name-based (a slab lip still stops a chasing
 mob), ladders/vines. Falsification: neutered step-up and a no-step
 move_player each fail their probe. Gate 1537/0/35/119.
+
+### P16-07 — Night fight runbook plus review (agent half)
+
+Owner runbook with exact commands, timings and a verdict sheet:
+`docs/testing/P16-NIGHT-FIGHT.md`. Review record with the falsification
+inventory, found-and-fixed list and deferred names:
+`docs/testing/P16-REVIEW.md`. Automated gate at review time: 1537/0/35/119
+with fmt, clippy `-D warnings` and docs audit clean. The real-client half
+(knockback felt, XP gained, effect on screen) is NOT RUN — owner verdict
+pending in the runbook; the P16 exit gate closes when it is filled.
 
 ## Unreleased — Phase 15 (Observability + Core Hardening)
 
