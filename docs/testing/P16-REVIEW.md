@@ -1,6 +1,7 @@
 # P16 review — Combat & the Survival Loop (agent half, 2026-09-21)
 
-Scope per `mc-rust-agent-prompts/tasks/TASK-INDEX.md`: P16-01..P16-07.
+Scope per the task index (P16-01..P16-07; TASK-INDEX lives in the
+operator's prompt pack, which is gitignored and therefore uncitable here).
 P16-01..P16-06 are landed below; P16-07's automated half is this file and
 the runbook; its real-client half is pending the owner (see Verdict below).
 
