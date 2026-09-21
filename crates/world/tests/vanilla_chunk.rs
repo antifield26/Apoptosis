@@ -164,7 +164,7 @@ fn a_vanilla_chunk_can_be_placed_in_a_world_and_walked_on() {
         f64::from(surface) + 20.0,
         f64::from(world_z) + 0.5,
     ));
-    let result = world.move_with_collision(player, Vec3::new(0.0, -30.0, 0.0));
+    let result = world.move_with_collision(player, Vec3::new(0.0, -30.0, 0.0), 0.0);
     assert!(result.on_ground, "the player must land on vanilla terrain");
     let landed_y = (player.min_y + result.delta.y).round() as i32;
     assert_eq!(

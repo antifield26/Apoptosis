@@ -369,6 +369,119 @@ fn a_wall_stops_a_player_and_a_fall_lands_on_the_floor() {
     );
 }
 
+/// P16-06: bottom slabs are walked up, not jumped.
+#[test]
+fn a_player_walks_up_slab_stairs_without_jumping() {
+    let mut harness = Harness::new("p16-steps");
+    let (sx, sy, sz) = harness.build_floor();
+    let _out = harness.join("Climber");
+    let slab = harness
+        .game
+        .registries()
+        .blocks
+        .state_id(
+            "minecraft:oak_slab",
+            &[
+                ("type".to_owned(), "bottom".to_owned()),
+                ("waterlogged".to_owned(), "false".to_owned()),
+            ],
+        )
+        .expect("bottom slab state");
+    for x in (sx + 2)..=(sx + 5) {
+        harness
+            .game
+            .world_mut()
+            .set_block(x, sy, sz, slab)
+            .expect("slab stair");
+    }
+    // Walk east in small client steps, never jumping (y stays level in
+    // every request — any climb comes from the server's step-up).
+    let mut x = f64::from(sx) + 0.5;
+    for _ in 0..12 {
+        x += 0.5;
+        harness.intent(PlayIntent::MovePlayerPos {
+            x,
+            y: f64::from(sy),
+            z: f64::from(sz) + 0.5,
+            on_ground: true,
+        });
+    }
+    let climbed = harness.game.player(harness.id).expect("player").position;
+    assert!(
+        climbed.x > f64::from(sx) + 4.0,
+        "the walk must pass the slabs, at {}",
+        climbed.x
+    );
+    assert!(
+        (climbed.y - (f64::from(sy) + 0.5)).abs() < 0.05,
+        "feet ride the slab tops at sy + 0.5, at {}",
+        climbed.y
+    );
+    assert!(
+        harness.game.player(harness.id).expect("player").on_ground,
+        "riding slabs reports on_ground"
+    );
+}
+
+/// P16-06: a 1.5-tall fence still contains a player who walks into it.
+#[test]
+fn a_fence_holds_a_player_who_walks_into_it() {
+    let mut harness = Harness::new("p16-fence");
+    let (sx, sy, sz) = harness.build_floor();
+    let _out = harness.join("Pusher");
+    let post = harness
+        .game
+        .registries()
+        .blocks
+        .state_id(
+            "minecraft:oak_fence",
+            &[
+                ("east".to_owned(), "false".to_owned()),
+                ("north".to_owned(), "false".to_owned()),
+                ("south".to_owned(), "false".to_owned()),
+                ("waterlogged".to_owned(), "false".to_owned()),
+                ("west".to_owned(), "false".to_owned()),
+            ],
+        )
+        .expect("isolated post state");
+    for z in (sz - 2)..=(sz + 2) {
+        harness
+            .game
+            .world_mut()
+            .set_block(sx + 2, sy, z, post)
+            .expect("fence run");
+    }
+    let mut x = f64::from(sx) + 0.5;
+    for _ in 0..12 {
+        x += 0.5;
+        harness.intent(PlayIntent::MovePlayerPos {
+            x,
+            y: f64::from(sy),
+            z: f64::from(sz) + 0.5,
+            on_ground: true,
+        });
+    }
+    let stopped = harness.game.player(harness.id).expect("player").position;
+    // The post face sits 0.375 inside its cell, so the nose touches at
+    // center sx + 2.075 — past where a full cube would stop, still
+    // contained, never through (through needs center past sx + 2.925).
+    assert!(
+        stopped.x > f64::from(sx) + 1.5,
+        "the walk must reach the fence, at {}",
+        stopped.x
+    );
+    assert!(
+        stopped.x < f64::from(sx) + 2.5,
+        "the fence must contain the player, got {}",
+        stopped.x
+    );
+    assert!(
+        (stopped.y - f64::from(sy)).abs() < 1e-9,
+        "and nothing climbs: {}",
+        stopped.y
+    );
+}
+
 #[test]
 fn breaking_and_placing_blocks_is_validated_and_broadcast() {
     let mut harness = Harness::new("p04-build");

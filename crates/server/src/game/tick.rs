@@ -2322,7 +2322,19 @@ impl Game {
 
         // 2. Integrate against the world. `move_with_collision` sweeps the box, so
         //    a fast or badly-framed step cannot tunnel through a floor.
-        let result = self.world.move_with_collision(hitbox, velocity);
+        //    Living movers (players are handled by `move_player`; here: mobs)
+        //    auto-step up to STEP_HEIGHT; drops, orbs and arrows move exactly
+        //    as before (NO_STEP_UP).
+        let step = if self
+            .entities
+            .get(id)
+            .is_some_and(|entity| entity.kind().is_living())
+        {
+            mc_world::STEP_HEIGHT
+        } else {
+            mc_world::NO_STEP_UP
+        };
+        let result = self.world.move_with_collision(hitbox, velocity, step);
         let applied = position.plus(result.delta);
         // Grounded, for an entity that *falls on its own*, is deliberately
         // narrower than the player rule below. A falling entity must not be

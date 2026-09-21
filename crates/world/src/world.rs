@@ -469,11 +469,20 @@ impl World {
     /// one step — typically falling diagonally against a wall, where Y-first
     /// lands before the wall instead of flying over it.
     ///
+    /// `step_height` is the auto-step allowance (P16-06): when horizontal
+    /// movement is blocked, the mover retries raised by up to this far and
+    /// settles back down, so slabs and stair steps climb without jumping.
+    /// Living movers pass [`STEP_HEIGHT`](crate::collision::STEP_HEIGHT)
+    /// (0.6, vanilla's attribute default); items, orbs and projectiles pass
+    /// [`NO_STEP_UP`](crate::collision::NO_STEP_UP) and move exactly as
+    /// before. A full-block wall still blocks: the raised box overlaps it,
+    /// the retry makes no progress, and the normal move stands.
+    ///
     /// Returns the movement actually applied, whether the box is now resting on
     /// something (`on_ground`), and whether any axis was obstructed (so the caller
     /// can zero a velocity component).
     #[must_use]
-    pub fn move_with_collision(&self, box_: Aabb, delta: Vec3) -> MoveResult {
+    pub fn move_with_collision(&self, box_: Aabb, delta: Vec3, step_height: f64) -> MoveResult {
         const EPSILON: f64 = 1e-7;
 
         // Defence in depth (Audit 02). A non-finite delta or box would poison the
@@ -489,6 +498,19 @@ impl World {
             };
         }
 
+        let normal = self.move_axes(box_, delta, EPSILON);
+        if step_height > 0.0
+            && (normal.collided[0] || normal.collided[2])
+            && let Some(stepped) = self.try_step_up(box_, delta, &normal, step_height, EPSILON)
+        {
+            return stepped;
+        }
+        normal
+    }
+
+    /// The per-axis clip loop `move_with_collision` runs, factored out so the
+    /// step-up retry reuses the exact same mover (same order, same clip).
+    fn move_axes(&self, box_: Aabb, delta: Vec3, epsilon: f64) -> MoveResult {
         let mut moved = Vec3::default();
         let mut collided = [false; 3];
         let mut on_ground = false;
@@ -514,14 +536,14 @@ impl World {
             // `base` is where the box stands *before* this axis moves; the clip
             // searches backwards from the full step, so it needs the start box.
             let base = box_.offset(moved);
-            let allowed = self.clip_axis(base, axis, amount, EPSILON);
+            let allowed = self.clip_axis(base, axis, amount, epsilon);
             match allowed {
                 Some(actual) => {
                     moved = moved.plus(axis_delta(axis, actual));
-                    if (actual - amount).abs() > EPSILON {
+                    if (actual - amount).abs() > epsilon {
                         collided[axis] = true;
                     }
-                    if axis == 1 && amount < 0.0 && (actual - amount).abs() > EPSILON {
+                    if axis == 1 && amount < 0.0 && (actual - amount).abs() > epsilon {
                         on_ground = true;
                     }
                 }
@@ -534,6 +556,60 @@ impl World {
             on_ground,
             collided,
         }
+    }
+
+    /// Retry a horizontally-blocked move raised by up to `step` (P16-06).
+    ///
+    /// The candidate climbs `step`, replays the full delta through the same
+    /// mover, then settles down by at most `step` plus any downward delta —
+    /// so a falling mover still lands rather than hovering. It wins only
+    /// when its horizontal progress strictly beats the normal move's, which
+    /// is what keeps full walls, ceilings and headroom traps blocking. The
+    /// settle is itself clipped, so the candidate cannot tunnel any further
+    /// than the normal move could.
+    fn try_step_up(
+        &self,
+        base: Aabb,
+        delta: Vec3,
+        normal: &MoveResult,
+        step: f64,
+        epsilon: f64,
+    ) -> Option<MoveResult> {
+        if !step.is_finite() || step <= 0.0 {
+            return None;
+        }
+        // No headroom at the raised position: the lip is a wall, not a step.
+        let raised = base.offset(Vec3::new(0.0, step, 0.0));
+        if self.intersects_solid(raised.expand(-epsilon)) {
+            return None;
+        }
+        let stepped = self.move_axes(raised, delta, epsilon);
+        // Settle back down onto whatever the raised move stands over.
+        let down_allow = step + (-delta.y).max(0.0);
+        let stepped_box = raised.offset(stepped.delta);
+        let down = self.clip_axis(stepped_box, 1, -down_allow, epsilon)?;
+        let final_delta = stepped
+            .delta
+            .plus(Vec3::new(0.0, step, 0.0))
+            .plus(Vec3::new(0.0, down, 0.0));
+        let normal_flat = normal.delta.x * normal.delta.x + normal.delta.z * normal.delta.z;
+        let stepped_flat = final_delta.x * final_delta.x + final_delta.z * final_delta.z;
+        if stepped_flat <= normal_flat {
+            return None;
+        }
+        let mut collided = stepped.collided;
+        // Landing on support during the settle grounds the mover, the same
+        // way a blocked fall does in the normal loop.
+        let mut on_ground = stepped.on_ground;
+        if (down + down_allow).abs() > epsilon {
+            collided[1] = true;
+            on_ground = true;
+        }
+        Some(MoveResult {
+            delta: final_delta,
+            on_ground,
+            collided,
+        })
     }
 
     /// Longest sub-movement along one axis that keeps the box clear of solids.
@@ -577,8 +653,34 @@ impl World {
         for x in min.0..max.0 {
             for y in min.1..max.1 {
                 for z in min.2..max.2 {
-                    if self.is_solid(x, y, z) && box_.intersects(Aabb::block(x, y, z)) {
-                        return true;
+                    let id = self.get_block(x, y, z);
+                    if !is_solid_or_unknown(&self.registry, id) {
+                        continue;
+                    }
+                    // Partial shapes (P16-06): a solid cell collides as its
+                    // per-state boxes, translated to world coords. `None`
+                    // (full cube, or a predated fixture) keeps today's box.
+                    match self.registry.collision_boxes(id) {
+                        None => {
+                            if box_.intersects(Aabb::block(x, y, z)) {
+                                return true;
+                            }
+                        }
+                        Some(boxes) => {
+                            for shape in boxes {
+                                let cell = Aabb {
+                                    min_x: f64::from(x) + shape[0],
+                                    min_y: f64::from(y) + shape[1],
+                                    min_z: f64::from(z) + shape[2],
+                                    max_x: f64::from(x) + shape[3],
+                                    max_y: f64::from(y) + shape[4],
+                                    max_z: f64::from(z) + shape[5],
+                                };
+                                if box_.intersects(cell) {
+                                    return true;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -696,11 +798,21 @@ mod tests {
         Aabb::player(Vec3::new(x, y, z))
     }
 
+    /// Oak bottom slab (unwaterlogged): type top|bottom|double (last varies
+    /// fastest over waterlogged pairs), so bottom starts at first + 2.
+    const OAK_BOTTOM_SLAB: i32 = 13332;
+    /// Oak stairs, east-facing bottom straight unwaterlogged: an eastward
+    /// flight walks the low slabs (state arithmetic verified by
+    /// `target/debug_align.py` against the asset cartesian order).
+    const OAK_EAST_BOTTOM_STAIR: i32 = 3978;
+    /// Oak fence, isolated post (all connections false).
+    const OAK_POST: i32 = 6996;
+
     #[test]
     fn falling_stops_on_the_floor() {
         let world = world();
         let box_ = player_at(0.5, 70.0, 0.5);
-        let result = world.move_with_collision(box_, Vec3::new(0.0, -10.0, 0.0));
+        let result = world.move_with_collision(box_, Vec3::new(0.0, -10.0, 0.0), 0.0);
         // Floor top is y = 64, so a fall from 70 may drop exactly 6 blocks.
         assert!(
             (result.delta.y - -6.0).abs() < 0.01,
@@ -711,7 +823,7 @@ mod tests {
         assert!(result.collided[1]);
         // And standing on the floor, a second downward move goes nowhere.
         let resting = player_at(0.5, 64.0, 0.5);
-        let again = world.move_with_collision(resting, Vec3::new(0.0, -0.5, 0.0));
+        let again = world.move_with_collision(resting, Vec3::new(0.0, -0.5, 0.0), 0.0);
         assert!(again.delta.y.abs() < 0.01, "no sinking: {}", again.delta.y);
         assert!(again.on_ground);
     }
@@ -723,7 +835,7 @@ mod tests {
             world.set_block(3, y, 0, 1).expect("wall");
         }
         let box_ = player_at(1.0, 64.0, 0.5);
-        let result = world.move_with_collision(box_, Vec3::new(5.0, 0.0, 0.0));
+        let result = world.move_with_collision(box_, Vec3::new(5.0, 0.0, 0.0), 0.0);
         assert!(result.collided[0], "the wall obstructed x");
         assert!(
             result.delta.x < 2.1 && result.delta.x > 1.5,
@@ -748,7 +860,7 @@ mod tests {
             Vec3::new(0.0, 0.0, f64::NEG_INFINITY),
             Vec3::new(f64::NAN, f64::NAN, f64::NAN),
         ] {
-            let result = world.move_with_collision(box_, bad);
+            let result = world.move_with_collision(box_, bad, 0.0);
             assert_eq!(
                 result.delta,
                 Vec3::default(),
@@ -762,7 +874,7 @@ mod tests {
         let mut broken = box_;
         broken.min_y = f64::NAN;
         assert!(!broken.is_finite());
-        let result = world.move_with_collision(broken, Vec3::new(1.0, 0.0, 0.0));
+        let result = world.move_with_collision(broken, Vec3::new(1.0, 0.0, 0.0), 0.0);
         assert_eq!(result.delta, Vec3::default());
     }
 
@@ -775,7 +887,7 @@ mod tests {
             }
         }
         let box_ = player_at(1.0, 64.0, 0.5);
-        let result = world.move_with_collision(box_, Vec3::new(2.0, 0.0, 2.0));
+        let result = world.move_with_collision(box_, Vec3::new(2.0, 0.0, 2.0), 0.0);
         assert!(result.collided[0], "x blocked by the wall");
         assert!(!result.collided[2], "z is free");
         assert!(
@@ -795,7 +907,7 @@ mod tests {
         let mut world = world();
         world.set_block(1, 64, 0, 1).expect("wall");
         let box_ = player_at(0.0, 65.0, 0.0);
-        let result = world.move_with_collision(box_, Vec3::new(2.0, -2.0, 0.0));
+        let result = world.move_with_collision(box_, Vec3::new(2.0, -2.0, 0.0), 0.0);
         assert!(
             (result.delta.y - -1.0).abs() < 0.01,
             "landed on the floor (top 64), moved {}",
@@ -824,7 +936,7 @@ mod tests {
         let mut world = world();
         world.set_block(2, 64, 0, 1).expect("short wall");
         let box_ = player_at(0.0, 64.0, 0.0);
-        let result = world.move_with_collision(box_, Vec3::new(3.0, 0.0, 4.0));
+        let result = world.move_with_collision(box_, Vec3::new(3.0, 0.0, 4.0), 0.0);
         assert!(
             (result.delta.z - 4.0).abs() < 1e-6,
             "z runs free: {}",
@@ -851,7 +963,7 @@ mod tests {
             }
         }
         let box_ = player_at(0.0, 64.0, 0.0);
-        let result = world.move_with_collision(box_, Vec3::new(4.0, 0.0, 0.0));
+        let result = world.move_with_collision(box_, Vec3::new(4.0, 0.0, 0.0), 0.0);
         // The player is 1.8 tall, so it cannot be inside a 1-block gap at all:
         // the starting box already overlaps the ceiling.
         assert!(
@@ -872,13 +984,14 @@ mod tests {
         }
         let box_ = player_at(0.5, 64.0, 0.5);
         // Rise 1.0 first (a jump), then move forward, then fall back down.
-        let up = world.move_with_collision(box_, Vec3::new(0.0, 1.2, 0.0));
+        let up = world.move_with_collision(box_, Vec3::new(0.0, 1.2, 0.0), 0.0);
         assert!(
             (up.delta.y - 1.2).abs() < 1e-6,
             "free ascent: {}",
             up.delta.y
         );
-        let forward = world.move_with_collision(box_.offset(up.delta), Vec3::new(2.0, 0.0, 0.0));
+        let forward =
+            world.move_with_collision(box_.offset(up.delta), Vec3::new(2.0, 0.0, 0.0), 0.0);
         assert!(
             forward.delta.x > 1.5,
             "moved over the ledge: {}",
@@ -887,10 +1000,119 @@ mod tests {
         let down = world.move_with_collision(
             box_.offset(up.delta).offset(forward.delta),
             Vec3::new(0.0, -2.0, 0.0),
+            0.0,
         );
         // Lands on the step top (y = 65) from y = 65.2.
         assert!(down.on_ground);
         assert!(down.delta.y.abs() < 0.3, "settled: {}", down.delta.y);
+    }
+
+    #[test]
+    fn a_bottom_slab_steps_up_without_jumping() {
+        use crate::collision::STEP_HEIGHT;
+        let mut world = world();
+        world.set_block(2, 64, 0, OAK_BOTTOM_SLAB).expect("slab");
+        // Feet at 64 walking east into the slab lip (top at 64.5).
+        let box_ = player_at(0.5, 64.0, 0.5);
+        let walked = world.move_with_collision(box_, Vec3::new(2.0, 0.0, 0.0), STEP_HEIGHT);
+        assert!(
+            walked.delta.x > 1.5,
+            "the slab lip must step up, moved {}",
+            walked.delta.x
+        );
+        assert!(
+            (box_.min_y + walked.delta.y - 64.5).abs() < 0.05,
+            "feet land on the slab top, moved {}",
+            walked.delta.y
+        );
+        assert!(walked.on_ground, "landing on the slab reports ground");
+        // Same move with no step allowance stops AT the lip (touching
+        // contact, 1.2 blocks of travel) with no climb, as before.
+        let blocked = world.move_with_collision(box_, Vec3::new(2.0, 0.0, 0.0), 0.0);
+        assert!(
+            (blocked.delta.x - 1.2).abs() < 0.05,
+            "without step-up the lip stops the box at contact: {}",
+            blocked.delta.x
+        );
+        assert!(
+            blocked.delta.y.abs() < 1e-9,
+            "and nothing climbs: {}",
+            blocked.delta.y
+        );
+    }
+
+    #[test]
+    fn stairs_climb_step_by_step() {
+        use crate::collision::STEP_HEIGHT;
+        let mut world = world();
+        // Three east-facing bottom stairs in a row: each block is a slab
+        // lip from the tread below. Climbing takes one move per tread —
+        // like ticks do — because each riser stops the box first.
+        for x in [2, 3, 4] {
+            world
+                .set_block(x, 64, 0, OAK_EAST_BOTTOM_STAIR)
+                .expect("stair");
+        }
+        let mut box_ = player_at(0.5, 64.0, 0.5);
+        for _ in 0..8 {
+            let step = world.move_with_collision(box_, Vec3::new(1.2, 0.0, 0.0), STEP_HEIGHT);
+            box_ = box_.offset(step.delta);
+        }
+        assert!(
+            box_.min_x > 4.0,
+            "three treads climbed eastward, feet at {}",
+            box_.min_x
+        );
+        // Treads at 64.5, step-tops at 65.0: binary-search residue (feet at
+        // 64.5 - epsilon) can turn a touching riser into an overlap the
+        // step-up then climbs, so both walkable surfaces are accepted. What
+        // must never happen is hovering, sinking or tunneling.
+        assert!(
+            box_.min_y > 64.4 && box_.min_y < 65.05,
+            "feet ride a walkable surface, at {}",
+            box_.min_y
+        );
+    }
+
+    #[test]
+    fn a_fence_contains_without_jumping() {
+        use crate::collision::STEP_HEIGHT;
+        let mut world = world();
+        // Isolated post: collision 1.5 tall, well above the 0.6 step. The
+        // post face sits 0.375 inside the cell, so a shape-aware mover
+        // stops at 1.575 — past the 1.2 a full cube would give, still
+        // contained, never climbing.
+        world.set_block(2, 64, 0, OAK_POST).expect("fence");
+        let box_ = player_at(0.5, 64.0, 0.5);
+        let walked = world.move_with_collision(box_, Vec3::new(2.0, 0.0, 0.0), STEP_HEIGHT);
+        assert!(walked.collided[0], "the post must obstruct x");
+        assert!(
+            walked.delta.x > 1.2 && walked.delta.x < 1.8,
+            "stops at the post face (1.575), never through it: {}",
+            walked.delta.x
+        );
+        assert!(walked.delta.y.abs() < 1e-9, "and nothing climbs");
+    }
+
+    #[test]
+    fn no_headroom_means_no_step() {
+        use crate::collision::STEP_HEIGHT;
+        let mut world = world();
+        // One-block gap (floor 63, ceiling 65): the player (1.8) fits, but
+        // stepping needs 0.6 + 1.8 = 2.4 of clearance.
+        for x in -5..5 {
+            for z in -5..5 {
+                world.set_block(x, 65, z, 1).expect("ceiling");
+            }
+        }
+        world.set_block(2, 64, 0, OAK_BOTTOM_SLAB).expect("slab");
+        let box_ = player_at(0.5, 64.0, 0.5);
+        let walked = world.move_with_collision(box_, Vec3::new(2.0, 0.0, 0.0), STEP_HEIGHT);
+        assert!(
+            walked.delta.x < 0.5,
+            "a slab under a low ceiling still blocks: {}",
+            walked.delta.x
+        );
     }
 
     #[test]

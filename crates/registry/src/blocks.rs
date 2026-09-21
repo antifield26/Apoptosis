@@ -179,6 +179,11 @@ pub struct BlockRegistry {
     /// Refused harvest tiers by block name (`block_tool_tiers.tsv`): the
     /// vanilla `incorrect_for_*_tool` sets.
     refused_tiers: HashMap<String, Vec<String>>,
+    /// Collision boxes by global state id, from `block_shapes.tsv`
+    /// (P16-06): each box is `(minx, miny, minz, maxx, maxy, maxz)` in
+    /// block-local 0..1 coords. An empty vec means no collision at all;
+    /// a missing entry means the full cube (today's behaviour).
+    shapes: HashMap<i32, Vec<[f64; 6]>>,
 }
 
 /// `minecraft:air`, the id every empty position uses.
@@ -330,6 +335,7 @@ impl BlockRegistry {
             requires_tool: std::collections::HashSet::new(),
             mineable_tags: HashMap::new(),
             refused_tiers: HashMap::new(),
+            shapes: HashMap::new(),
         };
         tracing::debug!(
             blocks = registry.by_name.len(),
@@ -534,10 +540,23 @@ impl BlockRegistry {
     pub fn refused_tiers(&self, name: &str) -> &[String] {
         self.refused_tiers.get(name).map_or(&[], Vec::as_slice)
     }
+
+    /// Collision boxes of a global state id, or `None` for the full cube.
+    ///
+    /// Each box is `(minx, miny, minz, maxx, maxy, maxz)` in block-local
+    /// 0..1 coords, translated by the cell position by the caller. An empty
+    /// slice means the state has no collision at all (open doors, torches —
+    /// though most of those never reach this map because they are not
+    /// solid in the first place). `None` covers both full-cube states
+    /// (omitted from the fixture as the default) and states missing from
+    /// a predated fixture — both collide as full cubes, today's behaviour.
+    #[must_use]
+    pub fn collision_boxes(&self, state_id: i32) -> Option<&[[f64; 6]]> {
+        self.shapes.get(&state_id).map(Vec::as_slice)
+    }
 }
 
-/// Load the three mining fixtures beside a `blocks.tsv` (P16-05).
-///
+/// Load the three mining fixtures beside a `blocks.tsv` (P16-05).///
 /// Each file warns and leaves its map empty when absent (the
 /// `block_defaults.tsv` contract): a deployment without mining data still
 /// digs, at documented fallback rates, rather than refusing every break.
@@ -590,6 +609,76 @@ fn apply_mining_tables(registry: &mut BlockRegistry, blocks_path: &Path) {
     }
     tracing::debug!(applied, "block hardness loaded");
     apply_mining_tags(registry, dir);
+    apply_collision_shapes(registry, dir);
+}
+
+/// Load the collision-shape fixture beside a `blocks.tsv` (P16-06).
+///
+/// Missing file: warn once and leave the map empty, so every solid cell
+/// collides as a full cube — exactly today's behaviour. Malformed rows
+/// warn per row and skip; a bad float fails the row, never the load.
+fn apply_collision_shapes(registry: &mut BlockRegistry, dir: &Path) {
+    let path = dir.join("block_shapes.tsv");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        tracing::warn!(
+            path = %path.display(),
+            "no collision shapes beside the block table; partial blocks collide as full cubes"
+        );
+        return;
+    };
+    let mut applied = 0usize;
+    for (number, line) in text.lines().enumerate() {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        let row = number + 1;
+        let Some((id, body)) = line.split_once('\t') else {
+            tracing::warn!(
+                row,
+                "block_shapes.tsv: expected 2 tab-separated fields; skipped"
+            );
+            continue;
+        };
+        let Ok(id) = id.parse::<i32>() else {
+            tracing::warn!(row, "block_shapes.tsv: bad state id; skipped");
+            continue;
+        };
+        if body == "EMPTY" {
+            registry.shapes.insert(id, Vec::new());
+            applied += 1;
+            continue;
+        }
+        let mut boxes = Vec::new();
+        let mut bad = false;
+        for cell in body.split(';') {
+            let coords: Vec<&str> = cell.split(',').collect();
+            if coords.len() != 6 {
+                bad = true;
+                break;
+            }
+            let mut shape = [0.0f64; 6];
+            for (slot, coord) in coords.iter().enumerate() {
+                match coord.parse::<f64>() {
+                    Ok(value) if value.is_finite() => shape[slot] = value,
+                    _ => {
+                        bad = true;
+                        break;
+                    }
+                }
+            }
+            if bad {
+                break;
+            }
+            boxes.push(shape);
+        }
+        if bad || boxes.is_empty() {
+            tracing::warn!(row, "block_shapes.tsv: bad box list; skipped");
+            continue;
+        }
+        registry.shapes.insert(id, boxes);
+        applied += 1;
+    }
+    tracing::debug!(applied, "collision shapes loaded");
 }
 
 /// Load the two membership fixtures (`block_mineable.tsv`,
@@ -717,6 +806,43 @@ mod tests {
         assert_eq!(blocks.hardness("minecraft:not_a_block"), None);
         assert!(!blocks.requires_tool("minecraft:not_a_block"));
         assert!(blocks.mineable_tags("minecraft:not_a_block").is_empty());
+    }
+
+    #[test]
+    fn collision_shapes_pin_spot_states() {
+        // P16-06: per-state boxes from pumpkin's block asset via
+        // target/extract_shapes.py. State ids are this registry's own
+        // (oak_slab lives at 13330: type top|bottom|double, waterlogged
+        // pairs; the double states are omitted as full cubes).
+        let blocks = registry();
+        assert_eq!(
+            blocks.collision_boxes(13330),
+            Some([[0.0, 0.5, 0.0, 1.0, 1.0, 1.0]].as_slice()),
+            "top slab keeps its upper half"
+        );
+        assert_eq!(
+            blocks.collision_boxes(13332),
+            Some([[0.0, 0.0, 0.0, 1.0, 0.5, 1.0]].as_slice()),
+            "bottom slab keeps its lower half"
+        );
+        assert_eq!(
+            blocks.collision_boxes(13334),
+            None,
+            "double slab is a full cube and stays omitted"
+        );
+        assert_eq!(
+            blocks.collision_boxes(1),
+            None,
+            "stone is a full cube and stays omitted"
+        );
+        assert_eq!(
+            blocks.collision_boxes(0),
+            Some([].as_slice()),
+            "air has no collision"
+        );
+        // Unknown states collide as full cubes (a predated fixture never
+        // opens holes in the world).
+        assert_eq!(blocks.collision_boxes(99_999), None);
     }
 
     #[test]

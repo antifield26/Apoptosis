@@ -1899,7 +1899,9 @@ impl Game {
         let started_on_ground = session.player.on_ground;
         let start_y = session.tick_start_y;
         let creative = session.player.game_mode.is_creative();
-        let result = self.world.move_with_collision(Aabb::player(current), delta);
+        let result =
+            self.world
+                .move_with_collision(Aabb::player(current), delta, mc_world::STEP_HEIGHT);
         let applied = current.plus(result.delta);
         let moved_less = (applied.x - requested.x).abs() > 0.001
             || (applied.y - requested.y).abs() > 0.001

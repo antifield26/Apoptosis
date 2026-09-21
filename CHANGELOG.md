@@ -74,7 +74,6 @@ flight tuning (shared gravity still moves arrows), exposure fractions,
 charged creepers, block destruction. Gate 1520/0/34/118.
 
 ### P16-05 — Digging progress: hardness, tool speeds, per-tick accumulation, abort
-
 Step A: four fixtures extracted from pumpkin's vanilla-derived data
 (`target/extract_mining.py`) — block hardness + tool requirement, mineable
 and efficiency tag membership, incorrect-tier sets, per-item Tool rules —
@@ -90,6 +89,24 @@ breaks only at server progress ≥ 1.0, and the harvest judgment gates drops
 Fatigue application, the water penalty, tool durability, block-specific
 placement rules. Falsification: frozen progress and no-op abort each fail
 their probe. Gate 1529/0/35/119.
+
+### P16-06 — Step-up plus non-full-cube collision for stairs, slabs, fences
+
+Solid cells collide as their per-state boxes from `block_shapes.tsv`
+(26,611 rows; extracted from pumpkin's block asset by
+`target/extract_shapes.py` — asset state i == our state first+i, verified
+three ways per block by `target/align_states.py`: state counts,
+property/value order, jar-probed default anchor, 1168/1168; full cube stays
+the default for missing entries). Living movers (players, mobs) auto-step
+up to 0.6 — vanilla's `step_height` default — with walls, ceilings and
+headroom traps still blocking; items, orbs and arrows move exactly as
+before. Along the way this freed mobs entombed in small plants (full-cube
+collision had sealed them in), which exposed the old single-column bow-wall
+test as vacuous twice over — replaced by a hermetic floor-plus-corridor
+geometry plus a point-blank positive control. Deliberately deferred: the
+mob one-cell lookahead stays name-based (a slab lip still stops a chasing
+mob), ladders/vines. Falsification: neutered step-up and a no-step
+move_player each fail their probe. Gate 1537/0/35/119.
 
 ## Unreleased — Phase 15 (Observability + Core Hardening)
 

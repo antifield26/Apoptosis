@@ -2,20 +2,22 @@
 //!
 //! ## Scope, stated plainly
 //!
-//! Solid means "full cube, blocks movement". A block is solid unless it is
-//! air-like per [`mc_registry::BlockRegistry::is_empty`] or appears in
-//! [`NON_SOLID`]. That covers walking, jumping and not falling through the world,
-//! which is what Phase 04 needs. It does **not** model:
+//! Solid means "blocks movement unless its collision shape says otherwise".
+//! A block is solid unless it is air-like per
+//! [`mc_registry::BlockRegistry::is_empty`] or appears in [`NON_SOLID`].
+//! Solid cells collide as their per-state boxes from the registry's shape
+//! table (P16-06: slabs, stairs, fences and everything else vanilla gives
+//! a non-cube collision to); cells with no entry collide as full cubes.
+//! That covers walking, jumping, stair/slab climbing and fence containment,
+//! which is what Phases 04–16 need. It does **not** model:
 //!
-//! - partial shapes (slabs, stairs, fences, walls, panes, doors, trapdoors, beds)
-//!   — these collide as full cubes, so a player cannot walk onto a slab;
 //! - fluid physics (water/lava are non-solid here, so a player falls through);
-//! - step-up assistance, so a 0.5-block lip must be jumped;
-//! - the true player hitbox (Vanilla: 0.6 × 1.8 × 0.6, eye height 1.62), which is
-//!   supplied by the caller as an [`Aabb`];
 //! - climbing (ladders/vines), which are non-solid here.
 //!
-//! Every one of those is recorded in `docs/vanilla-parity/PARITY-MATRIX.md`.
+//! Step-up assistance lives in [`World::move_with_collision`](crate::World)
+//! (P16-06, 0.6 for living movers), not in this module.
+//!
+//! Every remaining gap is recorded in `docs/vanilla-parity/PARITY-MATRIX.md`.
 
 use mc_registry::BlockRegistry;
 
@@ -281,6 +283,17 @@ pub const NON_SOLID: &[&str] = &[
     "minecraft:soul_fire",
     "minecraft:fire",
 ];
+
+/// Step height for living movers (P16-06): vanilla's `step_height`
+/// attribute default, jar-mirrored by pumpkin's generated attributes table.
+///
+/// A mover climbs at most this far without jumping when horizontal movement
+/// is blocked. Non-living movers (items, orbs, projectiles) pass
+/// [`NO_STEP_UP`] instead: vanilla physics objects do not auto-step.
+pub const STEP_HEIGHT: f64 = 0.6;
+
+/// Step height for non-living movers: no auto-step, today's behaviour.
+pub const NO_STEP_UP: f64 = 0.0;
 
 /// Whether a block-state id blocks movement.
 ///

@@ -45,7 +45,9 @@ pub mod ray;
 pub mod world;
 
 pub use chunk::{Chunk, ChunkPos, SECTION_HEIGHT, SECTION_WIDTH};
-pub use collision::{Aabb, BlockHit, Vec3, is_solid, is_solid_or_unknown, look_vector};
+pub use collision::{
+    Aabb, BlockHit, NO_STEP_UP, STEP_HEIGHT, Vec3, is_solid, is_solid_or_unknown, look_vector,
+};
 pub use ray::{BlockSampler, RegionSampler, ray_cast};
 pub use world::{BlockChange, MoveResult, World, chunks_a_block_can_light};
 

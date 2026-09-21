@@ -136,16 +136,74 @@ fn a_skeleton_in_range_shoots_and_the_arrow_lands() {
 }
 
 #[test]
+fn a_skeleton_two_blocks_away_with_clear_sight_shoots_at_once() {
+    // Positive control for the wall test below: at 2 blocks the Attack
+    // goal engages on the first tick (fresh target, cooldown 0), so an
+    // arrow is loosed within a few ticks. If this fails, the arm is dead
+    // and the wall test's silence proves nothing.
+    let mut harness = Harness::new("p16-bow-pointblank");
+    let _ = harness.join();
+    harness.summon(MobKind::Skeleton, 2, 0, 0);
+    harness.run(10);
+    assert!(
+        harness.health() < 20.0,
+        "a clear shot at 2 blocks must land within 10 ticks, health={}",
+        harness.health()
+    );
+}
+
+#[test]
 fn a_skeleton_behind_a_wall_holds_fire() {
+    // P16-04 Step B, P16-06-hardened: the skeleton starts inside Attack
+    // range (2 blocks, cooldown 0 on a fresh target) with a 3-wide,
+    // 3-high wall between eye and torso, and only 10 ticks run — far too
+    // short to walk around the wall, long enough for one shot cycle.
+    //
+    // The geometry is hermetic by construction, because this test passed
+    // vacuously twice over during P16-06: first the skeleton sat entombed
+    // in a plant at spawn (full-cube collision, pre-P16-06) and never
+    // moved, then — freed by shapes — its floating summon fell a block,
+    // tipping the exactly-2.0 distance into Chase so it walked around a
+    // single-column wall. Both modes are closed here: a laid stone floor
+    // puts both feet deterministically at sy (no falling, distance exactly
+    // 2.0, Attack from tick 1), and a cleared corridor means the only
+    // cells on the ray are the wall's.
     let mut harness = Harness::new("p16-bow-wall");
     let _ = harness.join();
     let (sx, sy, sz) = harness.game.spawn();
-    harness.summon(MobKind::Skeleton, 8, 0, 0);
-    // A three-high wall halfway between: the eye-to-torso ray must cross it.
-    for dy in 0..=2 {
-        harness.put_stone(sx + 4, sy + dy, sz);
+    let stone = harness
+        .game
+        .registries()
+        .blocks
+        .default_state("minecraft:stone")
+        .expect("stone is known");
+    let air = harness.game.registries().blocks.air_id();
+    for x in (sx - 1)..=(sx + 4) {
+        for z in (sz - 1)..=(sz + 1) {
+            harness.game.load_chunk(ChunkPos::new(x >> 4, z >> 4));
+            harness
+                .game
+                .world_mut()
+                .set_block(x, sy - 1, z, stone)
+                .expect("floor sets");
+            for y in [sy, sy + 1, sy + 2] {
+                if x != sx + 1 {
+                    harness
+                        .game
+                        .world_mut()
+                        .set_block(x, y, z, air)
+                        .expect("corridor clears");
+                }
+            }
+        }
     }
-    harness.run(60);
+    harness.summon(MobKind::Skeleton, 2, 0, 0);
+    for dz in [sz - 1, sz, sz + 1] {
+        for dy in 0..=2 {
+            harness.put_stone(sx + 1, sy + dy, dz);
+        }
+    }
+    harness.run(10);
     assert_eq!(
         harness.health(),
         20.0,
