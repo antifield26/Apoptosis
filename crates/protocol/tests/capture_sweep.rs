@@ -20,7 +20,10 @@
 //!
 //! `target/vanilla-capture/bodies/`, filenames
 //! `NNNNNN_<c2s|s2c>_<state>_<id>.bin` holding the body without the id prefix.
-//! The directory is never modified by this test.
+//! The directory is never modified by this test, and it is not committed —
+//! so this test is `#[ignore]`d like every other test that needs the vanilla
+//! capture under `target/` (run it with `-- --ignored` where the capture
+//! exists).
 //!
 //! # Provenance
 //!
@@ -191,6 +194,7 @@ const UNMODELLED: &[(&str, &str, i32, &str)] = &[
 ];
 
 #[test]
+#[ignore = "needs the vanilla capture under target/, which is not committed"]
 fn every_captured_body_round_trips_or_is_listed() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/vanilla-capture/bodies");
