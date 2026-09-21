@@ -421,12 +421,38 @@ fn the_six_phases_run_and_the_metrics_show_their_cost() {
             ),
         )
         .expect("spawn");
-    let report = harness.intent(PlayIntent::PlayerAction {
+    // P16-05: START only opens the dig. Give the pick and the ground flag
+    // white-box *before* starting (the dig snapshots the held item), then
+    // run to the break and take that tick's report — the phase assertions
+    // below are about the tick that breaks, not the tick that starts.
+    // Stone with diamond: 8/1.5/30 → 6 ticks grounded.
+    let pick = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:diamond_pickaxe")
+        .expect("pickaxe");
+    {
+        let player = harness.game.player_mut(harness.id).expect("player");
+        player
+            .inventory
+            .set_slot(0, ItemStack::new(pick, 1).expect("stack"))
+            .expect("slot 0 takes the pick");
+        player.on_ground = true;
+    }
+    harness.intent(PlayIntent::PlayerAction {
         status: 0,
         position: block_position(sx, sy - 1, sz),
         facing: 1,
         sequence: 0,
     });
+    let mut report = harness.game.tick().expect("tick");
+    for _ in 0..30 {
+        if report.block_changes >= 1 {
+            break;
+        }
+        report = harness.game.tick().expect("tick");
+    }
     assert_eq!(report.block_changes, 1, "the break is broadcast once");
     assert!(report.entities_ticked >= 1, "the item was ticked");
     assert!(report.packets > 0, "the tick queued packets");

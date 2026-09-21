@@ -110,6 +110,12 @@ impl Harness {
         self.game.tick().expect("tick");
     }
 
+    fn run(&mut self, ticks: usize) {
+        for _ in 0..ticks {
+            self.game.tick().expect("tick");
+        }
+    }
+
     fn drain_ids(out: &mut InboundReceiver) -> Vec<i32> {
         let mut ids = Vec::new();
         while let Some(raw) = out.try_recv() {
@@ -385,12 +391,29 @@ fn breaking_and_placing_blocks_is_validated_and_broadcast() {
 
     let _ = Harness::drain_ids(&mut out);
 
+    // P16-05: START only opens the dig — stone with diamond needs 6 ticks
+    // grounded, so the pick and the ground flag go in white-box first.
+    let pick = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:diamond_pickaxe")
+        .expect("pickaxe");
+    {
+        let player = harness.game.player_mut(harness.id).expect("player");
+        player
+            .inventory
+            .set_slot(0, mc_entity::stack::ItemStack::new(pick, 1).expect("stack"))
+            .expect("slot 0 takes the pick");
+        player.on_ground = true;
+    }
     harness.intent(PlayIntent::PlayerAction {
         status: 0,
         position: block_position(target.0, target.1, target.2),
         facing: 1,
         sequence: 0,
     });
+    harness.run(10);
     assert_eq!(
         harness.game.world().get_block(target.0, target.1, target.2),
         air,
@@ -1014,7 +1037,14 @@ fn breaking_a_chest_with_a_full_cursor_keeps_the_cursor() {
         facing: 1,
         sequence: 52,
     });
-    harness.game.tick().expect("settle");
+    // P16-05: the chest dig runs its progress first (axe above is for the
+    // other chest test; here the hand digs 2.5 at 1/2.5/30 → 75 grounded).
+    harness
+        .game
+        .player_mut(harness.id)
+        .expect("player")
+        .on_ground = true;
+    harness.run(80);
     let in_inventory: i64 = (0..harness
         .game
         .player(harness.id)
@@ -1246,12 +1276,34 @@ fn redstone_edits_feed_the_queue_and_dirt_does_not() {
 
     // Breaking the floor under the lever: removed stone is passive, but the
     // lever neighbour is an emitter, so the queue refills past the drain.
+    // P16-05: the stone dig runs its progress first (pick + ground
+    // white-box: 8/1.5/30 → 6 ticks), so poll to the break.
+    let pick = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:diamond_pickaxe")
+        .expect("pickaxe");
+    {
+        let player = harness.game.player_mut(harness.id).expect("player");
+        player
+            .inventory
+            .set_slot(0, mc_entity::stack::ItemStack::new(pick, 1).expect("stack"))
+            .expect("slot 0 takes the pick");
+        player.on_ground = true;
+    }
     harness.intent(PlayIntent::PlayerAction {
         status: 0,
         position: block_position(sx + 1, sy - 1, sz),
         facing: 1,
         sequence: 73,
     });
+    for _ in 0..30 {
+        if harness.game.redstone_pending() == 7 {
+            break;
+        }
+        harness.game.tick().expect("tick");
+    }
     assert_eq!(
         harness.game.redstone_pending(),
         7,
@@ -1816,15 +1868,31 @@ fn breaking_a_chest_drops_its_contents() {
         items[0] = mc_entity::stack::ItemStack::new(stone, 12).expect("stack");
     }
     let _ = Harness::drain_ids(&mut out);
-    // Instant survival dig (P04 rule): START_DESTROY_BLOCK breaks at once.
+    // P16-05: START only opens the dig (chest 2.5 with a diamond axe:
+    // 8/2.5/30 → 10 ticks grounded). Axe and ground flag white-box first.
+    let axe = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:diamond_axe")
+        .expect("axe");
+    {
+        let player = harness.game.player_mut(harness.id).expect("player");
+        player
+            .inventory
+            .set_slot(0, mc_entity::stack::ItemStack::new(axe, 1).expect("stack"))
+            .expect("slot 0 takes the axe");
+        player.on_ground = true;
+    }
     harness.intent(PlayIntent::PlayerAction {
         status: 0,
         position: block_position(at.0, at.1, at.2),
         facing: 1,
         sequence: 31,
     });
-    // One more tick so drops spawned during the broadcast are announced.
-    harness.game.tick().expect("settle");
+    // Ticks for the progress plus one so drops spawned during the broadcast
+    // are announced.
+    harness.run(15);
     assert!(
         harness
             .game

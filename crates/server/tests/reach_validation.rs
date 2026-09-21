@@ -189,7 +189,13 @@ impl Harness {
         }
     }
 
-    /// Dig `(x, y, z)` on status 0 (start) and report whether the block broke.
+    /// Dig `(x, y, z)` on status 0 (start), run the progress out, and report
+    /// whether the block broke.
+    ///
+    /// P16-05: one START only opens the dig; stone by hand needs 150 ticks
+    /// (1/1.5/100). The harness never moves, so the tracked ground flag is
+    /// set white-box — otherwise every dig would run at the mid-air fifth
+    /// and the count below would be wrong for reasons outside reach.
     fn dig_breaks(&mut self, x: i32, y: i32, z: i32) -> bool {
         let stone = self
             .game
@@ -202,12 +208,16 @@ impl Harness {
             .world_mut()
             .set_block(x, y, z, stone)
             .expect("the target is restored");
+        self.game.player_mut(self.id).expect("player").on_ground = true;
         self.intent(PlayIntent::PlayerAction {
             status: 0,
             position: block_position(x, y, z),
             facing: 1,
             sequence: 1,
         });
+        for _ in 0..160 {
+            self.game.tick().expect("tick");
+        }
         self.game.world().get_block_loaded(x, y, z) != Some(stone)
     }
 

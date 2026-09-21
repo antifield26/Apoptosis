@@ -16,9 +16,9 @@ use mc_persistence::chunk::ChunkPos;
 use mc_persistence::level::Difficulty;
 use mc_protocol::packets::Packet;
 use mc_protocol::packets::play::{
-    ContainerSetContent, ContainerSetSlot, GameEvent, MENU_FURNACE, MENU_GENERIC_9X3, MENU_HOPPER,
-    OpenScreen, PlayIntent, PlayerPosition, Respawn, SetDefaultSpawnPosition, SetHeldSlot, SetTime,
-    block_position, unpack_block_position,
+    BlockDestruction, ContainerSetContent, ContainerSetSlot, GameEvent, MENU_FURNACE,
+    MENU_GENERIC_9X3, MENU_HOPPER, OpenScreen, PlayIntent, PlayerPosition, Respawn,
+    SetDefaultSpawnPosition, SetHeldSlot, SetTime, block_position, unpack_block_position,
 };
 use mc_protocol::text::TextComponent;
 use mc_world::{Aabb, Vec3};
@@ -26,13 +26,13 @@ use std::collections::BTreeSet;
 use tracing::{debug, info, warn};
 
 use super::{
-    ACTION_DROP_ITEM, ACTION_FINISH_DESTROY_BLOCK, ACTION_START_DESTROY_BLOCK,
-    ACTION_SWAP_ITEM_WITH_OFFHAND, CHAT_TYPE_CHAT, CLIENT_COMMAND_RESPAWN, EYE_HEIGHT,
-    FALL_DAMAGE_THRESHOLD, GAME_EVENT_LEVEL_CHUNKS_LOAD_START, Game, NO_BLOCK_CHANGE_SEQUENCE,
-    OpenKind, TickReport, block_reach, chunk_of, entity_reach, face_offset, floor_to_i32,
-    is_container_block, mark_block_dirty, mirror_inventory, open_kind_for,
-    recompute_crafting_result, refuse_join, take_craft_result, targets_a_block, wire_stack,
-    write_back_block, write_back_inventory,
+    ACTION_ABORT_DESTROY_BLOCK, ACTION_DROP_ITEM, ACTION_FINISH_DESTROY_BLOCK,
+    ACTION_START_DESTROY_BLOCK, ACTION_SWAP_ITEM_WITH_OFFHAND, CHAT_TYPE_CHAT,
+    CLIENT_COMMAND_RESPAWN, EYE_HEIGHT, FALL_DAMAGE_THRESHOLD, GAME_EVENT_LEVEL_CHUNKS_LOAD_START,
+    Game, NO_BLOCK_CHANGE_SEQUENCE, OpenKind, TickReport, block_reach, chunk_of, entity_reach,
+    face_offset, floor_to_i32, is_container_block, mark_block_dirty, mirror_inventory,
+    open_kind_for, recompute_crafting_result, refuse_join, take_craft_result, targets_a_block,
+    wire_stack, write_back_block, write_back_inventory,
 };
 
 /// One connected player's server-side state.
@@ -129,6 +129,50 @@ pub(crate) struct Session {
     /// pending prediction at that position swallows every server block change
     /// there (see [`mc_protocol::packets::play::BlockChangedAck`]).
     pub(crate) ack_block_changes_up_to: i32,
+    /// Block being dug in survival, if any (P16-05): target, accumulated
+    /// progress, last announced crack stage, and the held item the dig
+    /// started with. Creative never sets this (instant breaks); abort, held
+    /// change, target loss and walking out of reach clear it.
+    pub(crate) dig: Option<DigState>,
+}
+
+/// One survival dig in progress.
+///
+/// Progress accumulates per tick from the mining tables; the block breaks at
+/// 1.0. `stage` is the last announced crack overlay (`-1` = none sent yet);
+/// `held` is the held item id (`None` = empty hand) the dig started with.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct DigState {
+    /// Target block position.
+    pub x: i32,
+    /// Target block position.
+    pub y: i32,
+    /// Target block position.
+    pub z: i32,
+    /// Block-state id digging started on; any change cancels the dig.
+    pub block: i32,
+    /// Accumulated progress; breaks at 1.0.
+    pub progress: f32,
+    /// Last announced overlay stage, or -1 when none was sent.
+    pub stage: i8,
+    /// Held item when digging started (`None` = empty hand).
+    pub held: Option<i32>,
+}
+
+/// A block about to break: position plus the state id in play.
+///
+/// Groups the four positional values `break_block_now` took separately, so
+/// the call sites cannot swap a coordinate with the block id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BreakTarget {
+    /// Target block position.
+    pub x: i32,
+    /// Target block position.
+    pub y: i32,
+    /// Target block position.
+    pub z: i32,
+    /// Block-state id at the target.
+    pub block: i32,
 }
 
 impl Session {
@@ -456,6 +500,7 @@ impl Game {
                 xp_pickup_cooldown: 0,
                 last_death_location: None,
                 ack_block_changes_up_to: NO_BLOCK_CHANGE_SEQUENCE,
+                dig: None,
             },
         );
 
@@ -2015,43 +2060,14 @@ impl Game {
             return Ok(());
         }
         match status {
-            ACTION_START_DESTROY_BLOCK | ACTION_FINISH_DESTROY_BLOCK => {
-                if !self.in_build_range(y) {
-                    debug!(id = %id, y, "rejected dig outside the world height");
-                    return Ok(());
-                }
-                let Some(current) = self.world.get_block_loaded(x, y, z) else {
-                    debug!(id = %id, "rejected dig in an unloaded chunk");
-                    return Ok(());
-                };
-                if self.registries.blocks.is_empty(current) {
-                    return Ok(()); // already air: nothing to do
-                }
-                let creative = self
-                    .sessions
-                    .get(&id)
-                    .is_some_and(|s| s.player.game_mode.is_creative());
-                if !creative && self.registries.blocks.block_name(current)? == "minecraft:bedrock" {
-                    debug!(id = %id, "refused to break bedrock in survival");
-                    return Ok(());
-                }
-                let air = self.registries.blocks.air_id();
-                // `set_block` cannot fail here: the y range was checked above, and
-                // an out-of-range y is its only error. Refusing to propagate keeps a
-                // hostile coordinate from ending the tick (AGENTS.md section 9).
-                if let Err(error) = self.world.set_block(x, y, z, air) {
-                    debug!(id = %id, x, y, z, %error, "block break was refused");
-                    return Ok(());
-                }
-                debug!(id = %id, x, y, z, "block broken");
-                // P13-02: breaking a component — or a block next to one — wakes
-                // the model with the *removed* id, so dust re-evaluates.
-                self.redstone_feed(x, y, z, current);
-                if !creative {
-                    // P11-04: the loot table is the drop authority in survival.
-                    self.spawn_block_drops(current, x, y, z);
-                }
-                self.sync_menu_from_inventory(id, report);
+            ACTION_START_DESTROY_BLOCK => {
+                self.start_dig(id, x, y, z, report)?;
+            }
+            ACTION_ABORT_DESTROY_BLOCK => {
+                self.abort_dig(id, report);
+            }
+            ACTION_FINISH_DESTROY_BLOCK => {
+                self.finish_dig(id, x, y, z, report)?;
             }
             ACTION_DROP_ITEM => {
                 // The held stack leaves the inventory and becomes a dropped-item
@@ -2096,6 +2112,244 @@ impl Game {
             }
             other => debug!(id = %id, status = other, "unhandled player action"),
         }
+        Ok(())
+    }
+
+    /// Held item name for the mining tables, or `None` for an empty hand.
+    ///
+    /// An unresolvable id degrades to a hand rather than refusing the dig:
+    /// the inventory validates every write, so reaching this means memory
+    /// corruption rather than player input — and a hand digs slowly instead
+    /// of erroring the tick.
+    fn held_item_name(&self, id: ConnectionId) -> Option<String> {
+        let held = self
+            .sessions
+            .get(&id)?
+            .player
+            .inventory
+            .selected_item()
+            .item_id()?;
+        self.registries.items.name(held).ok().map(str::to_owned)
+    }
+
+    /// Whether the player's feet report ground contact (mid-air digging runs
+    /// at a fifth of the speed).
+    fn on_ground(&self, id: ConnectionId) -> bool {
+        self.sessions
+            .get(&id)
+            .is_some_and(|session| session.player.on_ground)
+    }
+
+    /// Announce one dig overlay stage to every ready player.
+    ///
+    /// Stages run 0–9 with progress; -1 clears. Broadcast, not chunk-scoped
+    /// (the creeper-fuse packet made the same call): at most ten packets
+    /// per dig, and only on stage change.
+    fn send_dig_stage(
+        &self,
+        entity_id: i32,
+        x: i32,
+        y: i32,
+        z: i32,
+        stage: i8,
+        report: &mut TickReport,
+    ) {
+        let packet = BlockDestruction {
+            entity_id,
+            position: block_position(x, y, z),
+            stage,
+        };
+        if let Ok(raw) = packet.to_raw() {
+            self.broadcast_all(&raw, report);
+        }
+    }
+
+    /// Break a block right now: air, redstone wake, drops, menu sync.
+    ///
+    /// Shared by creative instant breaks, zero-hardness survival breaks, and
+    /// progress completions (intent or tick). `drops` is false in creative
+    /// and when the harvest judgment fails — vanilla drops nothing then.
+    pub(crate) fn break_block_now(
+        &mut self,
+        id: ConnectionId,
+        target: BreakTarget,
+        creative: bool,
+        harvest: bool,
+        report: &mut TickReport,
+    ) {
+        let air = self.registries.blocks.air_id();
+        // `set_block` cannot fail here: the y range was checked above, and
+        // an out-of-range y is its only error. Refusing to propagate keeps a
+        // hostile coordinate from ending the tick (AGENTS.md section 9).
+        if let Err(error) = self.world.set_block(target.x, target.y, target.z, air) {
+            debug!(id = %id, x = target.x, y = target.y, z = target.z, %error, "block break was refused");
+            return;
+        }
+        debug!(id = %id, x = target.x, y = target.y, z = target.z, "block broken");
+        // P13-02: breaking a component — or a block next to one — wakes
+        // the model with the *removed* id, so dust re-evaluates.
+        self.redstone_feed(target.x, target.y, target.z, target.block);
+        if !creative && harvest {
+            // P11-04: the loot table is the drop authority in survival.
+            self.spawn_block_drops(target.block, target.x, target.y, target.z, harvest);
+        }
+        self.sync_menu_from_inventory(id, report);
+    }
+
+    /// Open a survival dig (P16-05): instant, timed or refused by hardness.
+    ///
+    /// Creative breaks instantly through the shared path. A START on a new
+    /// target replaces the old dig (clearing its overlay), and a repeated
+    /// START restarts — vanilla's restart semantics, not progress banking.
+    fn start_dig(
+        &mut self,
+        id: ConnectionId,
+        x: i32,
+        y: i32,
+        z: i32,
+        report: &mut TickReport,
+    ) -> ServerResult<()> {
+        if !self.in_build_range(y) {
+            debug!(id = %id, y, "rejected dig outside the world height");
+            return Ok(());
+        }
+        let Some(current) = self.world.get_block_loaded(x, y, z) else {
+            debug!(id = %id, "rejected dig in an unloaded chunk");
+            return Ok(());
+        };
+        if self.registries.blocks.is_empty(current) {
+            return Ok(()); // already air: nothing to do
+        }
+        let target = BreakTarget {
+            x,
+            y,
+            z,
+            block: current,
+        };
+        let creative = self
+            .sessions
+            .get(&id)
+            .is_some_and(|s| s.player.game_mode.is_creative());
+        if creative {
+            self.break_block_now(id, target, true, true, report);
+            return Ok(());
+        }
+        // Bedrock is refused here by value (-1.0), not by name: the old name
+        // check covered one block while barriers, command blocks and end
+        // portal frames dug straight through.
+        let name = self.registries.blocks.block_name(current)?.to_owned();
+        match mc_registry::dig_rate(
+            &self.registries.blocks,
+            &self.registries.items,
+            self.held_item_name(id).as_deref(),
+            &name,
+            self.on_ground(id),
+        ) {
+            mc_registry::DigRate::Unbreakable => {
+                debug!(id = %id, name, "refused to break unbreakable block in survival");
+                return Ok(());
+            }
+            mc_registry::DigRate::Instant => {
+                let harvest = mc_registry::can_harvest(
+                    &self.registries.blocks,
+                    &self.registries.items,
+                    self.held_item_name(id).as_deref(),
+                    &name,
+                );
+                self.break_block_now(id, target, false, harvest, report);
+                return Ok(());
+            }
+            mc_registry::DigRate::PerTick(_) => {}
+        }
+        let replaced = self.sessions.get_mut(&id).map(|session| {
+            let held = session.player.inventory.selected_item().item_id();
+            session.dig.replace(DigState {
+                x,
+                y,
+                z,
+                block: current,
+                progress: 0.0,
+                stage: -1,
+                held,
+            })
+        });
+        if let Some(Some(old)) = replaced
+            && old.stage >= 0
+            && let Some(session) = self.sessions.get(&id)
+        {
+            self.send_dig_stage(session.entity.get(), old.x, old.y, old.z, -1, report);
+        }
+        Ok(())
+    }
+
+    /// Drop a dig: progress dies, and an announced overlay is cleared.
+    ///
+    /// No block, no drops, no menu sync — the abort half of P16-05.
+    fn abort_dig(&mut self, id: ConnectionId, report: &mut TickReport) {
+        let cleared = self.sessions.get_mut(&id).map(|session| session.dig.take());
+        if let Some(Some(dig)) = cleared
+            && dig.stage >= 0
+            && let Some(session) = self.sessions.get(&id)
+        {
+            self.send_dig_stage(session.entity.get(), dig.x, dig.y, dig.z, -1, report);
+        }
+    }
+
+    /// Finish a dig: break now only when the server agrees the progress is
+    /// complete (P16-05).
+    ///
+    /// Anything else is a prediction the sequence ack already closed —
+    /// ignoring it is what makes a too-early FINISH harmless instead of a
+    /// duplicate break, and what makes START+FINISH spam unable to skip the
+    /// accumulation (each START restarts it). The kept dig still completes
+    /// on the server's own ticks, absorbing the client's one-tick lead.
+    fn finish_dig(
+        &mut self,
+        id: ConnectionId,
+        x: i32,
+        y: i32,
+        z: i32,
+        report: &mut TickReport,
+    ) -> ServerResult<()> {
+        let ready = self
+            .sessions
+            .get(&id)
+            .and_then(|session| session.dig)
+            .is_some_and(|dig| dig.x == x && dig.y == y && dig.z == z && dig.progress >= 1.0);
+        if !ready {
+            return Ok(());
+        }
+        let Some(current) = self.world.get_block_loaded(x, y, z) else {
+            return Ok(());
+        };
+        if self.registries.blocks.is_empty(current) {
+            if let Some(session) = self.sessions.get_mut(&id) {
+                session.dig = None;
+            }
+            return Ok(());
+        }
+        let name = self.registries.blocks.block_name(current)?.to_owned();
+        let harvest = mc_registry::can_harvest(
+            &self.registries.blocks,
+            &self.registries.items,
+            self.held_item_name(id).as_deref(),
+            &name,
+        );
+        if let Some(session) = self.sessions.get_mut(&id) {
+            session.dig = None;
+        }
+        self.break_block_now(
+            id,
+            BreakTarget {
+                x,
+                y,
+                z,
+                block: current,
+            },
+            false,
+            harvest,
+            report,
+        );
         Ok(())
     }
 

@@ -219,7 +219,12 @@ fn a_dig_is_acknowledged_with_the_sequence_the_client_sent() {
 
     let (fx, fy, fz) = harness.feet();
     let target = (fx, fy - 1, fz);
-    harness.place(target.0, target.1, target.2, "minecraft:stone");
+    // A torch (hardness 0) breaks the tick digging starts, so the break and
+    // its ack share one flush — which is what the ordering assertion below
+    // needs. A stone dig would break ticks later under P16-05 progress while
+    // its ack goes out at once, and the order would invert through no fault
+    // of the ack path.
+    harness.place(target.0, target.1, target.2, "minecraft:torch");
 
     harness.dig_with_sequence(target.0, target.1, target.2, 7);
     let packets = Harness::drain(&mut out);

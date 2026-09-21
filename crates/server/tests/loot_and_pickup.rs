@@ -268,7 +268,8 @@ impl Harness {
     }
 
     /// Break the block at `(x, y, z)` the way a client does: `player_action`
-    /// status 0 (start digging), which this build treats as an instant break.
+    /// status 0 (start digging), then enough ticks for the progress to
+    /// complete (P16-05: START only opens the dig).
     fn dig(&mut self, x: i32, y: i32, z: i32) {
         self.intent(PlayIntent::PlayerAction {
             status: 0,
@@ -276,6 +277,24 @@ impl Harness {
             facing: 1,
             sequence: 0,
         });
+    }
+
+    /// White-box: the harness never moves, so the tracked ground flag stays
+    /// false and every dig would run at the mid-air fifth. Standing digs
+    /// need the flag a real client reports 20 times a second.
+    fn stand(&mut self) {
+        self.game.player_mut(self.id).expect("player").on_ground = true;
+    }
+
+    /// Put one of `item` in hotbar slot 0 (the selected slot).
+    fn give(&mut self, item: &str) {
+        let id = self.item_id(item);
+        self.game
+            .player_mut(self.id)
+            .expect("player")
+            .inventory
+            .set_slot(0, mc_entity::stack::ItemStack::new(id, 1).expect("stack"))
+            .expect("slot 0 takes the tool");
     }
 
     /// The player's inventory item count.
@@ -334,7 +353,13 @@ fn a_survival_break_drops_what_the_loot_table_says() {
     let (fx, fy, fz) = harness.feet();
     let target = (fx, fy - 1, fz);
     harness.place(target.0, target.1, target.2, "minecraft:stone");
+    // Stone requires a pickaxe: a bare hand digs 150 ticks and drops
+    // nothing (P16-05 harvest judgment), so the table half of this test
+    // digs with wood (2/1.5/30 → 23 ticks grounded).
+    harness.give("minecraft:wooden_pickaxe");
+    harness.stand();
     harness.dig(target.0, target.1, target.2);
+    harness.run(30);
 
     assert_eq!(
         harness
@@ -423,7 +448,10 @@ fn a_block_with_no_loot_table_drops_nothing() {
             .is_none(),
         "the fixture pack must not ship a dirt table, or this test proves nothing"
     );
+    // Dirt by hand: 1/0.5/30 → 15 ticks grounded.
+    harness.stand();
     harness.dig(target.0, target.1, target.2);
+    harness.run(20);
 
     assert_eq!(
         harness
@@ -746,7 +774,30 @@ fn breaking_common_blocks_without_a_pack_drops_the_baseline() {
         let (fx, fy, fz) = harness.feet();
         let target = (fx, fy - 1, fz);
         harness.place(target.0, target.1, target.2, block);
+        // Stone needs the pick (hand harvests nothing); dirt digs by hand.
+        if block.ends_with("stone") {
+            harness.give("minecraft:wooden_pickaxe");
+        }
+        harness.stand();
         harness.dig(target.0, target.1, target.2);
+        // Poll to the break and assert at once: the drop below the feet is
+        // inside the pickup radius once its delay expires, so a fixed long
+        // run would measure collection rather than dropping.
+        let air = harness.game.registries().blocks.air_id();
+        let mut broken = false;
+        for _ in 0..200 {
+            harness.run(1);
+            if harness
+                .game
+                .world()
+                .get_block_loaded(target.0, target.1, target.2)
+                == Some(air)
+            {
+                broken = true;
+                break;
+            }
+        }
+        assert!(broken, "breaking {block} must complete within 200 ticks");
         let want = harness.item_id(drop);
         let drops = ground(&harness);
         assert!(

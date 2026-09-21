@@ -32,15 +32,16 @@ use mc_simulation::{PhaseRunner, TickPhase};
 use mc_world::Vec3;
 use mc_world::World;
 use mc_world::chunk::Chunk;
+use mc_world::collision::Aabb;
 use std::collections::{BTreeMap, BTreeSet};
 use tracing::{debug, trace, warn};
 
 use super::{
-    AiRng, CHAT_TYPE_CHAT, CHUNKS_PER_TICK, ENTITY_GRAVITY, FALL_DAMAGE_THRESHOLD,
+    AiRng, CHAT_TYPE_CHAT, CHUNKS_PER_TICK, ENTITY_GRAVITY, EYE_HEIGHT, FALL_DAMAGE_THRESHOLD,
     FOOD_TICK_INTERVAL, Game, GroundItem, INVULNERABLE_TICKS, ITEM_MERGE_RADIUS_SQR,
     ITEM_PICKUP_RADIUS_SQR, LIGHT_UPDATES_PER_TICK, MOB_LOOKAHEAD_BLOCKS, NO_BLOCK_CHANGE_SEQUENCE,
     OpenKind, PENDING_INTENT_BUDGET, PLAINS_BIOME_ID, REST_EPSILON, TickReport,
-    UNLOAD_MARGIN_CHUNKS, chunk_of, floor_to_i32, is_container_block, light_fields,
+    UNLOAD_MARGIN_CHUNKS, block_reach, chunk_of, floor_to_i32, is_container_block, light_fields,
     mark_block_dirty, mirror_inventory, open_kind_for, wire_angle, wire_stack,
 };
 
@@ -52,6 +53,148 @@ struct WorldView<'a>(&'a World);
 impl BlockView for WorldView<'_> {
     fn is_solid(&self, x: i32, y: i32, z: i32) -> bool {
         self.0.is_solid(x, y, z)
+    }
+}
+
+/// Hunger and status effects for one session per tick (P11-06, P16-03).
+///
+/// Extracted from `tick_players` when the dig events pushed it over the
+/// line budget; behaviour byte-identical: food on the 4-second timer,
+/// poison/wither/regen beside it, death messages collected.
+fn tick_session_vitals(
+    session: &mut super::session::Session,
+    tick: u64,
+    items: &mc_registry::ItemRegistry,
+    messages: &mut Vec<(ConnectionId, String)>,
+    effect_events: &mut Vec<(ConnectionId, i32, Vec<i32>)>,
+) {
+    // Vanilla heals on a 4-second timer (`foodTickTimer`), not every tick.
+    // Calling this every tick made regeneration ~20x too fast and meant
+    // exhaustion never accrued, so food never depleted in play (Audit 03).
+    // The exhaustion cost of movement/actions is P05-14's table; until it
+    // exists this passes 0, which is why a player never gets hungry yet.
+    // An off-tick changed nothing, so the outcome is "no damage".
+    let outcome = if tick.is_multiple_of(FOOD_TICK_INTERVAL) {
+        session.player.tick_food(0.0)
+    } else {
+        mc_entity::player::DamageOutcome {
+            applied: false,
+            died: false,
+            dealt: 0.0,
+            health: session.player.health,
+        }
+    };
+    if outcome.died && !session.player.is_alive() {
+        messages.push((session.id, "You died!".to_owned()));
+    }
+    // Status effects tick down here, beside hunger: poison and wither
+    // deal through the shared damage path (armour-aware, floored at
+    // half a heart for poison), regeneration heals, and expired ids
+    // come back for their removal packets below.
+    let was_alive = session.player.is_alive();
+    let armor = mc_entity::combat::worn_stats(&session.player.inventory, items);
+    let expired = session.player.tick_effects(tick, &armor);
+    if !expired.is_empty() {
+        effect_events.push((session.id, session.entity.get(), expired));
+    }
+    if was_alive && !session.player.is_alive() {
+        messages.push((session.id, "You died!".to_owned()));
+    }
+}
+
+/// Advance one session's survival dig by a tick (P16-05).
+///
+/// Pure accumulation plus event collection: breaks mutate the world and
+/// stages broadcast, so both happen after the session loop from the
+/// collected vectors (the `tick_players` collect-then-apply shape, which
+/// also keeps this function borrow-clean: session mutably, world and
+/// registries shared).
+///
+/// Anything that invalidates the dig (target gone or changed, held item
+/// swapped, walked out of reach, creative switch) clears the state; a clear
+/// overlay goes out only when a stage was announced.
+fn tick_session_dig(
+    session: &mut super::session::Session,
+    world: &World,
+    registries: &mc_registry::Registries,
+    dig_breaks: &mut Vec<(ConnectionId, i32, i32, i32, i32)>,
+    dig_stages: &mut Vec<(i32, i32, i32, i32, i8)>,
+    dig_clears: &mut Vec<(i32, i32, i32, i32)>,
+) {
+    let Some(dig) = session.dig else {
+        return;
+    };
+    let id = session.id;
+    let entity_id = session.entity.get();
+    let announced = dig.stage >= 0;
+    // Creative breaks are instant through their own path: a survival dig
+    // that survives a gamemode flip ends here.
+    if session.player.game_mode.is_creative() {
+        session.dig = None;
+        if announced {
+            dig_clears.push((entity_id, dig.x, dig.y, dig.z));
+        }
+        return;
+    }
+    let current = world.get_block_loaded(dig.x, dig.y, dig.z);
+    let changed = current.is_none_or(|block| block != dig.block);
+    let held = session.player.inventory.selected_item().item_id();
+    let swapped = held != dig.held;
+    let eye = Vec3::new(
+        session.player.position.x,
+        session.player.position.y + EYE_HEIGHT,
+        session.player.position.z,
+    );
+    let reach = block_reach(false);
+    let walked_away = Aabb::block(dig.x, dig.y, dig.z).distance_to_sqr(eye) >= reach * reach;
+    if changed || swapped || walked_away {
+        session.dig = None;
+        if announced {
+            dig_clears.push((entity_id, dig.x, dig.y, dig.z));
+        }
+        return;
+    }
+    let Some(block) = current else {
+        return;
+    };
+    let name = registries
+        .blocks
+        .block_name(block)
+        .map(str::to_owned)
+        .unwrap_or_default();
+    let held_name = held.and_then(|held| registries.items.name(held).ok().map(str::to_owned));
+    match mc_registry::dig_rate(
+        &registries.blocks,
+        &registries.items,
+        held_name.as_deref(),
+        &name,
+        session.player.on_ground,
+    ) {
+        mc_registry::DigRate::Unbreakable | mc_registry::DigRate::Instant => {
+            // Unreachable for a tracked dig (START refuses/breaks those),
+            // so a changed table cancels rather than breaks: breaking here
+            // would spend a dig the START arm refused.
+            session.dig = None;
+            if announced {
+                dig_clears.push((entity_id, dig.x, dig.y, dig.z));
+            }
+        }
+        mc_registry::DigRate::PerTick(rate) => {
+            let progress = dig.progress + rate;
+            if progress >= 1.0 {
+                session.dig = None;
+                dig_breaks.push((id, dig.x, dig.y, dig.z, dig.block));
+                return;
+            }
+            let stage = i8::try_from(floor_to_i32(f64::from(progress) * 10.0).min(9)).unwrap_or(9);
+            if let Some(state) = session.dig.as_mut() {
+                state.progress = progress;
+                if stage != dig.stage {
+                    state.stage = stage;
+                    dig_stages.push((entity_id, dig.x, dig.y, dig.z, stage));
+                }
+            }
+        }
     }
 }
 
@@ -2869,43 +3012,25 @@ impl Game {
         let spawn = self.world.spawn();
         let mut messages: Vec<(ConnectionId, String)> = Vec::new();
         let mut effect_events: Vec<(ConnectionId, i32, Vec<i32>)> = Vec::new();
+        // Dig outcomes, applied after the loop (breaks mutate the world;
+        // stages broadcast). Breaks carry the connection plus the target
+        // snapshot (the state is already cleared when the event is
+        // collected); stages and clears carry the overlay key (miner
+        // entity, position) plus the stage.
+        let mut dig_breaks: Vec<(ConnectionId, i32, i32, i32, i32)> = Vec::new();
+        let mut dig_stages: Vec<(i32, i32, i32, i32, i8)> = Vec::new();
+        let mut dig_clears: Vec<(i32, i32, i32, i32)> = Vec::new();
         for session in self.sessions.values_mut() {
             session.tick_start_y = session.player.position.y;
             session.hurt_invuln_ticks = session.hurt_invuln_ticks.saturating_sub(1);
             session.xp_pickup_cooldown = session.xp_pickup_cooldown.saturating_sub(1);
-            // Vanilla heals on a 4-second timer (`foodTickTimer`), not every tick.
-            // Calling this every tick made regeneration ~20x too fast and meant
-            // exhaustion never accrued, so food never depleted in play (Audit 03).
-            // The exhaustion cost of movement/actions is P05-14's table; until it
-            // exists this passes 0, which is why a player never gets hungry yet.
-            // An off-tick changed nothing, so the outcome is "no damage".
-            let outcome = if self.tick.is_multiple_of(FOOD_TICK_INTERVAL) {
-                session.player.tick_food(0.0)
-            } else {
-                mc_entity::player::DamageOutcome {
-                    applied: false,
-                    died: false,
-                    dealt: 0.0,
-                    health: session.player.health,
-                }
-            };
-            if outcome.died && !session.player.is_alive() {
-                messages.push((session.id, "You died!".to_owned()));
-            }
-            // Status effects tick down here, beside hunger: poison and wither
-            // deal through the shared damage path (armour-aware, floored at
-            // half a heart for poison), regeneration heals, and expired ids
-            // come back for their removal packets below.
-            let was_alive = session.player.is_alive();
-            let armor =
-                mc_entity::combat::worn_stats(&session.player.inventory, &self.registries.items);
-            let expired = session.player.tick_effects(self.tick, &armor);
-            if !expired.is_empty() {
-                effect_events.push((session.id, session.entity.get(), expired));
-            }
-            if was_alive && !session.player.is_alive() {
-                messages.push((session.id, "You died!".to_owned()));
-            }
+            tick_session_vitals(
+                session,
+                self.tick,
+                &self.registries.items,
+                &mut messages,
+                &mut effect_events,
+            );
             // Nothing below the world is standable. Void damage is P05; until then
             // a player who ends up there is returned to spawn instead of falling
             // forever.
@@ -2919,6 +3044,16 @@ impl Game {
                 session.tick_start_y = f64::from(spawn.1);
                 session.sent_chunks.clear();
             }
+            // Survival digging accumulates here, beside hunger: one mining
+            // tick per game tick (see `tick_session_dig` for the rules).
+            tick_session_dig(
+                session,
+                &self.world,
+                &self.registries,
+                &mut dig_breaks,
+                &mut dig_stages,
+                &mut dig_clears,
+            );
         }
         for (id, message) in messages {
             self.send_message(id, &message);
@@ -2931,6 +3066,81 @@ impl Game {
                     effect_id,
                 };
                 let _ = self.send(id, &packet, &mut report);
+            }
+        }
+        // Dig outcomes, in collection order: breaks, stage advances, clears.
+        self.apply_dig_events(dig_breaks, dig_stages, dig_clears, &mut report);
+    }
+
+    /// Apply collected dig outcomes: breaks through the shared path with a
+    /// fresh harvest judgment, stages and clears as overlay packets.
+    ///
+    /// The harvest judgment re-runs here rather than riding the event: the
+    /// held item may have changed between collection and application, and
+    /// the break must judge what is held now. (A swap mid-tick cancels the
+    /// dig next tick via the held check, so this normally sees an unchanged
+    /// hand — defense in depth.)
+    fn apply_dig_events(
+        &mut self,
+        dig_breaks: Vec<(ConnectionId, i32, i32, i32, i32)>,
+        dig_stages: Vec<(i32, i32, i32, i32, i8)>,
+        dig_clears: Vec<(i32, i32, i32, i32)>,
+        report: &mut TickReport,
+    ) {
+        for (id, x, y, z, block) in dig_breaks {
+            let Some(current) = self.world.get_block_loaded(x, y, z) else {
+                continue;
+            };
+            if current != block || self.registries.blocks.is_empty(current) {
+                continue;
+            }
+            let Ok(name) = self.registries.blocks.block_name(current) else {
+                continue;
+            };
+            let name = name.to_owned();
+            let held = self
+                .sessions
+                .get(&id)
+                .and_then(|session| session.player.inventory.selected_item().item_id());
+            let held_name =
+                held.and_then(|held| self.registries.items.name(held).ok().map(str::to_owned));
+            let harvest = mc_registry::can_harvest(
+                &self.registries.blocks,
+                &self.registries.items,
+                held_name.as_deref(),
+                &name,
+            );
+            self.break_block_now(
+                id,
+                super::session::BreakTarget {
+                    x,
+                    y,
+                    z,
+                    block: current,
+                },
+                false,
+                harvest,
+                report,
+            );
+        }
+        for (entity_id, x, y, z, stage) in dig_stages {
+            let packet = mc_protocol::packets::play::BlockDestruction {
+                entity_id,
+                position: block_position(x, y, z),
+                stage,
+            };
+            if let Ok(raw) = packet.to_raw() {
+                self.broadcast_all(&raw, report);
+            }
+        }
+        for (entity_id, x, y, z) in dig_clears {
+            let packet = mc_protocol::packets::play::BlockDestruction {
+                entity_id,
+                position: block_position(x, y, z),
+                stage: -1,
+            };
+            if let Ok(raw) = packet.to_raw() {
+                self.broadcast_all(&raw, report);
             }
         }
     }

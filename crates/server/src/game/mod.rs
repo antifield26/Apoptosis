@@ -1700,7 +1700,14 @@ impl Game {
     /// enchantment-dependent condition refuses, which is the no-silk-touch
     /// reading of a bare hand — and `survives_explosion: true`, because a
     /// player break is not an explosion.
-    fn spawn_block_drops(&mut self, block_id: i32, x: i32, y: i32, z: i32) {
+    ///
+    /// `harvest` is vanilla's `can_harvest` judgment (P16-05): a block whose
+    /// drops require the correct tool, broken with the wrong one (or a bare
+    /// hand), drops nothing at all.
+    fn spawn_block_drops(&mut self, block_id: i32, x: i32, y: i32, z: i32, harvest: bool) {
+        if !harvest {
+            return;
+        }
         let Ok(name) = self.registries.blocks.block_name(block_id) else {
             return;
         };
