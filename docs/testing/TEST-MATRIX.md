@@ -87,8 +87,10 @@ weapon/armour tables, reach hook, held damage, worn stats), three knockback
 (away, halve, facing fallback), one armour-bypass (melee vs falls vs
 starvation), one sword integration, one shove integration and one iron-suit
 integration, and **nine from P16-02**: three orb numbers (splits,
-age/despawn, merge) and six orb end-to-end (sword scatter, fall-kill
-silence, pickup levels, throttle, merge, capped player death), and **thirteen
+age/despawn, merge) and six orb end-to-end (sword scatter, blast-kill
+silence — rewritten from fall-kill during the P16/P17 acceptance, see
+`docs/testing/P16-P17-ACCEPTANCE.md` §findings — pickup levels, throttle,
+merge, capped player death), and **thirteen
 from P16-03**: five entity effect pins (give rules, tick damage, floor,
 regen, expiry), two effect commands, five effect end-to-end (poison, wither,
 regen, mob ticking, rejoin sync) and one mob-effect packet round-trip, and

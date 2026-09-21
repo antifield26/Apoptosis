@@ -14,6 +14,7 @@ use mc_protocol::packets::play::PlayIntent;
 use mc_server::game::Game;
 use mc_server::storage::WorldService;
 use mc_test_support::fixtures::TempDir;
+use mc_world::ChunkPos;
 
 /// Everything a test needs: a live game and a channel to act as the client.
 struct Harness {
@@ -140,21 +141,94 @@ fn a_sword_kill_scatters_the_cows_three_xp() {
 }
 
 #[test]
-fn a_fall_kill_scatters_nothing() {
-    // P16-02: vanilla awards XP for player kills only. A mob that falls to
-    // its death without a swing leaves no orbs (documented: no hurt-credit
-    // tracking, so environmental finishes do not credit anyone).
-    let mut harness = Harness::new("p16-fall-kill");
+fn an_explosion_kill_scatters_nothing() {
+    // P16-02: vanilla awards XP for player kills only. A cow finished by a
+    // creeper blast (attacker None) leaves no orbs.
+    //
+    // History: this was a fall-kill test, but the fall geometry cannot kill —
+    // per-tick fall segments floor at the 3-block threshold (the P05 gap the
+    // matrix records), so a 40-block drop lands a cow at full health and the
+    // test passed with or without the attribution gate (verified by probe
+    // during the P16/P17 acceptance: the cow stood at 10.0 HP after 120
+    // ticks). The gate is proven by blast instead, through the real fuse.
+    let mut harness = Harness::new("p16-blast-kill");
     harness.join("Witness");
-    let cow = harness.summon_nearby(MobKind::Cow);
-    harness
+    let (sx, sy, sz) = harness.game.spawn();
+    // Stone floor under the rig so both mobs stand at sy (no falling, no
+    // wandering surprises beyond the pens).
+    let stone = harness
         .game
-        .entity_store_mut()
-        .get_mut(cow)
-        .expect("cow")
-        .position
-        .y += 40.0;
-    harness.run(120);
+        .registries()
+        .blocks
+        .default_state("minecraft:stone")
+        .expect("stone");
+    let air = harness.game.registries().blocks.air_id();
+    for x in (sx - 2)..=(sx + 5) {
+        for z in (sz - 2)..=(sz + 2) {
+            harness.game.load_chunk(ChunkPos::new(x >> 4, z >> 4));
+            harness
+                .game
+                .world_mut()
+                .set_block(x, sy - 1, z, stone)
+                .expect("floor");
+            harness
+                .game
+                .world_mut()
+                .set_block(x, sy, z, air)
+                .expect("clear");
+            harness
+                .game
+                .world_mut()
+                .set_block(x, sy + 1, z, air)
+                .expect("clear head");
+        }
+    }
+    let wall = |harness: &mut Harness, x: i32, y: i32, z: i32| {
+        harness.game.load_chunk(ChunkPos::new(x >> 4, z >> 4));
+        harness
+            .game
+            .world_mut()
+            .set_block(x, y, z, stone)
+            .expect("pen wall sets");
+    };
+    // Creeper cell (sx+2) penned on the player side and flanks; cow cell
+    // (sx+3) penned on the far side and flanks. The shared edge stays open
+    // (a wall there would block the blast LOS gate); the player-side wall
+    // also shields the player, so only the cow can die.
+    wall(&mut harness, sx + 1, sy, sz);
+    wall(&mut harness, sx + 2, sy, sz - 1);
+    wall(&mut harness, sx + 2, sy, sz + 1);
+    wall(&mut harness, sx + 4, sy, sz);
+    wall(&mut harness, sx + 3, sy, sz - 1);
+    wall(&mut harness, sx + 3, sy, sz + 1);
+    let at =
+        |dx: i32| mc_world::Vec3::new(f64::from(sx + dx) + 0.5, f64::from(sy), f64::from(sz) + 0.5);
+    let creeper = harness
+        .game
+        .spawn_mob(MobKind::Creeper, at(2))
+        .expect("creeper spawns");
+    let cow = harness
+        .game
+        .spawn_mob(MobKind::Cow, at(3))
+        .expect("cow spawns");
+    // Player within the 3-block ignite radius; 30-tick fuse plus margin.
+    harness.run(45);
+    assert!(
+        harness
+            .game
+            .entity_store()
+            .get(creeper)
+            .is_none_or(|e| e.removed),
+        "the creeper detonated within 45 ticks"
+    );
+    assert!(
+        harness
+            .game
+            .entity_store()
+            .get(cow)
+            .is_none_or(|e| e.removed),
+        "the blast next door killed the cow"
+    );
     assert_eq!(harness.orbs(), (0, 0), "no swing, no orbs");
 }
 
