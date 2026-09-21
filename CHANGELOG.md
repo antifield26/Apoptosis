@@ -73,6 +73,24 @@ drops nothing. Deliberately deferred: criticals/arrow pickup, per-kind
 flight tuning (shared gravity still moves arrows), exposure fractions,
 charged creepers, block destruction. Gate 1520/0/34/118.
 
+### P16-05 — Digging progress: hardness, tool speeds, per-tick accumulation, abort
+
+Step A: four fixtures extracted from pumpkin's vanilla-derived data
+(`target/extract_mining.py`) — block hardness + tool requirement, mineable
+and efficiency tag membership, incorrect-tier sets, per-item Tool rules —
+loaded beside-file with warn-and-degrade; `mc-registry::mining` evaluates
+pumpkin's `speed / hardness / divisor` formula (divisor 30/100 by the
+harvest judgment, mid-air fifth); `block_destruction` (id 5) modelled.
+Step B: START opens a tracked survival dig (creative still instant,
+zero-hardness instant, negative hardness refused — bedrock by value, not
+name), the Players phase accumulates to 1.0 with abort/held-swap/target
+change/out-of-reach cancels, crack stages broadcast with -1 clears, FINISH
+breaks only at server progress ≥ 1.0, and the harvest judgment gates drops
+(hand-mined stone drops nothing). Deliberately deferred: Efficiency/Haste/
+Fatigue application, the water penalty, tool durability, block-specific
+placement rules. Falsification: frozen progress and no-op abort each fail
+their probe. Gate 1529/0/35/119.
+
 ## Unreleased — Phase 15 (Observability + Core Hardening)
 
 ### P15-08 — Hardening review sign-off (all clauses re-evidenced)

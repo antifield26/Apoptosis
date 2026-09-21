@@ -5,11 +5,11 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 524 passed, 0 failed, 35 ignored** across **118 suites**, re-derived from
+Totals: **1 529 passed, 0 failed, 35 ignored** across **119 suites**, re-derived from
 `cargo test --workspace --no-fail-fast` on the current tree (`python
 tools/gates/run.py --quick`: every gate passed). The count has
 moved 1 194 -> 1 196 -> 1 206 -> 1 207 -> 1 212 -> 1 325 -> 1 344 -> 1 346 -> 1 358 ->
-1 365 -> 1 380 -> 1 384 -> 1 386 -> 1 388 -> 1 389 -> 1 392 -> 1 399 -> 1 412 -> 1 426 -> 1 428 -> 1 431 -> 1 433 -> 1 437 -> 1 440 -> 1 441 -> 1 445 -> 1 451 -> 1 452 -> 1 468 -> 1 475 -> 1 477 -> 1 491 -> 1 500 -> 1 513 -> 1 520 -> 1 519 -> **1 524**: three from the Audit 07 remediation, two Audit 08 coverage tests, ten from the
+1 365 -> 1 380 -> 1 384 -> 1 386 -> 1 388 -> 1 389 -> 1 392 -> 1 399 -> 1 412 -> 1 426 -> 1 428 -> 1 431 -> 1 433 -> 1 437 -> 1 440 -> 1 441 -> 1 445 -> 1 451 -> 1 452 -> 1 468 -> 1 475 -> 1 477 -> 1 491 -> 1 500 -> 1 513 -> 1 520 -> 1 519 -> 1 524 -> **1 529**: three from the Audit 07 remediation, two Audit 08 coverage tests, ten from the
 `mc-capture-rig` crate (P10-01), one regression test for the
 compression-transition defect (P10-02), the synced-registry work (P10-03), then
 P10-04..11 and P11-01..03, nineteen from the P11-04..09 landing, two from
@@ -95,7 +95,11 @@ regen, mob ticking, rejoin sync) and one mob-effect packet round-trip, and
 **seven from P16-04**: one zombie follow-range, one line-of-sight, one
 gap-routing plus the reworked no-phasing wall test (Step A), and four
 ranged/explosive end-to-end (bow hit, wall holds fire, fuse detonates, far
-creeper stays dark — Step B). The 1 520 -> 1 519 step is the capture sweep
+creeper stays dark — Step B), and **ten from P16-05**: two mining rates, one
+fixture spot-values, one tool-rules mirror, one crack-packet round-trip
+(Step A: tables, evaluation, wire), plus five dig end-to-end (15-tick dirt,
+abort clears and resets, pick-vs-hand stone with the no-drop harvest gate,
+bedrock refusal, early FINISH — Step B). The 1 520 -> 1 519 step is the capture sweep
 going `#[ignore]`d: it needs the uncommitted vanilla capture under
 `target/`, so it failed every fresh checkout (including CI) and now runs
 only with `-- --ignored` where the capture exists — the house pattern every
