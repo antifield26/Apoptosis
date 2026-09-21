@@ -28,9 +28,11 @@ Exit-gate evidence for P16 that no automated suite can produce: knockback
    them. The XP bar fills and the level counter clicks up with the
    level-up sound (7 points bank a full level-1 from empty).
 4. **Effect.** `effect give <name> minecraft:speed 60` — the swirl icon
-   appears top-right and movement is visibly faster. Then `effect clear`
-   and watch the icon leave. (Poison also shows hearts if you prefer
-   drama; it floors at half a heart and cannot kill.)
+   appears top-right and `effect clear` removes it (HUD sync is the
+   evidence here). Movement speed does **not** change on this build
+   (speed/strength application is deferred — do NOT file this as a
+   finding). For visible gameplay: `effect give <name> minecraft:poison
+   30` drains hearts but floors at half a heart and cannot kill.
 5. **Digging + steps while you are there.** Hold left-click on stone:
    cracks grow through 10 stages; by hand it takes ~7.5s, with a pickaxe
    (`give <name> minecraft:stone_pickaxe`) ~0.6s. Walk up a slab or stair
@@ -41,7 +43,7 @@ Exit-gate evidence for P16 that no automated suite can produce: knockback
 - Commit SHA tested:
 - Knockback: zombie recoils on strike / hardly noticeable / absent —
 - XP: orbs scattered (count?) / bar moved / level+sound on ___ points —
-- Effect: icon appeared for ___ / movement change felt / clear removed it —
+- Effect: icon appeared for ___ / clear removed it / poison floored at half heart —
 - Digging: crack stages seen 0-9 / break time felt right for hand vs pick —
 - Steps: slab/stair flight walked without jumping / fence held —
 - Anything that looked wrong (positions, sounds, icons, timing):
