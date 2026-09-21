@@ -810,18 +810,6 @@ impl Game {
             let mut moved = false;
             // Push into the facing cell first, then pull from above.
             for (source_pos, dest_pos) in [(pos, dest), (above, pos)] {
-                let (Some(source_items), Some(dest_items)) = (
-                    self.block_entities
-                        .get(source_pos)
-                        .and_then(|e| e.data.items())
-                        .map(<[mc_entity::stack::ItemStack]>::to_vec),
-                    self.block_entities
-                        .get(dest_pos)
-                        .and_then(|e| e.data.items())
-                        .map(<[mc_entity::stack::ItemStack]>::to_vec),
-                ) else {
-                    continue;
-                };
                 // Furnace routing (P17-02): a furnace source yields its output
                 // slot only (input/fuel refuse hopper extraction); a furnace
                 // destination takes smeltables into the input on top entry and
@@ -856,6 +844,14 @@ impl Game {
                     }
                     continue;
                 }
+                // Merged double-chest views (P17-02 Step B): a half reads the
+                // pair as one 54-slot inventory, like vanilla.
+                let (Some((source_items, source_halves)), Some((dest_items, dest_halves))) = (
+                    self.hopper_inventory(source_pos),
+                    self.hopper_inventory(dest_pos),
+                ) else {
+                    continue;
+                };
                 let Ok(mut source) = mc_container::Container::new(
                     mc_container::ContainerKind::Generic,
                     source_items.len(),
@@ -888,22 +884,26 @@ impl Game {
                 if transfer.moved == 0 {
                     continue;
                 }
-                // Write both halves back through sequential map borrows.
-                if let Some(entity) = self.block_entities.get_mut(source_pos)
-                    && let Some(items) = entity.data.items_mut()
+                // Write back through the same views (doubles split 27/27).
+                // Both views validated at read and nothing runs between, so
+                // a refused write here is unreachable single-threaded; it
+                // still counts as no-move rather than a half-applied one.
+                let back_source: Vec<mc_entity::stack::ItemStack> =
+                    (0..source.len()).map(|i| source.get(i)).collect();
+                let back_dest: Vec<mc_entity::stack::ItemStack> =
+                    (0..dest.len()).map(|i| dest.get(i)).collect();
+                if !self.store_hopper_inventory(source_pos, source_halves, &back_source)
+                    || !self.store_hopper_inventory(dest_pos, dest_halves, &back_dest)
                 {
-                    for (index, slot) in items.iter_mut().enumerate() {
-                        *slot = source.get(index);
-                    }
-                }
-                if let Some(entity) = self.block_entities.get_mut(dest_pos)
-                    && let Some(items) = entity.data.items_mut()
-                {
-                    for (index, slot) in items.iter_mut().enumerate() {
-                        *slot = dest.get(index);
-                    }
+                    continue;
                 }
                 moved = true;
+                // Touch both halves of any double, so viewers of either half
+                // resync and both chunks mark dirty.
+                for half in [source_halves, dest_halves].into_iter().flatten() {
+                    hopper_touched.push(mc_container::BlockPos::new(half.0.0, half.0.1, half.0.2));
+                    hopper_touched.push(mc_container::BlockPos::new(half.1.0, half.1.1, half.1.2));
+                }
                 hopper_touched.push(source_pos);
                 hopper_touched.push(dest_pos);
                 // One side per cooldown, like vanilla's single transfer per wake.
@@ -969,7 +969,8 @@ impl Game {
                 .map(|(id, _)| *id)
                 .collect();
             for id in viewers {
-                // Refresh the block half from the entity.
+                // Refresh the block half from the entity. A 54-slot double
+                // menu refreshes from the merged pair (P17-02 Step B).
                 let refreshed = {
                     let (entity_items, menu_len) = match (
                         self.block_entities.get(pos).and_then(|e| e.data.items()),
@@ -978,6 +979,10 @@ impl Game {
                             .and_then(|s| s.menu.container(0).map(mc_container::Container::len)),
                     ) {
                         (Some(items), Some(len)) if items.len() == len => (items.to_vec(), true),
+                        (_, Some(54)) => match self.chest_merged_items(pos.x, pos.y, pos.z) {
+                            Some(merged) => (merged, true),
+                            None => (Vec::new(), false),
+                        },
                         _ => (Vec::new(), false),
                     };
                     if menu_len {

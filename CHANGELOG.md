@@ -168,6 +168,24 @@ orientation (first state wins), double chests, the crafting-table window
 (Step B/C). Falsification: all-Storage pull roles and the chest-id save
 each fail their probe. Gate 1558/0/35/123.
 
+### P17-02 — Containers round-up, Step B: double chests
+
+Adjacent placements of the same chest block join (clockwise side first,
+becoming LEFT, else counter-clockwise RIGHT — pumpkin's order; sneaking
+never joins here, named divergence), the partner flips in the same tick,
+and breaking a half singles the survivor with its contents untouched.
+Opens show the merged 54 (`generic_9x6`, "Large Chest" / "Large Copper
+Chest") in pumpkin-mirrored right-first order; closes split 27/27 back,
+dropping a vanished half's share at the player's feet rather than losing
+it. Hoppers read a half as the merged pair, and viewers of either half
+resync from it. Cover above either half refuses the open (barrels ignore
+cover); copper joins copper only, with its own titles and save ids.
+Deliberately deferred: chest placement orientation stays first-state
+north, trapped-chest redstone output, ender chests (per-player inventory),
+the crafting-table window and grid sync (Step C), the real-client session
+(owner half). Falsification: never-join and flipped order each fail their
+probe. Gate 1565/0/35/124.
+
 ## Unreleased — Phase 15 (Observability + Core Hardening)
 
 ### P15-08 — Hardening review sign-off (all clauses re-evidenced)

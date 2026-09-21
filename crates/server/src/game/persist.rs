@@ -397,8 +397,8 @@ impl Game {
 
     /// The saved block entities of one chunk as NBT (P12-05).
     ///
-    /// Shape: `id` (`minecraft:chest`/`minecraft:furnace`/`minecraft:hopper`/
-    /// `minecraft:dispenser`/`minecraft:dropper`),
+    /// Shape: `id` (the chest-family block's own name, `minecraft:furnace`/
+    /// `minecraft:hopper`/`minecraft:dispenser`/`minecraft:dropper`),
     /// `x`/`y`/`z` ints, `Items` list of `{Slot byte, id string, Count int}`,
     /// plus furnace `BurnTicks`/`BurnTotal`/`CookProgress`/`CookTotal` ints and
     /// hopper `Cooldown` int. Vanilla reads `id`/`x`/`y`/`z`/`Items` and ignores
@@ -429,6 +429,7 @@ impl Game {
                             Some("minecraft:chest") => "minecraft:chest",
                             Some("minecraft:trapped_chest") => "minecraft:trapped_chest",
                             Some("minecraft:barrel") => "minecraft:barrel",
+                            Some(name) if crate::game::is_chest_family(name) => name,
                             _ => {
                                 warn!(pos = ?entity.pos, "a chest entity sits on no chest; skipped");
                                 return None;
@@ -547,6 +548,7 @@ impl Game {
                 "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:barrel" => {
                     mc_container::BlockEntityKind::Container
                 }
+                id if crate::game::is_chest_family(id) => mc_container::BlockEntityKind::Container,
                 "minecraft:furnace" => mc_container::BlockEntityKind::Furnace,
                 "minecraft:hopper" => mc_container::BlockEntityKind::Hopper,
                 "minecraft:dispenser" | "minecraft:dropper" => {

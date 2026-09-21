@@ -2179,14 +2179,92 @@ pub fn face_offset(face: i32) -> (i32, i32, i32) {
     }
 }
 
-/// Which block window to open. Double chests are deliberately a single 27-slot
-/// window here: merging two block entities is recorded as a gap, not guessed.
+/// The two halves of a double chest, right then left: each is an (x, y, z)
+/// triple. Menu slots 0..27 belong to the right half, 27..54 to the left.
+type ChestHalves = ((i32, i32, i32), (i32, i32, i32));
+
+/// Which block window to open. Double chests open the 54-slot window
+/// (P17-02 Step B); every other kind opens its own size.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OpenKind {
     Chest,
     Furnace,
     Hopper,
     Dispenser,
+}
+
+/// The eight copper-chest variants in 26.1 (plain, exposed, weathered,
+/// oxidized, and the four waxed ones): every registry name ends in
+/// `copper_chest`, and a test in `session` pins the list so a ninth
+/// variant fails loudly instead of silently opening single.
+const COPPER_CHEST_SUFFIX: &str = "copper_chest";
+
+/// A chest-family block: joins doubles and opens the chest window.
+///
+/// Plain, trapped and copper chests (barrels open as chests but never
+/// join; ender chests are unmodelled — right-click falls through to
+/// placement — because their inventory is per-player, a second store this
+/// build does not have).
+fn is_chest_family(name: &str) -> bool {
+    name == "minecraft:chest"
+        || name == "minecraft:trapped_chest"
+        || (name.starts_with("minecraft:") && name.ends_with(COPPER_CHEST_SUFFIX))
+}
+
+/// Window title for a chest-family open: vanilla `container.*` names
+/// (pumpkin-generated translations agree: `container.chest` Chest,
+/// `container.chestDouble` Large Chest, `container.barrel` Barrel,
+/// `container.chestCopper` Copper Chest, `container.chestDoubleCopper`
+/// Large Copper Chest). Trapped chests keep "Chest" like vanilla.
+fn chest_title(name: &str, doubled: bool) -> &'static str {
+    if name == "minecraft:barrel" {
+        return "Barrel";
+    }
+    let copper = name.starts_with("minecraft:") && name.ends_with(COPPER_CHEST_SUFFIX);
+    match (copper, doubled) {
+        (true, true) => "Large Copper Chest",
+        (true, false) => "Copper Chest",
+        (false, true) => "Large Chest",
+        (false, false) => "Chest",
+    }
+}
+
+/// Clockwise direction of a cardinal facing, viewed from above (pumpkin
+/// `rotate_clockwise`: north to east). Unknown facings read as north, the
+/// registry's first value.
+fn clockwise(facing: &str) -> &'static str {
+    match facing {
+        "east" => "south",
+        "south" => "west",
+        "west" => "north",
+        _ => "east",
+    }
+}
+
+/// Counter-clockwise direction of a cardinal facing (pumpkin
+/// `rotate_counter_clockwise`).
+fn counter_clockwise(facing: &str) -> &'static str {
+    match facing {
+        "east" => "north",
+        "south" => "east",
+        "west" => "south",
+        _ => "west",
+    }
+}
+
+/// Offset of a horizontal cardinal (north is -Z).
+#[allow(
+    clippy::match_same_arms,
+    reason = "the north arm names the verified rule; the wildcard names the corrupt-input fallback, matching facing_offset's documented split"
+)]
+fn horizontal_offset(facing: &str) -> (i32, i32) {
+    match facing {
+        "north" => (0, -1),
+        "south" => (0, 1),
+        "west" => (-1, 0),
+        "east" => (1, 0),
+        _ => (0, -1),
+    }
 }
 
 /// Classify a block name for the right-click-open path, or `None` to place.
@@ -2196,6 +2274,7 @@ fn open_kind_for(name: &str) -> Option<OpenKind> {
         "minecraft:furnace" => Some(OpenKind::Furnace),
         "minecraft:hopper" => Some(OpenKind::Hopper),
         "minecraft:dispenser" | "minecraft:dropper" => Some(OpenKind::Dispenser),
+        name if is_chest_family(name) => Some(OpenKind::Chest),
         _ => None,
     }
 }
