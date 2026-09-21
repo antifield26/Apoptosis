@@ -149,6 +149,25 @@ comparator output facing. Falsification: unwritten toggle, neutered
 mechanism arm, unpowered observer and spawnless dispense each fail their
 probe. Gate 1550/0/35/121.
 
+### P17-02 — Containers round-up, Step A: hopper→furnace routing and the barrel fix
+
+Hoppers push into their `facing` cell (down or horizontal; unreadable
+states fail safe to below) and furnaces take part at last: pulls take the
+output slot only (`SlotRole::may_hopper_extract` refuses input/fuel —
+vanilla's sided rule, pumpkin `suck_in_items` walks every slot above),
+top entries feed the input with smeltables only and side entries feed the
+fuel slot with fuels only (pack smelting table + jar-verified fuel table,
+per item, so coal from above and food from the side stay put). The full
+feed-cook-collect chain runs end to end (260 ticks, exactly one stone
+below). Barrels show "Barrel" (`container.barrel`, pumpkin translations
+agree) and save under `minecraft:chest` no longer — the on-disk id is the
+block's own (`chest`/`trapped_chest`/`barrel`, mismatches skipped), read
+back from the region file in the test. Deliberately deferred: furnace XP
+on extract, the hopper `enabled` redstone lock, hopper placement
+orientation (first state wins), double chests, the crafting-table window
+(Step B/C). Falsification: all-Storage pull roles and the chest-id save
+each fail their probe. Gate 1558/0/35/123.
+
 ## Unreleased — Phase 15 (Observability + Core Hardening)
 
 ### P15-08 — Hardening review sign-off (all clauses re-evidenced)

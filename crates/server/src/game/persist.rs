@@ -414,7 +414,27 @@ impl Game {
             .filter_map(|entity| {
                 let mut fields: Vec<(String, mc_nbt::NbtTag)> = Vec::new();
                 let id = match entity.kind() {
-                    mc_container::BlockEntityKind::Container => "minecraft:chest",
+                    // One kind serves chests, trapped chests and barrels (same
+                    // 27 slots); the block itself names the id — a barrel saved
+                    // as `minecraft:chest` loads wrong on a vanilla server
+                    // (P17-02 barrel fix). A mismatch means the world and the
+                    // entity store disagree, so the entry is skipped rather
+                    // than saved under the wrong id.
+                    mc_container::BlockEntityKind::Container => {
+                        let block = self
+                            .world
+                            .get_block_loaded(entity.pos.x, entity.pos.y, entity.pos.z)
+                            .and_then(|state| self.registries.blocks.block_name(state).ok());
+                        match block {
+                            Some("minecraft:chest") => "minecraft:chest",
+                            Some("minecraft:trapped_chest") => "minecraft:trapped_chest",
+                            Some("minecraft:barrel") => "minecraft:barrel",
+                            _ => {
+                                warn!(pos = ?entity.pos, "a chest entity sits on no chest; skipped");
+                                return None;
+                            }
+                        }
+                    }
                     mc_container::BlockEntityKind::Furnace => "minecraft:furnace",
                     mc_container::BlockEntityKind::Hopper => "minecraft:hopper",
                     // One kind serves both blocks (same 9 slots); the block

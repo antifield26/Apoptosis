@@ -1544,7 +1544,15 @@ impl Game {
                             return;
                         }
                     };
-                (menu, MENU_GENERIC_9X3, "Chest")
+                // A barrel shows "Barrel" (container.barrel in the vanilla
+                // lang table, pumpkin-generated translations agree); trapped
+                // chests keep "Chest" like vanilla (P17-02 barrel fix).
+                let title = if name == "minecraft:barrel" {
+                    "Barrel"
+                } else {
+                    "Chest"
+                };
+                (menu, MENU_GENERIC_9X3, title)
             }
             OpenKind::Furnace => {
                 let mut block =

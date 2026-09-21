@@ -759,10 +759,15 @@ impl Game {
         //
         // Vanilla pulls from above then pushes below in the same tick; this does
         // push-then-pull with one item per side so a hopper chain advances one
-        // slot per cooldown. Only `Container`/`Hopper` payloads participate —
-        // furnace input/output routing is a recorded gap. Positions ascend for
-        // determinism; mutations go through temp containers so two map entries
-        // are never borrowed together.
+        // slot per cooldown. Positions ascend for determinism; mutations go
+        // through temp containers so two map entries are never borrowed together.
+        //
+        // P17-02: the push target follows the hopper's `facing` (pumpkin ejects
+        // into `position.offset(facing)`), and furnaces take part with
+        // face-aware routing — pull takes the output slot only (input/fuel
+        // refuse hopper extraction), a top entry feeds the input slot with
+        // smeltables only, a side entry feeds the fuel slot with fuels only.
+        // Furnace XP on extract and the `enabled` redstone lock stay named gaps.
         let mut hopper_touched: Vec<mc_container::BlockPos> = Vec::new();
         let hopper_positions: Vec<mc_container::BlockPos> = self
             .block_entities
@@ -792,11 +797,19 @@ impl Game {
             if !cooled {
                 continue;
             }
-            let below = mc_container::BlockPos::new(pos.x, pos.y - 1, pos.z);
+            // Push target follows `facing` (down = below, else the horizontal
+            // neighbour); unreadable states fail safe to below, which is the
+            // pre-P17-02 behaviour. The pull source stays the cell above.
+            let dest_below = self.hopper_push_offset(pos);
+            let dest = mc_container::BlockPos::new(
+                pos.x + dest_below.0,
+                pos.y + dest_below.1,
+                pos.z + dest_below.2,
+            );
             let above = mc_container::BlockPos::new(pos.x, pos.y + 1, pos.z);
             let mut moved = false;
-            // Push below first, then pull from above.
-            for (source_pos, dest_pos) in [(pos, below), (above, pos)] {
+            // Push into the facing cell first, then pull from above.
+            for (source_pos, dest_pos) in [(pos, dest), (above, pos)] {
                 let (Some(source_items), Some(dest_items)) = (
                     self.block_entities
                         .get(source_pos)
@@ -809,8 +822,10 @@ impl Game {
                 ) else {
                     continue;
                 };
-                // Furnaces are skipped: their slot roles need input/output
-                // routing that this phase does not model.
+                // Furnace routing (P17-02): a furnace source yields its output
+                // slot only (input/fuel refuse hopper extraction); a furnace
+                // destination takes smeltables into the input on top entry and
+                // fuels into the fuel slot on side entry, checked per item.
                 let source_is_furnace = self
                     .block_entities
                     .get(source_pos)
@@ -819,7 +834,26 @@ impl Game {
                     .block_entities
                     .get(dest_pos)
                     .is_some_and(|e| e.kind() == mc_container::BlockEntityKind::Furnace);
-                if source_is_furnace || dest_is_furnace {
+                if dest_is_furnace && source_pos == pos {
+                    if self.hopper_feed_furnace(pos, dest_pos, dest_below.1 == -1) {
+                        moved = true;
+                        hopper_touched.push(source_pos);
+                        hopper_touched.push(dest_pos);
+                    }
+                    if moved {
+                        break;
+                    }
+                    continue;
+                }
+                if source_is_furnace && dest_pos == pos {
+                    if self.hopper_take_furnace_output(source_pos, dest_pos) {
+                        moved = true;
+                        hopper_touched.push(source_pos);
+                        hopper_touched.push(dest_pos);
+                    }
+                    if moved {
+                        break;
+                    }
                     continue;
                 }
                 let Ok(mut source) = mc_container::Container::new(
@@ -994,6 +1028,207 @@ impl Game {
             }
         }
         Ok(())
+    }
+
+    /// A hopper's push offset from its `facing` property (P17-02).
+    ///
+    /// Down pushes below, horizontal facings push sideways (pumpkin ejects
+    /// into `position.offset(facing)`). Unreadable states fail safe to below
+    /// — the pre-P17-02 behaviour — rather than refusing the transfer.
+    fn hopper_push_offset(&self, pos: mc_container::BlockPos) -> (i32, i32, i32) {
+        let facing = self
+            .world
+            .get_block_loaded(pos.x, pos.y, pos.z)
+            .and_then(|id| self.registries.blocks.properties_of(id).ok())
+            .and_then(|props| {
+                props
+                    .iter()
+                    .find(|(key, _)| key == "facing")
+                    .map(|(_, value)| value.clone())
+            })
+            .unwrap_or_else(|| "down".to_owned());
+        if facing == "down" {
+            (0, -1, 0)
+        } else {
+            let (fx, fy, fz) = mc_redstone::blocks::facing_offset(&facing);
+            if fy != 0 { (0, -1, 0) } else { (fx, 0, fz) }
+        }
+    }
+
+    /// Push one item from a hopper into a furnace, face-aware (P17-02).
+    ///
+    /// `from_top` (hopper directly above) feeds the input slot with smeltable
+    /// items only; a side entry feeds the fuel slot with fuels only — vanilla's
+    /// sided rule, checked per item against the pack smelting table and the
+    /// jar-verified fuel table, so coal from above stays put and food from the
+    /// side stays put. Hopper slots are tried in order; the first valid stack
+    /// with room in the target moves one item. Unknown items (failed lookups)
+    /// fail safe as "not valid" rather than as fuel.
+    fn hopper_feed_furnace(
+        &mut self,
+        hopper: mc_container::BlockPos,
+        furnace: mc_container::BlockPos,
+        from_top: bool,
+    ) -> bool {
+        // Slot 0 on top entry, slot 1 on side entry.
+        let slot = usize::from(!from_top);
+        let Some(hopper_items) = self
+            .block_entities
+            .get(hopper)
+            .and_then(|e| e.data.items())
+            .map(<[mc_entity::stack::ItemStack]>::to_vec)
+        else {
+            return false;
+        };
+        let Some(furnace_items) = self
+            .block_entities
+            .get(furnace)
+            .and_then(|e| e.data.items())
+            .map(<[mc_entity::stack::ItemStack]>::to_vec)
+        else {
+            return false;
+        };
+        if furnace_items.len() <= slot {
+            return false;
+        }
+        for (index, stack) in hopper_items.iter().enumerate() {
+            if stack.is_empty() {
+                continue;
+            }
+            let Some(item_id) = stack.item_id() else {
+                continue;
+            };
+            let valid = if from_top {
+                self.smelting_furnace.recipe_for(item_id).is_some()
+            } else {
+                self.smelting_furnace
+                    .burn_ticks_for(&self.registries.items, item_id)
+                    .unwrap_or(None)
+                    .is_some()
+            };
+            if !valid {
+                continue;
+            }
+            let dest = furnace_items[slot];
+            let room = if dest.is_empty() {
+                true
+            } else if dest.item_id() == Some(item_id) {
+                let limit = self.sessions.values().next().map_or(64, |session| {
+                    session
+                        .player
+                        .inventory
+                        .stack_sizes()
+                        .max_stack_size(item_id)
+                });
+                dest.count() < limit
+            } else {
+                false
+            };
+            if !room {
+                return false;
+            }
+            let mut taken = *stack;
+            let one = taken.split(1);
+            if one.is_empty() {
+                continue;
+            }
+            let mut into = dest;
+            if into.is_empty() {
+                into = one;
+            } else {
+                into.grow(1);
+            }
+            if let Some(entity) = self.block_entities.get_mut(hopper)
+                && let Some(items) = entity.data.items_mut()
+                && let Some(slot_stack) = items.get_mut(index)
+            {
+                *slot_stack = taken;
+            } else {
+                return false;
+            }
+            if let Some(entity) = self.block_entities.get_mut(furnace)
+                && let Some(items) = entity.data.items_mut()
+                && let Some(slot_stack) = items.get_mut(slot)
+            {
+                *slot_stack = into;
+            } else {
+                return false;
+            }
+            mark_block_dirty(&mut self.world, hopper.x, hopper.z);
+            return true;
+        }
+        false
+    }
+
+    /// Pull one item from a furnace's output slot into a hopper (P17-02).
+    ///
+    /// Input and fuel never leave through a hopper (vanilla sided rule; the
+    /// refusal lives in [`mc_container::SlotRole::may_hopper_extract`], this
+    /// only supplies the furnace role slice). The hopper half takes anything
+    /// with room, exactly like the generic push path.
+    fn hopper_take_furnace_output(
+        &mut self,
+        furnace: mc_container::BlockPos,
+        hopper: mc_container::BlockPos,
+    ) -> bool {
+        let (Some(source_items), Some(dest_items)) = (
+            self.block_entities
+                .get(furnace)
+                .and_then(|e| e.data.items())
+                .map(<[mc_entity::stack::ItemStack]>::to_vec),
+            self.block_entities
+                .get(hopper)
+                .and_then(|e| e.data.items())
+                .map(<[mc_entity::stack::ItemStack]>::to_vec),
+        ) else {
+            return false;
+        };
+        let Ok(mut source) =
+            mc_container::Container::new(mc_container::ContainerKind::Generic, source_items.len())
+        else {
+            return false;
+        };
+        let Ok(mut dest) =
+            mc_container::Container::new(mc_container::ContainerKind::Generic, dest_items.len())
+        else {
+            return false;
+        };
+        for (index, stack) in source_items.iter().enumerate() {
+            let _ = source.set(index, *stack);
+        }
+        for (index, stack) in dest_items.iter().enumerate() {
+            let _ = dest.set(index, *stack);
+        }
+        let roles = [
+            mc_container::SlotRole::FurnaceInput,
+            mc_container::SlotRole::FurnaceFuel,
+            mc_container::SlotRole::FurnaceOutput,
+        ];
+        let dest_roles = vec![mc_container::SlotRole::Storage; dest.len()];
+        let Ok(transfer) =
+            mc_container::Hopper::transfer(&mut source, &roles, &mut dest, &dest_roles, 1)
+        else {
+            return false;
+        };
+        if transfer.moved == 0 {
+            return false;
+        }
+        if let Some(entity) = self.block_entities.get_mut(furnace)
+            && let Some(items) = entity.data.items_mut()
+        {
+            for (index, slot) in items.iter_mut().enumerate() {
+                *slot = source.get(index);
+            }
+        }
+        if let Some(entity) = self.block_entities.get_mut(hopper)
+            && let Some(items) = entity.data.items_mut()
+        {
+            for (index, slot) in items.iter_mut().enumerate() {
+                *slot = dest.get(index);
+            }
+        }
+        mark_block_dirty(&mut self.world, furnace.x, furnace.z);
+        true
     }
 
     /// Phase 3: tick every non-player entity, ascending by id.

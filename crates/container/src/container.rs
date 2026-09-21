@@ -116,6 +116,19 @@ impl SlotRole {
         true
     }
 
+    /// Whether a hopper may pull a stack out of a slot with this role.
+    ///
+    /// Hoppers extract furnace output only: the input and fuel slots refuse,
+    /// everything else allows. That is vanilla's sided-inventory rule on the
+    /// down face (pumpkin `HopperBlockEntity::suck_in_items` walks every slot
+    /// of the container above, and only slot 2 of a furnace is a legal take).
+    /// Separate from [`Self::may_pickup`] because the client *may* take fuel
+    /// back out by hand — the refusal is the hopper's, not the slot's.
+    #[must_use]
+    pub const fn may_hopper_extract(self) -> bool {
+        !matches!(self, Self::FurnaceInput | Self::FurnaceFuel)
+    }
+
     /// Whether this role is computed by the server rather than stored by a player.
     #[must_use]
     pub const fn is_computed(self) -> bool {

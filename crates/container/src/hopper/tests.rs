@@ -358,6 +358,13 @@ fn a_transfer_does_not_pull_from_a_pickup_refusing_slot() {
             "{role:?} is documented as takeable; the premise of this test is that no \
              role refuses pickup yet"
         );
+        // Hopper extraction is stricter: furnace input/fuel refuse (vanilla
+        // sided rule — output only), everything else allows.
+        assert_eq!(
+            role.may_hopper_extract(),
+            !matches!(role, SlotRole::FurnaceInput | SlotRole::FurnaceFuel),
+            "{role:?} hopper-extract rule"
+        );
     }
 
     // A source whose *only* non-empty slot is not pullable must not be drained.
@@ -375,6 +382,36 @@ fn a_transfer_does_not_pull_from_a_pickup_refusing_slot() {
     assert_eq!(result.destination_slot, Some(0));
     assert_eq!(destination.get(0), stack(stone(), 10));
     assert!(source.get(1).is_empty());
+}
+
+#[test]
+fn a_transfer_pulls_only_the_output_from_a_furnace() {
+    // P17-02: a hopper above a furnace takes the output slot even when the
+    // input and fuel slots are fuller and earlier in order.
+    let mut furnace = container(3);
+    furnace.set(0, stack(stone(), 64)).expect("input");
+    furnace.set(1, stack(stone(), 64)).expect("fuel");
+    furnace.set(2, stack(stone(), 10)).expect("output");
+    let mut destination = container(1);
+    let roles = [
+        SlotRole::FurnaceInput,
+        SlotRole::FurnaceFuel,
+        SlotRole::FurnaceOutput,
+    ];
+    let result =
+        Hopper::transfer(&mut furnace, &roles, &mut destination, &[], 10).expect("transfer");
+    assert_eq!(result.source_slot, Some(2), "input and fuel are skipped");
+    assert_eq!(destination.get(0), stack(stone(), 10));
+    assert_eq!(furnace.get(0), stack(stone(), 64));
+    assert_eq!(furnace.get(1), stack(stone(), 64));
+
+    // Output empty: nothing moves, however full the input is.
+    let mut full_input = container(3);
+    full_input.set(0, stack(stone(), 64)).expect("input");
+    let mut idle = container(1);
+    let result = Hopper::transfer(&mut full_input, &roles, &mut idle, &[], 10).expect("transfer");
+    assert_eq!(result, HopperTransfer::none());
+    assert!(idle.get(0).is_empty());
 }
 
 #[test]

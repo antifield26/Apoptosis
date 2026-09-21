@@ -29,7 +29,8 @@
 //!
 //! ## Slot roles
 //!
-//! A hopper must not pull from a slot that refuses pickup and must not push into a
+//! A hopper must not pull from a furnace's input/fuel slots
+//! ([`SlotRole::may_hopper_extract`]) and must not push into a
 //! computed slot ([`SlotRole::CraftingResult`] and [`SlotRole::FurnaceOutput`] are
 //! take-only, because the server computes them: a hopper pushing into one would be
 //! creating items). Both containers therefore take a parallel `&[SlotRole]` slice
@@ -248,10 +249,12 @@ fn wanted(per_transfer: i32) -> i32 {
 
 /// Every source slot the hopper may pull from, in slot order.
 ///
-/// A slot qualifies when its role allows pickup ([`SlotRole::may_pickup`]) and it
-/// holds items. The list is materialised before any mutation so that a
-/// destination search that fails for one candidate can fall through to the next
-/// without re-reading a container that has not changed.
+/// A slot qualifies when its role allows hopper extraction
+/// ([`SlotRole::may_hopper_extract`] — furnace input/fuel refuse, so a
+/// hopper above a furnace takes the output only) and it holds items. The
+/// list is materialised before any mutation so that a destination search
+/// that fails for one candidate can fall through to the next without
+/// re-reading a container that has not changed.
 fn pull_candidates(
     source: &Container,
     source_roles: &[SlotRole],
@@ -263,7 +266,7 @@ fn pull_candidates(
     }
     source
         .non_empty()
-        .filter(|(index, _)| role_at(source_roles, *index).may_pickup())
+        .filter(|(index, _)| role_at(source_roles, *index).may_hopper_extract())
         .map(|(index, stack)| PullCandidate { index, stack })
         .collect()
 }
