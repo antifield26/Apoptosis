@@ -20,6 +20,31 @@ use std::path::Path;
 pub struct ItemRegistry {
     by_name: HashMap<String, i32>,
     by_id: Vec<ItemEntry>,
+    /// Tool rules by item name, from `tool_rules.tsv` beside `items.tsv`
+    /// (P16-05): vanilla Tool components in evaluation order.
+    tools: HashMap<String, ToolEntry>,
+}
+
+/// One item's Tool component: ordered rules plus the default speed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolEntry {
+    /// Speed when no rule matches (1.0 for every vanilla tool).
+    pub default_speed: f32,
+    /// Rules in evaluation order: the first rule whose tag contains the
+    /// block and that sets the field wins (pumpkin `ItemStack::get_speed` /
+    /// `is_correct_for_drops`).
+    pub rules: Vec<ToolRule>,
+}
+
+/// One Tool rule.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolRule {
+    /// Block tag this rule matches, e.g. `minecraft:mineable/pickaxe`.
+    pub tag: String,
+    /// Mining speed on a match, or `None` when the rule only judges drops.
+    pub speed: Option<f32>,
+    /// Whether the match harvests drops, or `None` for speed-only rules.
+    pub correct: Option<bool>,
 }
 
 /// One registered item.
@@ -43,7 +68,9 @@ impl ItemRegistry {
         let text = std::fs::read_to_string(path).map_err(|e| {
             ServerError::Operational(format!("cannot read {}: {e}", path.display()))
         })?;
-        Self::parse(&text)
+        let mut registry = Self::parse(&text)?;
+        apply_tool_rules(&mut registry.tools, path);
+        Ok(registry)
     }
 
     /// Parse a table from memory.
@@ -87,7 +114,11 @@ impl ItemRegistry {
             .enumerate()
             .map(|(id, entry)| (entry.name.clone(), id as i32))
             .collect();
-        Ok(Self { by_name, by_id })
+        Ok(Self {
+            by_name,
+            by_id,
+            tools: HashMap::new(),
+        })
     }
 
     /// Number of registered items.
@@ -173,9 +204,106 @@ impl ItemRegistry {
             .map(|index| index as i32)
             .ok_or_else(|| ServerError::CorruptData(format!("no item places block {block:?}")))
     }
+
+    /// Tool rules for an item name, or `None` for a non-tool (hand equivalent).
+    ///
+    /// `None` means "dig everything at speed 1.0, harvest nothing a tool is
+    /// required for" — the vanilla reading of an empty hand, and of any tool
+    /// the fixture predates.
+    #[must_use]
+    pub fn tool(&self, name: &str) -> Option<&ToolEntry> {
+        self.tools.get(name)
+    }
+}
+
+/// Load `tool_rules.tsv` beside an `items.tsv` into `tools` (P16-05).
+///
+/// Missing file: warn once and leave the map empty (every held item then
+/// digs as a hand — the degraded mode). Malformed rows warn per row and
+/// skip; a bad order field fails the load, because rule order *is* the
+/// semantics and a misordered table would invert tool judgments silently.
+fn apply_tool_rules(tools: &mut HashMap<String, ToolEntry>, items_path: &Path) {
+    let Some(dir) = items_path.parent() else {
+        return;
+    };
+    let path = dir.join("tool_rules.tsv");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        tracing::warn!(
+            path = %path.display(),
+            "no tool rules beside the item table; every held item digs as a hand"
+        );
+        return;
+    };
+    let mut ordered: HashMap<String, Vec<(usize, ToolRule, f32)>> = HashMap::new();
+    for (number, line) in text.lines().enumerate() {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        let row = number + 1;
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() != 6 {
+            tracing::warn!(
+                row,
+                "tool_rules.tsv: expected 6 tab-separated fields; skipped"
+            );
+            continue;
+        }
+        let Ok(order) = fields[1].parse::<usize>() else {
+            tracing::warn!(row, "tool_rules.tsv: bad rule order; skipped");
+            continue;
+        };
+        let speed = match fields[3] {
+            "-" => None,
+            speed => {
+                let Ok(speed) = speed.strip_suffix("f32").unwrap_or(speed).parse::<f32>() else {
+                    tracing::warn!(row, "tool_rules.tsv: bad speed; skipped");
+                    continue;
+                };
+                Some(speed)
+            }
+        };
+        let correct = match fields[4] {
+            "-" => None,
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => {
+                tracing::warn!(row, "tool_rules.tsv: bad correct flag; skipped");
+                continue;
+            }
+        };
+        let fields5 = fields[5].strip_suffix("f32").unwrap_or(fields[5]);
+        let Ok(default) = fields5.parse::<f32>() else {
+            tracing::warn!(row, "tool_rules.tsv: bad default speed; skipped");
+            continue;
+        };
+        ordered.entry(fields[0].to_owned()).or_default().push((
+            order,
+            ToolRule {
+                tag: fields[2].to_owned(),
+                speed,
+                correct,
+            },
+            default,
+        ));
+    }
+    let mut applied = 0usize;
+    for (name, mut rules) in ordered {
+        rules.sort_by_key(|(order, _, _)| *order);
+        let default = rules.first().map_or(1.0, |(_, _, default)| *default);
+        tools.insert(
+            name,
+            ToolEntry {
+                default_speed: default,
+                rules: rules.into_iter().map(|(_, rule, _)| rule).collect(),
+            },
+        );
+        applied += 1;
+    }
+    tracing::debug!(applied, "tool rules loaded");
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp, reason = "fixture pins assert exact parsed speeds")]
 mod tests {
     use super::ItemRegistry;
 
@@ -231,6 +359,25 @@ mod tests {
         assert!(items.entry(99_999).is_err());
         assert!(items.name(-1).is_err());
         assert!(items.item_for_block("minecraft:not_a_block").is_err());
+    }
+
+    #[test]
+    fn tool_rules_mirror_the_vanilla_tool_components() {
+        // P16-05: ordered rules from pumpkin's generated item.rs via
+        // target/extract_mining.py. First match wins per field.
+        let items = registry();
+        let pick = items.tool("minecraft:diamond_pickaxe").expect("a tool");
+        assert_eq!(pick.default_speed, 1.0);
+        assert_eq!(pick.rules.len(), 2);
+        assert_eq!(pick.rules[0].tag, "minecraft:incorrect_for_diamond_tool");
+        assert_eq!(pick.rules[0].speed, None);
+        assert_eq!(pick.rules[0].correct, Some(false));
+        assert_eq!(pick.rules[1].tag, "minecraft:mineable/pickaxe");
+        assert_eq!(pick.rules[1].speed, Some(8.0));
+        assert_eq!(pick.rules[1].correct, Some(true));
+        // A non-tool has no entry: the caller digs as a hand.
+        assert_eq!(items.tool("minecraft:stick"), None);
+        assert_eq!(items.tool("minecraft:not_an_item"), None);
     }
 
     #[test]

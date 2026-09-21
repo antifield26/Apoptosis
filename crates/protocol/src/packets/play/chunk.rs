@@ -778,6 +778,51 @@ impl Packet for BlockUpdate {
     }
 }
 
+/// A block-crack overlay stage (`minecraft:block_destruction`, P16-05).
+///
+/// Wire shape corroborated by pumpkin's `CSetBlockDestroyStage`: `VarInt`
+/// entity id (usually the miner's), packed block position, `i8` stage.
+/// Stages run 0–9 with progress; any other value (vanilla sends -1) clears
+/// the overlay. Id 5 in both the shipped table and pumpkin's packet enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockDestruction {
+    /// Miner's entity id: overlays are keyed per miner, so two players can
+    /// crack the same block independently.
+    pub entity_id: i32,
+    /// Packed block position, see [`block_position`].
+    pub position: i64,
+    /// Crack stage 0–9, or anything else to clear.
+    pub stage: i8,
+}
+
+impl Packet for BlockDestruction {
+    const ID: i32 = clientbound::play::BLOCK_DESTRUCTION;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let packet = Self {
+            entity_id: reader.read_varint()?,
+            position: reader.read_i64()?,
+            stage: reader.read_i8()?,
+        };
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "block_destruction has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(packet)
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.entity_id);
+        writer.write_i64(self.position);
+        writer.write_i8(self.stage);
+        Ok(writer.finish())
+    }
+}
+
 /// A batch of block changes in one section (`minecraft:section_blocks_update`).
 ///
 /// Vanilla packs many block changes into one packet, which maps cleanly onto a

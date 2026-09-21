@@ -80,12 +80,13 @@ mod light;
 mod position;
 
 pub use self::chunk::{
-    BIOMES_PER_SECTION, BLOCKS_PER_SECTION, BlockChangedAck, BlockUpdate, ChunkBatchFinished,
-    ChunkBatchStart, ChunkSection, HEIGHTMAP_MOTION_BLOCKING, HEIGHTMAP_MOTION_BLOCKING_NO_LEAVES,
-    HEIGHTMAP_OCEAN_FLOOR, HEIGHTMAP_OCEAN_FLOOR_WG, HEIGHTMAP_WORLD_SURFACE,
-    HEIGHTMAP_WORLD_SURFACE_WG, Heightmap, LevelChunkWithLight, MAX_BLOCK_ENTITIES,
-    MAX_CHUNK_SECTIONS, MAX_HEIGHTMAP_LONGS, MAX_HEIGHTMAPS, MAX_PALETTE_LEN, MAX_SECTION_UPDATES,
-    NETWORK_BIOME_MIN_BITS, OVERWORLD_SECTIONS, PalettedContainer, SectionBlocksUpdate,
+    BIOMES_PER_SECTION, BLOCKS_PER_SECTION, BlockChangedAck, BlockDestruction, BlockUpdate,
+    ChunkBatchFinished, ChunkBatchStart, ChunkSection, HEIGHTMAP_MOTION_BLOCKING,
+    HEIGHTMAP_MOTION_BLOCKING_NO_LEAVES, HEIGHTMAP_OCEAN_FLOOR, HEIGHTMAP_OCEAN_FLOOR_WG,
+    HEIGHTMAP_WORLD_SURFACE, HEIGHTMAP_WORLD_SURFACE_WG, Heightmap, LevelChunkWithLight,
+    MAX_BLOCK_ENTITIES, MAX_CHUNK_SECTIONS, MAX_HEIGHTMAP_LONGS, MAX_HEIGHTMAPS, MAX_PALETTE_LEN,
+    MAX_SECTION_UPDATES, NETWORK_BIOME_MIN_BITS, OVERWORLD_SECTIONS, PalettedContainer,
+    SectionBlocksUpdate,
 };
 pub use self::inventory::{
     ContainerClose, ContainerSetContent, ContainerSetData, ContainerSetSlot, ItemStack,
@@ -2010,10 +2011,10 @@ impl PlayIntent {
 #[cfg(test)]
 mod tests {
     use super::{
-        COMMAND_MAX_CHARS, ConfigurationAcknowledged, ContainerClose, ContainerSetData,
-        ForgetLevelChunk, JoinGame, KeepAlive, LightData, LightUpdate, MENU_FURNACE,
-        MENU_GENERIC_9X3, MENU_GENERIC_9X6, MENU_HOPPER, OpenScreen, PlayDisconnect, PlayIntent,
-        PlayPingRequest, PlayPong, PlayerPosition, RemoveMobEffect, SIGNATURE_LEN,
+        BlockDestruction, COMMAND_MAX_CHARS, ConfigurationAcknowledged, ContainerClose,
+        ContainerSetData, ForgetLevelChunk, JoinGame, KeepAlive, LightData, LightUpdate,
+        MENU_FURNACE, MENU_GENERIC_9X3, MENU_GENERIC_9X6, MENU_HOPPER, OpenScreen, PlayDisconnect,
+        PlayIntent, PlayPingRequest, PlayPong, PlayerPosition, RemoveMobEffect, SIGNATURE_LEN,
         SetChunkCacheCenter, SetChunkCacheRadius, SetCursorItem, UpdateMobEffect,
     };
     use crate::packets::Packet;
@@ -2839,6 +2840,36 @@ mod tests {
         assert_eq!(raw.id, BlockUpdate::ID);
         assert_eq!(raw.id, 8);
         assert_eq!(raw.payload, expected);
+    }
+
+    #[test]
+    fn block_destruction_round_trip() {
+        // P16-05: VarInt entity, packed position, i8 stage — the shape
+        // pumpkin's CSetBlockDestroyStage corroborates. 0xFF decodes as -1,
+        // the overlay-clearing stage, which the dig path sends on abort.
+        let packet = BlockDestruction {
+            entity_id: 7,
+            position: block_position(1, 64, -1),
+            stage: 4,
+        };
+        let body = packet.encode().expect("encodes");
+        assert_eq!(body.len(), 1 + 8 + 1);
+        assert_eq!(BlockDestruction::decode(&body).expect("decodes"), packet);
+        let clearing = BlockDestruction {
+            entity_id: 7,
+            position: block_position(1, 64, -1),
+            stage: -1,
+        };
+        let clearing_body = clearing.encode().expect("encodes");
+        assert_eq!(clearing_body[clearing_body.len() - 1], 0xFF);
+        assert_eq!(
+            BlockDestruction::decode(&clearing_body).expect("decodes"),
+            clearing
+        );
+        assert!(BlockDestruction::decode(&[0x07]).is_err());
+        let raw = packet.to_raw().expect("raw");
+        assert_eq!(raw.id, BlockDestruction::ID);
+        assert_eq!(raw.id, 5);
     }
 
     #[test]

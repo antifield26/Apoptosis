@@ -95,7 +95,7 @@ restore.
 ## Testing
 
 ```sh
-cargo test --workspace --no-fail-fast            # 1 519 passed / 0 failed / 35 ignored (118 suites)
+cargo test --workspace --no-fail-fast            # 1 524 passed / 0 failed / 35 ignored (118 suites)
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo check --target aarch64-unknown-linux-gnu --workspace --all-targets

@@ -583,6 +583,12 @@ fn every_constant_we_use_matches_the_vanilla_jar() {
     check(
         "game",
         "clientbound",
+        "block_destruction",
+        clientbound::play::BLOCK_DESTRUCTION,
+    );
+    check(
+        "game",
+        "clientbound",
         "block_update",
         clientbound::play::BLOCK_UPDATE,
     );

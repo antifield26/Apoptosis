@@ -251,6 +251,9 @@ pub mod clientbound {
         /// [`crate::packets::play::BlockChangedAck`] for the bytecode. Its absence
         /// was M-2 of the owner's P11-10 acceptance round.
         pub const BLOCK_CHANGED_ACK: i32 = 4;
+        /// `minecraft:block_destruction` — one miner's crack overlay stage
+        /// (0–9; anything else clears). P16-05 dig progress announces here.
+        pub const BLOCK_DESTRUCTION: i32 = 5;
         /// `minecraft:block_entity_data` — the contents of a block entity, on placement and on
         /// change.
         ///

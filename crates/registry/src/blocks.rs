@@ -168,6 +168,17 @@ pub struct BlockRegistry {
     air_id: i32,
     /// Ids of every state that is air or a fluid-less "empty" block.
     empty_ids: Vec<i32>,
+    /// Mining hardness (`destroyTime`) by block name, from
+    /// `block_hardness.tsv` beside `blocks.tsv` (P16-05).
+    hardness: HashMap<String, f32>,
+    /// Blocks whose drops require the correct tool, from the same file.
+    requires_tool: std::collections::HashSet<String>,
+    /// Mining-tag membership by block name (`block_mineable.tsv`): the
+    /// vanilla `mineable/*`, sword and shears efficiency tags a block sits in.
+    mineable_tags: HashMap<String, Vec<String>>,
+    /// Refused harvest tiers by block name (`block_tool_tiers.tsv`): the
+    /// vanilla `incorrect_for_*_tool` sets.
+    refused_tiers: HashMap<String, Vec<String>>,
 }
 
 /// `minecraft:air`, the id every empty position uses.
@@ -188,6 +199,12 @@ impl BlockRegistry {
         // **The real defaults**, from the table the jar probe writes. `parse` cannot do this: it takes text and
         // has no directory to look beside. See `apply_default_states` for what the fallback costs.
         apply_default_states(&mut registry.by_name, path);
+        // **Mining tables**, same beside-file contract (P16-05): extracted
+        // from pumpkin's vanilla-derived data by `target/extract_mining.py`.
+        // Absent files warn and leave the maps empty; the mining evaluation
+        // treats a missing entry with a documented fallback rather than
+        // refusing the dig (same degraded-mode reasoning as the defaults).
+        apply_mining_tables(&mut registry, path);
         Ok(registry)
     }
 
@@ -309,6 +326,10 @@ impl BlockRegistry {
             by_id,
             air_id,
             empty_ids,
+            hardness: HashMap::new(),
+            requires_tool: std::collections::HashSet::new(),
+            mineable_tags: HashMap::new(),
+            refused_tiers: HashMap::new(),
         };
         tracing::debug!(
             blocks = registry.by_name.len(),
@@ -473,6 +494,168 @@ impl BlockRegistry {
             id,
         })
     }
+
+    /// Mining hardness (`destroyTime`) of a block, or `None` when the mining
+    /// fixture is absent or predates the block.
+    ///
+    /// `Some(-1.0)` is unbreakable (bedrock and friends); `Some(0.0)` breaks
+    /// the tick digging starts. Callers apply the documented fallback, never
+    /// a silent substitute: see [`apply_mining_tables`].
+    #[must_use]
+    pub fn hardness(&self, name: &str) -> Option<f32> {
+        self.hardness.get(name).copied()
+    }
+
+    /// Whether a block's drops require the correct tool
+    /// (`requiresCorrectToolForDrops`).
+    ///
+    /// `false` for unknown names: without the fixture there is nothing to
+    /// require, and refusing the dig would brick survival on a stale deploy.
+    #[must_use]
+    pub fn requires_tool(&self, name: &str) -> bool {
+        self.requires_tool.contains(name)
+    }
+
+    /// Mining tags a block sits in (`mineable/*`, sword/shears efficiency).
+    ///
+    /// Empty for unknown names, which matches no tool rule and digs at the
+    /// default speed — the degraded mode, not a refusal.
+    #[must_use]
+    pub fn mineable_tags(&self, name: &str) -> &[String] {
+        self.mineable_tags.get(name).map_or(&[], Vec::as_slice)
+    }
+
+    /// Harvest tiers refused for a block (`incorrect_for_*_tool` tags).
+    ///
+    /// Full tag names (e.g. `minecraft:incorrect_for_stone_tool`), so tool
+    /// rules match against the same membership lists as the mineable tags.
+    /// Empty for unknown names: no tier is refused without the fixture.
+    #[must_use]
+    pub fn refused_tiers(&self, name: &str) -> &[String] {
+        self.refused_tiers.get(name).map_or(&[], Vec::as_slice)
+    }
+}
+
+/// Load the three mining fixtures beside a `blocks.tsv` (P16-05).
+///
+/// Each file warns and leaves its map empty when absent (the
+/// `block_defaults.tsv` contract): a deployment without mining data still
+/// digs, at documented fallback rates, rather than refusing every break.
+/// Malformed rows warn per row and skip — one bad row must not discard the
+/// other thousand, and every skip is visible in the log.
+fn apply_mining_tables(registry: &mut BlockRegistry, blocks_path: &Path) {
+    let Some(dir) = blocks_path.parent() else {
+        return;
+    };
+    let hardness_path = dir.join("block_hardness.tsv");
+    let Ok(text) = std::fs::read_to_string(&hardness_path) else {
+        tracing::warn!(
+            path = %hardness_path.display(),
+            "no block hardness table beside the block table; digs fall back to a flat rate"
+        );
+        // The tag lists below degrade independently: they may still exist
+        // and are still worth loading for tool matching.
+        apply_mining_tags(registry, dir);
+        return;
+    };
+    let mut applied = 0usize;
+    for (number, line) in text.lines().enumerate() {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        let row = number + 1;
+        let mut fields = line.split('\t');
+        let (Some(name), Some(hardness), Some(required)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            tracing::warn!(
+                row,
+                "block_hardness.tsv: expected 3 tab-separated fields; skipped"
+            );
+            continue;
+        };
+        let (Ok(hardness), Ok(required)) = (hardness.parse::<f32>(), required.parse::<u8>()) else {
+            tracing::warn!(
+                row,
+                name,
+                "block_hardness.tsv: bad hardness or flag; skipped"
+            );
+            continue;
+        };
+        if required == 1 {
+            registry.requires_tool.insert(name.to_owned());
+        }
+        registry.hardness.insert(name.to_owned(), hardness);
+        applied += 1;
+    }
+    tracing::debug!(applied, "block hardness loaded");
+    apply_mining_tags(registry, dir);
+}
+
+/// Load the two membership fixtures (`block_mineable.tsv`,
+/// `block_tool_tiers.tsv`) into the registry.
+fn apply_mining_tags(registry: &mut BlockRegistry, dir: &Path) {
+    load_tag_list(
+        &dir.join("block_mineable.tsv"),
+        3,
+        &mut registry.mineable_tags,
+        |fields| {
+            fields
+                .get(2)
+                .map(|tag| (fields[0].to_owned(), (*tag).to_owned()))
+        },
+    );
+    load_tag_list(
+        &dir.join("block_tool_tiers.tsv"),
+        2,
+        &mut registry.refused_tiers,
+        |fields| {
+            fields
+                .get(1)
+                .map(|tier| (fields[0].to_owned(), (*tier).to_owned()))
+        },
+    );
+}
+
+/// Load a two-shape membership fixture into `map` (block name → list).
+///
+/// `columns` is the expected field count; `pick` maps a row's fields to one
+/// (block, member) pair. Missing file: warn once, leave the map empty.
+/// Malformed rows: warn per row and skip — one bad row must not discard the
+/// other eight hundred.
+fn load_tag_list(
+    path: &Path,
+    columns: usize,
+    map: &mut HashMap<String, Vec<String>>,
+    pick: impl Fn(&[&str]) -> Option<(String, String)>,
+) {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        tracing::warn!(
+            path = %path.display(),
+            "no mining tag table; tool matching degrades to default speed"
+        );
+        return;
+    };
+    let mut applied = 0usize;
+    for (number, line) in text.lines().enumerate() {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() != columns {
+            tracing::warn!(
+                row = number + 1,
+                path = %path.display(),
+                "membership row has the wrong shape; skipped"
+            );
+            continue;
+        }
+        if let Some((block, member)) = pick(&fields) {
+            map.entry(block).or_default().push(member);
+            applied += 1;
+        }
+    }
+    tracing::debug!(path = %path.display(), applied, "mining tag list loaded");
 }
 
 #[cfg(test)]
@@ -498,6 +681,42 @@ mod tests {
             "state count from the jar dump"
         );
         assert_eq!(blocks.air_id(), 0);
+    }
+
+    #[test]
+    fn mining_tables_pin_spot_values() {
+        // P16-05: hardness (destroyTime), the tool requirement flag, tag
+        // membership and refused tiers, all extracted from pumpkin's
+        // vanilla-derived data by target/extract_mining.py.
+        let blocks = registry();
+        assert_eq!(blocks.hardness("minecraft:stone"), Some(1.5));
+        assert_eq!(blocks.hardness("minecraft:dirt"), Some(0.5));
+        assert_eq!(blocks.hardness("minecraft:obsidian"), Some(50.0));
+        assert_eq!(blocks.hardness("minecraft:bedrock"), Some(-1.0));
+        assert_eq!(blocks.hardness("minecraft:torch"), Some(0.0));
+        assert!(blocks.requires_tool("minecraft:stone"));
+        assert!(!blocks.requires_tool("minecraft:dirt"));
+        assert!(
+            blocks
+                .mineable_tags("minecraft:stone")
+                .contains(&"minecraft:mineable/pickaxe".to_owned())
+        );
+        assert!(
+            blocks
+                .mineable_tags("minecraft:oak_log")
+                .contains(&"minecraft:mineable/axe".to_owned())
+        );
+        assert!(
+            blocks
+                .refused_tiers("minecraft:diamond_ore")
+                .contains(&"minecraft:incorrect_for_stone_tool".to_owned())
+        );
+        assert!(blocks.refused_tiers("minecraft:stone").is_empty());
+        // Unknown names degrade, never refuse: empty tags, no requirement,
+        // no hardness.
+        assert_eq!(blocks.hardness("minecraft:not_a_block"), None);
+        assert!(!blocks.requires_tool("minecraft:not_a_block"));
+        assert!(blocks.mineable_tags("minecraft:not_a_block").is_empty());
     }
 
     #[test]
