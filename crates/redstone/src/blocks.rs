@@ -175,6 +175,47 @@ pub fn source_for_name(name: &str) -> Option<PowerSource> {
         .map(|(_, source)| *source)
 }
 
+/// A door block (`minecraft:*_door`), any material.
+///
+/// Suffix match: the registry holds exactly the door blocks under this
+/// suffix (21 in 26.1, wood through waxed copper plus iron), and a test
+/// below asserts every match carries the `open` and `powered` properties
+/// the mechanism arm reads — so a future block that happens to end in
+/// `_door` without those properties fails loudly instead of reacting
+/// half-way.
+#[must_use]
+pub fn is_door(name: &str) -> bool {
+    name.ends_with("_door")
+}
+
+/// A trapdoor block (`minecraft:*_trapdoor`), any material.
+///
+/// Same suffix contract as [`is_door`].
+#[must_use]
+pub fn is_trapdoor(name: &str) -> bool {
+    name.ends_with("_trapdoor")
+}
+
+/// A fence-gate block (`minecraft:*_fence_gate`), any material.
+///
+/// Same suffix contract as [`is_door`].
+#[must_use]
+pub fn is_fence_gate(name: &str) -> bool {
+    name.ends_with("_fence_gate")
+}
+
+/// Whether a player hand may toggle the block.
+///
+/// Vanilla refuses iron doors and the iron trapdoor (redstone-only); every
+/// other door, trapdoor and fence gate — copper included — toggles by hand
+/// (pumpkin `can_open_door` / `can_open_trapdoor`).
+#[must_use]
+pub fn hand_toggleable(name: &str) -> bool {
+    (is_door(name) || is_trapdoor(name) || is_fence_gate(name))
+        && name != "minecraft:iron_door"
+        && name != "minecraft:iron_trapdoor"
+}
+
 /// The canonical block name of a source, for resolving a state id in tests and tools.
 ///
 /// A source with several blocks (buttons, pressure plates, lightning rods) reports its
@@ -195,13 +236,71 @@ pub fn primary_block_name(source: PowerSource) -> &'static str {
 mod tests {
     use super::{
         COMPARATOR, LEVER, REDSTONE_BLOCK, REDSTONE_TORCH, REDSTONE_WALL_TORCH, REDSTONE_WIRE,
-        REPEATER, SOURCE_BLOCKS, primary_block_name, source_for_name,
+        REPEATER, SOURCE_BLOCKS, hand_toggleable, is_door, is_fence_gate, is_trapdoor,
+        primary_block_name, source_for_name,
     };
     use crate::power::PowerSource;
     use mc_registry::Registries;
 
     fn registry() -> mc_registry::BlockRegistry {
         Registries::vanilla().expect("registry").blocks
+    }
+
+    #[test]
+    fn door_family_suffixes_resolve_and_carry_open_and_powered() {
+        // P17-01: the suffix contract — every registry match must expose the
+        // two properties the mechanism arm reads and writes, or the arm
+        // would half-react. A future block ending in `_door` without them
+        // fails here, not silently in a tick.
+        let blocks = registry();
+        let mut doors = 0;
+        let mut trapdoors = 0;
+        let mut gates = 0;
+        for name in blocks.block_names() {
+            let matched = is_door(name) || is_trapdoor(name) || is_fence_gate(name);
+            if !matched {
+                continue;
+            }
+            if is_door(name) {
+                doors += 1;
+            } else if is_trapdoor(name) {
+                trapdoors += 1;
+            } else {
+                gates += 1;
+            }
+            for (prop, value) in [("open", "true"), ("powered", "true")] {
+                // Full property lists: `state_id` needs every axis, so
+                // clone the default's assignment and flip one flag.
+                let default = blocks.default_state(name).expect("default resolves");
+                let mut props = blocks.properties_of(default).expect("props read");
+                let mut found = false;
+                for (key, val) in &mut props {
+                    if key == prop {
+                        *val = value.to_owned();
+                        found = true;
+                    }
+                }
+                assert!(found, "{name} has no {prop} property at all");
+                let id = blocks
+                    .state_id(name, &props)
+                    .unwrap_or_else(|_| panic!("{name} has no {prop}={value} state"));
+                let back = blocks.properties_of(id).expect("props read back");
+                assert!(
+                    back.iter().any(|(key, val)| key == prop && val == value),
+                    "{name} round-trips {prop}={value}"
+                );
+            }
+        }
+        assert!(doors >= 20, "the door family must be present, saw {doors}");
+        assert!(trapdoors >= 1, "trapdoors must be present, saw {trapdoors}");
+        assert!(gates >= 1, "fence gates must be present, saw {gates}");
+        // Iron refuses the hand but reacts to redstone; copper toggles by hand.
+        assert!(!hand_toggleable("minecraft:iron_door"));
+        assert!(!hand_toggleable("minecraft:iron_trapdoor"));
+        assert!(hand_toggleable("minecraft:oak_door"));
+        assert!(hand_toggleable("minecraft:copper_door"));
+        assert!(hand_toggleable("minecraft:oak_fence_gate"));
+        assert!(!hand_toggleable("minecraft:stone"));
     }
 
     #[test]

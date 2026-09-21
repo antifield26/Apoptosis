@@ -295,6 +295,26 @@ pub const STEP_HEIGHT: f64 = 0.6;
 /// Step height for non-living movers: no auto-step, today's behaviour.
 pub const NO_STEP_UP: f64 = 0.0;
 
+/// Whether a block-state id collides as exactly the full cube.
+///
+/// `true` for states with no shape-table entry (the loader default) and
+/// for a single box spanning 0..1 on all axes; `false` for partial and
+/// empty shapes. Used by placement rules that mirror vanilla's
+/// `isFullCube` checks (door-hinge scoring in P17-01). Unknown ids fail
+/// safe as non-cubes rather than as cubes: treating unknown geometry as
+/// solid-full would be the wrong default for a probe about openness.
+///
+/// Exact comparison, not epsilon: the fixture stores the asset's own
+/// decimals, and a near-cube is not a cube for hinge scoring.
+#[allow(clippy::float_cmp)]
+#[must_use]
+pub fn is_full_cube(registry: &BlockRegistry, id: i32) -> bool {
+    match registry.collision_boxes(id) {
+        None => true,
+        Some(boxes) => boxes.len() == 1 && boxes[0] == [0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+    }
+}
+
 /// Whether a block-state id blocks movement.
 ///
 /// # Errors

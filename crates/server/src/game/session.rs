@@ -784,11 +784,14 @@ impl Game {
                 position,
                 face,
                 hand,
+                cursor_x,
+                cursor_y,
+                cursor_z,
                 sequence,
                 ..
             } => {
                 self.note_block_change_sequence(id, sequence);
-                self.apply_use_item_on(id, position, face, hand, report);
+                self.apply_use_item_on(id, position, face, hand, (cursor_x, cursor_y, cursor_z), report);
             }
             PlayIntent::UseItem { sequence, .. } => {
                 // The item use itself stays the no-op it was (no consumable, no
@@ -2195,6 +2198,36 @@ impl Game {
             // P11-04: the loot table is the drop authority in survival.
             self.spawn_block_drops(target.block, target.x, target.y, target.z, harvest);
         }
+        // P17-01: breaking one door half removes the other (no second
+        // drop — the initiator's table already rolled the one door item).
+        // Either half may be dug first; the survivor must be the opposite
+        // half of the same door.
+        if let Ok(name) = self.registries.blocks.block_name(target.block)
+            && mc_redstone::blocks::is_door(name)
+            && let Ok(props) = self.registries.blocks.properties_of(target.block)
+            && let Some(half) = props.iter().find(|(key, _)| key == "half")
+        {
+            let other_y = if half.1 == "upper" {
+                target.y - 1
+            } else {
+                target.y + 1
+            };
+            let want = if half.1 == "upper" { "lower" } else { "upper" };
+            if let Some(other) = self.world.get_block_loaded(target.x, other_y, target.z)
+                && let Ok(other_name) = self.registries.blocks.block_name(other)
+                && other_name == name
+                && let Ok(other_props) = self.registries.blocks.properties_of(other)
+                && other_props
+                    .iter()
+                    .any(|(key, value)| key == "half" && value == want)
+                && self
+                    .world
+                    .set_block(target.x, other_y, target.z, air)
+                    .is_ok()
+            {
+                self.redstone_feed(target.x, other_y, target.z, other);
+            }
+        }
         self.sync_menu_from_inventory(id, report);
     }
 
@@ -2355,6 +2388,454 @@ impl Game {
         Ok(())
     }
 
+    /// Flip a door-like block on right-click (P17-01): doors (both halves),
+    /// trapdoors and fence gates. Iron doors and the iron trapdoor refuse —
+    /// redstone-only in vanilla (pumpkin `can_open_door`).
+    ///
+    /// State writes land in the world's change list (broadcast) and feed
+    /// redstone (an observer facing the door must see the flip), exactly
+    /// like the lever path.
+    fn toggle_door_like(&mut self, id: ConnectionId, x: i32, y: i32, z: i32, name: &str) {
+        if !mc_redstone::blocks::hand_toggleable(name) {
+            debug!(id = %id, name, "iron doors and trapdoors need redstone");
+            return;
+        }
+        let Some(state) = self.world.get_block_loaded(x, y, z) else {
+            return;
+        };
+        let Ok(props) = self.registries.blocks.properties_of(state) else {
+            debug!(id = %id, "door state is missing from the registry");
+            return;
+        };
+        let is_open = props
+            .iter()
+            .any(|(key, value)| key == "open" && value == "true");
+        let mut flipped = props.clone();
+        for (key, value) in &mut flipped {
+            if key == "open" {
+                *value = (!is_open).to_string();
+            }
+        }
+        // Fence gates swing toward the clicker on opening (pumpkin
+        // `toggle_fence_gate`): keep the facing when closing.
+        if mc_redstone::blocks::is_fence_gate(name) && !is_open {
+            let facing = self.player_facing(id);
+            for (key, value) in &mut flipped {
+                if key == "facing" {
+                    facing.clone_into(value);
+                }
+            }
+        }
+        let Ok(new_id) = self.registries.blocks.state_id(name, &flipped) else {
+            debug!(id = %id, "toggled door state does not resolve");
+            return;
+        };
+        if new_id == state {
+            return;
+        }
+        if self.world.set_block(x, y, z, new_id).is_err() {
+            return;
+        }
+        self.redstone_feed(x, y, z, new_id);
+        // Doors flip both halves (pumpkin `toggle_door`); the lone half
+        // still flips when its partner is missing rather than refusing.
+        if mc_redstone::blocks::is_door(name) {
+            let half = props
+                .iter()
+                .find(|(key, _)| key == "half")
+                .map_or("lower", |(_, value)| value.as_str());
+            let (ox, oy, oz) = if half == "upper" {
+                (x, y - 1, z)
+            } else {
+                (x, y + 1, z)
+            };
+            if let Some(other) = self.world.get_block_loaded(ox, oy, oz)
+                && let Ok(other_name) = self.registries.blocks.block_name(other)
+                && other_name == name
+                && let Ok(mut other_props) = self.registries.blocks.properties_of(other)
+            {
+                for (key, value) in &mut other_props {
+                    if key == "open" {
+                        *value = (!is_open).to_string();
+                    }
+                }
+                if let Ok(other_id) = self.registries.blocks.state_id(other_name, &other_props)
+                    && other_id != other
+                    && self.world.set_block(ox, oy, oz, other_id).is_ok()
+                {
+                    self.redstone_feed(ox, oy, oz, other_id);
+                }
+            }
+        }
+        debug!(id = %id, name, x, y, z, open = !is_open, "door-like toggled");
+    }
+
+    /// The player's horizontal facing as a cardinal (`north` = -Z).
+    ///
+    /// Yaw 0 looks toward +Z (south), increasing clockwise toward -X, so
+    /// the quadrants fall south/west/north/east in order.
+    fn player_facing(&self, id: ConnectionId) -> &'static str {
+        let yaw = self
+            .sessions
+            .get(&id)
+            .map_or(0.0, |session| session.player.yaw);
+        Self::cardinal_facing(yaw)
+    }
+
+    /// Cardinal facing for a vanilla yaw in degrees (P17-01).
+    ///
+    /// Yaw 0 looks toward +Z, increasing clockwise toward -X
+    /// ([`mc_world::collision::look_vector`]): south, west, north, east in
+    /// quadrant order. Non-finite yaw reads as south rather than refusing the
+    /// placement — the click was real, only the compass is broken.
+    fn cardinal_facing(yaw: f32) -> &'static str {
+        if !yaw.is_finite() {
+            return "south";
+        }
+        let mut degrees = yaw % 360.0;
+        if degrees < 0.0 {
+            degrees += 360.0;
+        }
+        if degrees < 45.0 || degrees >= 315.0 {
+            "south"
+        } else if degrees < 135.0 {
+            "west"
+        } else if degrees < 225.0 {
+            "north"
+        } else {
+            "east"
+        }
+    }
+
+    /// Opposite cardinal (door fronts face the clicker).
+    #[allow(
+        clippy::match_same_arms,
+        reason = "the wildcard names the fallback for corrupt input; the south arm names the verified rule, and merging them hides which facings are real"
+    )]
+    fn opposite_facing(facing: &str) -> &'static str {
+        match facing {
+            "north" => "south",
+            "south" => "north",
+            "west" => "east",
+            "east" => "west",
+            _ => "north",
+        }
+    }
+
+    /// Cardinal for a clicked face id, when the face is horizontal.
+    fn face_facing(face: i32) -> Option<&'static str> {
+        match face {
+            x if x == mc_world::collision::FACE_NORTH as i32 => Some("north"),
+            x if x == mc_world::collision::FACE_SOUTH as i32 => Some("south"),
+            x if x == mc_world::collision::FACE_WEST as i32 => Some("west"),
+            x if x == mc_world::collision::FACE_EAST as i32 => Some("east"),
+            _ => None,
+        }
+    }
+
+    /// Resolve a block state from the default assignment plus overrides.
+    ///
+    /// Doors, trapdoors and gates orient at placement time instead of
+    /// taking the first state; every other property rides the default.
+    /// `None` when the block lacks an overridden property or the combination
+    /// does not exist — a registry gap, never a guessed state.
+    fn oriented_state(&self, block: &str, overrides: &[(&str, &str)]) -> Option<i32> {
+        let default = self.registries.blocks.default_state(block).ok()?;
+        let mut props = self.registries.blocks.properties_of(default).ok()?;
+        for (key, value) in overrides {
+            let Some(entry) = props.iter_mut().find(|(name, _)| name == key) else {
+                debug!(block = %block, prop = %key, "placement orientation has no such property");
+                return None;
+            };
+            (*value).clone_into(&mut entry.1);
+        }
+        self.registries.blocks.state_id(block, &props).ok()
+    }
+
+    /// Place a door as both halves (P17-01, pumpkin `DoorBlock`).
+    ///
+    /// Facing is opposite the clicker's look, halves lower+upper with the
+    /// hinge scored off neighbouring doors and full cubes (mirrored rule),
+    /// `open`/`powered` false. Both cells must be empty; the cell above is
+    /// checked like the target (same hostile-coordinate reasoning).
+    fn place_door(
+        &mut self,
+        id: ConnectionId,
+        pos: (i32, i32, i32),
+        block: &str,
+        hand: Hand,
+        cursor: (f32, f32, f32),
+        report: &mut TickReport,
+    ) {
+        let (x, y, z) = pos;
+        if !self.in_build_range(y + 1) {
+            debug!(id = %id, y, "rejected door: headroom outside the world height");
+            return;
+        }
+        let above_open = self
+            .world
+            .get_block_loaded(x, y + 1, z)
+            .is_some_and(|above| self.registries.blocks.is_empty(above));
+        if !above_open {
+            debug!(id = %id, "refused to place a door under an occupied block");
+            return;
+        }
+        let facing = Self::opposite_facing(self.player_facing(id));
+        let hinge = self.door_hinge(x, y, z, facing, cursor);
+        let lower = self.oriented_state(
+            block,
+            &[
+                ("facing", facing),
+                ("half", "lower"),
+                ("hinge", hinge),
+                ("open", "false"),
+                ("powered", "false"),
+            ],
+        );
+        let upper = self.oriented_state(
+            block,
+            &[
+                ("facing", facing),
+                ("half", "upper"),
+                ("hinge", hinge),
+                ("open", "false"),
+                ("powered", "false"),
+            ],
+        );
+        let (Some(lower), Some(upper)) = (lower, upper) else {
+            debug!(id = %id, block = %block, "door orientation does not resolve");
+            return;
+        };
+        // The upper half must not land inside a player either (1.8-tall
+        // bodies reach into it); the target cell itself was checked by the
+        // caller.
+        let upper_box = Aabb::block(x, y + 1, z);
+        if self
+            .sessions
+            .values()
+            .any(|other| other.aabb().intersects(upper_box))
+        {
+            debug!(id = %id, "refused to place a door inside a player");
+            return;
+        }
+        if self.world.set_block(x, y, z, lower).is_err()
+            || self.world.set_block(x, y + 1, z, upper).is_err()
+        {
+            debug!(id = %id, "door placement was refused");
+            return;
+        }
+        self.redstone_feed(x, y, z, lower);
+        self.redstone_feed(x, y + 1, z, upper);
+        self.consume_held(id, hand, report);
+        debug!(id = %id, block = %block, x, y, z, facing, hinge, "door placed");
+    }
+
+    /// Consume one held item in survival and re-mirror the menu (P17-01).
+    ///
+    /// Factored out of the placement tail so door placement shares the exact
+    /// same consume-and-sync (P14-09 walk: take + shrink + write back to the
+    /// same slot, never through `add_stack`).
+    fn consume_held(&mut self, id: ConnectionId, hand: Hand, report: &mut TickReport) {
+        let survival = self
+            .sessions
+            .get(&id)
+            .is_some_and(|s| s.player.game_mode == GameMode::Survival);
+        if survival {
+            {
+                let Some(session) = self.sessions.get_mut(&id) else {
+                    return;
+                };
+                // Consume in place: `take` + `shrink` + write back to the
+                // *same* slot. Routing the remainder through `add_stack`
+                // merged it into the lowest partial stack first, so placing
+                // from a full held stack emptied the held slot and grew an
+                // earlier one — the client's hotbar visibly rearranged on
+                // every placement (P14-09 walk).
+                let mut stack = session.player.inventory.take_held(hand);
+                stack.shrink(1);
+                let _ = session.player.inventory.replace_held(hand, stack);
+            }
+            // One path for "an action changed my items": mirror the inventory into the
+            // menu, advance the revision and send the per-slot updates. The bespoke
+            // single-slot send this replaces used a hard-coded `state_id: 0`, so the
+            // client was handed a revision the server did not have (Audit 04 A6).
+            self.sync_menu_from_inventory(id, report);
+        }
+    }
+
+    /// Score a door hinge off the neighbourhood (P17-01, pumpkin `get_hinge`).
+    ///
+    /// Neighbouring lower-half doors and full cubes score exactly like the
+    /// reference; the cursor breaks a scoreless tie. An unloaded neighbour
+    /// counts as neither door nor cube (fail-open toward the cursor rule
+    /// rather than toward a wall that may not be there).
+    #[allow(
+        clippy::match_same_arms,
+        reason = "the wildcard names the fallback for corrupt input; the north arms name the verified rules, and merging them hides which facings are real"
+    )]
+    fn door_hinge(
+        &self,
+        x: i32,
+        y: i32,
+        z: i32,
+        facing: &str,
+        cursor: (f32, f32, f32),
+    ) -> &'static str {
+        // Left of the facing, viewed from above: north→west, east→north,
+        // south→east, west→south. Unknown facings read as north (the
+        // registry never produces one; the fallback keeps the return total).
+        let (left_x, left_z): (i32, i32) = match facing {
+            "east" => (0, -1),
+            "south" => (1, 0),
+            "west" => (0, 1),
+            _ => (-1, 0),
+        };
+        let (face_x, face_z): (i32, i32) = match facing {
+            "east" => (1, 0),
+            "south" => (0, 1),
+            "west" => (-1, 0),
+            _ => (0, -1),
+        };
+        let lower_door_at = |dx: i32, dz: i32| {
+            self.world
+                .get_block_loaded(x + dx, y, z + dz)
+                .filter(|id| {
+                    self.registries
+                        .blocks
+                        .block_name(*id)
+                        .is_ok_and(mc_redstone::blocks::is_door)
+                })
+                .is_some_and(|id| {
+                    self.registries.blocks.properties_of(id).is_ok_and(|props| {
+                        props
+                            .iter()
+                            .any(|(key, value)| key == "half" && value == "lower")
+                    })
+                })
+        };
+        let full_cube_at = |dx: i32, dy: i32, dz: i32| {
+            self.world
+                .get_block_loaded(x + dx, y + dy, z + dz)
+                .is_some_and(|id| mc_world::collision::is_full_cube(&self.registries.blocks, id))
+        };
+        let has_left = lower_door_at(left_x, left_z);
+        let has_right = lower_door_at(-left_x, -left_z);
+        let left_full = full_cube_at(left_x, 0, left_z);
+        let top_full = full_cube_at(face_x, 1, face_z);
+        let right_full = full_cube_at(-left_x, 0, -left_z);
+        let top_right_full = full_cube_at(face_x + -left_x, 1, face_z + -left_z);
+        let score =
+            -(left_full as i32) - (top_full as i32) + (right_full as i32) + (top_right_full as i32);
+        if (!has_left || has_right) && score <= 0 {
+            if (!has_right || has_left) && score >= 0 {
+                // Integer face components against the 0..1 cursor: the
+                // comparisons below are the reference's float form with the
+                // casts folded away (components are all -1, 0 or 1).
+                if (face_x >= 0 || cursor.2 > 0.5)
+                    && (face_x <= 0 || cursor.2 < 0.5)
+                    && (face_z >= 0 || cursor.0 < 0.5)
+                    && (face_z <= 0 || cursor.0 > 0.5)
+                {
+                    return "left";
+                }
+                return "right";
+            }
+            return "left";
+        }
+        "right"
+    }
+
+    /// Trapdoor orientation at placement (P17-01, pumpkin `TrapDoorBlock`).
+    ///
+    /// Facing follows the clicked horizontal face, else the clicker's look;
+    /// the top face takes the bottom half and the bottom face the top half
+    /// (the trapdoor sits against the clicked face), sides read the cursor
+    /// height. New trapdoors start closed and unpowered.
+    fn trapdoor_state(
+        &self,
+        block: &str,
+        face: i32,
+        cursor: (f32, f32, f32),
+        id: ConnectionId,
+    ) -> Option<i32> {
+        let facing = Self::face_facing(face).unwrap_or_else(|| self.player_facing(id));
+        let half = if face == mc_world::collision::FACE_UP as i32 {
+            "bottom"
+        } else if face == mc_world::collision::FACE_DOWN as i32 {
+            "top"
+        } else if cursor.1 < 0.5 {
+            "bottom"
+        } else {
+            "top"
+        };
+        self.oriented_state(
+            block,
+            &[
+                ("facing", facing),
+                ("half", half),
+                ("open", "false"),
+                ("powered", "false"),
+            ],
+        )
+    }
+
+    /// Fence-gate orientation at placement (P17-01, pumpkin `FenceGateBlock`).
+    ///
+    /// Gates face the clicker directly (unlike doors, which oppose); `open`
+    /// and `powered` mirror the circuit at the position; `in_wall` reads
+    /// the four horizontal neighbours for walls.
+    fn fence_gate_state(
+        &mut self,
+        block: &str,
+        x: i32,
+        y: i32,
+        z: i32,
+        id: ConnectionId,
+    ) -> Option<i32> {
+        // Gates face the clicker directly (unlike doors, which oppose —
+        // pumpkin `FenceGateBlock.on_place`); `open`/`powered` mirror the
+        // circuit at the position, and `in_wall` reads the neighbours.
+        let facing = self.player_facing(id);
+        let powered = self.powered_at(x, y, z);
+        let in_wall = ["north", "south", "west", "east"].iter().any(|dir| {
+            let (dx, dz) = match *dir {
+                "north" => (0, -1),
+                "south" => (0, 1),
+                "west" => (-1, 0),
+                _ => (1, 0),
+            };
+            self.world
+                .get_block_loaded(x + dx, y, z + dz)
+                .and_then(|nid| self.registries.blocks.block_name(nid).ok())
+                .is_some_and(|name| name.ends_with("_wall"))
+        });
+        self.oriented_state(
+            block,
+            &[
+                ("facing", facing),
+                ("open", if powered { "true" } else { "false" }),
+                ("powered", if powered { "true" } else { "false" }),
+                ("in_wall", if in_wall { "true" } else { "false" }),
+            ],
+        )
+    }
+
+    /// Whether any neighbour emission reaches `(x, y, z)` (P17-01).
+    ///
+    /// The same judgment the propagation loop applies per block, factored
+    /// for placement (fence gates open into a live circuit): strongest
+    /// neighbour emission above zero, dust cited at face value.
+    fn powered_at(&self, x: i32, y: i32, z: i32) -> bool {
+        let table = mc_redstone::EmitterTable::new(&self.registries.blocks);
+        let inputs = mc_redstone::propagation::gather_inputs(
+            &self.world,
+            table,
+            mc_redstone::BlockPos::new(x, y, z),
+            false,
+        );
+        inputs.strongest().effective().get() > 0
+    }
+
     /// Whether a `y` is inside the world's build range.
     ///
     /// This guard is what keeps a client-chosen coordinate away from
@@ -2377,6 +2858,7 @@ impl Game {
         position: i64,
         face: i32,
         hand: i32,
+        cursor: (f32, f32, f32),
         report: &mut TickReport,
     ) {
         let (x, y, z) = unpack_block_position(position);
@@ -2403,7 +2885,38 @@ impl Game {
             self.flip_lever(id, x, y, z);
             return;
         }
+        // Doors, trapdoors and fence gates toggle on right-click (P17-01),
+        // same position as the lever: an empty hand works and a held block
+        // must not place through them.
+        if let Some(name) = self.clicked_block_name(x, y, z)
+            && (mc_redstone::blocks::is_door(&name)
+                || mc_redstone::blocks::is_trapdoor(&name)
+                || mc_redstone::blocks::is_fence_gate(&name))
+        {
+            self.toggle_door_like(id, x, y, z, &name);
+            return;
+        }
         let hand = Hand::from_id(u8::try_from(hand).unwrap_or(0)).unwrap_or(Hand::Main);
+        self.place_held_block(id, (x, y, z), face, hand, cursor, report);
+    }
+
+    /// Place the held block item against the clicked face (P17-01 split).
+    ///
+    /// Extracted from `apply_use_item_on` when the door arms pushed it over
+    /// the line budget; behaviour byte-identical: held lookup, face offset,
+    /// height/unloaded/occupied/inside-player refusals, orientation (doors
+    /// both halves, trapdoors and gates oriented, everything else the first
+    /// state), write, feed, consume, sync.
+    fn place_held_block(
+        &mut self,
+        id: ConnectionId,
+        pos: (i32, i32, i32),
+        face: i32,
+        hand: Hand,
+        cursor: (f32, f32, f32),
+        report: &mut TickReport,
+    ) {
+        let (x, y, z) = pos;
         let Some(session) = self.sessions.get(&id) else {
             return;
         };
@@ -2448,11 +2961,30 @@ impl Game {
         // `state_id` with no properties yields the block's first state. A block
         // whose default needs a facing (stairs, logs) is placed with that first
         // state rather than a guessed one; the parity matrix records this.
-        let block_id = match self.registries.blocks.state_id(&block, &[]) {
-            Ok(id) => id,
-            Err(error) => {
-                debug!(id = %id, %block, %error, "cannot resolve a block state");
+        // Doors take both halves with clicker-relative orientation (P17-01);
+        // trapdoors and fence gates orient by face and yaw instead of the
+        // first state for the same reason.
+        if mc_redstone::blocks::is_door(&block) {
+            self.place_door(id, (tx, ty, tz), &block, hand, cursor, report);
+            return;
+        }
+        let block_id = if mc_redstone::blocks::is_trapdoor(&block) {
+            let Some(state) = self.trapdoor_state(&block, face, cursor, id) else {
                 return;
+            };
+            state
+        } else if mc_redstone::blocks::is_fence_gate(&block) {
+            let Some(state) = self.fence_gate_state(&block, tx, ty, tz, id) else {
+                return;
+            };
+            state
+        } else {
+            match self.registries.blocks.state_id(&block, &[]) {
+                Ok(id) => id,
+                Err(error) => {
+                    debug!(id = %id, %block, %error, "cannot resolve a block state");
+                    return;
+                }
             }
         };
         if let Err(error) = self.world.set_block(tx, ty, tz, block_id) {
@@ -2464,31 +2996,7 @@ impl Game {
         }
         // P13-02: a placed wire, torch, lever or neighbour of one wakes the model.
         self.redstone_feed(tx, ty, tz, block_id);
-        let survival = self
-            .sessions
-            .get(&id)
-            .is_some_and(|s| s.player.game_mode == GameMode::Survival);
-        if survival {
-            {
-                let Some(session) = self.sessions.get_mut(&id) else {
-                    return;
-                };
-                // Consume in place: `take` + `shrink` + write back to the
-                // *same* slot. Routing the remainder through `add_stack`
-                // merged it into the lowest partial stack first, so placing
-                // from a full held stack emptied the held slot and grew an
-                // earlier one — the client's hotbar visibly rearranged on
-                // every placement (P14-09 walk).
-                let mut stack = session.player.inventory.take_held(hand);
-                stack.shrink(1);
-                let _ = session.player.inventory.replace_held(hand, stack);
-            }
-            // One path for "an action changed my items": mirror the inventory into the
-            // menu, advance the revision and send the per-slot updates. The bespoke
-            // single-slot send this replaces used a hard-coded `state_id: 0`, so the
-            // client was handed a revision the server did not have (Audit 04 A6).
-            self.sync_menu_from_inventory(id, report);
-        }
+        self.consume_held(id, hand, report);
         debug!(id = %id, block = %block, x = tx, y = ty, z = tz, "block placed");
     }
 

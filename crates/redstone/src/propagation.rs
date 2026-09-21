@@ -376,6 +376,16 @@ impl<'a> EmitterTable<'a> {
         if name == REDSTONE_LAMP {
             return BlockRole::Mechanism;
         }
+        // P17-01: doors, trapdoors and fence gates are driven mechanisms:
+        // they track power in `powered` and follow it in `open` (see
+        // `new_state`). Iron variants react too — only the *hand* toggle
+        // refuses them.
+        if crate::blocks::is_door(name)
+            || crate::blocks::is_trapdoor(name)
+            || crate::blocks::is_fence_gate(name)
+        {
+            return BlockRole::Mechanism;
+        }
         match source_for_name(name) {
             Some(source) => BlockRole::Emitter { source },
             None => BlockRole::Passive,
@@ -679,27 +689,57 @@ impl<'a> EmitterTable<'a> {
                 // torch, block) leaves it dark, and so does a powered stone
                 // beside it — the lamp reads its support and its cap, not
                 // its sides.
-                let lit = [pos.offset(0, 1, 0), pos.offset(0, -1, 0)]
-                    .into_iter()
-                    .any(|at| {
-                        world.get_state(at).is_some_and(|id| {
-                            is_conductive(self, id) && solid_power(world, *self, at, None).is_some()
-                        })
-                    });
+                let name = self.name_of(current_id)?;
+                if name == crate::blocks::REDSTONE_LAMP {
+                    let lit = [pos.offset(0, 1, 0), pos.offset(0, -1, 0)]
+                        .into_iter()
+                        .any(|at| {
+                            world.get_state(at).is_some_and(|id| {
+                                is_conductive(self, id)
+                                    && solid_power(world, *self, at, None).is_some()
+                            })
+                        });
+                    let properties = self.registry.properties_of(current_id).ok()?;
+                    let current = properties
+                        .iter()
+                        .find(|(name, _)| name == "lit")
+                        .is_some_and(|(_, value)| value == "true");
+                    if lit == current {
+                        return Some(current_id);
+                    }
+                    return self
+                        .registry
+                        .state_id(
+                            crate::blocks::REDSTONE_LAMP,
+                            &[("lit".to_owned(), lit.to_string())],
+                        )
+                        .ok();
+                }
+                // P17-01: doors, trapdoors and fence gates track power in
+                // `powered` and follow it in `open` — but only when the
+                // power *changes* (pumpkin `DoorBlock.on_neighbor_update`).
+                // A manually toggled door on an unpowered circuit keeps its
+                // `open` until the power flips, which is vanilla's
+                // much-complained-about behavior, mirrored here rather than
+                // smoothed. Any face powers (vanilla `hasNeighborSignal`
+                // reads all sides, same as pumpkin's either-half check
+                // approximates for the half the update reaches).
                 let properties = self.registry.properties_of(current_id).ok()?;
-                let current = properties
+                let stored = properties
                     .iter()
-                    .find(|(name, _)| name == "lit")
+                    .find(|(key, _)| key == "powered")
                     .is_some_and(|(_, value)| value == "true");
-                if lit == current {
+                let powered = inputs.strongest().effective().get() > 0;
+                if stored == powered {
                     return Some(current_id);
                 }
-                self.registry
-                    .state_id(
-                        crate::blocks::REDSTONE_LAMP,
-                        &[("lit".to_owned(), lit.to_string())],
-                    )
-                    .ok()
+                let mut rewritten = properties.clone();
+                for (key, value) in &mut rewritten {
+                    if key == "powered" || key == "open" {
+                        *value = powered.to_string();
+                    }
+                }
+                self.registry.state_id(name, &rewritten).ok()
             }
             BlockRole::Emitter { .. } | BlockRole::Passive => Some(current_id),
         }
@@ -1738,6 +1778,74 @@ mod tests {
                 .emitted(BlockRole::Wire { stored: level(9) }, &BlockInputs::NONE)
                 .effective(),
             PowerLevel::ZERO
+        );
+    }
+
+    /// An oak-door lower-half state with the given open/powered flags;
+    /// everything else is the default assignment.
+    fn door_state(registry: &BlockRegistry, open: bool, powered: bool) -> i32 {
+        let default = registry
+            .default_state("minecraft:oak_door")
+            .expect("door default");
+        let mut props = registry.properties_of(default).expect("door props");
+        for (key, value) in &mut props {
+            if key == "open" {
+                *value = open.to_string();
+            } else if key == "powered" {
+                *value = powered.to_string();
+            }
+        }
+        registry
+            .state_id("minecraft:oak_door", &props)
+            .expect("door state")
+    }
+
+    #[test]
+    fn doors_track_power_and_hold_manual_state_while_unpowered() {
+        // P17-01: the mechanism arm. A redstone block next door opens it
+        // (powered + open flip together); a cold neighbour closes a
+        // powered door; a manually opened door on a cold circuit is left
+        // alone (vanilla's quirk: only a power *change* rewrites `open`).
+        let registry = registry();
+        let table = EmitterTable::new(&registry);
+        let closed = door_state(&registry, false, false);
+        assert_eq!(
+            table.classify(closed),
+            BlockRole::Mechanism,
+            "doors are driven mechanisms now, not passive"
+        );
+        let block = registry
+            .default_state("minecraft:redstone_block")
+            .expect("redstone block");
+        let door_pos = BlockPos::new(4, 1, 4);
+        let mut world = FlatWorld::boxed((8, 4, 8));
+        world.set(door_pos, closed);
+        world.set(BlockPos::new(4, 1, 5), block);
+        let inputs = gather_inputs(&world, table, door_pos, false);
+        let opened = table
+            .new_state(&world, door_pos, BlockRole::Mechanism, &inputs, closed)
+            .expect("recomputable");
+        assert_ne!(opened, closed, "power next door opens the door");
+        let props = registry.properties_of(opened).expect("props");
+        assert!(props.iter().any(|(k, v)| k == "open" && v == "true"));
+        assert!(props.iter().any(|(k, v)| k == "powered" && v == "true"));
+        // Cold again: closes.
+        world.set(BlockPos::new(4, 1, 5), registry.air_id());
+        let inputs = gather_inputs(&world, table, door_pos, false);
+        assert_eq!(
+            table.new_state(&world, door_pos, BlockRole::Mechanism, &inputs, opened),
+            Some(closed),
+            "removing power closes the door"
+        );
+        // Manual open on a cold circuit: recompute is a no-op, so the tick
+        // writes nothing and the hand's work survives neighbour updates.
+        let manual = door_state(&registry, true, false);
+        world.set(door_pos, manual);
+        let inputs = gather_inputs(&world, table, door_pos, false);
+        assert_eq!(
+            table.new_state(&world, door_pos, BlockRole::Mechanism, &inputs, manual),
+            Some(manual),
+            "no power change means no rewrite"
         );
     }
 
