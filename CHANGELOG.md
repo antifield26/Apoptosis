@@ -117,6 +117,38 @@ with fmt, clippy `-D warnings` and docs audit clean. The real-client half
 (knockback felt, XP gained, effect on screen) is NOT RUN — owner verdict
 pending in the runbook; the P16 exit gate closes when it is filled.
 
+## Unreleased — Phase 17 (Redstone mechanisms)
+
+### P17-01 — Doors, observers, dispensers
+
+Step A (doors, trapdoors, fence gates): right-click toggles before the
+held-item check (empty hand works, held blocks never place through), both
+door halves flipping together with iron doors and the iron trapdoor
+refusing (redstone-only, pumpkin `can_open_door`); two-high placement with
+clicker-relative facing, neighbour-scored hinges (mirrored rule) and full
+support/occupancy checks; trapdoor face/half rules; gates facing the
+clicker, `in_wall` from neighbours, re-orienting on open; doors/trapdoors/
+gates as `BlockRole::Mechanism` tracking power in `powered` and following
+it in `open` only on power *change* (a hand-opened door on a cold circuit
+holds — vanilla's quirk, mirrored); breaking one door half removes the
+other with a single drop. Step B (observers, dispensers, droppers):
+observers as directional emitters (15, strong, back face only) that power
+up when a faced neighbour changes with the off-tick in 2 (2-tick pulse
+through dust, `Schedule`d tick going dark); dispensers/droppers latching
+`triggered` on a rising edge (above-cell power included) with the dispense
+in 4 — one random occupied slot, one item out the front — unlatching on
+the fall, so held power fires exactly once; front-away placement,
+nine-slot `BlockEntityKind::Dispenser` with the `generic_3x3` window (jar
+menu id 6), NBT round-trip under the block's own id, right-click opens.
+Every item dispenses as a ground entity (no arrow shots, no fluid
+placement — named gaps, the item still leaves). Deliberately deferred:
+pistons (needs block pushing + entity shoving; named in the P17 prompt
+pack with reasons), rails, note blocks, TNT, hoppers-as-power, daylight
+detectors, weighted-plate analog levels, torch delay/burn-out, repeater/
+comparator output facing. Falsification: unwritten toggle, neutered
+mechanism arm, unpowered observer and spawnless dispense each fail their
+probe. Gate 1550/0/35/121.
+
 ## Unreleased — Phase 15 (Observability + Core Hardening)
 
 ### P15-08 — Hardening review sign-off (all clauses re-evidenced)

@@ -98,10 +98,11 @@ pub mod propagation;
 pub mod update;
 
 #[doc(inline)]
-pub use blocks::{REDSTONE_LAMP, REDSTONE_WIRE, SOURCE_BLOCKS};
+pub use blocks::{DISPENSER, DROPPER, OBSERVER, REDSTONE_LAMP, REDSTONE_WIRE, SOURCE_BLOCKS};
 #[doc(inline)]
 pub use components::{
-    Comparator, ComparatorMode, ComponentState, FACING_COUNT, Lever, RedstoneTorch, Repeater,
+    Comparator, ComparatorMode, ComponentState, FACING_COUNT, Lever, Observer, RedstoneTorch,
+    Repeater,
 };
 #[doc(inline)]
 pub use power::{MAX_POWER, PowerLevel, PowerSource, PowerState, SignalKind};

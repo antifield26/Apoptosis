@@ -5,11 +5,11 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 537 passed, 0 failed, 35 ignored** across **119 suites**, re-derived from
+Totals: **1 550 passed, 0 failed, 35 ignored** across **121 suites**, re-derived from
 `cargo test --workspace --no-fail-fast` on the current tree (`python
 tools/gates/run.py --quick`: every gate passed). The count has
 moved 1 194 -> 1 196 -> 1 206 -> 1 207 -> 1 212 -> 1 325 -> 1 344 -> 1 346 -> 1 358 ->
-1 365 -> 1 380 -> 1 384 -> 1 386 -> 1 388 -> 1 389 -> 1 392 -> 1 399 -> 1 412 -> 1 426 -> 1 428 -> 1 431 -> 1 433 -> 1 437 -> 1 440 -> 1 441 -> 1 445 -> 1 451 -> 1 452 -> 1 468 -> 1 475 -> 1 477 -> 1 491 -> 1 500 -> 1 513 -> 1 520 -> 1 519 -> 1 524 -> 1 529 -> **1 537**: three from the Audit 07 remediation, two Audit 08 coverage tests, ten from the
+1 365 -> 1 380 -> 1 384 -> 1 386 -> 1 388 -> 1 389 -> 1 392 -> 1 399 -> 1 412 -> 1 426 -> 1 428 -> 1 431 -> 1 433 -> 1 437 -> 1 440 -> 1 441 -> 1 445 -> 1 451 -> 1 452 -> 1 468 -> 1 475 -> 1 477 -> 1 491 -> 1 500 -> 1 513 -> 1 520 -> 1 519 -> 1 524 -> 1 529 -> **1 537** -> **1 550**: three from the Audit 07 remediation, two Audit 08 coverage tests, ten from the
 `mc-capture-rig` crate (P10-01), one regression test for the
 compression-transition defect (P10-02), the synced-registry work (P10-03), then
 P10-04..11 and P11-01..03, nineteen from the P11-04..09 landing, two from
@@ -108,7 +108,17 @@ plant-entombment saga — see the CHANGELOG). The 1 520 -> 1 519 step is the cap
 going `#[ignore]`d: it needs the uncommitted vanilla capture under
 `target/`, so it failed every fresh checkout (including CI) and now runs
 only with `-- --ignored` where the capture exists — the house pattern every
-other capture-dependent test already follows.
+other capture-dependent test already follows, and **thirteen from P17-01**:
+Step A contributes six `doors` end-to-end (two-half oriented placement,
+both-halves toggle with iron refusal, lever-driven open/close, half-break
+cleanup, trapdoor face rules, gate swing-back) plus two `mc-redstone` lib
+pins (door-family suffixes carrying `open`+`powered`, power-tracking with
+manual-state hold); Step B contributes four `mechanisms` end-to-end
+(observer pulse with its deaf control, dispenser rising-edge/re-arm,
+dropper drop plus the nine-slot window) plus one `mc-redstone` lib pin
+(back-face-only emission). Falsification: unwritten toggle, neutered
+mechanism arm, unpowered observer and spawnless dispense each fail their
+probe.
 The 35 ignored = the 8 differential
 suites in the last section (16 tests) + `vanilla_loot` 3 + `vanilla_chunk_light` 2
 + `vanilla_light_differential` 1 + `light_update_trigger` 1 + `sky_light_surface` 2
@@ -117,7 +127,7 @@ suites in the last section (16 tests) + `vanilla_loot` 3 + `vanilla_chunk_light`
 
 **Every per-crate count below was re-measured with `cargo test -p <crate> --lib`**
 while updating this total. The 17 lib counts sum to **1 045** (`mc-protocol` 113 ->
-**118**, `mc-container` 130 -> **133**, `mc-redstone` 64 -> **66**, `mc-entity` 135 ->
+**118**, `mc-container` 130 -> **133**, `mc-redstone` 64 -> **69**, `mc-entity` 135 ->
 **136**, `mc-server` 61 -> **67**, `mc-simulation` 27 -> **28**, `mc-world` 42 -> **44**, `mc-data` 127 ->
 **129**, rest unchanged), the 5 doc-tests and
 the **402** named-suite tests complete the 1 452 (1 045 + 5 + 402 = 1 452, the third

@@ -131,6 +131,39 @@ impl Lever {
     }
 }
 
+/// An observer: watching while `powered`.
+///
+/// **derived** — the block state table gives `facing=north|east|south|west|up|down`
+/// plus `powered=true|false`. The pulse timing (2 ticks on) lives in the
+/// scheduled-tick drive, not here: this type only says what a powered
+/// observer emits (15, strong — pumpkin answers both queries with 15, and
+/// vanilla observers drive dust directly).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Observer {
+    /// Whether the observer is currently emitting its pulse.
+    pub powered: bool,
+}
+
+impl Observer {
+    /// A dark observer.
+    pub const OFF: Self = Self { powered: false };
+
+    /// An observer in the given state.
+    #[must_use]
+    pub const fn new(powered: bool) -> Self {
+        Self { powered }
+    }
+
+    /// The *state* properties of this observer: `powered`.
+    ///
+    /// Facing rides [`ComponentState::properties`] as `north`, like every
+    /// other oriented component.
+    #[must_use]
+    pub fn properties(&self) -> Vec<(String, String)> {
+        vec![("powered".to_owned(), self.powered.to_string())]
+    }
+}
+
 /// A redstone torch: lit until its attachment block is powered.
 ///
 /// **verified** — the block state table gives a torch `lit=true|false`
@@ -400,6 +433,8 @@ pub enum ComponentState {
     Repeater(Repeater),
     /// A comparator.
     Comparator(Comparator),
+    /// An observer.
+    Observer(Observer),
 }
 
 impl ComponentState {
@@ -445,6 +480,13 @@ impl ComponentState {
             Self::Torch(torch) => torch.output(),
             Self::Repeater(repeater) => repeater.output(),
             Self::Comparator(comparator) => comparator.output(input.effective(), PowerLevel::ZERO),
+            Self::Observer(observer) => {
+                if observer.powered {
+                    PowerSource::Observer.active_state()
+                } else {
+                    PowerState::OFF
+                }
+            }
         }
     }
 
@@ -470,6 +512,7 @@ impl ComponentState {
             Self::Torch(_) => PowerSource::Torch,
             Self::Repeater(_) => PowerSource::Repeater,
             Self::Comparator(_) => PowerSource::Comparator,
+            Self::Observer(_) => PowerSource::Observer,
         }
     }
 
@@ -502,6 +545,7 @@ impl ComponentState {
             Self::Torch(torch) => torch.properties(),
             Self::Repeater(repeater) => repeater.properties(),
             Self::Comparator(comparator) => comparator.properties(),
+            Self::Observer(observer) => observer.properties(),
         };
         if self.has_facing() {
             properties.push(("facing".to_owned(), "north".to_owned()));
@@ -520,7 +564,7 @@ impl ComponentState {
     const fn has_facing(self) -> bool {
         matches!(
             self,
-            Self::Lever(_) | Self::Repeater(_) | Self::Comparator(_)
+            Self::Lever(_) | Self::Repeater(_) | Self::Comparator(_) | Self::Observer(_)
         )
     }
 
@@ -537,8 +581,8 @@ impl ComponentState {
 #[cfg(test)]
 mod tests {
     use super::{
-        Comparator, ComparatorMode, ComponentState, FACING_COUNT, Lever, RedstoneTorch, Repeater,
-        clamp_repeater_delay,
+        Comparator, ComparatorMode, ComponentState, FACING_COUNT, Lever, Observer, RedstoneTorch,
+        Repeater, clamp_repeater_delay,
     };
     use crate::power::{MAX_POWER, PowerLevel, PowerState};
 
@@ -858,6 +902,10 @@ mod tests {
             (
                 ComponentState::Comparator(Comparator::new(ComparatorMode::Compare)),
                 crate::power::PowerSource::Comparator,
+            ),
+            (
+                ComponentState::Observer(Observer::new(true)),
+                crate::power::PowerSource::Observer,
             ),
         ];
         for (component, source) in components {

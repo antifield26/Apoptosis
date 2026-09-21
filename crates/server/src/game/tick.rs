@@ -364,6 +364,10 @@ impl Game {
         report.scheduled_ticks_fired = drain.len();
         report.scheduled_ticks_pending = drain.scheduled_later;
         for pos in &drain.positions {
+            // Due component ticks act first so the recompute below sees the
+            // post-action state (an observer going dark, a dispenser one item
+            // lighter).
+            self.fire_due_component_tick(*pos);
             mc_redstone::propagation::prepare(&mut self.scheduled_ticks, *pos);
             mc_redstone::propagation::prepare_self(&mut self.scheduled_ticks, *pos);
         }
@@ -389,6 +393,19 @@ impl Game {
             tick,
             &changed,
         );
+        // Pulse-driven components watch state changes, not recomputes: an
+        // observer fires when its watched block changes, a dispenser latches
+        // on a rising edge. Both are edge events the propagation loop does
+        // not carry, so they are scanned here off the change list (and in
+        // `redstone_feed` for player edits, which queue before propagate).
+        let triggered: Vec<(i32, i32, i32)> = propagation
+            .changes
+            .iter()
+            .map(|change| (change.pos.x, change.pos.y, change.pos.z))
+            .collect();
+        for (x, y, z) in triggered {
+            self.trigger_neighbors_of_change(x, y, z);
+        }
     }
 
     /// Schedule a block tick for `(x, y, z)`, `delay` ticks from now (P13-01).
@@ -413,6 +430,230 @@ impl Game {
         let now = self.tick;
         self.scheduled_ticks
             .schedule(now, mc_redstone::BlockPos::new(x, y, z), delay)
+    }
+
+    /// Write one boolean property, returning whether anything changed.
+    ///
+    /// Shared by the observer pulse and the dispenser latch: reads the
+    /// current assignment, no-ops when it already matches (so the write,
+    /// the feed and the schedule below all stay edge-triggered), otherwise
+    /// resolves, writes, feeds and reports true. A state that stops
+    /// resolving fails safe as "no change" rather than as a stuck latch.
+    fn set_block_flag(&mut self, x: i32, y: i32, z: i32, key: &str, value: bool) -> bool {
+        let Some(id) = self.world.get_block_loaded(x, y, z) else {
+            return false;
+        };
+        let Ok(name) = self.registries.blocks.block_name(id) else {
+            return false;
+        };
+        let name = name.to_owned();
+        let Ok(props) = self.registries.blocks.properties_of(id) else {
+            return false;
+        };
+        if props
+            .iter()
+            .any(|(prop, val)| prop == key && val == &value.to_string())
+        {
+            return false;
+        }
+        let mut rewritten = props.clone();
+        let Some(entry) = rewritten.iter_mut().find(|(prop, _)| prop == key) else {
+            return false;
+        };
+        entry.1 = value.to_string();
+        let Ok(new_id) = self.registries.blocks.state_id(&name, &rewritten) else {
+            return false;
+        };
+        if new_id == id {
+            return false;
+        }
+        if self.world.set_block(x, y, z, new_id).is_err() {
+            return false;
+        }
+        self.redstone_feed(x, y, z, new_id);
+        true
+    }
+
+    /// Pulse observers and latch dispensers around a changed block (P17-01).
+    ///
+    /// For each of the six neighbors: an observer whose front faces the
+    /// change powers up with an off-tick in 2 (pumpkin `ObserverBlock` —
+    /// schedule only from unpowered, so the powered check doubles as the
+    /// scheduled check); a dispenser/dropper latches `triggered` with a
+    /// dispense in 4 on a rising edge and unlatches on the fall (pumpkin
+    /// `DispenserBlock.on_neighbor_update`, including the above-cell power
+    /// check). Reads only, except on a genuine edge.
+    pub(crate) fn trigger_neighbors_of_change(&mut self, x: i32, y: i32, z: i32) {
+        const OFFSETS: [(i32, i32, i32); 6] = [
+            (0, -1, 0),
+            (0, 1, 0),
+            (0, 0, -1),
+            (0, 0, 1),
+            (-1, 0, 0),
+            (1, 0, 0),
+        ];
+        for (dx, dy, dz) in OFFSETS {
+            let (nx, ny, nz) = (x + dx, y + dy, z + dz);
+            let Some(id) = self.world.get_block_loaded(nx, ny, nz) else {
+                continue;
+            };
+            let Ok(name) = self.registries.blocks.block_name(id) else {
+                continue;
+            };
+            if name == mc_redstone::OBSERVER {
+                // Front offset of the observer must be the change: the
+                // change sits at (observer + facing).
+                let facing = self
+                    .registries
+                    .blocks
+                    .properties_of(id)
+                    .ok()
+                    .and_then(|props| {
+                        props
+                            .iter()
+                            .find(|(key, _)| key == "facing")
+                            .map(|(_, value)| value.clone())
+                    })
+                    .unwrap_or_else(|| "north".to_owned());
+                let (fx, fy, fz) = mc_redstone::blocks::facing_offset(&facing);
+                if (nx + fx, ny + fy, nz + fz) != (x, y, z) {
+                    continue;
+                }
+                if self.set_block_flag(nx, ny, nz, "powered", true)
+                    && let Err(error) = self.schedule_block_tick(nx, ny, nz, 2)
+                {
+                    debug!(%error, "observer off-tick refused");
+                }
+            } else if name == mc_redstone::DISPENSER || name == mc_redstone::DROPPER {
+                let powered = self.powered_at(nx, ny, nz) || self.powered_at(nx, ny + 1, nz);
+                let triggered = self.registries.blocks.properties_of(id).is_ok_and(|props| {
+                    props
+                        .iter()
+                        .any(|(key, value)| key == "triggered" && value == "true")
+                });
+                if powered && !triggered {
+                    if self.set_block_flag(nx, ny, nz, "triggered", true)
+                        && let Err(error) = self.schedule_block_tick(nx, ny, nz, 4)
+                    {
+                        debug!(%error, "dispenser tick refused");
+                    }
+                } else if !powered && triggered {
+                    self.set_block_flag(nx, ny, nz, "triggered", false);
+                }
+            }
+        }
+    }
+
+    /// Run a due component tick: observers go dark, dispensers dispense.
+    ///
+    /// Due positions are drained by `tick_scheduled`, which recomputes them
+    /// right after — so this acts first, letting the recompute see the
+    /// post-action state.
+    fn fire_due_component_tick(&mut self, pos: mc_redstone::BlockPos) {
+        let Some(id) = self.world.get_block_loaded(pos.x, pos.y, pos.z) else {
+            return;
+        };
+        let Ok(name) = self.registries.blocks.block_name(id) else {
+            return;
+        };
+        if name == mc_redstone::OBSERVER {
+            self.set_block_flag(pos.x, pos.y, pos.z, "powered", false);
+        } else if name == mc_redstone::DISPENSER || name == mc_redstone::DROPPER {
+            let triggered = self.registries.blocks.properties_of(id).is_ok_and(|props| {
+                props
+                    .iter()
+                    .any(|(key, value)| key == "triggered" && value == "true")
+            });
+            if triggered {
+                self.dispense_from(pos.x, pos.y, pos.z);
+            }
+        }
+    }
+
+    /// Dispense one item from a triggered dispenser/dropper (P17-01).
+    ///
+    /// A random occupied slot (seeded game RNG, so replays agree), one item
+    /// out the front face with a small forward velocity. Every item drops
+    /// as an entity: arrows do not shoot, fluids do not place, tools do not
+    /// till — each special is a named gap, not a silent refusal (the item
+    /// still leaves, exactly one per pulse). An empty inventory fires
+    /// silently (no click sound exists anywhere in this build).
+    fn dispense_from(&mut self, x: i32, y: i32, z: i32) {
+        let Some(id) = self.world.get_block_loaded(x, y, z) else {
+            return;
+        };
+        let facing = self
+            .registries
+            .blocks
+            .properties_of(id)
+            .ok()
+            .and_then(|props| {
+                props
+                    .iter()
+                    .find(|(key, _)| key == "facing")
+                    .map(|(_, value)| value.clone())
+            })
+            .unwrap_or_else(|| "north".to_owned());
+        let (fx, fy, fz) = mc_redstone::blocks::facing_offset(&facing);
+        let pos = mc_container::BlockPos::new(x, y, z);
+        let taken = self
+            .block_entities
+            .get_mut(pos)
+            .and_then(|entity| entity.data.items_mut())
+            .and_then(|items| {
+                let occupied: Vec<usize> = items
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, stack)| !stack.is_empty())
+                    .map(|(index, _)| index)
+                    .collect();
+                if occupied.is_empty() {
+                    return None;
+                }
+                let pick = usize::try_from(
+                    self.random
+                        .next_i32_bounded(i32::try_from(occupied.len()).unwrap_or(1)),
+                )
+                .unwrap_or(0);
+                let index = occupied[pick.min(occupied.len() - 1)];
+                Some(items[index].split(1))
+            });
+        let Some(one) = taken else {
+            return;
+        };
+        if one.is_empty() {
+            return;
+        }
+        mark_block_dirty(&mut self.world, x, z);
+        let at = mc_world::Vec3::new(
+            f64::from(x + fx) + 0.5,
+            f64::from(y + fy) + 0.5,
+            f64::from(z + fz) + 0.5,
+        );
+        match self.spawn_item(one, at) {
+            Ok(entity) => {
+                if let Some(entity) = self.entities.get_mut(entity) {
+                    entity.velocity = mc_world::Vec3::new(
+                        f64::from(fx) * 0.3,
+                        f64::from(fy) * 0.3,
+                        f64::from(fz) * 0.3,
+                    );
+                }
+            }
+            Err(error) => {
+                warn!(%error, "a dispensed item could not be spawned; restored");
+                if let Some(entity) = self.block_entities.get_mut(pos)
+                    && let Some(items) = entity.data.items_mut()
+                {
+                    for stack in items.iter_mut() {
+                        if stack.item_id() == one.item_id() && !stack.is_empty() {
+                            stack.grow(1);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Phase 5: furnaces cook, hoppers transfer (P12-03/04).
@@ -2840,6 +3081,7 @@ impl Game {
                     OpenKind::Chest => mc_container::BlockEntityKind::Container,
                     OpenKind::Furnace => mc_container::BlockEntityKind::Furnace,
                     OpenKind::Hopper => mc_container::BlockEntityKind::Hopper,
+                    OpenKind::Dispenser => mc_container::BlockEntityKind::Dispenser,
                 };
                 self.block_entities
                     .insert(mc_container::BlockEntity::new(pos, entity_kind));

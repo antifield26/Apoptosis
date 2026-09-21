@@ -1464,6 +1464,11 @@ impl Game {
     /// 1024-per-tick neighbour budget real circuits need. Deduplication and
     /// the 4096-entry cap live in the queue itself.
     fn redstone_feed(&mut self, x: i32, y: i32, z: i32, changed_id: i32) {
+        // Pulse edges first (P17-01 Step B): observers and dispensers watch
+        // *events*, and player edits queue before propagate runs — a scan
+        // only after propagate would miss the edit that caused it. The tick
+        // phase scans propagation changes the same way.
+        self.trigger_neighbors_of_change(x, y, z);
         let table = self.redstone_table();
         let relevant = |id: i32| !matches!(table.classify(id), mc_redstone::BlockRole::Passive);
         if !relevant(changed_id) {
@@ -2181,6 +2186,7 @@ enum OpenKind {
     Chest,
     Furnace,
     Hopper,
+    Dispenser,
 }
 
 /// Classify a block name for the right-click-open path, or `None` to place.
@@ -2189,6 +2195,7 @@ fn open_kind_for(name: &str) -> Option<OpenKind> {
         "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:barrel" => Some(OpenKind::Chest),
         "minecraft:furnace" => Some(OpenKind::Furnace),
         "minecraft:hopper" => Some(OpenKind::Hopper),
+        "minecraft:dispenser" | "minecraft:dropper" => Some(OpenKind::Dispenser),
         _ => None,
     }
 }

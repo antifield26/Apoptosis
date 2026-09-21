@@ -500,6 +500,9 @@ impl<'a> EmitterTable<'a> {
                     powered: powered("powered"),
                 })
             }
+            PowerSource::Observer => {
+                ComponentState::Observer(crate::components::Observer::new(powered("powered")))
+            }
             PowerSource::RedstoneBlock
             | PowerSource::Button
             | PowerSource::PressurePlate
@@ -941,6 +944,31 @@ fn solid_emitter_contribution<V: BlockView + ?Sized>(
         | PowerSource::Button
         | PowerSource::PressurePlate
         | PowerSource::LightningRod => None,
+        // P17-01: a lit observer strongly powers the solid on its back
+        // face (the output side) and nothing else.
+        PowerSource::Observer => {
+            if !property_is(table, id, "powered") {
+                return None;
+            }
+            let facing = table
+                .registry()
+                .properties_of(id)
+                .ok()
+                .and_then(|properties| {
+                    properties
+                        .iter()
+                        .find(|(key, _)| key == "facing")
+                        .map(|(_, value)| value.clone())
+                })
+                .unwrap_or_else(|| "north".to_owned());
+            let (fx, fy, fz) = crate::blocks::facing_offset(&facing);
+            let back = emitter_pos.offset(-fx, -fy, -fz);
+            if back == solid_pos {
+                Some((PowerLevel::MAX, true))
+            } else {
+                None
+            }
+        }
     }
 }
 
@@ -1048,7 +1076,21 @@ fn gather_inputs_inner<V: BlockView + ?Sized>(
             }
             // A component's emission is read from its own state, which is why this goes
             // through the id: an unlit torch must emit nothing here.
-            BlockRole::Emitter { .. } => table.emitted_for_id(neighbour_id, &BlockInputs::NONE),
+            // P17-01: observers emit toward their back face only (vanilla
+            // output side; pumpkin answers both queries with 15, and the
+            // scheduled pulse in `tick_scheduled` is what turns it on and
+            // off). Every other emitter broadcasts — the model has no other
+            // directional source.
+            BlockRole::Emitter { source } => {
+                let emission = table.emitted_for_id(neighbour_id, &BlockInputs::NONE);
+                if source == crate::power::PowerSource::Observer
+                    && !observer_emits_toward(table, neighbour_id, index)
+                {
+                    EmitterOutput::OFF
+                } else {
+                    emission
+                }
+            }
             // Mechanisms emit nothing (a lit lamp does not power neighbours).
             BlockRole::Mechanism => EmitterOutput::OFF,
             // P13-06: a conductive solid contributes its computed power —
@@ -1077,6 +1119,42 @@ fn gather_inputs_inner<V: BlockView + ?Sized>(
         };
     }
     BlockInputs { faces, dust }
+}
+
+/// Whether an observer state emits toward the querier on face `index`.
+///
+/// Face order is the neighbour order (`down, up, north, south, west, east`):
+/// the neighbour on face `index` sits at the matching offset, so the
+/// direction from the observer back to the querier is that offset negated.
+/// The observer emits iff that direction is opposite its `facing` — i.e.
+/// the querier stands at its back. Unreadable facing reads as north (the
+/// registry's first value), matching the component default.
+fn observer_emits_toward(table: EmitterTable<'_>, id: i32, face_index: usize) -> bool {
+    const OFFSETS: [(i32, i32, i32); 6] = [
+        (0, -1, 0),
+        (0, 1, 0),
+        (0, 0, -1),
+        (0, 0, 1),
+        (-1, 0, 0),
+        (1, 0, 0),
+    ];
+    let Some(offset) = OFFSETS.get(face_index) else {
+        return false;
+    };
+    let facing = table
+        .registry
+        .properties_of(id)
+        .ok()
+        .and_then(|properties| {
+            properties
+                .iter()
+                .find(|(key, _)| key == "facing")
+                .map(|(_, value)| value.clone())
+        })
+        .unwrap_or_else(|| "north".to_owned());
+    let (fx, fy, fz) = crate::blocks::facing_offset(&facing);
+    let back = (-fx, -fy, -fz);
+    (-offset.0, -offset.1, -offset.2) == back
 }
 
 /// Read the current inputs and emitted output of one block.
@@ -1634,7 +1712,7 @@ mod tests {
     };
     use crate::blocks::REDSTONE_WIRE;
     use crate::components::{
-        Comparator, ComparatorMode, ComponentState, Lever, RedstoneTorch, Repeater,
+        Comparator, ComparatorMode, ComponentState, Lever, Observer, RedstoneTorch, Repeater,
     };
     use crate::power::{MAX_POWER, PowerLevel, PowerSource, PowerState, SignalKind};
     use crate::update::{BlockPos, Inserted, UpdateBudget, UpdateQueue};
@@ -1798,6 +1876,59 @@ mod tests {
         registry
             .state_id("minecraft:oak_door", &props)
             .expect("door state")
+    }
+
+    /// An observer state facing north with the given powered flag.
+    fn observer_state(registry: &BlockRegistry, powered: bool) -> i32 {
+        let default = registry
+            .default_state("minecraft:observer")
+            .expect("observer default");
+        let mut props = registry.properties_of(default).expect("observer props");
+        for (key, value) in &mut props {
+            if key == "facing" {
+                *value = "north".to_owned();
+            } else if key == "powered" {
+                *value = powered.to_string();
+            }
+        }
+        registry
+            .state_id("minecraft:observer", &props)
+            .expect("observer state")
+    }
+
+    #[test]
+    fn an_observer_emits_from_its_back_only() {
+        // P17-01: a powered observer facing north watches (4,1,3) and
+        // powers (4,1,5). The front dust stays dark (vanilla output side;
+        // the facing/output question is recorded for the P17-04
+        // differential, but the mechanism shape — one face, not six — is
+        // pinned here).
+        let registry = registry();
+        let table = EmitterTable::new(&registry);
+        let lit = observer_state(&registry, true);
+        assert!(
+            matches!(table.classify(lit), BlockRole::Emitter { .. }),
+            "observers are emitters"
+        );
+        let mut world = FlatWorld::boxed((8, 4, 8));
+        world.set(BlockPos::new(4, 1, 4), lit);
+        let behind = gather_inputs(&world, table, BlockPos::new(4, 1, 5), false);
+        assert_eq!(
+            behind.faces[2].effective(),
+            PowerLevel::MAX,
+            "the back face (north of the dust) reads 15"
+        );
+        assert!(behind.faces[2].is_strong(), "observer output is strong");
+        let front = gather_inputs(&world, table, BlockPos::new(4, 1, 3), false);
+        assert_eq!(
+            front.faces[3],
+            EmitterOutput::OFF,
+            "the watched face reads nothing"
+        );
+        // Dark observers emit nothing anywhere.
+        world.set(BlockPos::new(4, 1, 4), observer_state(&registry, false));
+        let behind = gather_inputs(&world, table, BlockPos::new(4, 1, 5), false);
+        assert_eq!(behind.faces[2], EmitterOutput::OFF);
     }
 
     #[test]
@@ -2182,6 +2313,8 @@ mod tests {
                 mode: ComparatorMode::Compare,
                 powered: false,
             }),
+            ComponentState::Observer(Observer::new(true)),
+            ComponentState::Observer(Observer::OFF),
         ];
         for component in components {
             let id = table.component_state(component).expect("state resolves");

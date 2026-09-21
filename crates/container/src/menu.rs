@@ -561,6 +561,56 @@ impl Menu {
         )
     }
 
+    /// Build a dispenser/dropper menu: 9 block slots plus 36 player slots
+    /// (P17-01, vanilla `generic_3x3`).
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Invariant`] on the same shape mismatches as [`Menu::chest`].
+    pub fn dispenser(
+        window_id: u8,
+        block_slots: Container,
+        player_slots: Container,
+        stack_sizes: StackSizeTable,
+    ) -> ServerResult<Self> {
+        if block_slots.len() != 9 {
+            return Err(ServerError::Invariant(format!(
+                "a dispenser container needs 9 slots, got {}",
+                block_slots.len()
+            )));
+        }
+        if block_slots.kind() != ContainerKind::Generic {
+            return Err(ServerError::Invariant(format!(
+                "a dispenser container must be Generic, got {}",
+                block_slots.kind()
+            )));
+        }
+        if player_slots.len() != 41 {
+            return Err(ServerError::Invariant(format!(
+                "a dispenser menu needs 41 player slots, got {}",
+                player_slots.len()
+            )));
+        }
+        let mut slots = Vec::with_capacity(45);
+        for slot in 0..9u16 {
+            slots.push(SlotMapping::storage(0, slot));
+        }
+        for slot in 9..36u16 {
+            slots.push(SlotMapping::storage(1, slot));
+        }
+        for slot in 0..9u16 {
+            slots.push(SlotMapping::storage(1, slot));
+        }
+        let layout = MenuLayout::container_and_player(9);
+        Self::new(
+            window_id,
+            vec![block_slots, player_slots],
+            slots,
+            layout,
+            stack_sizes,
+        )
+    }
+
     /// The current state id, which the client must echo back.
     #[must_use]
     pub const fn state_id(&self) -> i32 {

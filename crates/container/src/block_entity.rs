@@ -86,6 +86,8 @@ pub enum BlockEntityKind {
     Furnace,
     /// A hopper: a slot list plus a transfer cooldown.
     Hopper,
+    /// A dispenser or dropper: a nine-slot list (P17-01).
+    Dispenser,
     /// A sign or hanging sign: text lines.
     Sign,
 }
@@ -98,6 +100,7 @@ impl BlockEntityKind {
             Self::Container => "container",
             Self::Furnace => "furnace",
             Self::Hopper => "hopper",
+            Self::Dispenser => "dispenser",
             Self::Sign => "sign",
         }
     }
@@ -110,6 +113,8 @@ impl BlockEntityKind {
             Self::Furnace => 3,
             // A hopper has exactly five slots in Vanilla.
             Self::Hopper => 5,
+            // A dispenser or dropper has exactly nine slots in Vanilla.
+            Self::Dispenser => 9,
             Self::Sign => 0,
         }
     }
@@ -155,6 +160,11 @@ pub enum BlockEntityData {
         /// Ticks until the next transfer attempt.
         cooldown: u32,
     },
+    /// A dispenser or dropper's nine slots (P17-01).
+    Dispenser {
+        /// The nine slots, row-major like the 3×3 window.
+        items: Vec<ItemStack>,
+    },
     /// A sign's four text lines.
     Sign {
         /// The lines, in order.
@@ -179,6 +189,9 @@ impl BlockEntityData {
                 items: vec![ItemStack::EMPTY; 5],
                 cooldown: 0,
             },
+            BlockEntityKind::Dispenser => Self::Dispenser {
+                items: vec![ItemStack::EMPTY; 9],
+            },
             BlockEntityKind::Sign => Self::Sign {
                 lines: std::array::from_fn(|_| String::new()),
             },
@@ -192,6 +205,7 @@ impl BlockEntityData {
             Self::Items(_) => BlockEntityKind::Container,
             Self::Furnace { .. } => BlockEntityKind::Furnace,
             Self::Hopper { .. } => BlockEntityKind::Hopper,
+            Self::Dispenser { .. } => BlockEntityKind::Dispenser,
             Self::Sign { .. } => BlockEntityKind::Sign,
         }
     }
@@ -200,9 +214,10 @@ impl BlockEntityData {
     #[must_use]
     pub fn items(&self) -> Option<&[ItemStack]> {
         match self {
-            Self::Items(items) | Self::Furnace { items, .. } | Self::Hopper { items, .. } => {
-                Some(items)
-            }
+            Self::Items(items)
+            | Self::Furnace { items, .. }
+            | Self::Hopper { items, .. }
+            | Self::Dispenser { items } => Some(items),
             Self::Sign { .. } => None,
         }
     }
@@ -210,9 +225,10 @@ impl BlockEntityData {
     /// The slot list, mutably.
     pub fn items_mut(&mut self) -> Option<&mut Vec<ItemStack>> {
         match self {
-            Self::Items(items) | Self::Furnace { items, .. } | Self::Hopper { items, .. } => {
-                Some(items)
-            }
+            Self::Items(items)
+            | Self::Furnace { items, .. }
+            | Self::Hopper { items, .. }
+            | Self::Dispenser { items } => Some(items),
             Self::Sign { .. } => None,
         }
     }
@@ -231,6 +247,7 @@ impl BlockEntityData {
             Self::Items(items) => items.len() == BlockEntityKind::Container.slot_count(),
             Self::Furnace { items, .. } => items.len() == BlockEntityKind::Furnace.slot_count(),
             Self::Hopper { items, .. } => items.len() == BlockEntityKind::Hopper.slot_count(),
+            Self::Dispenser { items } => items.len() == BlockEntityKind::Dispenser.slot_count(),
             Self::Sign { .. } => true,
         }
     }

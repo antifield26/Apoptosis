@@ -141,6 +141,7 @@ pub const SOURCE_BLOCKS: &[(&str, PowerSource)] = &[
     ),
     (REPEATER, PowerSource::Repeater),
     (COMPARATOR, PowerSource::Comparator),
+    ("minecraft:observer", PowerSource::Observer),
     ("minecraft:lightning_rod", PowerSource::LightningRod),
     ("minecraft:exposed_lightning_rod", PowerSource::LightningRod),
     (
@@ -203,6 +204,36 @@ pub fn is_trapdoor(name: &str) -> bool {
 pub fn is_fence_gate(name: &str) -> bool {
     name.ends_with("_fence_gate")
 }
+
+/// Offset of a `facing` value (P17-01).
+///
+/// North is -Z, up is +Y. Unknown values read as north (the registry's
+/// first value), matching the component default.
+#[allow(
+    clippy::match_same_arms,
+    reason = "the north arm names the verified rule; the wildcard names the corrupt-input fallback, and merging them hides which facings are real"
+)]
+#[must_use]
+pub const fn facing_offset(facing: &str) -> (i32, i32, i32) {
+    match facing.as_bytes() {
+        b"down" => (0, -1, 0),
+        b"up" => (0, 1, 0),
+        b"north" => (0, 0, -1),
+        b"south" => (0, 0, 1),
+        b"west" => (-1, 0, 0),
+        b"east" => (1, 0, 0),
+        _ => (0, 0, -1),
+    }
+}
+
+/// `minecraft:observer` (P17-01 Step B).
+pub const OBSERVER: &str = "minecraft:observer";
+
+/// `minecraft:dispenser` (P17-01 Step B).
+pub const DISPENSER: &str = "minecraft:dispenser";
+
+/// `minecraft:dropper` (P17-01 Step B).
+pub const DROPPER: &str = "minecraft:dropper";
 
 /// Whether a player hand may toggle the block.
 ///

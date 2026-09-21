@@ -23,6 +23,7 @@ fn a_new_entity_has_an_empty_payload_of_its_own_kind() {
         BlockEntityKind::Container,
         BlockEntityKind::Furnace,
         BlockEntityKind::Hopper,
+        BlockEntityKind::Dispenser,
         BlockEntityKind::Sign,
     ] {
         let entity = BlockEntity::new(BlockPos::new(1, 2, 3), kind);
@@ -43,6 +44,7 @@ fn a_new_entity_has_an_empty_payload_of_its_own_kind() {
     assert_eq!(BlockEntityKind::Container.slot_count(), 27);
     assert_eq!(BlockEntityKind::Furnace.slot_count(), 3);
     assert_eq!(BlockEntityKind::Hopper.slot_count(), 5);
+    assert_eq!(BlockEntityKind::Dispenser.slot_count(), 9);
     assert_eq!(BlockEntityKind::Sign.slot_count(), 0);
     assert!(!BlockEntityKind::Sign.has_inventory());
 }
@@ -181,6 +183,7 @@ fn totals_sum_across_every_inventory() {
         BlockEntityKind::Container,
         BlockEntityKind::Furnace,
         BlockEntityKind::Hopper,
+        BlockEntityKind::Dispenser,
         BlockEntityKind::Sign,
     ]
     .into_iter()
@@ -192,8 +195,8 @@ fn totals_sum_across_every_inventory() {
             items[0] = stack(STONE, 10);
         }
     }
-    // Three inventories of 10; the sign contributes nothing.
-    assert_eq!(store.total_items(), 30);
+    // Four inventories of 10; the sign contributes nothing.
+    assert_eq!(store.total_items(), 40);
     assert!(store.is_well_formed());
 }
 

@@ -541,7 +541,8 @@ impl Packet for ContainerSetContent {
 /// ```
 ///
 /// Only the four P12 needs are named here; adding a fifth menu is adding a
-/// constant, not re-deriving the table.
+/// constant, not re-deriving the table. P17-01 adds the fifth
+/// (`generic_3x3` = 6) from the same table.
 pub const MENU_GENERIC_9X3: i32 = 2;
 
 /// Double chest (54 slots).
@@ -552,6 +553,9 @@ pub const MENU_FURNACE: i32 = 14;
 
 /// Hopper (5 slots).
 pub const MENU_HOPPER: i32 = 16;
+
+/// Dispenser, dropper and crafter 3×3 (9 slots, P17-01).
+pub const MENU_GENERIC_3X3: i32 = 6;
 
 /// `minecraft:open_screen` (clientbound play 59).
 ///

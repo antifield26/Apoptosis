@@ -916,6 +916,15 @@ fn block_menus_have_the_vanilla_slot_counts_and_player_container() {
     )
     .expect("hopper");
     assert_eq!(hopper.slot_count(), 41);
+    let dispenser = Menu::dispenser(
+        4,
+        Container::new(ContainerKind::Generic, 9).expect("d"),
+        player(),
+        sizes(),
+    )
+    .expect("dispenser");
+    assert_eq!(dispenser.slot_count(), 45);
+    assert_eq!(dispenser.player_container_index(), 1);
     // Wrong sizes are invariants, not hostile input.
     assert!(
         Menu::chest(
@@ -930,6 +939,15 @@ fn block_menus_have_the_vanilla_slot_counts_and_player_container() {
         Menu::furnace(
             2,
             Container::new(ContainerKind::Generic, 3).expect("f"),
+            player(),
+            sizes()
+        )
+        .is_err()
+    );
+    assert!(
+        Menu::dispenser(
+            4,
+            Container::new(ContainerKind::Generic, 5).expect("d"),
             player(),
             sizes()
         )

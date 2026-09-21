@@ -397,7 +397,8 @@ impl Game {
 
     /// The saved block entities of one chunk as NBT (P12-05).
     ///
-    /// Shape: `id` (`minecraft:chest`/`minecraft:furnace`/`minecraft:hopper`),
+    /// Shape: `id` (`minecraft:chest`/`minecraft:furnace`/`minecraft:hopper`/
+    /// `minecraft:dispenser`/`minecraft:dropper`),
     /// `x`/`y`/`z` ints, `Items` list of `{Slot byte, id string, Count int}`,
     /// plus furnace `BurnTicks`/`BurnTotal`/`CookProgress`/`CookTotal` ints and
     /// hopper `Cooldown` int. Vanilla reads `id`/`x`/`y`/`z`/`Items` and ignores
@@ -410,12 +411,30 @@ impl Game {
                 let (ex, ez) = (entity.pos.x >> 4, entity.pos.z >> 4);
                 ex == pos.x && ez == pos.z
             })
-            .map(|entity| {
+            .filter_map(|entity| {
                 let mut fields: Vec<(String, mc_nbt::NbtTag)> = Vec::new();
                 let id = match entity.kind() {
                     mc_container::BlockEntityKind::Container => "minecraft:chest",
                     mc_container::BlockEntityKind::Furnace => "minecraft:furnace",
                     mc_container::BlockEntityKind::Hopper => "minecraft:hopper",
+                    // One kind serves both blocks (same 9 slots); the block
+                    // itself names the id. A mismatch means the world and the
+                    // entity store disagree, so the entry is skipped rather
+                    // than saved under the wrong id.
+                    mc_container::BlockEntityKind::Dispenser => {
+                        let block = self
+                            .world
+                            .get_block_loaded(entity.pos.x, entity.pos.y, entity.pos.z)
+                            .and_then(|state| self.registries.blocks.block_name(state).ok());
+                        match block {
+                            Some("minecraft:dropper") => "minecraft:dropper",
+                            Some("minecraft:dispenser") => "minecraft:dispenser",
+                            _ => {
+                                warn!(pos = ?entity.pos, "a dispenser entity sits on no dispenser; skipped");
+                                return None;
+                            }
+                        }
+                    }
                     mc_container::BlockEntityKind::Sign => "minecraft:sign",
                 };
                 fields.push(("id".to_owned(), mc_nbt::NbtTag::String(id.to_owned())));
@@ -471,7 +490,7 @@ impl Game {
                     }
                     _ => {}
                 }
-                mc_nbt::NbtTag::Compound(fields)
+                Some(mc_nbt::NbtTag::Compound(fields))
             })
             .collect()
     }
@@ -510,6 +529,9 @@ impl Game {
                 }
                 "minecraft:furnace" => mc_container::BlockEntityKind::Furnace,
                 "minecraft:hopper" => mc_container::BlockEntityKind::Hopper,
+                "minecraft:dispenser" | "minecraft:dropper" => {
+                    mc_container::BlockEntityKind::Dispenser
+                }
                 _ => {
                     warn!(%id, "a saved block entity names an unmodelled kind; skipped");
                     continue;

@@ -17,8 +17,8 @@ use mc_persistence::level::Difficulty;
 use mc_protocol::packets::Packet;
 use mc_protocol::packets::play::{
     BlockDestruction, ContainerSetContent, ContainerSetSlot, GameEvent, MENU_FURNACE,
-    MENU_GENERIC_9X3, MENU_HOPPER, OpenScreen, PlayIntent, PlayerPosition, Respawn,
-    SetDefaultSpawnPosition, SetHeldSlot, SetTime, block_position, unpack_block_position,
+    MENU_GENERIC_3X3, MENU_GENERIC_9X3, MENU_HOPPER, OpenScreen, PlayIntent, PlayerPosition,
+    Respawn, SetDefaultSpawnPosition, SetHeldSlot, SetTime, block_position, unpack_block_position,
 };
 use mc_protocol::text::TextComponent;
 use mc_world::{Aabb, Vec3};
@@ -1480,6 +1480,7 @@ impl Game {
                 OpenKind::Chest => mc_container::BlockEntityKind::Container,
                 OpenKind::Furnace => mc_container::BlockEntityKind::Furnace,
                 OpenKind::Hopper => mc_container::BlockEntityKind::Hopper,
+                OpenKind::Dispenser => mc_container::BlockEntityKind::Dispenser,
             };
             self.block_entities
                 .insert(mc_container::BlockEntity::new(pos, entity_kind));
@@ -1593,6 +1594,32 @@ impl Game {
                     }
                 };
                 (menu, MENU_HOPPER, "Hopper")
+            }
+            OpenKind::Dispenser => {
+                let mut block =
+                    match mc_container::Container::new(mc_container::ContainerKind::Generic, 9) {
+                        Ok(container) => container,
+                        Err(error) => {
+                            debug!(id = %id, %error, "could not build a dispenser container");
+                            return;
+                        }
+                    };
+                for (index, stack) in items.iter().enumerate().take(9) {
+                    let _ = block.set(index, *stack);
+                }
+                let menu = match mc_container::Menu::dispenser(
+                    window,
+                    block,
+                    player_container,
+                    stack_sizes,
+                ) {
+                    Ok(menu) => menu,
+                    Err(error) => {
+                        debug!(id = %id, %error, "could not build a dispenser menu");
+                        return;
+                    }
+                };
+                (menu, MENU_GENERIC_3X3, "Dispenser")
             }
         };
 
@@ -2825,7 +2852,7 @@ impl Game {
     /// The same judgment the propagation loop applies per block, factored
     /// for placement (fence gates open into a live circuit): strongest
     /// neighbour emission above zero, dust cited at face value.
-    fn powered_at(&self, x: i32, y: i32, z: i32) -> bool {
+    pub(crate) fn powered_at(&self, x: i32, y: i32, z: i32) -> bool {
         let table = mc_redstone::EmitterTable::new(&self.registries.blocks);
         let inputs = mc_redstone::propagation::gather_inputs(
             &self.world,
@@ -2975,6 +3002,24 @@ impl Game {
             state
         } else if mc_redstone::blocks::is_fence_gate(&block) {
             let Some(state) = self.fence_gate_state(&block, tx, ty, tz, id) else {
+                return;
+            };
+            state
+        } else if block == mc_redstone::OBSERVER {
+            // Front toward the clicker (pumpkin `ObserverBlock.on_place`):
+            // the watched cell is the one faced.
+            let facing = self.player_facing(id);
+            let Some(state) = self.oriented_state(&block, &[("facing", facing)]) else {
+                return;
+            };
+            state
+        } else if block == mc_redstone::DISPENSER || block == mc_redstone::DROPPER {
+            // Head away from the clicker (pumpkin `DispenserBlock.on_place`),
+            // untriggered and dark.
+            let facing = Self::opposite_facing(self.player_facing(id));
+            let Some(state) =
+                self.oriented_state(&block, &[("facing", facing), ("triggered", "false")])
+            else {
                 return;
             };
             state

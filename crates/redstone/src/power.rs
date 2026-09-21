@@ -375,6 +375,9 @@ pub enum PowerSource {
     /// Comparator: active while `powered=true`; output is the input level in
     /// `compare` mode and the difference in `subtract` mode.
     Comparator,
+    /// Observer: active while `powered=true`; emits 15 from its back face
+    /// only (P17-01 — directional, see the gather rule).
+    Observer,
     /// Lightning rod: active while `powered=true` (struck by lightning).
     LightningRod,
 }
@@ -418,6 +421,7 @@ impl PowerSource {
             | Self::PressurePlate
             | Self::Repeater
             | Self::Comparator
+            | Self::Observer
             | Self::LightningRod => PowerLevel::MAX,
         }
     }
@@ -434,10 +438,12 @@ impl PowerSource {
     ///
     /// Whether a *repeater's or comparator's output* strongly powers the block
     /// in front of it is **unverified**, and the conservative choice is to
-    /// model both as weak until a baseline test says otherwise.
+    /// model both as weak until a baseline test says otherwise. Observers
+    /// are strong: pumpkin returns 15 for both weak and strong queries, and
+    /// vanilla observers drive dust directly.
     #[must_use]
     pub const fn is_strong_source(self) -> bool {
-        matches!(self, Self::RedstoneBlock)
+        matches!(self, Self::RedstoneBlock | Self::Observer)
     }
 
     /// The state this source emits while active.
@@ -462,6 +468,7 @@ impl PowerSource {
             Self::PressurePlate => "pressure_plate",
             Self::Repeater => "repeater",
             Self::Comparator => "comparator",
+            Self::Observer => "observer",
             Self::LightningRod => "lightning_rod",
         }
     }
@@ -483,6 +490,7 @@ impl PowerSource {
             Self::PressurePlate => "minecraft:stone_pressure_plate",
             Self::Repeater => "minecraft:repeater",
             Self::Comparator => "minecraft:comparator",
+            Self::Observer => "minecraft:observer",
             Self::LightningRod => "minecraft:lightning_rod",
         }
     }
@@ -614,9 +622,11 @@ mod tests {
     }
 
     #[test]
-    fn only_the_redstone_block_is_a_strong_source() {
+    fn only_the_redstone_block_and_the_observer_are_strong_sources() {
         // Written as an exhaustive table so that adding a variant without deciding
         // its strength fails here rather than silently taking a default.
+        // The observer joins the redstone block: pumpkin answers 15 to both
+        // weak and strong queries, and vanilla observers drive dust directly.
         let expected = [
             (PowerSource::RedstoneBlock, true),
             (PowerSource::Torch, false),
@@ -625,6 +635,7 @@ mod tests {
             (PowerSource::PressurePlate, false),
             (PowerSource::Repeater, false),
             (PowerSource::Comparator, false),
+            (PowerSource::Observer, true),
             (PowerSource::LightningRod, false),
         ];
         for (source, strong) in expected {
@@ -643,7 +654,7 @@ mod tests {
     }
 
     #[test]
-    fn at_most_one_source_is_strong_and_names_are_unique() {
+    fn strong_sources_and_names_are_unique() {
         let all = [
             PowerSource::RedstoneBlock,
             PowerSource::Torch,
@@ -652,13 +663,14 @@ mod tests {
             PowerSource::PressurePlate,
             PowerSource::Repeater,
             PowerSource::Comparator,
+            PowerSource::Observer,
             PowerSource::LightningRod,
         ];
         assert_eq!(
             all.iter()
                 .filter(|source| source.is_strong_source())
                 .count(),
-            1
+            2
         );
         let mut names: Vec<&str> = all.iter().map(|source| source.name()).collect();
         names.sort_unstable();
