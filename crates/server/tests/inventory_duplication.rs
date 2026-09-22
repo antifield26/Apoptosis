@@ -227,6 +227,7 @@ fn placing_a_block_then_clicking_does_not_refund_it() {
         cursor_y: 1.0,
         cursor_z: 0.5,
         inside_block: false,
+        world_border_hit: false,
         sequence: 0,
     });
     let after_place = harness.inventory_total();

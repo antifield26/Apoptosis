@@ -594,6 +594,7 @@ fn breaking_and_placing_blocks_is_validated_and_broadcast() {
         cursor_y: 1.0,
         cursor_z: 0.5,
         inside_block: false,
+        world_border_hit: false,
         sequence: 0,
     });
     let placed = harness
@@ -638,6 +639,7 @@ fn breaking_and_placing_blocks_is_validated_and_broadcast() {
         cursor_y: 0.0,
         cursor_z: 0.5,
         inside_block: false,
+        world_border_hit: false,
         sequence: 0,
     });
     assert_eq!(
@@ -712,6 +714,7 @@ fn placement_consumes_in_the_held_slot() {
         cursor_y: 1.0,
         cursor_z: 0.5,
         inside_block: false,
+        world_border_hit: false,
         sequence: 0,
     });
     assert_eq!(
@@ -1100,6 +1103,7 @@ fn breaking_a_chest_with_a_full_cursor_keeps_the_cursor() {
         cursor_y: 1.0,
         cursor_z: 0.5,
         inside_block: false,
+        world_border_hit: false,
         sequence: 51,
     });
     let window = i32::from(
@@ -1221,6 +1225,7 @@ fn an_open_furnace_menu_shows_completed_output() {
         cursor_y: 1.0,
         cursor_z: 0.5,
         inside_block: false,
+        world_border_hit: false,
         sequence: 61,
     });
     let window = i32::from(
@@ -1337,6 +1342,7 @@ fn redstone_edits_feed_the_queue_and_dirt_does_not() {
         cursor_y: 1.0,
         cursor_z: 0.5,
         inside_block: false,
+        world_border_hit: false,
         sequence: 70,
     });
     assert_eq!(
@@ -1371,6 +1377,7 @@ fn redstone_edits_feed_the_queue_and_dirt_does_not() {
         cursor_y: 1.0,
         cursor_z: 0.5,
         inside_block: false,
+        world_border_hit: false,
         sequence: 71,
     });
     let placed = harness.game.world().get_block(at.0, at.1, at.2);
@@ -1477,6 +1484,7 @@ fn right_clicking_a_lever_flips_powered() {
         cursor_y: 1.0,
         cursor_z: 0.5,
         inside_block: false,
+        world_border_hit: false,
         sequence: 74,
     });
     let flipped = powered(&harness);
@@ -1490,6 +1498,7 @@ fn right_clicking_a_lever_flips_powered() {
         cursor_y: 1.0,
         cursor_z: 0.5,
         inside_block: false,
+        world_border_hit: false,
         sequence: 75,
     });
     assert_eq!(powered(&harness), initial, "two flips must round-trip");
@@ -1570,6 +1579,7 @@ fn a_flipped_lever_powers_dust_and_lights_a_lamp() {
             cursor_y: 1.0,
             cursor_z: 0.5,
             inside_block: false,
+            world_border_hit: false,
             sequence: 80 + i32::try_from(round).expect("few rounds"),
         });
         {
@@ -1635,6 +1645,7 @@ fn a_flipped_lever_powers_dust_and_lights_a_lamp() {
         cursor_y: 1.0,
         cursor_z: 0.5,
         inside_block: false,
+        world_border_hit: false,
         sequence: 90,
     });
     for _ in 0..3 {
@@ -1669,6 +1680,7 @@ fn a_flipped_lever_powers_dust_and_lights_a_lamp() {
         cursor_y: 1.0,
         cursor_z: 0.5,
         inside_block: false,
+        world_border_hit: false,
         sequence: 91,
     });
     for _ in 0..3 {
@@ -1725,6 +1737,7 @@ fn a_torch_follows_its_attachment_not_its_neighbours() {
         cursor_y: 1.0,
         cursor_z: 0.5,
         inside_block: false,
+        world_border_hit: false,
         sequence: 100,
     });
     let torch = harness
@@ -1792,6 +1805,7 @@ fn a_torch_follows_its_attachment_not_its_neighbours() {
         cursor_y: 1.0,
         cursor_z: 0.5,
         inside_block: false,
+        world_border_hit: false,
         sequence: 103,
     });
     for _ in 0..3 {
@@ -1809,6 +1823,7 @@ fn a_torch_follows_its_attachment_not_its_neighbours() {
         cursor_y: 1.0,
         cursor_z: 0.5,
         inside_block: false,
+        world_border_hit: false,
         sequence: 104,
     });
     for _ in 0..3 {
@@ -1850,6 +1865,7 @@ fn closing_a_chest_returns_the_cursor() {
         cursor_y: 1.0,
         cursor_z: 0.5,
         inside_block: false,
+        world_border_hit: false,
         sequence: 41,
     });
     let window = i32::from(
@@ -2062,6 +2078,7 @@ fn chest_transactions_conserve_across_a_flood() {
         cursor_y: 1.0,
         cursor_z: 0.5,
         inside_block: false,
+        world_border_hit: false,
         sequence: 11,
     });
     let window = i32::from(
@@ -2274,6 +2291,7 @@ fn an_open_furnace_cooks_and_reports_progress() {
         cursor_y: 1.0,
         cursor_z: 0.5,
         inside_block: false,
+        world_border_hit: false,
         sequence: 21,
     });
     let window = i32::from(
@@ -2367,6 +2385,7 @@ fn right_clicking_a_chest_opens_a_window() {
         cursor_y: 1.0,
         cursor_z: 0.5,
         inside_block: false,
+        world_border_hit: false,
         sequence: 7,
     });
     let ids = Harness::drain_ids(&mut out);

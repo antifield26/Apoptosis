@@ -1872,6 +1872,11 @@ pub enum PlayIntent {
         cursor_z: f32,
         /// Whether the click landed inside the block shape.
         inside_block: bool,
+        /// Whether the click hit the world border (jar `BlockHitResult`
+        /// ends with `inside` then `worldBorderHit`, both plain bools).
+        /// Read so the frame is consumed exactly, then ignored — no world
+        /// border is modelled.
+        world_border_hit: bool,
         /// Action sequence number (echoed back in block-change acks).
         sequence: i32,
     },
@@ -2075,6 +2080,10 @@ impl PlayIntent {
                 cursor_y: reader.read_f32()?,
                 cursor_z: reader.read_f32()?,
                 inside_block: reader.read_bool()?,
+                // The trailing world-border bit: without it every real
+                // placement dies on one trailing byte (AUDIT-09 A-03) and
+                // the connection with it — the owner placement disconnects.
+                world_border_hit: reader.read_bool()?,
                 sequence: reader.read_varint()?,
             }),
             serverbound::play::USE_ITEM => Some(Self::UseItem {
@@ -2764,6 +2773,7 @@ mod tests {
         writer.write_f32(0.5);
         writer.write_f32(0.5);
         writer.write_bool(false);
+        writer.write_bool(false);
         writer.write_varint(9);
         let bytes = writer.finish();
         let intent = PlayIntent::decode(ids::USE_ITEM_ON, &bytes)
@@ -2779,6 +2789,7 @@ mod tests {
                 cursor_y: 0.5,
                 cursor_z: 0.5,
                 inside_block: false,
+                world_border_hit: false,
                 sequence: 9,
             }
         );

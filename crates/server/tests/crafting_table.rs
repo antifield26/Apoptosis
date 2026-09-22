@@ -175,6 +175,7 @@ fn open_table(harness: &mut Harness, out: &mut InboundReceiver) -> (i32, i32, i3
         cursor_y: 0.5,
         cursor_z: 0.5,
         inside_block: false,
+        world_border_hit: false,
         sequence: 0,
     });
     // Empty the hand, then click the table itself.
@@ -193,6 +194,7 @@ fn open_table(harness: &mut Harness, out: &mut InboundReceiver) -> (i32, i32, i3
         cursor_y: 0.5,
         cursor_z: 0.5,
         inside_block: false,
+        world_border_hit: false,
         sequence: 0,
     });
     let mut types = Vec::new();

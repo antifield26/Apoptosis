@@ -117,6 +117,7 @@ impl Harness {
             cursor_y: 0.5,
             cursor_z: 0.5,
             inside_block: false,
+            world_border_hit: false,
             sequence: 0,
         });
     }
@@ -130,6 +131,7 @@ impl Harness {
             cursor_y: 0.5,
             cursor_z: 0.5,
             inside_block: false,
+            world_border_hit: false,
             sequence: 0,
         });
     }

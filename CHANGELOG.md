@@ -291,10 +291,16 @@ simulation and need a controlled single-action repro):
   "not effective" should go away with the icon).
 - Placement disconnect diagnostics: the server logged nothing — no
   kick, no error, a clean TCP close, and no placement intent either.
-  `apply_use_item_on` now logs the intent (INFO) and every kick logs
-  its reason (INFO), so intake versus response separates in the log on
-  the next repro. Still needs from the owner: which block was placed
-  and held, and the full `latest.log` tail (not one line).
+  Root-caused since: vanilla `UseItemOn` ends with a `worldBorderHit`
+  bool (`BlockHitResult`: pos + direction + 3×f32 cursor + `inside` +
+  `worldBorderHit`, jar-verified) that the decoder never read, so every
+  real placement died on one trailing byte (AUDIT-09 A-03) and the
+  connection with it — and the listener discarded the connection result
+  (`let _ =`), so the kill was silent on top of silent. The decoder
+  reads and ignores the bit (no world border modelled, stated gap);
+  connection errors now warn with peer and error. Falsification: the
+  `UseItemOn` decode test carries the full vanilla-shaped body (fails
+  with the read removed). Owner re-test pending on the new binary.
 - No red hurt flash: corrects round 1's "animation 2" — the packet
   layout was jar-verified but the id was convention, and the convention
   is wrong on a modern client. Jar `LivingEntity` never broadcasts event

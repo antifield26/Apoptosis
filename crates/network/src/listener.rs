@@ -341,7 +341,19 @@ async fn accept_loop(
                                 let auth = Arc::clone(&auth);
                                 let link = game_link.clone();
                                 connections.spawn(async move {
-                                    let _ = run_connection(stream, settings, shutdown, auth, guard, link).await;
+                                    if let Err(error) = run_connection(
+                                        stream, settings, shutdown, auth, guard, link,
+                                    )
+                                    .await
+                                    {
+                                        // Owner placement disconnects: this
+                                        // result used to be discarded, so a
+                                        // connection killed by a decode
+                                        // failure looked exactly like a clean
+                                        // client leave. Clean disconnects are
+                                        // `Ok` and stay silent.
+                                        tracing::warn!(%peer, %error, "connection ended with an error");
+                                    }
                                 });
                             }
                             Err(reason) => {
