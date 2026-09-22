@@ -285,10 +285,11 @@ simulation and need a controlled single-action repro):
   the icon packet went to the wrong entity whatever id it carried.
   Falsification: the `mc-entity` wire pin now expects raw ids, and
   `admin_commands` pins poison 18 on both the icon and the removal
-  (fail with the identity mapping restored). Owner re-test pending:
-  `give speed` should show Speed and actually hasten (the client applies
-  movement speed from its own effect state, so the earlier
-  "not effective" should go away with the icon).
+  (fail with the identity mapping restored). Owner-verified: `give
+  speed` shows the Speed icon (was Slowness). Whether it hastens is
+  still open — the client applies movement speed from its own effect
+  state, so a correct icon should hasten; the test method matters here
+  (see the verdict request below).
 - Placement disconnect diagnostics: the server logged nothing — no
   kick, no error, a clean TCP close, and no placement intent either.
   Root-caused since: vanilla `UseItemOn` ends with a `worldBorderHit`
@@ -300,7 +301,8 @@ simulation and need a controlled single-action repro):
   reads and ignores the bit (no world border modelled, stated gap);
   connection errors now warn with peer and error. Falsification: the
   `UseItemOn` decode test carries the full vanilla-shaped body (fails
-  with the read removed). Owner re-test pending on the new binary.
+  with the read removed). Owner-verified on the new binary: oak-planks
+  placement lands with no disconnect.
 - No red hurt flash: corrects round 1's "animation 2" — the packet
   layout was jar-verified but the id was convention, and the convention
   is wrong on a modern client. Jar `LivingEntity` never broadcasts event
