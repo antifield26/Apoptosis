@@ -2132,7 +2132,12 @@ impl Game {
             let length = (dx * dx + dz * dz).sqrt();
             if length > 1.0e-6 {
                 let (dir_x, dir_z) = (dx / length, dz / length);
-                let speed = kind.movement_speed();
+                // Speed/Slowness (P16-03 modifiers) scale the kind's walk.
+                let effect_speed = self.entities.get(id).map_or(1.0, |entity| {
+                    let effects: Vec<_> = entity.effects.values().copied().collect();
+                    mc_entity::effect::movement_speed_multiplier(&effects)
+                });
+                let speed = kind.movement_speed() * effect_speed;
                 // Vanilla's yaw convention: 0 faces +Z, increasing clockwise,
                 // so `yaw = degrees(atan2(-x, z))` — pinned by a unit test.
                 let yaw = (-dir_x).atan2(dir_z).to_degrees();
@@ -2734,6 +2739,14 @@ impl Game {
         {
             return;
         }
+        // Strength/Weakness on the *attacker* (P16-03 modifiers) shift the
+        // kind's base hit, floored at zero. Collected before the session
+        // borrow so the entity map stays free.
+        let bonus = self.entities.get(attacker).map_or(0.0, |entity| {
+            let effects: Vec<_> = entity.effects.values().copied().collect();
+            mc_entity::effect::attack_damage_bonus(&effects)
+        });
+        let hit = (kind.attack_damage() + bonus).max(0.0);
         let outcome = self.sessions.get_mut(&session_id).map(|session| {
             session.hurt_invuln_ticks = INVULNERABLE_TICKS;
             // Armour is the victim's worn set (P16-01); knockback does not
@@ -2742,7 +2755,7 @@ impl Game {
             let armor = worn_stats(&session.player.inventory, &self.registries.items);
             session
                 .player
-                .apply_damage(kind.attack_damage(), DamageSource::MobAttack, &armor)
+                .apply_damage(hit, DamageSource::MobAttack, &armor)
         });
         let Some(outcome) = outcome else {
             return;

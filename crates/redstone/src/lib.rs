@@ -31,15 +31,14 @@
 //! - **Observers**, hoppers (and any container-driven comparator output), rails of every
 //!   kind, sculk sensors, daylight detectors, target blocks, trapped chests, tripwire
 //!   hooks, jukeboxes, lecterns.
-//! - **Conductivity**: a solid block is never powered, so "lever attached to a block,
-//!   dust on the far side" does not work. This is the largest single gap and it is
-//!   called out in [`propagation`].
+//! - **Conductivity**: measured and modelled in [`propagation`] (P13-06) —
+//!   torch/lever/dust/redstone-block/lamp receipt, strong vs weak, solid-blind.
 //! - **Quasi-connectivity.**
 //! - **Timing**: a repeater's configured delay is stored and validated, not waited on.
 //!   A torch changes state with no delay, and dust has no re-evaluation delay of its
 //!   own. Only a wire's "ask again next tick" schedule exists.
-//! - **Orientation**: a component has no facing, so its inputs and outputs are not
-//!   directional. A comparator's side inputs are therefore not read.
+//! - **Orientation (outputs)**: torch attachment and comparator back/sides are
+//!   read by `facing` (P13-04); repeater/comparator *outputs* still ignore facing.
 //! - **Vanilla's update order**, and Vanilla's separation of block updates from shape
 //!   updates and comparator updates.
 //! - **Writing component states back**: the propagation loop writes redstone dust's

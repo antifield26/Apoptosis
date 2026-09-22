@@ -281,6 +281,17 @@ pub fn held_damage(inv: &PlayerInventory, items: &ItemRegistry) -> f32 {
     FIST_DAMAGE + melee_damage_bonus(name)
 }
 
+/// [`held_damage`] plus the Strength/Weakness flat bonus from `effects`,
+/// floored at zero so a Weakness stack cannot deal negative damage.
+#[must_use]
+pub fn held_damage_with_effects(
+    inv: &PlayerInventory,
+    items: &ItemRegistry,
+    effects: &[crate::effect::ActiveEffect],
+) -> f32 {
+    (held_damage(inv, items) + crate::effect::attack_damage_bonus(effects)).max(0.0)
+}
+
 /// Summed combat stats of what `inv` wears: the four armour slots starting
 /// at [`ARMOR_START`]. Unknown ids contribute nothing (same fallback rule as
 /// [`held_damage`]).
@@ -310,7 +321,7 @@ pub fn worn_stats(inv: &PlayerInventory, items: &ItemRegistry) -> CombatStats {
 mod tests {
     use super::{
         BASE_MELEE_KNOCKBACK, CombatStats, DamageSource, armor_absorb, armor_of,
-        attack_range_bonus, held_damage, melee_damage_bonus, worn_stats,
+        attack_range_bonus, held_damage, held_damage_with_effects, melee_damage_bonus, worn_stats,
     };
 
     #[test]
@@ -438,6 +449,32 @@ mod tests {
         inv.set_slot(0, ItemStack::new(stick, 1).expect("stick"))
             .expect("set");
         assert_eq!(held_damage(&inv, &items), 1.0);
+    }
+
+    #[test]
+    fn strength_and_weakness_modifiers_fight_the_fist_and_the_sword() {
+        use crate::stack::ItemStack;
+        let items = registry();
+        let inv = stocked_inventory();
+        let strength = [crate::effect::ActiveEffect::new(
+            crate::effect::effect_id::STRENGTH,
+            0,
+            100,
+        )];
+        let weakness = [crate::effect::ActiveEffect::new(
+            crate::effect::effect_id::WEAKNESS,
+            0,
+            100,
+        )];
+        assert_eq!(held_damage_with_effects(&inv, &items, &strength), 4.0);
+        assert_eq!(held_damage_with_effects(&inv, &items, &weakness), 0.0);
+        let mut armed = stocked_inventory();
+        let sword = items.id("minecraft:diamond_sword").expect("sword");
+        armed
+            .set_slot(0, ItemStack::new(sword, 1).expect("sword"))
+            .expect("set");
+        assert_eq!(held_damage_with_effects(&armed, &items, &strength), 10.0);
+        assert_eq!(held_damage_with_effects(&armed, &items, &weakness), 3.0);
     }
 
     #[test]

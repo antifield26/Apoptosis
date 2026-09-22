@@ -32,9 +32,9 @@
 //!
 //! ## What is not modelled here
 //!
-//! Conductivity (which blocks can be powered at all), quasi-connectivity, the
-//! block-update/shape-update distinction and the full component set are **not**
-//! implemented. See the crate docs for the complete list.
+//! Quasi-connectivity, the block-update/shape-update distinction and the full
+//! component set are **not** implemented. Conductivity itself is modelled in
+//! [`crate::propagation`] (P13-06). See the crate docs for the complete list.
 
 use mc_core::error::{ServerError, ServerResult};
 use std::fmt;

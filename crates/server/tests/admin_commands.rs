@@ -302,6 +302,69 @@ fn kill_runs_the_death_path_even_in_creative() {
 }
 
 #[test]
+fn death_drops_the_inventory_once_and_respawn_does_not_double_drop() {
+    // P11-07 / AUDIT-16: death drains the inventory onto the ground through
+    // `after_damage`; a later respawn must find it empty and drop nothing twice.
+    let mut harness = Harness::new("p16-death-drops", ops_for("Chief", 4));
+    let (id, mut out) = harness.join("Chief");
+    harness.command(id, &mut out, "give Chief stone 5");
+    assert_eq!(
+        harness.game.dropped_items().len(),
+        0,
+        "the give lands in the inventory, not on the ground"
+    );
+
+    harness.command(id, &mut out, "kill");
+    assert!(!harness.game.player(id).expect("player").is_alive());
+    let total_after: i64 = harness
+        .game
+        .dropped_items()
+        .iter()
+        .map(|(stack, _)| i64::from(stack.count()))
+        .sum();
+    assert!(
+        total_after >= 5,
+        "the five stones must be on the ground after death, saw total {total_after}"
+    );
+    assert_eq!(
+        harness.game.session(id).expect("session").inventory_total(),
+        0,
+        "death drains the inventory"
+    );
+
+    // Respawn through the same intent a real client sends.
+    harness
+        .events
+        .try_send(ClientEvent {
+            id,
+            kind: ClientEventKind::Intent(mc_protocol::packets::play::PlayIntent::ClientCommand {
+                action: 0,
+            }),
+        })
+        .expect("respawn intent queued");
+    harness.run(1);
+    assert!(
+        harness.game.player(id).expect("player").is_alive(),
+        "respawn restores the player"
+    );
+    let total_after_respawn: i64 = harness
+        .game
+        .dropped_items()
+        .iter()
+        .map(|(stack, _)| i64::from(stack.count()))
+        .sum();
+    assert_eq!(
+        total_after_respawn, total_after,
+        "respawn must not double-drop: {total_after} -> {total_after_respawn}"
+    );
+    assert_eq!(
+        harness.game.session(id).expect("session").inventory_total(),
+        0,
+        "the drained inventory stays empty at respawn"
+    );
+}
+
+#[test]
 fn seed_reports_the_simulation_seed() {
     let mut harness = Harness::new("p14-seed", ops_for("Chief", 4));
     let (id, mut out) = harness.join("Chief");

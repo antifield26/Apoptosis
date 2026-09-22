@@ -25,8 +25,8 @@
 //!   the accepted range for 26.1.2 is not verified.
 //! - **No `filter` or `overlay` sections.** Both exist in the format; neither is
 //!   modelled, and neither appears in the vanilla pack.
-//! - **No pack selection UI or `enabled` list.** A world's
-//!   `level.dat → DataPacks` list is not read, so every discovered pack is loaded.
+//! - **No pack selection UI.** The world's `level.dat → DataPacks` list **is**
+//!   read (`crate::enabled`, P07-12); there is no in-game selection screen.
 
 use std::path::{Path, PathBuf};
 use thiserror::Error;

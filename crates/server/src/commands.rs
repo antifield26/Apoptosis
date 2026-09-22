@@ -1,6 +1,6 @@
 //! The server's command set (P07-05, P14-01).
 //!
-//! Twelve commands, chosen because each exercises a different part of the framework and
+//! Sixteen commands, chosen because each exercises a different part of the framework and
 //! each is *usefully* implementable today:
 //!
 //! | Command | Argument shape it exercises | What it does |

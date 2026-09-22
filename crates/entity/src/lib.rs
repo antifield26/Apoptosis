@@ -101,7 +101,8 @@
 //! - no items falling slower in water ([`item_entity`]);
 //! - no container transactions (clicks, drags, shift-click, cursor stack);
 //! - no crafting: payload slots 0 and 1..=4 are always empty;
-//! - no armour/effect/absorption damage reduction and no `DamageSource` typing;
+//! - armour/toughness absorb and `DamageSource` typing exist (P16-01); no
+//!   enchantments or absorption hearts;
 //! - no `keepInventory` game rule lookup (the caller passes the flag) and no
 //!   item dropping (the caller receives the stacks);
 //! - no difficulty: starvation damage is the normal/hard value;

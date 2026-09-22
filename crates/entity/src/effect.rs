@@ -8,15 +8,15 @@
 //! ## What is modelled, and what is not
 //!
 //! Modelled: an effect's identity, amplifier, remaining duration, the ambient flag,
-//! expiry, and the two numeric modifiers a caller can ask for — movement speed and
-//! damage taken. [`EffectKind`] lists the effects whose *numeric* effect we apply.
+//! expiry, and the numeric modifiers a caller can ask for — movement speed,
+//! damage taken, and melee attack damage (Strength/Weakness). [`EffectKind`]
+//! lists the effects whose *numeric* effect we apply.
 //!
-//! **Not** modelled, and therefore not claimed: particles, the HUD icon, effect
-//! colour, per-effect behaviour beyond the two modifiers (poison, wither,
-//! levitation, blindness…), instant effects (they apply once rather than over
-//! time), effect removal by milk, beacons or conduits. The client is not sent
-//! `update_mob_effect` yet, so a player sees no icon even when the server applies
-//! the modifier — recorded in the parity matrix rather than implied away.
+//! **Not** modelled, and therefore not claimed: particles, effect colour,
+//! per-effect behaviour beyond those modifiers (poison, wither, levitation,
+//! blindness…), instant effects (they apply once rather than over time), effect
+//! removal by milk, beacons or conduits. Icons reach the client via
+//! `update_mob_effect` (P16-03).
 
 /// Effect ids, stable identity for storage and tests (P05-10).
 ///
@@ -199,7 +199,7 @@ pub fn wire_id_of(stored: i32) -> Option<i32> {
 
 /// One active effect on an entity.
 ///
-/// Field names match what the tick loop and the (future) `update_mob_effect`
+/// Field names match what the tick loop and the `update_mob_effect`
 /// encoder need.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ActiveEffect {
@@ -281,6 +281,42 @@ pub fn damage_taken_multiplier(effects: &[ActiveEffect]) -> f64 {
     (1.0 - reduction).clamp(0.0, 1.0)
 }
 
+/// Flat melee damage bonus from Strength / Weakness.
+///
+/// Vanilla adds `3 × level` for Strength and subtracts `4 × level` for
+/// Weakness (community-documented attribute modifiers, same honesty tier as
+/// [`movement_speed_multiplier`]). The sum is **not** clamped here; callers
+/// fold it into a total that floors at zero so a Weakness stack cannot deal
+/// negative damage.
+#[must_use]
+pub fn attack_damage_bonus(effects: &[ActiveEffect]) -> f32 {
+    let mut bonus = 0.0f32;
+    for effect in effects {
+        match effect.kind() {
+            Some(EffectKind::Strength) => {
+                #[allow(
+                    clippy::cast_precision_loss,
+                    reason = "amplifier is a small game integer; level is already i32"
+                )]
+                {
+                    bonus += 3.0 * effect.level() as f32;
+                }
+            }
+            Some(EffectKind::Weakness) => {
+                #[allow(
+                    clippy::cast_precision_loss,
+                    reason = "amplifier is a small game integer; level is already i32"
+                )]
+                {
+                    bonus -= 4.0 * effect.level() as f32;
+                }
+            }
+            _ => {}
+        }
+    }
+    bonus
+}
+
 /// Damage an effect deals this tick, if any.
 ///
 /// Vanilla's poison and wither deal one point on a cadence that depends on the
@@ -321,8 +357,8 @@ pub fn can_kill(effect: &ActiveEffect) -> bool {
 #[allow(clippy::float_cmp)]
 mod tests {
     use super::{
-        ActiveEffect, EffectKind, can_kill, damage_over_time, damage_taken_multiplier, effect_id,
-        movement_speed_multiplier, wire_id_of,
+        ActiveEffect, EffectKind, attack_damage_bonus, can_kill, damage_over_time,
+        damage_taken_multiplier, effect_id, movement_speed_multiplier, wire_id_of,
     };
 
     #[test]
@@ -423,6 +459,22 @@ mod tests {
             resist_ten.abs() < 1e-9,
             "capped at full immunity: {resist_ten}"
         );
+    }
+
+    #[test]
+    fn strength_and_weakness_shift_melee_damage() {
+        assert_eq!(attack_damage_bonus(&[]), 0.0);
+        let strength_one = attack_damage_bonus(&[ActiveEffect::new(effect_id::STRENGTH, 0, 100)]);
+        assert_eq!(strength_one, 3.0, "Strength I is +3");
+        let strength_two = attack_damage_bonus(&[ActiveEffect::new(effect_id::STRENGTH, 1, 100)]);
+        assert_eq!(strength_two, 6.0, "Strength II is +6");
+        let weakness_one = attack_damage_bonus(&[ActiveEffect::new(effect_id::WEAKNESS, 0, 100)]);
+        assert_eq!(weakness_one, -4.0, "Weakness I is −4");
+        let both = attack_damage_bonus(&[
+            ActiveEffect::new(effect_id::STRENGTH, 0, 100),
+            ActiveEffect::new(effect_id::WEAKNESS, 0, 100),
+        ]);
+        assert_eq!(both, -1.0, "stacks add: +3 − 4");
     }
 
     #[test]

@@ -39,7 +39,8 @@
 //! - **No movement, physics, collision, fall damage or respawn anchoring.**
 //!   Position is stored, never simulated; `respawn` does not search for a safe
 //!   spawn or move the player.
-//! - **No `keep_inventory` game rule and no death drops.** [`Player::respawn`]
+//! - **No `keep_inventory` game rule.** Death drops are drained by
+//!   `Game::after_damage` (P11-07); [`Player::respawn`] does not drop again.
 //!   restores health/food only; the caller decides what happens to the inventory
 //!   and to experience (see [`Player::respawn`]).
 //! - **No effects, attributes, statistics, advancements, ender chest,

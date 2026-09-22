@@ -163,7 +163,6 @@ const UNMODELLED: &[(&str, &str, i32, &str)] = &[
     ("play", "s2c", 0, "bundle"),
     ("play", "s2c", 10, "change_difficulty"),
     ("play", "s2c", 16, "commands"),
-    ("play", "s2c", 34, "entity_event"),
     ("play", "s2c", 35, "entity_position_sync"),
     ("play", "s2c", 43, "initialize_border"),
     ("play", "s2c", 46, "level_event"),
@@ -177,7 +176,6 @@ const UNMODELLED: &[(&str, &str, i32, &str)] = &[
     ("play", "s2c", 128, "ticking_step"),
     ("play", "s2c", 130, "update_advancements"),
     ("play", "s2c", 131, "update_attributes"),
-    ("play", "s2c", 133, "update_mob_effect"),
 ];
 
 #[test]

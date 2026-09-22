@@ -27,9 +27,8 @@
 //! | 4 | the server console |
 //!
 //! **The names are Vanilla's; the mapping from a player to a level is this project's**,
-//! because `ops.json` is not read yet — an offline-mode player is level 0 unless the
-//! operator grants otherwise, and the console is level 4. That is recorded rather than
-//! presented as parity.
+//! read from `ops.json` (P14-02 / KD-33) — an offline-mode player is level 0 unless the
+//! operator grants otherwise, and the console is level 4.
 
 /// What a source is allowed to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

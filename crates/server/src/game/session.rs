@@ -815,17 +815,18 @@ impl Game {
                             return Ok(());
                         }
                         // Held-item damage (P16-01): fist plus the weapon's
-                        // bonus, resolved against the registry like every
-                        // other item lookup on this path.
-                        let damage = self
-                            .sessions
-                            .get(&id)
-                            .map_or(FIST_DAMAGE, |session| {
-                                mc_entity::combat::held_damage(
-                                    &session.player.inventory,
-                                    &self.registries.items,
-                                )
-                            });
+                        // bonus and Strength/Weakness (P16-03 modifiers),
+                        // resolved against the registry like every other item
+                        // lookup on this path.
+                        let damage = self.sessions.get(&id).map_or(FIST_DAMAGE, |session| {
+                            let effects: Vec<_> =
+                                session.player.effects.values().copied().collect();
+                            mc_entity::combat::held_damage_with_effects(
+                                &session.player.inventory,
+                                &self.registries.items,
+                                &effects,
+                            )
+                        });
                         let attacker = self.sessions.get(&id).map(|session| {
                             mc_entity::combat::Attacker {
                                 pos: session.player.position,

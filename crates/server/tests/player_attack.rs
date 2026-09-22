@@ -12,6 +12,8 @@
 //!
 //! - a fist does **1.0** damage (`mc_entity::combat::FIST_DAMAGE`); a held
 //!   weapon adds its attribute bonus on top (P16-01);
+//! - Strength/Weakness shift that total by `+3×level` / `−4×level`
+//!   (P16-03 modifiers, floored at zero);
 //! - a hit lands at most once per **10-tick** window
 //!   (`INVULNERABLE_TICKS`), which is vanilla's `invulnerableTime`;
 //! - a **non-living** entity is immune rather than silently damaged.
@@ -23,11 +25,9 @@
 //!
 //! ## What these do not prove
 //!
-//! That a held item's damage is used (it is not: the fist figure is applied
-//! whatever is held — a named gap, see the parity matrix). Knockback motion
-//! rides the decaying channel (pinned above) and the hurt flash rides
-//! `hurt_animation` (pinned below); what they look like on a real client
-//! is owner-verified.
+//! Knockback motion rides the decaying channel (pinned above) and the hurt
+//! flash rides `hurt_animation` (pinned below); what they look like on a real
+//! client is owner-verified.
 
 // Health is compared exactly on purpose: every value here is reached by adding or
 // subtracting 1.0 from a whole number, so each is exactly representable in `f32`
@@ -162,6 +162,53 @@ fn a_swing_takes_the_fist_damage_off_a_mob() {
         after,
         before - 1.0,
         "one fist swing is one point of damage; saw {before} -> {after}"
+    );
+}
+
+#[test]
+fn weakness_blunts_the_fist_and_strength_sharpens_it() {
+    // P16-03 modifiers: Weakness I floors the fist at 0; Strength I adds +3.
+    let mut harness = Harness::new("p16-effect-mods");
+    harness.join("Alchemist");
+    // A cow (10 HP) survives both bookend hits so the numbers stay readable.
+    let cow = harness.summon_nearby(MobKind::Cow);
+    let before = harness.health(cow).expect("alive");
+
+    harness
+        .game
+        .player_mut(harness.id)
+        .expect("player")
+        .give_effect(mc_entity::effect::effect_id::WEAKNESS, 0, 200);
+    harness.swing(cow.get());
+    assert_eq!(
+        harness.health(cow).expect("alive"),
+        before,
+        "Weakness I floors the 1.0 fist at 0 — no damage lands"
+    );
+
+    // Clear Weakness so Strength is measured alone (stacks would cancel).
+    harness
+        .game
+        .player_mut(harness.id)
+        .expect("player")
+        .effects
+        .remove(&mc_entity::effect::effect_id::WEAKNESS);
+    harness
+        .game
+        .player_mut(harness.id)
+        .expect("player")
+        .give_effect(mc_entity::effect::effect_id::STRENGTH, 0, 200);
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "tick counts are small game integers"
+    )]
+    harness.run(INVULNERABLE_TICKS as usize + 1);
+    harness.swing(cow.get());
+    let after = harness.health(cow).expect("alive");
+    assert_eq!(
+        after,
+        before - 4.0,
+        "Strength I is fist 1.0 + 3.0; saw {before} -> {after}"
     );
 }
 

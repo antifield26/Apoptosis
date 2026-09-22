@@ -958,6 +958,11 @@ mod tests {
             .iter()
             .position(|&(offset, len)| offset == slot_offset && len == 4)
             .expect("a location-word write is journalled");
+        let timestamp_offset = SECTOR_BYTES as u64 + slot_offset;
+        let timestamp = journal
+            .iter()
+            .position(|&(offset, len)| offset == timestamp_offset && len == 4)
+            .expect("a timestamp write is journalled");
         let payload = journal
             .iter()
             .position(|&(offset, len)| offset != 0 && len >= SECTOR_BYTES)
@@ -965,6 +970,10 @@ mod tests {
         assert!(
             location > payload,
             "location word at journal index {location} must follow the payload write at {payload}: {journal:?}"
+        );
+        assert!(
+            location > timestamp,
+            "location word at journal index {location} must be the commit point after the timestamp at {timestamp}: {journal:?}"
         );
     }
 
