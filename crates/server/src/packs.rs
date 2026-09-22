@@ -24,15 +24,12 @@
 //!
 //! ## What this does **not** load, stated because the earlier wording claimed otherwise
 //!
-//! **Tags.** `mc-data` parses tags and the differential suites assert their census
-//! against the real pack, but no tag lookup is reachable from gameplay (recipe
-//! tag ingredients are counted and skipped). Recipes **do** load since P12-07/08:
-//! the crafting table converts item-only shaped/shapeless and the furnace table
-//! converts smelting rows; fuel stays the jar-verified baseline.
-//!
-//! An earlier version of this comment said the loader handled "functions, recipes or tags". It handled
-//! functions. That is the same failure this project keeps finding — a description of an intention, three
-//! lines above code that does something narrower — and it is why the sentence now names what is absent.
+//! Tags now reach gameplay only as **recipe ingredient expansion** (P17-03):
+//! `tags/item/` is resolved into a [`mc_data::TagSet`] and handed to the crafting
+//! and smelting conversions. There is still no general gameplay tag lookup (spawn
+//! rules, block predicates, enchantment filtering keep their local fixtures). The
+//! earlier wording claimed functions/recipes/tags and only delivered functions —
+//! the sentence now names what is present *and* what is still absent.
 //!
 //! ## Why this does not stop the boot
 //!
@@ -86,12 +83,14 @@ pub struct PackLoadOutcome {
     pub loot_refused: Vec<String>,
     /// How many recipes loaded across every pack (P12-07/08).
     pub recipes_loaded: usize,
-    /// Crafting recipes converted to the table (P12-07).
+    /// Crafting recipes converted to the table (P12-07, P17-03).
     pub crafting_converted: usize,
-    /// Crafting recipes skipped for tags/unknowns (P12-07).
+    /// Crafting recipes skipped for tags/unknowns/complex transmute (P12-07, P17-03).
     pub crafting_skipped: usize,
     /// Smelting rows converted for the furnace table (P12-08).
     pub smelting_rows: usize,
+    /// How many item tags resolved for recipe expansion (P17-03).
+    pub item_tags_resolved: usize,
 }
 
 impl PackLoadOutcome {
@@ -135,11 +134,12 @@ impl PackLoadOutcome {
         if self.recipes_loaded > 0 {
             let _ = write!(
                 text,
-                "; {} recipe(s), {} crafting converted ({} skipped), {} smelting rows",
+                "; {} recipe(s), {} crafting converted ({} skipped), {} smelting rows, {} item tags",
                 self.recipes_loaded,
                 self.crafting_converted,
                 self.crafting_skipped,
-                self.smelting_rows
+                self.smelting_rows,
+                self.item_tags_resolved
             );
         }
         text
@@ -348,12 +348,54 @@ pub fn load_packs(
         }
     }
     outcome.recipes_loaded = book.len();
-    // Crafting table: item-only conversion (tags counted, not guessed).
-    match mc_container::RecipeRegistry::from_book(&book, &items) {
+
+    // Item tags, resolved once so recipe ingredients can expand (P17-03). The
+    // same TagSet feeds crafting and smelting; without it both refuse tags and
+    // count them, which is the honest fallback for a pack with no `tags/`.
+    let mut tag_report = mc_data::TagLoadReport::default();
+    let mut tag_files = Vec::new();
+    for (namespace, root, _source) in set.load_plan() {
+        if !root.join("tags").is_dir() {
+            continue;
+        }
+        tag_files.extend(mc_data::tag::load_directory(
+            &root,
+            &namespace,
+            Limits::DEFAULT,
+            &mut tag_report,
+        ));
+    }
+    let item_ids: std::collections::BTreeSet<mc_core::ids::ResourceId> = items
+        .names()
+        .filter_map(|name| mc_core::ids::ResourceId::parse(name).ok())
+        .collect();
+    let mut contents = mc_data::RegistryContents::new();
+    contents.insert("item", item_ids);
+    let tags =
+        mc_data::TagSet::from_map(mc_data::resolve_all(&tag_files, &contents, &mut tag_report));
+    // `TagSet` is keyed by (registry, name) across every registry the packs
+    // define; the outcome figure is the resolved set size, which for a vanilla
+    // pack is the 758 tags (item and otherwise) after nesting.
+    outcome.item_tags_resolved = tags.len();
+
+    let resolve_tag: mc_container::smelting_data::TagResolver<'_> =
+        &|tag: &mc_core::ids::ResourceId| {
+            tags.get(&mc_data::TagKey {
+                registry: "item".to_owned(),
+                name: tag.clone(),
+            })
+            .map(|set| set.iter().cloned().collect())
+            .unwrap_or_default()
+        };
+
+    // Crafting table: item + tag + simple transmute conversion (P17-03).
+    match mc_container::RecipeRegistry::from_book(&book, &items, Some(resolve_tag)) {
         Ok((table, report)) => {
             outcome.crafting_converted = report.converted;
-            outcome.crafting_skipped =
-                report.tag_or_unknown + report.malformed.len() + report.other_kinds;
+            outcome.crafting_skipped = report.tag_or_unknown
+                + report.malformed.len()
+                + report.other_kinds
+                + report.complex_transmute;
             // An empty pack (no packs configured) keeps the baseline: replacing
             // a working table with nothing would uncraft sticks.
             if !table.is_empty() {
@@ -372,7 +414,7 @@ pub fn load_packs(
         &book,
         mc_data::SmeltingKind::Smelting,
         &items,
-        None,
+        Some(resolve_tag),
     ) {
         Ok((table, report)) => {
             outcome.smelting_rows = report.rows;

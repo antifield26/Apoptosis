@@ -1144,11 +1144,115 @@ fn crafted_items_are_consumed_from_a_container_backed_grid() {
     );
 }
 
+/// P17-03: a pack book expands tag ingredients when a resolver is supplied,
+/// and a simple transmute becomes a two-ingredient shapeless recipe while a
+/// multi-material one is counted as complex rather than flattened.
+#[test]
+fn a_pack_book_expands_tags_and_converts_simple_transmute() {
+    use mc_core::ids::ResourceId;
+    use mc_data::{
+        Ingredient as DataIngredient, Recipe as DataRecipe, RecipeBook, TransmuteRecipe,
+    };
+    use std::collections::BTreeMap;
+
+    fn id(text: &str) -> ResourceId {
+        ResourceId::parse(text).expect("a valid id")
+    }
+    let mut book = RecipeBook::new();
+    // Sticks from a planks tag — the real pack's shape.
+    book.insert(DataRecipe::Shaped(mc_data::ShapedRecipe {
+        name: id("minecraft:test_sticks"),
+        pattern: vec!["#".to_owned(), "#".to_owned()],
+        key: BTreeMap::from([('#', vec![DataIngredient::Tag(id("minecraft:planks"))])]),
+        result: id("minecraft:stick"),
+        result_count: 4,
+        group: None,
+    }));
+    // Simple dye transmute: bundle + black dye → black bundle.
+    book.insert(DataRecipe::Transmute(TransmuteRecipe {
+        name: id("minecraft:black_bundle"),
+        input: vec![DataIngredient::Item(id("minecraft:bundle"))],
+        material: vec![DataIngredient::Item(id("minecraft:black_dye"))],
+        result: id("minecraft:black_bundle"),
+        result_count: 1,
+        material_count_min: 1,
+        material_count_max: 1,
+        add_material_count_to_result: false,
+        group: None,
+    }));
+    // Map cloning is the multi-material shape and stays counted, not guessed.
+    book.insert(DataRecipe::Transmute(TransmuteRecipe {
+        name: id("minecraft:map_cloning"),
+        input: vec![DataIngredient::Item(id("minecraft:filled_map"))],
+        material: vec![DataIngredient::Item(id("minecraft:map"))],
+        result: id("minecraft:filled_map"),
+        result_count: 1,
+        material_count_min: 1,
+        material_count_max: 8,
+        add_material_count_to_result: true,
+        group: None,
+    }));
+
+    let oak_planks = id("minecraft:oak_planks");
+    let birch_planks = id("minecraft:birch_planks");
+    let resolve_tag = &|tag: &ResourceId| -> Vec<ResourceId> {
+        if tag.value() == "planks" {
+            vec![oak_planks.clone(), birch_planks.clone()]
+        } else {
+            Vec::new()
+        }
+    };
+
+    let (table, report) =
+        RecipeRegistry::from_book(&book, &items(), Some(resolve_tag)).expect("converts");
+    assert_eq!(report.shaped_seen, 1, "{report:?}");
+    assert_eq!(report.transmute_seen, 2, "{report:?}");
+    assert_eq!(report.complex_transmute, 1, "{report:?}");
+    assert_eq!(report.converted, 2, "{report:?}");
+    assert_eq!(report.tag_or_unknown, 0, "{report:?}");
+    assert_eq!(table.len(), 2);
+
+    // Tag-expanded sticks match from either plank alternative.
+    for plank in [item("minecraft:oak_planks"), item("minecraft:birch_planks")] {
+        let mut grid = vec![ItemStack::EMPTY; 4];
+        grid[0] = stack(plank, 1);
+        grid[2] = stack(plank, 1);
+        assert!(table.matches(&grid, 2), "plank {plank} must craft sticks");
+        let mut crafting = grid.clone();
+        let made = table
+            .craft(&mut crafting, 2, &items())
+            .expect("crafts")
+            .expect("a result");
+        assert_eq!(made.item_id(), Some(item("minecraft:stick")));
+        assert_eq!(made.count(), 4);
+    }
+
+    // Simple transmute: one bundle + one black dye → black bundle.
+    let mut grid = vec![ItemStack::EMPTY; 4];
+    grid[0] = stack(item("minecraft:bundle"), 1);
+    grid[1] = stack(item("minecraft:black_dye"), 1);
+    assert!(table.matches(&grid, 2), "the dye transmute must match");
+    let mut crafting = grid.clone();
+    let made = table
+        .craft(&mut crafting, 2, &items())
+        .expect("crafts")
+        .expect("a result");
+    assert_eq!(made.item_id(), Some(item("minecraft:black_bundle")));
+    assert_eq!(made.count(), 1);
+
+    // Without a resolver the tag sticks refuse (counted, not guessed).
+    let (narrow, report) = RecipeRegistry::from_book(&book, &items(), None).expect("converts");
+    assert_eq!(report.converted, 1, "{report:?}");
+    assert_eq!(report.tag_or_unknown, 1, "{report:?}");
+    assert_eq!(narrow.len(), 1);
+}
+
 /// P12-07: a pack book converts to a matching table (item-only).
 ///
 /// A hand-built book with one shaped (sticks) and one shapeless (planks)
 /// recipe converts to two table entries that match and craft; a tag-ingredient
-/// recipe and a cooking recipe are counted and skipped, not guessed.
+/// recipe and a cooking recipe are counted and skipped without a resolver,
+/// not guessed.
 #[test]
 fn a_pack_book_converts_item_recipes_and_counts_the_rest() {
     use mc_core::ids::ResourceId;
@@ -1195,7 +1299,7 @@ fn a_pack_book_converts_item_recipes_and_counts_the_rest() {
         experience: 0.7,
     }));
 
-    let (table, report) = RecipeRegistry::from_book(&book, &items()).expect("converts");
+    let (table, report) = RecipeRegistry::from_book(&book, &items(), None).expect("converts");
     assert_eq!(report.converted, 2, "{report:?}");
     assert_eq!(report.tag_or_unknown, 1, "{report:?}");
     assert_eq!(report.other_kinds, 1, "{report:?}");

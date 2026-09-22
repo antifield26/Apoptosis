@@ -91,7 +91,7 @@ Precise **file** counts (see section 0a for why the first version was wrong):
 | Directory | Files | Loaded by `mc-data` |
 |---|---|---|
 | `advancement/` | 1 617 | no |
-| `recipe/` | 1 515 | **7 of 21 types** |
+| `recipe/` | 1 515 | **8 of 21 types** |
 | `loot_table/` | 1 326 | no |
 | `structure/` | 1 202 | no |
 | `worldgen/` | 951 | no |
@@ -172,7 +172,7 @@ than silently mis-split.
 
 With the table, the real pack resolves with **758 of 758 tags and zero problems**.
 
-## 3. Recipes — 21 types, 7 modelled
+## 3. Recipes — 21 types, 8 modelled
 
 | Type | Files | Modelled | Why not |
 |---|---|---|---|
@@ -180,16 +180,16 @@ With the table, the real pack resolves with **758 of 758 tags and zero problems*
 | `crafting_shapeless` | 322 | yes | |
 | `stonecutting` | 275 | yes | |
 | `smelting` | 73 | yes | |
-| `crafting_transmute` | 33 | **no** | new in 26.1; semantics not verified |
+| `crafting_transmute` | 33 | **yes (P17-03)** | simple dye rows convert as 2-slot shapeless; `map_cloning` stays counted as complex |
 | `blasting` | 25 | yes | |
 | `smithing_trim` | 18 | **no** | needs a smithing menu |
 | `crafting_special_bannerduplicate` | 16 | **no** | hard-coded behaviour, not data |
 | `smithing_transform` | 12 | **no** | needs a smithing menu |
 | `campfire_cooking` | 9 | yes | |
 | `smoking` | 9 | yes | |
-| `crafting_dye` | 6 | **no** | new in 26.1; semantics not verified |
+| `crafting_dye` | 6 | **no** | needs item components (colour) |
 | `crafting_special_*` (book cloning, firework, map, repair, shield) | 5 | **no** | hard-coded behaviour |
-| `crafting_decorated_pot`, `crafting_imbue` | 2 | **no** | new in 26.1 |
+| `crafting_decorated_pot`, `crafting_imbue` | 2 | **no** | need item components / special behaviour |
 
 Every skipped type is **counted** in `RecipeLoadReport::unmodelled`, so a pack whose
 recipes did nothing is distinguishable from one that failed to load.
@@ -235,5 +235,6 @@ verified.
   but nothing extracts them.
 - **Advancements effects, predicates, item modifiers, worldgen.** Not loaded;
   listed in `DATA_DIRECTORIES` as intent and absent from the parity claims. (Loot
-  tables, functions, tags and 7 recipe types load; recipes convert to the
-  crafting/furnace tables since P12-07/08.)
+  tables, functions, tags and 8 recipe types load; recipes convert to the
+  crafting/furnace tables since P12-07/08, with tag-ingredient expansion and
+  simple transmute since P17-03.)

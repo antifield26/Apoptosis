@@ -96,11 +96,14 @@ pub const MAX_GRID_SLOTS: usize = MAX_GRID_WIDTH * MAX_GRID_WIDTH;
 /// Up to this many distinct alternatives may be given for one ingredient.
 ///
 /// A product decision: the baseline expresses "any planks" as one ingredient with
-/// several alternatives, and 16 is above the number of wood types any one
-/// ingredient needs. The cap exists so a generated or hostile recipe cannot ask
-/// for an unbounded match list; a recipe needing more belongs in the P07-03 data
-/// loader, which models ingredient tags properly.
-pub const MAX_ALTERNATIVES_PER_KEY: usize = 16;
+/// several alternatives. Real pack tags expand larger once nesting is resolved —
+/// `#minecraft:planks` is 12, `#minecraft:shulker_boxes` is 17, `#minecraft:logs`
+/// is 44 — so the cap is the measured ceiling of every tag a vanilla *crafting*
+/// key references, with headroom for a pack that adds another wood family. The
+/// cap exists so a generated or hostile recipe cannot ask for an unbounded match
+/// list; an ingredient that still overflows is refused and counted, never
+/// truncated into a different recipe.
+pub const MAX_ALTERNATIVES_PER_KEY: usize = 64;
 
 /// How much of a grid a shaped pattern covers, in either axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -824,10 +827,15 @@ pub struct CraftingConversion {
     pub shaped_seen: usize,
     /// Shapeless recipes read.
     pub shapeless_seen: usize,
+    /// Transmute recipes read (P17-03).
+    pub transmute_seen: usize,
     /// Recipes that converted.
     pub converted: usize,
-    /// Recipes skipped for a tag/unknown ingredient (no tag resolver here).
+    /// Recipes skipped for a tag/unknown ingredient (no usable resolver hit).
     pub tag_or_unknown: usize,
+    /// Transmute recipes skipped because they need multi-material stack
+    /// arithmetic or component copy (`map_cloning`).
+    pub complex_transmute: usize,
     /// Recipes whose result name is not in the item registry.
     pub unknown_results: Vec<String>,
     /// Malformed recipes (bad counts, patterns, duplicate names at build).
@@ -1044,13 +1052,16 @@ impl RecipeRegistry {
         Self::new(recipes)
     }
 
-    /// Build the table from a loaded data-pack [`mc_data::RecipeBook`] (P12-07).
+    /// Build the table from a loaded data-pack [`mc_data::RecipeBook`] (P12-07, P17-03).
     ///
-    /// Only item-ingredient `crafting_shaped`/`crafting_shapeless` recipes with
-    /// registry-known ids convert; tag ingredients, unknown items, and other
-    /// recipe types are counted and skipped (same refusal-ladder honesty as the
-    /// loot and smelting joins). Order is the book's load order, so pack
-    /// overrides win by position like they do on disk.
+    /// Item-only `crafting_shaped`/`crafting_shapeless` and simple
+    /// `crafting_transmute` recipes with registry-known ids convert. `resolve_tag`
+    /// expands tag ingredients to their member item ids (the same contract as
+    /// [`crate::smelting_data::TagResolver`]); without it, tags are counted and
+    /// skipped rather than guessed. Unknown items and complex transmutes are
+    /// counted and skipped (same refusal-ladder honesty as the loot and smelting
+    /// joins). Order is the book's load order, so pack overrides win by position
+    /// like they do on disk.
     ///
     /// # Errors
     ///
@@ -1059,6 +1070,7 @@ impl RecipeRegistry {
     pub fn from_book(
         book: &mc_data::RecipeBook,
         items: &ItemRegistry,
+        resolve_tag: Option<crate::smelting_data::TagResolver<'_>>,
     ) -> ServerResult<(Self, CraftingConversion)> {
         use mc_data::{Ingredient as DataIngredient, Recipe as DataRecipe};
 
@@ -1069,6 +1081,7 @@ impl RecipeRegistry {
         fn container_ingredient(
             alternatives: &[DataIngredient],
             items: &ItemRegistry,
+            resolve_tag: Option<crate::smelting_data::TagResolver<'_>>,
         ) -> Option<Ingredient> {
             let mut ids = Vec::new();
             for alternative in alternatives {
@@ -1079,7 +1092,18 @@ impl RecipeRegistry {
                         };
                         ids.push(item_id);
                     }
-                    DataIngredient::Tag(_) => return None,
+                    DataIngredient::Tag(tag) => {
+                        let resolve = resolve_tag?;
+                        let members = resolve(tag);
+                        if members.is_empty() {
+                            return None;
+                        }
+                        for member in members {
+                            if let Ok(item_id) = items.id(&full_name(&member)) {
+                                ids.push(item_id);
+                            }
+                        }
+                    }
                 }
             }
             if ids.is_empty() {
@@ -1126,7 +1150,9 @@ impl RecipeRegistry {
                                     break;
                                 }
                             };
-                            if let Some(ingredient) = container_ingredient(alternatives, items) {
+                            if let Some(ingredient) =
+                                container_ingredient(alternatives, items, resolve_tag)
+                            {
                                 cells.push(Some(ingredient));
                             } else {
                                 refused = true;
@@ -1175,7 +1201,7 @@ impl RecipeRegistry {
                     let mut ingredients = Vec::new();
                     let mut refused = false;
                     for entry in &shapeless.ingredients {
-                        if let Some(ingredient) = container_ingredient(entry, items) {
+                        if let Some(ingredient) = container_ingredient(entry, items, resolve_tag) {
                             ingredients.push(ingredient);
                         } else {
                             refused = true;
@@ -1193,6 +1219,44 @@ impl RecipeRegistry {
                         shapeless.result_count,
                     ) else {
                         report.malformed.push(shapeless.name.to_string());
+                        continue;
+                    };
+                    recipes.push(Recipe::Shapeless(Box::new(recipe)));
+                    report.converted += 1;
+                }
+                DataRecipe::Transmute(transmute) => {
+                    report.transmute_seen += 1;
+                    // Multi-material rows and component copy need stack-count
+                    // arithmetic and item components this table does not have.
+                    // Counted, not flattened into a wrong recipe.
+                    if !transmute.is_simple() {
+                        report.complex_transmute += 1;
+                        continue;
+                    }
+                    let Ok(result) = items.id(&full_name(&transmute.result)) else {
+                        report.unknown_results.push(transmute.result.to_string());
+                        continue;
+                    };
+                    let Some(input) = container_ingredient(&transmute.input, items, resolve_tag)
+                    else {
+                        report.tag_or_unknown += 1;
+                        continue;
+                    };
+                    let Some(material) =
+                        container_ingredient(&transmute.material, items, resolve_tag)
+                    else {
+                        report.tag_or_unknown += 1;
+                        continue;
+                    };
+                    // Simple transmute is exactly two slots in any order: the
+                    // input (whose components would copy) and the material.
+                    let Ok(recipe) = ShapelessRecipe::new(
+                        &transmute.name.to_string(),
+                        vec![input, material],
+                        result,
+                        transmute.result_count,
+                    ) else {
+                        report.malformed.push(transmute.name.to_string());
                         continue;
                     };
                     recipes.push(Recipe::Shapeless(Box::new(recipe)));

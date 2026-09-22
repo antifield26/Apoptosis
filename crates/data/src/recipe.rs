@@ -12,12 +12,12 @@
 //! | `crafting_shapeless` | 322 | yes |
 //! | `stonecutting` | 275 | yes |
 //! | `smelting` | 73 | yes |
+//! | `crafting_transmute` | 33 | yes (P17-03; component copy is a named gap) |
 //! | `blasting` | 25 | yes |
 //! | `campfire_cooking` | 9 | yes |
 //! | `smoking` | 9 | yes |
-//! | `crafting_transmute` | 33 | **no** — new in 26.1, semantics unverified |
 //! | `smithing_trim` / `smithing_transform` | 30 | **no** — needs a smithing menu |
-//! | `crafting_dye`, `crafting_imbue`, `crafting_decorated_pot` | 8 | **no** — new in 26.1 |
+//! | `crafting_dye`, `crafting_imbue`, `crafting_decorated_pot` | 8 | **no** — need item components |
 //! | `crafting_special_*` | 25 | **no** — hard-coded behaviours, not data |
 //!
 //! The unmodelled types are **skipped and counted**, never silently dropped: a
@@ -253,6 +253,60 @@ pub struct StonecuttingRecipe {
     pub result_count: i32,
 }
 
+/// A transmute crafting recipe (`minecraft:crafting_transmute`, new in 26.1).
+///
+/// Two slots: `input` is the item whose components the result should inherit, and
+/// `material` is the catalyst (a dye, an empty map, …). The pack samples from the
+/// 26.1.2 jar show two shapes:
+///
+/// - **simple dye** (`black_bundle.json`, 32 of 33): one input + one material →
+///   a fixed result. Shulker-box and bundle dyeing.
+/// - **multi-material** (`map_cloning.json`): `material_count` 1..=8 and
+///   `add_material_count_to_result`, so N empty maps plus one filled map become
+///   `1 + N` filled maps.
+///
+/// **Component copy from input to result is not modelled** until item components
+/// land (P18). Empty shulker boxes and bundles dye correctly; a filled box would
+/// lose its contents, and map cloning loses the map id. Both are named gaps, not
+/// silent behaviour.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransmuteRecipe {
+    /// The recipe's name.
+    pub name: ResourceId,
+    /// The item whose components the result inherits. May be a tag.
+    pub input: Vec<Ingredient>,
+    /// The catalyst. May be a tag.
+    pub material: Vec<Ingredient>,
+    /// What it produces (the item id; components would ride the input).
+    pub result: ResourceId,
+    /// How many, before any `add_material_count_to_result` adjustment.
+    pub result_count: i32,
+    /// Smallest material stack this accepts. Vanilla dye recipes omit the field
+    /// (so 1); `map_cloning` states `{"min": 1, "max": 8}`.
+    pub material_count_min: i32,
+    /// Largest material stack this accepts.
+    pub material_count_max: i32,
+    /// Whether the result count is `result_count + material_count` (map cloning).
+    pub add_material_count_to_result: bool,
+    /// The `group` string, which only affects recipe-book grouping.
+    pub group: Option<String>,
+}
+
+impl TransmuteRecipe {
+    /// Whether this is the simple one-input-one-material shape the crafting
+    /// table can express as a two-slot shapeless recipe.
+    ///
+    /// Multi-material rows and `add_material_count_to_result` need stack-count
+    /// arithmetic the table does not do; those stay named gaps rather than being
+    /// quietly flattened.
+    #[must_use]
+    pub const fn is_simple(&self) -> bool {
+        !self.add_material_count_to_result
+            && self.material_count_min == 1
+            && self.material_count_max == 1
+    }
+}
+
 /// Any recipe this build understands.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Recipe {
@@ -264,6 +318,8 @@ pub enum Recipe {
     Cooking(CookingRecipe),
     /// A stonecutting recipe.
     Stonecutting(StonecuttingRecipe),
+    /// A transmute crafting recipe.
+    Transmute(TransmuteRecipe),
 }
 
 impl Recipe {
@@ -275,6 +331,7 @@ impl Recipe {
             Self::Shapeless(recipe) => &recipe.name,
             Self::Cooking(recipe) => &recipe.name,
             Self::Stonecutting(recipe) => &recipe.name,
+            Self::Transmute(recipe) => &recipe.name,
         }
     }
 
@@ -286,6 +343,7 @@ impl Recipe {
             Self::Shapeless(recipe) => &recipe.result,
             Self::Cooking(recipe) => &recipe.result,
             Self::Stonecutting(recipe) => &recipe.result,
+            Self::Transmute(recipe) => &recipe.result,
         }
     }
 
@@ -297,6 +355,7 @@ impl Recipe {
             Self::Shapeless(recipe) => recipe.result_count,
             Self::Cooking(recipe) => recipe.result_count,
             Self::Stonecutting(recipe) => recipe.result_count,
+            Self::Transmute(recipe) => recipe.result_count,
         }
     }
 
@@ -308,6 +367,7 @@ impl Recipe {
             Self::Shapeless(_) => RecipeKind::Shapeless,
             Self::Cooking(_) => RecipeKind::Cooking,
             Self::Stonecutting(_) => RecipeKind::Stonecutting,
+            Self::Transmute(_) => RecipeKind::Transmute,
         }
     }
 }
@@ -323,6 +383,8 @@ pub enum RecipeKind {
     Cooking,
     /// Stonecutting.
     Stonecutting,
+    /// Transmute crafting (input + material → result).
+    Transmute,
 }
 
 impl RecipeKind {
@@ -334,6 +396,7 @@ impl RecipeKind {
             Self::Shapeless => "shapeless",
             Self::Cooking => "cooking",
             Self::Stonecutting => "stonecutting",
+            Self::Transmute => "transmute",
         }
     }
 }
@@ -544,6 +607,27 @@ fn read_recipe_file(
                 result_count,
             })))
         }
+        "minecraft:crafting_transmute" => {
+            let input = read_ingredient(&map, "input", path)?;
+            let material = read_ingredient(&map, "material", path)?;
+            let (result, result_count) = read_result(&map, path)?;
+            let (material_count_min, material_count_max) = read_material_count(&map, path)?;
+            let add_material_count_to_result = map
+                .get("add_material_count_to_result")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            Ok(Some(Recipe::Transmute(TransmuteRecipe {
+                name,
+                input,
+                material,
+                result,
+                result_count,
+                material_count_min,
+                material_count_max,
+                add_material_count_to_result,
+                group,
+            })))
+        }
         other => {
             let Some(kind) = SmeltingKind::from_type_name(other) else {
                 return Err(Skipped::Unmodelled(other.to_owned()));
@@ -740,6 +824,78 @@ fn read_ingredients_value(
             ),
         })),
     }
+}
+
+/// Read the optional `material_count` object on a transmute recipe.
+///
+/// Absent means one material (the dye shape). Present is `{"min": 1, "max": 8}`
+/// on `map_cloning`. A bare integer is accepted as both bounds for a pack that
+/// spells it that way; anything else is malformed rather than guessed.
+fn read_material_count(
+    map: &serde_json::Map<String, serde_json::Value>,
+    path: &Path,
+) -> Result<(i32, i32), Skipped> {
+    let Some(value) = map.get("material_count") else {
+        return Ok((1, 1));
+    };
+    let (min, max) = match value {
+        serde_json::Value::Number(number) => {
+            let count = number.as_i64().ok_or_else(|| {
+                Skipped::Parse(JsonError::Invalid {
+                    path: path.to_path_buf(),
+                    reason: format!("material_count {number} is not an integer"),
+                })
+            })?;
+            (count, count)
+        }
+        serde_json::Value::Object(object) => {
+            let read_bound = |key: &str, default: Option<i64>| -> Result<i64, Skipped> {
+                match object.get(key) {
+                    Some(bound) => bound.as_i64().ok_or_else(|| {
+                        Skipped::Parse(JsonError::Invalid {
+                            path: path.to_path_buf(),
+                            reason: format!("material_count.{key} is not an integer"),
+                        })
+                    }),
+                    None => default.ok_or_else(|| {
+                        Skipped::Parse(JsonError::Invalid {
+                            path: path.to_path_buf(),
+                            reason: format!("material_count is missing {key}"),
+                        })
+                    }),
+                }
+            };
+            let min = read_bound("min", None)?;
+            let max = read_bound("max", Some(min))?;
+            (min, max)
+        }
+        other => {
+            return Err(Skipped::Parse(JsonError::Invalid {
+                path: path.to_path_buf(),
+                reason: format!(
+                    "material_count must be an integer or a min/max object, found {}",
+                    crate::json::type_name(other)
+                ),
+            }));
+        }
+    };
+    let (min, max) = (i32::try_from(min), i32::try_from(max));
+    let (Ok(min), Ok(max)) = (min, max) else {
+        return Err(Skipped::Parse(JsonError::Invalid {
+            path: path.to_path_buf(),
+            reason: "material_count bounds do not fit a stack count".to_owned(),
+        }));
+    };
+    if !(1..=mc_entity_stack_hard_max()).contains(&min)
+        || !(1..=mc_entity_stack_hard_max()).contains(&max)
+        || min > max
+    {
+        return Err(Skipped::Parse(JsonError::Invalid {
+            path: path.to_path_buf(),
+            reason: format!("material_count {min}..={max} is not a stack range"),
+        }));
+    }
+    Ok((min, max))
 }
 
 fn parse_ingredient(text: &str, path: &Path) -> Result<Ingredient, Skipped> {

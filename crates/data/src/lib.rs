@@ -76,7 +76,7 @@ pub use loot::{
 pub use pack::{DataPack, DataPackSet, PackError, PackMetadata, PackSource};
 pub use recipe::{
     CookingRecipe, Ingredient, Recipe, RecipeBook, RecipeKind, RecipeLoadReport, ShapedRecipe,
-    ShapelessRecipe, SmeltingKind, StonecuttingRecipe,
+    ShapelessRecipe, SmeltingKind, StonecuttingRecipe, TransmuteRecipe,
 };
 pub use tag::{
     RegistryContents, TagEntry, TagFile, TagKey, TagLoadReport, TagProblem, TagSet, TagValue,

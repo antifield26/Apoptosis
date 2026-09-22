@@ -120,7 +120,35 @@ with fmt, clippy `-D warnings` and docs audit clean. The P16 exit gate
 is closed on the three named real-client criteria with the sheet as
 filled; the effect-modifier gap is recorded, not hidden.
 
-## Unreleased — Phase 17 (Redstone mechanisms)
+## Unreleased — Phase 17 (World Interaction)
+
+### P17-03 — Crafting tag-ingredient resolution + simple transmute
+
+Tag ingredients expand through a shared `TagResolver` (the same contract
+smelting already had): `from_book` takes an optional resolver, each `#tag`
+alternative becomes its member item ids (sorted, deduped, capped at
+`MAX_ALTERNATIVES_PER_KEY` 64 — `#minecraft:logs` is 44 after nesting and
+was the measured ceiling), and `packs.rs` resolves `tags/item/` into a
+`TagSet` handed to both crafting and smelting. Without a resolver, tags are
+still counted and skipped.
+
+`crafting_transmute` (33 files) is the next recipe kind: the 32 simple dye
+rows (bundle/shulker dyeing) convert as two-slot shapeless recipes (input +
+material, either order — Pumpkin's matcher and Paper's `TransmuteRecipe`
+agree on the pair); `map_cloning` is the multi-material shape
+(`material_count` 1..=8 + `add_material_count_to_result`) and is counted
+as `complex_transmute` rather than flattened. Component copy from input to
+result is a named gap until P18 item components.
+
+Deliberately deferred: `crafting_dye`/`imbue`/`decorated_pot` (need item
+components or hard-coded behaviour), smithing (needs a menu),
+`crafting_special_*` (hard-coded). Falsification: refusing tags even with
+a resolver fails `a_pack_book_expands_tags…` (converted 1 vs 2); refusing
+every transmute fails it too (`complex_transmute` 2 vs 1).
+Differentials: `vanilla_crafting` converts hundreds with tags and keeps
+`black_bundle` in the table; `vanilla_pack` loads 33 transmute and reports
+61 unmodelled (was 94). Gate: fmt, clippy `-D warnings`, mc-data 135 /
+mc-container 135 unit tests green.
 
 ### P17-01 — Doors, observers, dispensers
 

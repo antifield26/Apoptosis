@@ -183,6 +183,7 @@ fn check_recipes(pack_root: &Path) {
         RecipeKind::Shapeless,
         RecipeKind::Stonecutting,
         RecipeKind::Cooking,
+        RecipeKind::Transmute,
     ] {
         println!(
             "  {:12} {}",
@@ -201,8 +202,8 @@ fn check_recipes(pack_root: &Path) {
     );
     assert_eq!(
         recipes.total_loaded(),
-        708 + 322 + 275 + 73 + 25 + 9 + 9,
-        "the baseline's modelled-type counts"
+        708 + 322 + 275 + 73 + 33 + 25 + 9 + 9,
+        "the baseline's modelled-type counts (transmute since P17-03)"
     );
     // 1 515, not 1 516: the baseline's original figure counted the `recipe/`
     // **directory entry**, which `zipfile` reports as its own name. The loader was
@@ -216,6 +217,10 @@ fn check_recipes(pack_root: &Path) {
     assert_eq!(
         recipes.loaded.get(&RecipeKind::Shapeless).copied(),
         Some(322)
+    );
+    assert_eq!(
+        recipes.loaded.get(&RecipeKind::Transmute).copied(),
+        Some(33)
     );
     assert_eq!(
         recipes.loaded.get(&RecipeKind::Stonecutting).copied(),
