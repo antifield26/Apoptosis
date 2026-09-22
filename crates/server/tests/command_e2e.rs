@@ -34,7 +34,11 @@ impl Harness {
             autosave_ticks: 0,
         };
         let storage = WorldService::open(&config).expect("world opens");
-        let (event_tx, event_rx) = game_channel(256);
+        // Capacity must hold a full flood (300 chat_commands) without the
+        // network layer's drop-on-full path: that path is hostile-client
+        // protection, and the flood test's point is the per-tick *drain*
+        // budget (256), not silent packet loss.
+        let (event_tx, event_rx) = game_channel(1024);
         let mut game = Game::new(&storage, 3, event_rx).expect("game builds");
 
         let settings = mc_network::NetworkSettings {
