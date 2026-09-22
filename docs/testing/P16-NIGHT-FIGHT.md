@@ -40,13 +40,34 @@ Exit-gate evidence for P16 that no automated suite can produce: knockback
 
 ## Verdict sheet (fill in, append the answers to this file)
 
-- Commit SHA tested:
-- Knockback: zombie recoils on strike / hardly noticeable / absent —
-- XP: orbs scattered (count?) / bar moved / level+sound on ___ points —
-- Effect: icon appeared for ___ / clear removed it / poison floored at half heart —
-- Digging: crack stages seen 0-9 / break time felt right for hand vs pick —
-- Steps: slab/stair flight walked without jumping / fence held —
+- Commit SHA tested: sessions across `c7ef879`..`873740d` (round-1 base
+  through the round-2 fixes; each fix verified on its deploy SHA — see
+  CHANGELOG "Owner session findings round 1/2"). Final binary `873740d`,
+  gate 1583/0/35/126 at fill time.
+- Knockback: zombie recoils on strike — owner-felt horizontal shove on
+  fist strikes (server logged damage 1.0 per swing with the knockback
+  channel applied; red hurt flash on every landed hit, also owner-seen).
+- XP: orbs scattered (cow 3, pig/drops likewise) / bar moved / level 1
+  reached and passed; post-magnetism-fix orbs home in and pick up.
+  Level-up sound NOT confirmed by owner (no claim).
+- Effect: icon appeared for Speed (post raw-id fix; pre-fix the same
+  command showed Slowness — see CHANGELOG round 2). Clear removal and
+  the poison floor were NOT run on screen (scripted suites only).
+  Systematic finding, not a pass: effect modifiers do not apply
+  (Slowness II verified: correct icon, normal countdown, zero
+  movement/FOV change; effect bytes field-identical to a live 26.1.2
+  server) — recorded as a named gap, not a verdict failure of the
+  icon sync this sheet asks for.
+- Digging: NOT RUN on screen (scripted: crack stages, hand-vs-pick
+  timing).
+- Steps: NOT RUN on screen (scripted: slab/stair walk, fence hold).
 - Anything that looked wrong (positions, sounds, icons, timing):
+  everything else is in CHANGELOG "Owner session findings round 1/2"
+  (attack decode, knockback channel, hurt flash, orb metadata,
+  JoinGame id, effect ids + blend, placement disconnect, UseItemOn
+  tail byte, Q-drop arms + throw, hotbar slot translation, revision
+  lockstep, gamemode event, orb magnetism, `@s`) — each fixed,
+  owner-verified, and gated.
 
 ## Known honest divergences (do NOT file these as new findings)
 

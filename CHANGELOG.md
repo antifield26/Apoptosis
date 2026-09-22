@@ -110,12 +110,15 @@ move_player each fail their probe. Gate 1537/0/35/119.
 ### P16-07 — Night fight runbook plus review (agent half)
 
 Owner runbook with exact commands, timings and a verdict sheet:
-`docs/testing/P16-NIGHT-FIGHT.md`. Review record with the falsification
-inventory, found-and-fixed list and deferred names:
+`docs/testing/P16-NIGHT-FIGHT.md` (sheet filled from owner sessions
+across `c7ef879`..`873740d`: knockback felt, XP gained, effect icons
+on screen; digging/steps owner-unrun, scripted only). Review record
+with the falsification inventory, found-and-fixed list and deferred
+names:
 `docs/testing/P16-REVIEW.md`. Automated gate at review time: 1537/0/35/119
-with fmt, clippy `-D warnings` and docs audit clean. The real-client half
-(knockback felt, XP gained, effect on screen) is NOT RUN — owner verdict
-pending in the runbook; the P16 exit gate closes when it is filled.
+with fmt, clippy `-D warnings` and docs audit clean. The P16 exit gate
+is closed on the three named real-client criteria with the sheet as
+filled; the effect-modifier gap is recorded, not hidden.
 
 ## Unreleased — Phase 17 (Redstone mechanisms)
 

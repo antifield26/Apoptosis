@@ -67,6 +67,9 @@ persistence, potions, shields/parry, difficulty-scaled melee damage.
 Automated gate at review time: 1537/0/35 across 119 suites
 (`python tools/gates/run.py --quick`), fmt + clippy `-D warnings`
 + docs audit clean. Real-client night fight (runbook:
-`docs/testing/P16-NIGHT-FIGHT.md`): **NOT RUN — owner verdict pending**.
-P17 work may proceed on the automated evidence; the P16 exit gate closes
-when the verdict sheet in the runbook is filled.
+`docs/testing/P16-NIGHT-FIGHT.md`): verdict sheet filled from owner
+sessions across `c7ef879`..`873740d` — knockback felt, XP gained,
+effect icons on screen (modifiers recorded as a named gap); digging
+cracks and slab/stair/fence steps NOT RUN on screen (scripted only).
+P17 work may proceed on the automated evidence; the P16 exit gate
+closes on the three named criteria with the sheet as filled.
