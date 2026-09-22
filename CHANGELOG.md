@@ -343,7 +343,7 @@ simulation and need a controlled single-action repro):
   only from `GameEvent` 3 (`CHANGE_GAME_MODE`, jar static init
   `iconst_3`; param carries the mode id). `set_player_game_mode` now
   sends it. Pinned by a `GAME_EVENT` assert in the gamemode test.
-  Owner re-test pending.
+  Owner-verified: the creative bar appears immediately.
 - Placement disconnect diagnostics: the server logged nothing — no
   kick, no error, a clean TCP close, and no placement intent either.
   Root-caused since: vanilla `UseItemOn` ends with a `worldBorderHit`
