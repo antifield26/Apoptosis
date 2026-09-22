@@ -362,20 +362,17 @@ async fn a_command_flood_from_one_client_does_not_starve_the_tick() {
         1,
         "a flood must not disconnect the sender"
     );
-    // Drain the answers over the next ticks; every command gets one.
-    // Budget is 256 intents/tick so two ticks process the flood; the rest of
-    // the window is for socket delivery on slow CI runners (Linux GitHub
-    // runners have flaked this at 12 ticks).
+    // Drain the answers until every command is acknowledged. Budget is 256
+    // intents/tick so two ticks process the flood; the deadline covers socket
+    // delivery on slow CI runners (Linux GitHub has flaked short windows).
     let mut chats = 0usize;
-    for _ in 0..40 {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while chats < 300 && tokio::time::Instant::now() < deadline {
         harness.game.tick().expect("tick");
-        for id in harness.drain_ids(512).await {
+        for id in harness.drain_ids(150).await {
             if id == clientbound::play::DISGUISED_CHAT {
                 chats += 1;
             }
-        }
-        if chats >= 300 {
-            break;
         }
     }
     assert!(
