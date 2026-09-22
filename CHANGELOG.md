@@ -319,6 +319,15 @@ simulation and need a controlled single-action repro):
   omitted as cosmetic to keep the seeded stream stable), pinned by
   direction + delay asserts in the same case. Owner-verified: Q throws
   forward and no longer vacuums back.
+- Crafting-grid ghost on hotbar switch: the switch sync wrote the
+  hotbar index (0..8) as the window slot, but on window 0 those are
+  the crafting result and grid (hotbar lives at 36..=44) — the held
+  item painted onto the crafting table, exactly the owner repro
+  (join, switch held, open backpack). The sync now translates through
+  the menu mapping (correct on block windows too) and carries the
+  menu's own state id instead of a hardcoded 0. Falsification: the new
+  `inventory_duplication` case pins window slot 38 for hotbar 2.
+  Owner re-test pending.
 - Placement disconnect diagnostics: the server logged nothing — no
   kick, no error, a clean TCP close, and no placement intent either.
   Root-caused since: vanilla `UseItemOn` ends with a `worldBorderHit`

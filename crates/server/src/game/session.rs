@@ -3830,24 +3830,43 @@ impl Game {
             debug!(id = %id, slot, "rejected negative hotbar index");
             return Ok(());
         };
-        let Some(session) = self.sessions.get_mut(&id) else {
-            return Ok(());
+        let (selected, held, window, state, window_slot) = {
+            let Some(session) = self.sessions.get_mut(&id) else {
+                return Ok(());
+            };
+            if session.player.inventory.select(slot).is_err() {
+                debug!(id = %id, slot, "rejected out-of-range hotbar index");
+                return Ok(());
+            }
+            let selected_hotbar = session.player.inventory.selected_hotbar();
+            (
+                i32::from(selected_hotbar),
+                session.player.inventory.selected_item(),
+                i32::from(session.menu.window_id()),
+                session.menu.state_id(),
+                session.menu.window_slot_for(
+                    session.menu.player_container_index(),
+                    u16::from(selected_hotbar),
+                ),
+            )
         };
-        if session.player.inventory.select(slot).is_err() {
-            debug!(id = %id, slot, "rejected out-of-range hotbar index");
-            return Ok(());
-        }
-        let selected = i32::from(session.player.inventory.selected_hotbar());
-        let held = session.player.inventory.selected_item();
         self.send(id, &SetHeldSlot { slot: selected }, report)?;
-        // Sync the newly held slot so the client's hotbar matches the server's.
-        let packet = mc_protocol::packets::play::ContainerSetSlot {
-            window_id: 0,
-            state_id: 0,
-            slot: selected as i16,
-            item: wire_stack(held),
-        };
-        self.send(id, &packet, report)?;
+        // Sync the newly held slot so the client's hotbar matches the
+        // server's. The window slot comes from the menu mapping, not the
+        // hotbar index: on window 0 the hotbar lives at 36..=44 (0..=8
+        // are the crafting result and grid — writing there painted the
+        // held item onto the crafting table, the owner ghost report), and
+        // on a block window it sits after the block slots. The state id
+        // is the menu's own: a hardcoded 0 belongs to no revision.
+        if let Some(slot) = window_slot {
+            let packet = mc_protocol::packets::play::ContainerSetSlot {
+                window_id: window,
+                state_id: state,
+                slot: slot as i16,
+                item: wire_stack(held),
+            };
+            self.send(id, &packet, report)?;
+        }
         Ok(())
     }
 

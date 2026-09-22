@@ -19,9 +19,11 @@
 
 use mc_container::ClickType;
 use mc_network::bridge::{
-    ClientEvent, ClientEventKind, ConnectionId, OutboundSender, game_channel,
+    ClientEvent, ClientEventKind, ConnectionId, InboundReceiver, OutboundSender, game_channel,
 };
-use mc_protocol::packets::play::{PlayIntent, block_position};
+use mc_protocol::ids::clientbound;
+use mc_protocol::packets::Packet;
+use mc_protocol::packets::play::{ContainerSetSlot, PlayIntent, block_position};
 use mc_server::game::Game;
 use mc_server::storage::WorldService;
 use mc_test_support::fixtures::TempDir;
@@ -31,6 +33,7 @@ struct Harness {
     game: Game,
     events: tokio::sync::mpsc::Sender<ClientEvent>,
     id: ConnectionId,
+    out: InboundReceiver,
     _service: WorldService,
     _dir: TempDir,
 }
@@ -63,7 +66,7 @@ impl Harness {
         let _ = service.storage_mut();
 
         let id = ConnectionId(1);
-        let (outbound, _rx) = OutboundSender::pair(id, 4096);
+        let (outbound, out) = OutboundSender::pair(id, 4096);
         tx.try_send(ClientEvent {
             id,
             kind: ClientEventKind::Joined {
@@ -78,6 +81,7 @@ impl Harness {
             game,
             events: tx,
             id,
+            out,
             _service: service,
             _dir: dir,
         }
@@ -238,6 +242,42 @@ fn pressing_q_drops_exactly_one_item() {
         "a click must not resurrect the dropped item"
     );
     assert_eq!(harness.hotbar_slot(), 9, "the menu shows nine left");
+}
+
+#[test]
+fn switching_hotbar_syncs_the_window_hotbar_slot() {
+    // Owner session: switching the held item painted it onto the
+    // crafting grid. Window 0's hotbar lives at 36..=44 (0..=8 are the
+    // crafting result and grid), so the sync must translate instead of
+    // echoing the hotbar index — and carry the menu's own state id,
+    // which the client echoes back on its next click.
+    let mut harness = Harness::new("p06-hotbar-sync");
+    harness
+        .game
+        .grant_item(harness.id, "minecraft:stone", 10)
+        .expect("granted");
+    while harness.out.try_recv().is_some() {}
+    let state_before = harness.game.menu_state_id(harness.id).expect("state");
+
+    harness.intent(PlayIntent::SetCarriedItem { slot: 2 });
+
+    let mut synced = Vec::new();
+    while let Some(raw) = harness.out.try_recv() {
+        if raw.id == clientbound::play::CONTAINER_SET_SLOT {
+            synced.push(ContainerSetSlot::decode(&raw.payload).expect("decodes"));
+        }
+    }
+    assert_eq!(synced.len(), 1, "one slot sync, saw {synced:?}");
+    assert_eq!(synced[0].window_id, 0, "the player window");
+    assert_eq!(
+        synced[0].slot, 38,
+        "hotbar 2 rides window slot 36 + 2, not the crafting grid"
+    );
+    assert_eq!(
+        synced[0].state_id, state_before,
+        "the menu's own revision, which the next click echoes"
+    );
+    assert_eq!(synced[0].item.count, 0, "hotbar 2 is empty here");
 }
 
 #[test]

@@ -739,6 +739,21 @@ impl Menu {
         self.slots.get(index)
     }
 
+    /// The window slot displaying a storage slot, if any.
+    ///
+    /// Vanilla window numbers differ per menu (player hotbar `h` lives at
+    /// window slot `36 + h` on window 0, but after the block slots on a
+    /// block window), so callers translating storage indices — hotbar
+    /// selection sync, held-slot updates — must ask the menu rather than
+    /// add a constant. First match wins; layouts never alias one storage
+    /// slot twice.
+    #[must_use]
+    pub fn window_slot_for(&self, container: usize, slot: u16) -> Option<usize> {
+        self.slots
+            .iter()
+            .position(|mapping| usize::from(mapping.container) == container && mapping.slot == slot)
+    }
+
     /// The layout.
     #[must_use]
     pub const fn layout(&self) -> &MenuLayout {
