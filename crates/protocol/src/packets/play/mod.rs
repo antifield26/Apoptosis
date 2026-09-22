@@ -4225,16 +4225,19 @@ mod tests {
         // P16-03: field order per pumpkin's CUpdateMobEffect/CRemoveMobEffect
         // (entity, effect, amplifier, duration, flags); no capture exists for
         // either id, so the pin is shape-exactness through our own codec plus
-        // the trailing-byte refusal both decoders share.
+        // the trailing-byte refusal both decoders share. The flags byte is
+        // the fresh-add shape: a live 26.1.2 server answers
+        // `effect give ... speed 120 1` with `... 01 e0 12 0e`
+        // (amplifier 1, 2400 ticks, particles|icon|blend).
         let update = UpdateMobEffect {
             entity_id: 7,
             effect_id: 19,
             amplifier: 1,
             duration: 600,
-            flags: UpdateMobEffect::flags_for(false),
+            flags: UpdateMobEffect::flags_for(false, true),
         };
         let body = update.encode().expect("encodes");
-        assert_eq!(body, [0x07, 0x13, 0x01, 0xD8, 0x04, 0x06]);
+        assert_eq!(body, [0x07, 0x13, 0x01, 0xD8, 0x04, 0x0E]);
         assert_eq!(UpdateMobEffect::decode(&body).expect("decodes"), update);
         assert!(UpdateMobEffect::decode(&[0x07, 0x13]).is_err());
         let mut padded = body.clone();

@@ -310,6 +310,7 @@ impl TestClient {
             main_hand: 1,
             text_filtering: false,
             server_listing: true,
+            particle_status: 0,
         })
         .await?;
         let mut registries = Vec::new();

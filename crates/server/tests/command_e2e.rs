@@ -395,6 +395,7 @@ async fn a_client_information_update_resets_the_streaming_radius() {
         main_hand: 1,
         text_filtering: false,
         server_listing: true,
+        particle_status: 0,
     };
     harness
         .client

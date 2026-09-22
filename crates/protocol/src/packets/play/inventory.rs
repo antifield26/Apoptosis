@@ -735,15 +735,24 @@ pub const MOB_EFFECT_FLAG_AMBIENT: i8 = 0x01;
 pub const MOB_EFFECT_FLAG_PARTICLES: i8 = 0x02;
 /// Flag bit: show the HUD icon.
 pub const MOB_EFFECT_FLAG_ICON: i8 = 0x04;
+/// Flag bit: blend the screen overlay in.
+///
+/// Jar `ClientboundUpdateMobEffectPacket` builds the flags from
+/// ambient/visible/icon plus a fourth constructor boolean into this
+/// bit; vanilla passes true on a fresh add (`ServerPlayer.onEffectAdded`)
+/// and false on re-sync (`PlayerList.sendActiveEffects`) — and a live
+/// 26.1.2 server's `/effect give` bytes end in `0x0E`, i.e. this bit set.
+pub const MOB_EFFECT_FLAG_BLEND: i8 = 0x08;
 
 /// `minecraft:update_mob_effect` (clientbound 132): one effect icon for the
 /// HUD.
 ///
 /// Field order (entity, effect, amplifier, duration, flags) corroborated by
-/// pumpkin's `CUpdateMobEffect`; the 26.x shape drops 1.19's trailing blend
-/// flag. The flag bits are the long-standing wire convention
-/// (ambient/particles/icon), verified visually at acceptance rather than by
-/// a capture — no 132 body was captured.
+/// pumpkin's `CUpdateMobEffect` and jar-verified. The flag bits are
+/// ambient/particles/icon plus blend (`0x08`, set on fresh adds, clear on
+/// re-syncs — jar `ServerPlayer.onEffectAdded` vs
+/// `PlayerList.sendActiveEffects`, and a live 26.1.2 capture ends the
+/// give-packet in `0x0E`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UpdateMobEffect {
     /// Entity carrying the effect (a player, for this server).
@@ -761,12 +770,18 @@ pub struct UpdateMobEffect {
 
 impl UpdateMobEffect {
     /// Flags for an effect: ambient when it says so, particles and icon on
-    /// (this build models no hidden-icon effects).
+    /// (this build models no hidden-icon effects), blend on fresh adds.
+    ///
+    /// `blend` mirrors the packet's fourth constructor boolean: vanilla
+    /// passes true when an effect is newly added and false when merely
+    /// re-syncing the active set (jar `ServerPlayer.onEffectAdded` vs
+    /// `PlayerList.sendActiveEffects`).
     #[must_use]
-    pub const fn flags_for(ambient: bool) -> i8 {
+    pub const fn flags_for(ambient: bool, blend: bool) -> i8 {
         (if ambient { MOB_EFFECT_FLAG_AMBIENT } else { 0 })
             | MOB_EFFECT_FLAG_PARTICLES
             | MOB_EFFECT_FLAG_ICON
+            | (if blend { MOB_EFFECT_FLAG_BLEND } else { 0 })
     }
 }
 

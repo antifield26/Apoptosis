@@ -74,6 +74,14 @@ impl Packet for SelectKnownPacks {
 }
 
 /// `minecraft:client_information` (configuration serverbound 0, also play 14).
+///
+/// Field order from `javap -c` on the 26.1.2 jar
+/// (`ClientInformation` codec): locale, view distance, chat
+/// visibility, chat colours, skin parts, main hand, text filtering,
+/// server listing, then particle status. The ninth field is what the
+/// capture rig logged as "one trailing byte of unknown semantics" on
+/// every body (always `0x00`) — a particle-status enum ordinal, not a
+/// mystery byte.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientInformation {
     /// Client locale, e.g. `en_us`.
@@ -92,6 +100,8 @@ pub struct ClientInformation {
     pub text_filtering: bool,
     /// Whether the player allows server-list display.
     pub server_listing: bool,
+    /// Particle visibility (0 all, 1 decreased, 2 minimal).
+    pub particle_status: i32,
 }
 
 impl ClientInformation {
@@ -102,7 +112,7 @@ impl ClientInformation {
     /// [`ServerError::Protocol`] on malformed data.
     pub fn decode_body(payload: &[u8]) -> ServerResult<Self> {
         let mut reader = PacketReader::new(payload);
-        Ok(Self {
+        let packet = Self {
             locale: reader.read_string(MAX_LOCALE_CHARS)?,
             view_distance: reader.read_i8()?,
             chat_mode: reader.read_varint()?,
@@ -111,7 +121,15 @@ impl ClientInformation {
             main_hand: reader.read_varint()?,
             text_filtering: reader.read_bool()?,
             server_listing: reader.read_bool()?,
-        })
+            particle_status: reader.read_varint()?,
+        };
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "client_information has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(packet)
     }
 
     /// Encode the shared body (used by both configuration and play ids).
@@ -129,6 +147,7 @@ impl ClientInformation {
         writer.write_varint(self.main_hand);
         writer.write_bool(self.text_filtering);
         writer.write_bool(self.server_listing);
+        writer.write_varint(self.particle_status);
         Ok(writer.finish())
     }
 }
@@ -624,20 +643,23 @@ mod tests {
 
     #[test]
     fn client_information_round_trip() {
-        let packet = ClientInformation {
-            locale: "en_us".to_owned(),
-            view_distance: 12,
-            chat_mode: 0,
-            chat_colors: true,
-            skin_parts: 0x7F,
-            main_hand: 1,
-            text_filtering: false,
-            server_listing: true,
-        };
-        assert_eq!(
-            ClientInformation::decode(&packet.encode().expect("encodes")).expect("decodes"),
-            packet
-        );
+        for particle_status in [0, 2] {
+            let packet = ClientInformation {
+                locale: "en_us".to_owned(),
+                view_distance: 12,
+                chat_mode: 0,
+                chat_colors: true,
+                skin_parts: 0x7F,
+                main_hand: 1,
+                text_filtering: false,
+                server_listing: true,
+                particle_status,
+            };
+            assert_eq!(
+                ClientInformation::decode(&packet.encode().expect("encodes")).expect("decodes"),
+                packet
+            );
+        }
     }
 
     #[test]

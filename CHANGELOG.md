@@ -344,6 +344,19 @@ simulation and need a controlled single-action repro):
   `iconst_3`; param carries the mode id). `set_player_game_mode` now
   sends it. Pinned by a `GAME_EVENT` assert in the gamemode test.
   Owner-verified: the creative bar appears immediately.
+- Speed icon without haste: byte-compared against a live 26.1.2
+  server (rig booted on loopback for the capture, then shut down and
+  restored). Vanilla answers `effect give ... speed 120 1` with
+  `2b 00 01 e0 12 0e` — entity, raw 0, amplifier 1, 2400 ticks, flags
+  `0x0E`. Every field matches except flags: vanilla sets bit `0x08`
+  (BLEND) on fresh adds (`ServerPlayer.onEffectAdded` passes true)
+  and clears it on re-syncs (`PlayerList.sendActiveEffects` passes
+  false), while this build sent `0x06` everywhere. `flags_for` takes
+  the blend bit now; give sets it, join sync clears it. The same
+  session also exposed a missing ninth `ClientInformation` field
+  (`particle_status`, jar field order — the rig's "trailing `0x00` of
+  unknown semantics", which now round-trips in the capture sweep).
+  Owner re-test pending (the falsification for the whole effect saga).
 - Placement disconnect diagnostics: the server logged nothing — no
   kick, no error, a clean TCP close, and no placement intent either.
   Root-caused since: vanilla `UseItemOn` ends with a `worldBorderHit`

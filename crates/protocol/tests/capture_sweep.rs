@@ -88,24 +88,11 @@ fn motion(body: &[u8]) -> Result<(), String> {
     }
 }
 
-/// The 8 modeled fields decode; one trailing byte of unknown semantics
-/// follows on every captured body (seven sessions, all `0x00`). It is *not*
-/// modelled — a guess would be a lie about a client setting — but its bounds
-/// are pinned: exactly one byte, still zero. A nonzero trailing byte, or a
-/// second one, fails here and means the field has been identified and must be
-/// modelled (P18).
+/// The ninth field (particle status) is modelled since the jar field
+/// order identified the old trailing byte, so captured bodies must now
+/// round-trip exactly like every other modelled packet.
 fn client_information(body: &[u8]) -> Result<(), String> {
-    let packet = ClientInformation::decode(body).map_err(|e| format!("decode: {e}"))?;
-    let back = packet.encode().map_err(|e| format!("encode: {e}"))?;
-    if body.len() == back.len() + 1 && body.last() == Some(&0x00) && back == body[..back.len()] {
-        Ok(())
-    } else {
-        Err(format!(
-            "client_information trailing byte changed ({} in, {} modeled)",
-            body.len(),
-            back.len()
-        ))
-    }
+    roundtrip::<ClientInformation>(body)
 }
 
 /// What one body established: checked with a verdict, or unmodelled.

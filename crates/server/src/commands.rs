@@ -764,7 +764,7 @@ impl Game {
             effect_id: kind.wire_id(),
             amplifier,
             duration,
-            flags: mc_protocol::packets::play::UpdateMobEffect::flags_for(false),
+            flags: mc_protocol::packets::play::UpdateMobEffect::flags_for(false, true),
         };
         let _ = self.send(id, &packet, report);
         CommandResult::message(format!(

@@ -666,6 +666,7 @@ impl Game {
                         duration: effect.duration,
                         flags: mc_protocol::packets::play::UpdateMobEffect::flags_for(
                             effect.ambient,
+                            false,
                         ),
                     },
                     report,
