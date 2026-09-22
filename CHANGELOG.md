@@ -122,6 +122,28 @@ filled; the effect-modifier gap is recorded, not hidden.
 
 ## Unreleased — Phase 17 (World Interaction)
 
+### P17-04 — Observer/dispenser differentials against a live 26.1.2 server
+
+The P17-01 "facing/output question" is settled by measurement, not by
+reading a name. `target/p17_observer_run.py` boots the official jar,
+builds discriminating topologies (observer facing north/east with a
+dropper preloaded with one cobblestone on the back and on each side;
+dispensers facing north/south), flips levers, and saves.
+`p17_observer_read.py` decodes the save; an emptied dropper saw a pulse,
+a full one did not — that latch is what makes a 2-tick observer pulse
+visible in a world file.
+
+Measured contract (oracle `crates/redstone/tests/fixtures/vanilla_observer.tsv`,
+replayed by `vanilla_observer`, 3 tests): observer `facing` names the
+**watch** side; the pulse leaves only the **back** (opposite) face —
+back droppers fired 3/3, side droppers stayed full 3/3; a block update in
+front of the face pulses the back (O-N-FACE); facing east watches east and
+outputs west. Dispenser `facing` is the output face (both test dispensers
+emptied when lever-powered). This confirms P17-01's implementation.
+
+Falsification: the oracle test's named-back panic fires if `facing` were
+the output side. Gate: `vanilla_observer` 3/3 green.
+
 ### P17-03 — Crafting tag-ingredient resolution + simple transmute
 
 Tag ingredients expand through a shared `TagResolver` (the same contract

@@ -1,0 +1,23 @@
+# P17-04 observer/dispenser differential oracle — machine-written from a live
+# 26.1.2 server (target/p17_observer_run.py + p17_observer_read.py, world under
+# target/p17-observer/vanilla). A dropper preloaded with one cobblestone that
+# is empty after the flip FIRED (saw a pulse); one that still holds cobble
+# did NOT. That is the pulse latch.
+#
+# Verdicts settled here (the P17-01 named gap):
+#   observer `facing` names the WATCH side; the pulse leaves only the BACK
+#   (opposite) face. Side faces stay dark. A block update in front of the face
+#   pulses the back. Dispenser `facing` names the output face (both test
+#   dispensers emptied when their lever fired).
+#
+# Columns: label x y z facing fired
+#   facing: the observer/dispenser `facing` property (or -)
+#   fired:  1 if the preloaded dropper/dispenser emptied, 0 if it kept its item
+O-N.dropper_back	0	101	1	south	1
+O-N.dropper_east	1	101	0	east	0
+O-N.dropper_west	-1	101	0	west	0
+O-N-FACE.dropper_back	4	101	1	south	1
+O-E.dropper_back	7	101	0	west	1
+O-E.dropper_side	8	101	1	south	0
+D-N.dispenser	0	101	5	north	1
+D-S.dispenser	4	101	5	south	1
