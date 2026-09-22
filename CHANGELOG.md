@@ -312,7 +312,12 @@ simulation and need a controlled single-action repro):
   click "restored" it — exactly the owner report. The new arm splits
   one off the held stack, spawns it, and re-mirrors. Falsification:
   the new `inventory_duplication` case fails 10-vs-9 with the arm
-  removed. Owner re-test pending.
+  removed. Follow-up from the same report: the drop had no throw —
+  zero velocity at the feet, vacuumed straight back. Both arms now
+  throw along the look (jar `createItemStackToDrop`: eye − 0.3 spawn,
+  0.3 aimed + 0.1 up, 40-tick delay, thrower set; the ±0.02 spread is
+  omitted as cosmetic to keep the seeded stream stable), pinned by
+  direction + delay asserts in the same case. Owner re-test pending.
 - Placement disconnect diagnostics: the server logged nothing — no
   kick, no error, a clean TCP close, and no placement intent either.
   Root-caused since: vanilla `UseItemOn` ends with a `worldBorderHit`

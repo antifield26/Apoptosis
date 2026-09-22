@@ -2360,6 +2360,70 @@ impl Game {
     // ------------------------------------------------------ block actions
 
     /// Dig/drop/swap, validated against reach, load state and the registry.
+    /// Throw held items into the world along the look direction (Q / Ctrl+Q).
+    ///
+    /// Vanilla `LivingEntity.createItemStackToDrop` (26.1.2 jar): spawn at
+    /// eye height minus 0.3, pickup delay 40, thrower set, aimed 0.3 along
+    /// the look vector with +0.1 up. The ±0.02 random spread is omitted
+    /// deliberately — cosmetic, and drawing it would shift the seeded
+    /// stream the scatter goldens pin. `single` selects status 4 (Q, one
+    /// item) versus status 3 (Ctrl+Q, the whole stack); an empty hand is
+    /// a silent no-op either way.
+    fn throw_held(&mut self, id: ConnectionId, single: bool, report: &mut TickReport) {
+        let taken = {
+            let Some(session) = self.sessions.get_mut(&id) else {
+                return;
+            };
+            let mut held = session.player.inventory.take_held(Hand::Main);
+            if held.is_empty() {
+                session.player.inventory.replace_held(Hand::Main, held);
+                return;
+            }
+            let taken = if single { held.split(1) } else { held.take() };
+            if single {
+                session.player.inventory.replace_held(Hand::Main, held);
+            }
+            let yaw = f64::from(session.player.yaw).to_radians();
+            let pitch = f64::from(session.player.pitch).to_radians();
+            let at = Vec3::new(
+                session.player.position.x,
+                session.player.position.y + EYE_HEIGHT - 0.3,
+                session.player.position.z,
+            );
+            let aimed = Vec3::new(
+                -yaw.sin() * pitch.cos() * 0.3,
+                -pitch.sin() * 0.3 + 0.1,
+                yaw.cos() * pitch.cos() * 0.3,
+            );
+            (taken, session.entity, at, aimed)
+        };
+        if taken.0.is_empty() {
+            return;
+        }
+        match self.spawn_item_owned(taken.0, taken.2, Some(taken.1)) {
+            Ok(entity) => {
+                debug!(id = %id, %entity, single, "threw a held item");
+                // Thrown, not dropped: it flies forward with a 40-tick
+                // pickup delay and the thrower marked, so standing still
+                // does not vacuum it straight back.
+                if let Some(body) = self.entities.get_mut(entity)
+                    && let EntityBody::Item(item) = &mut body.body
+                {
+                    body.velocity = taken.3;
+                    item.pickup_delay = 40;
+                    item.thrower = Some(taken.1);
+                }
+            }
+            // The stack has already left the inventory at this point, so a
+            // refusal is a real loss and is logged rather than swallowed.
+            Err(error) => warn!(id = %id, %error, "could not spawn a dropped item"),
+        }
+        // The slot the client is looking at just changed, so the menu is
+        // re-mirrored and the update sent. Without this the menu kept the
+        // pre-drop view until the next click.
+        self.sync_menu_from_inventory(id, report);
+    }
+
     fn apply_player_action(
         &mut self,
         id: ConnectionId,
@@ -2396,69 +2460,10 @@ impl Game {
                 self.finish_dig(id, x, y, z, report)?;
             }
             ACTION_DROP_STACK => {
-                // The held stack leaves the inventory and becomes a dropped-item
-                // entity at roughly eye height. The entity is announced by the
-                // Broadcast phase with its stack metadata, and the Entities
-                // phase's merge and pickup passes (P11-05/P11-09) take it from
-                // there.
-                let (dropped, owner, at) = {
-                    let Some(session) = self.sessions.get_mut(&id) else {
-                        return Ok(());
-                    };
-                    let dropped = session.player.inventory.take_held(Hand::Main);
-                    let at = Vec3::new(
-                        session.player.position.x,
-                        session.player.position.y + 1.2,
-                        session.player.position.z,
-                    );
-                    (dropped, session.entity, at)
-                };
-                if dropped.is_empty() {
-                    return Ok(());
-                }
-                match self.spawn_item_owned(dropped, at, Some(owner)) {
-                    Ok(entity) => debug!(id = %id, %entity, "dropped an item entity"),
-                    // The stack has already left the inventory at this point, so a
-                    // refusal is a real loss and is logged rather than swallowed.
-                    Err(error) => warn!(id = %id, %error, "could not spawn a dropped item"),
-                }
-                // The slot the client is looking at just emptied, so the menu is
-                // re-mirrored and the update sent. Without this the menu kept the
-                // pre-drop view until the next click.
-                self.sync_menu_from_inventory(id, report);
+                self.throw_held(id, false, report);
             }
             ACTION_DROP_ONE_ITEM => {
-                // Q with no window open: one item leaves the held stack
-                // (status 4; status 3 above is the whole stack). Unhandled,
-                // the client predicted the removal while the server kept
-                // the stack — the next click re-mirrored and "restored"
-                // the item, which is exactly the owner report.
-                let (dropped, owner, at) = {
-                    let Some(session) = self.sessions.get_mut(&id) else {
-                        return Ok(());
-                    };
-                    let mut held = session.player.inventory.take_held(Hand::Main);
-                    if held.is_empty() {
-                        session.player.inventory.replace_held(Hand::Main, held);
-                        return Ok(());
-                    }
-                    let dropped = held.split(1);
-                    session.player.inventory.replace_held(Hand::Main, held);
-                    let at = Vec3::new(
-                        session.player.position.x,
-                        session.player.position.y + 1.2,
-                        session.player.position.z,
-                    );
-                    (dropped, session.entity, at)
-                };
-                if dropped.is_empty() {
-                    return Ok(());
-                }
-                match self.spawn_item_owned(dropped, at, Some(owner)) {
-                    Ok(entity) => debug!(id = %id, %entity, "dropped a single item"),
-                    Err(error) => warn!(id = %id, %error, "could not spawn a dropped item"),
-                }
-                self.sync_menu_from_inventory(id, report);
+                self.throw_held(id, true, report);
             }
             ACTION_SWAP_ITEM_WITH_OFFHAND => {
                 if let Some(session) = self.sessions.get_mut(&id) {

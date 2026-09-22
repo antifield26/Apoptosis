@@ -208,6 +208,28 @@ fn pressing_q_drops_exactly_one_item() {
         entities_before + 1,
         "and becomes a real entity"
     );
+    // Thrown forward, not dropped at the feet: yaw 0 faces +Z, so the
+    // aimed 0.3 lands on +Z with the +0.1 pop, already integrated once
+    // (gravity and drag ran in the same tick). Zero velocity here is
+    // the old behaviour.
+    let thrown = harness
+        .game
+        .entity_store()
+        .iter()
+        .find_map(|entity| match &entity.body {
+            mc_entity::EntityBody::Item(item) => Some((entity.velocity, item.pickup_delay)),
+            _ => None,
+        })
+        .expect("the dropped entity");
+    assert!(
+        thrown.0.z > 0.2 && thrown.0.y > 0.0 && thrown.0.x.abs() < 1e-12,
+        "thrown toward the look direction, got {:?}",
+        thrown.0
+    );
+    assert_eq!(
+        thrown.1, 40,
+        "the 40-tick thrower delay, not the ambient 10"
+    );
 
     harness.idle_click();
     assert_eq!(
