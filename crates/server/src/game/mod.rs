@@ -553,8 +553,10 @@ const fn targets_a_block(status: i32) -> bool {
 
 /// `player_action` status: abort digging (the client changed its mind).
 const ACTION_ABORT_DESTROY_BLOCK: i32 = 1;
-/// `player_action` status: drop the held item.
-const ACTION_DROP_ITEM: i32 = 3;
+/// `player_action` status: drop the whole held stack (Ctrl+Q).
+const ACTION_DROP_STACK: i32 = 3;
+/// `player_action` status: drop one held item (Q).
+const ACTION_DROP_ONE_ITEM: i32 = 4;
 /// `player_action` status: swap the held item with the offhand.
 const ACTION_SWAP_ITEM_WITH_OFFHAND: i32 = 6;
 

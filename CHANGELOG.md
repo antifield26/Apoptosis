@@ -306,6 +306,13 @@ simulation and need a controlled single-action repro):
   accept `@s` as the invoking player (`targets_self`); wider selectors
   still need an engine this build does not have and are refused with
   the caller's own reason. Pinned by an `admin_commands` case.
+- Q single-drop silently ignored: only status 3 (drop stack) had an
+  arm; status 4 (Q, one item) fell into "unhandled", so the client
+  predicted the removal while the server kept the stack and the next
+  click "restored" it — exactly the owner report. The new arm splits
+  one off the held stack, spawns it, and re-mirrors. Falsification:
+  the new `inventory_duplication` case fails 10-vs-9 with the arm
+  removed. Owner re-test pending.
 - Placement disconnect diagnostics: the server logged nothing — no
   kick, no error, a clean TCP close, and no placement intent either.
   Root-caused since: vanilla `UseItemOn` ends with a `worldBorderHit`

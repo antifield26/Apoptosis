@@ -179,6 +179,46 @@ fn dropping_an_item_and_then_clicking_does_not_duplicate_it() {
 }
 
 #[test]
+fn pressing_q_drops_exactly_one_item() {
+    // Owner session: Q showed the deduction but dropped nothing, and the
+    // next click "restored" the item — status 4 (single drop) had no arm
+    // while status 3 (whole stack) did, so the server kept the stack the
+    // client had predicted away.
+    let mut harness = Harness::new("p06-dupe-single-drop");
+    harness
+        .game
+        .grant_item(harness.id, "minecraft:stone", 10)
+        .expect("granted");
+    let before = harness.inventory_total();
+    let entities_before = harness.entity_count();
+
+    harness.intent(PlayIntent::PlayerAction {
+        status: 4,
+        position: block_position(0, 64, 0),
+        facing: 0,
+        sequence: 0,
+    });
+    assert_eq!(
+        harness.inventory_total(),
+        before - 1,
+        "one item leaves the authoritative inventory"
+    );
+    assert_eq!(
+        harness.entity_count(),
+        entities_before + 1,
+        "and becomes a real entity"
+    );
+
+    harness.idle_click();
+    assert_eq!(
+        harness.inventory_total(),
+        before - 1,
+        "a click must not resurrect the dropped item"
+    );
+    assert_eq!(harness.hotbar_slot(), 9, "the menu shows nine left");
+}
+
+#[test]
 fn swapping_to_the_offhand_and_then_clicking_does_not_duplicate() {
     let mut harness = Harness::new("p06-dupe-swap");
     harness

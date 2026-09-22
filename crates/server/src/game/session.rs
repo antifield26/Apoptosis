@@ -27,9 +27,9 @@ use std::collections::BTreeSet;
 use tracing::{debug, info, warn};
 
 use super::{
-    ACTION_ABORT_DESTROY_BLOCK, ACTION_DROP_ITEM, ACTION_FINISH_DESTROY_BLOCK,
-    ACTION_START_DESTROY_BLOCK, ACTION_SWAP_ITEM_WITH_OFFHAND, CHAT_TYPE_CHAT,
-    CLIENT_COMMAND_RESPAWN, ChestHalves, EYE_HEIGHT, FALL_DAMAGE_THRESHOLD,
+    ACTION_ABORT_DESTROY_BLOCK, ACTION_DROP_ONE_ITEM, ACTION_DROP_STACK,
+    ACTION_FINISH_DESTROY_BLOCK, ACTION_START_DESTROY_BLOCK, ACTION_SWAP_ITEM_WITH_OFFHAND,
+    CHAT_TYPE_CHAT, CLIENT_COMMAND_RESPAWN, ChestHalves, EYE_HEIGHT, FALL_DAMAGE_THRESHOLD,
     GAME_EVENT_LEVEL_CHUNKS_LOAD_START, Game, NO_BLOCK_CHANGE_SEQUENCE, OpenKind, TickReport,
     block_reach, chest_title, chunk_of, clockwise, counter_clockwise, entity_reach, face_offset,
     floor_to_i32, horizontal_offset, is_chest_family, is_container_block, mark_block_dirty,
@@ -2395,7 +2395,7 @@ impl Game {
             ACTION_FINISH_DESTROY_BLOCK => {
                 self.finish_dig(id, x, y, z, report)?;
             }
-            ACTION_DROP_ITEM => {
+            ACTION_DROP_STACK => {
                 // The held stack leaves the inventory and becomes a dropped-item
                 // entity at roughly eye height. The entity is announced by the
                 // Broadcast phase with its stack metadata, and the Entities
@@ -2425,6 +2425,39 @@ impl Game {
                 // The slot the client is looking at just emptied, so the menu is
                 // re-mirrored and the update sent. Without this the menu kept the
                 // pre-drop view until the next click.
+                self.sync_menu_from_inventory(id, report);
+            }
+            ACTION_DROP_ONE_ITEM => {
+                // Q with no window open: one item leaves the held stack
+                // (status 4; status 3 above is the whole stack). Unhandled,
+                // the client predicted the removal while the server kept
+                // the stack — the next click re-mirrored and "restored"
+                // the item, which is exactly the owner report.
+                let (dropped, owner, at) = {
+                    let Some(session) = self.sessions.get_mut(&id) else {
+                        return Ok(());
+                    };
+                    let mut held = session.player.inventory.take_held(Hand::Main);
+                    if held.is_empty() {
+                        session.player.inventory.replace_held(Hand::Main, held);
+                        return Ok(());
+                    }
+                    let dropped = held.split(1);
+                    session.player.inventory.replace_held(Hand::Main, held);
+                    let at = Vec3::new(
+                        session.player.position.x,
+                        session.player.position.y + 1.2,
+                        session.player.position.z,
+                    );
+                    (dropped, session.entity, at)
+                };
+                if dropped.is_empty() {
+                    return Ok(());
+                }
+                match self.spawn_item_owned(dropped, at, Some(owner)) {
+                    Ok(entity) => debug!(id = %id, %entity, "dropped a single item"),
+                    Err(error) => warn!(id = %id, %error, "could not spawn a dropped item"),
+                }
                 self.sync_menu_from_inventory(id, report);
             }
             ACTION_SWAP_ITEM_WITH_OFFHAND => {
