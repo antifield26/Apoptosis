@@ -47,9 +47,11 @@ impl Harness {
             .await
             .expect("listener starts");
         let addr = service.local_addr();
-        let (client, _join) = TestClient::login_join(addr, "Commander")
-            .await
-            .expect("login completes");
+        let (client, _join) = TestClient::login_join_tick(addr, "Commander", || {
+            game.tick().expect("tick");
+        })
+        .await
+        .expect("login completes");
 
         for _ in 0..40 {
             game.tick().expect("tick");
@@ -288,9 +290,11 @@ async fn an_over_long_command_ends_only_that_connection() {
 
     // The listener is still accepting: a fresh client logs in and gets an answer.
     let addr = harness.service.local_addr();
-    let (mut fresh, _join) = TestClient::login_join(addr, "Survivor")
-        .await
-        .expect("the server must still accept logins after an over-long command");
+    let (mut fresh, _join) = TestClient::login_join_tick(addr, "Survivor", || {
+        harness.game.tick().expect("tick");
+    })
+    .await
+    .expect("the server must still accept logins after an over-long command");
     fresh
         .send_raw_packet(&RawPacket::new(
             serverbound::play::CHAT_COMMAND,
@@ -419,7 +423,7 @@ async fn a_client_information_update_resets_the_streaming_radius() {
             break;
         }
     }
-    // enter_play announces the server radius first; the update confirms 2
+    // The join burst announces the server radius first; the update confirms 2
     // after it, exactly once.
     assert_eq!(
         radii.last(),

@@ -16,10 +16,10 @@ use mc_persistence::chunk::ChunkPos;
 use mc_persistence::level::Difficulty;
 use mc_protocol::packets::Packet;
 use mc_protocol::packets::play::{
-    BlockDestruction, ContainerSetContent, ContainerSetSlot, GameEvent, MENU_CRAFTING,
+    BlockDestruction, ContainerSetContent, ContainerSetSlot, GameEvent, JoinGame, MENU_CRAFTING,
     MENU_FURNACE, MENU_GENERIC_3X3, MENU_GENERIC_9X3, MENU_GENERIC_9X6, MENU_HOPPER, OpenScreen,
-    PlayIntent, PlayerPosition, Respawn, SetDefaultSpawnPosition, SetHeldSlot, SetTime,
-    block_position, unpack_block_position,
+    PlayIntent, PlayerPosition, Respawn, SetChunkCacheCenter, SetChunkCacheRadius,
+    SetDefaultSpawnPosition, SetHeldSlot, SetTime, block_position, unpack_block_position,
 };
 use mc_protocol::text::TextComponent;
 use mc_world::{Aabb, Vec3};
@@ -57,9 +57,9 @@ pub(crate) struct Session {
     pub(crate) sent_chunks: BTreeSet<ChunkPos>,
     /// The chunk centre the client was last told (P14-04 follow-up).
     ///
-    /// The connection tells the client `(0, 0)` at enter-play; the game sets
-    /// the join chunk here and re-sends on every chunk crossing, before the
-    /// chunks themselves stream. Without it the client culls and waits on a
+    /// The game tells the client the join chunk in the join burst below and
+    /// re-sends on every chunk crossing, before the chunks themselves stream.
+    /// Without it the client culls and waits on a
     /// stale centre: walking far shows nothing new, and respawning far away
     /// sticks on "Loading terrain".
     pub(crate) center: ChunkPos,
@@ -514,6 +514,59 @@ impl Game {
             },
         );
 
+        // The join burst leads with `JoinGame`: the client's self entity id.
+        // It must be the entity store's allocation, not a constant — a
+        // hardcoded 1 broke every rejoin (the world already holds mobs, so
+        // the second join allocates 18+, while the client still believed it
+        // was 1 and dropped every self-directed packet such as the effect
+        // icons). The cache centre/radius ride with it, which the network
+        // layer used to send before the game owned the burst.
+        {
+            let Some(session) = self.sessions.get(&id) else {
+                warn!(id = %id, "join failed before the join burst");
+                return Ok(());
+            };
+            let centre = chunk_of(at.x, at.z);
+            let join = JoinGame {
+                entity_id: session.entity.get(),
+                hardcore: false,
+                dimension_names: vec![mc_network::registry_data::OVERWORLD.to_owned()],
+                max_players: self.max_players as i32,
+                view_distance: self.view_distance,
+                simulation_distance: self.view_distance,
+                reduced_debug_info: false,
+                enable_respawn_screen: true,
+                limited_crafting: false,
+                dimension_type_id: 0,
+                dimension_name: mc_network::registry_data::OVERWORLD.to_owned(),
+                hashed_seed: 0,
+                game_mode: session.player.game_mode.id(),
+                previous_game_mode: -1,
+                is_debug: false,
+                is_flat: false,
+                death_location: None,
+                portal_cooldown: 0,
+                sea_level: 63,
+                enforce_secure_chat: false,
+            };
+            self.send(id, &join, report)?;
+            self.send(
+                id,
+                &SetChunkCacheCenter {
+                    x: centre.x,
+                    z: centre.z,
+                },
+                report,
+            )?;
+            self.send(
+                id,
+                &SetChunkCacheRadius {
+                    radius: session.view_distance,
+                },
+                report,
+            )?;
+        }
+
         // The client renders an empty hotbar until told otherwise: a rejoin
         // with a non-empty inventory showed nothing until the first
         // inventory action touched it (P14-10 walk). Sync the whole player
@@ -539,8 +592,8 @@ impl Game {
             self.send(id, &packet, report)?;
         }
 
-        // The network layer already sent JoinGame; this is the world-side
-        // continuation: the level-load signal, position, spawn marker, vitals, then terrain.
+        // This is the world-side continuation after the `JoinGame` burst above:
+        // the level-load signal, position, spawn marker, vitals, then terrain.
         //
         // **This one is not optional, and nothing complains when it is missing.** A 26.x client's loading
         // screen dismisses on `LevelLoadTracker.isLevelReady()`, which only becomes true once

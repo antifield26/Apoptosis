@@ -251,6 +251,49 @@ Real client on 25567, eight findings, seven fixed or diagnosed here:
 - Open (needs owner re-test): player attacks, effect icons, table
   placement ghost/drop.
 
+### Owner session findings round 2 (unreleased, against `c7ef879`)
+
+Real client on 25567. The re-test reported four symptoms; two are
+root-caused and fixed here, two stay open for lack of server-side
+evidence (the server logged zero intents from the current connection —
+no attacks, no effects, no placements — so they never reached the
+simulation and need a controlled single-action repro):
+
+- Effect HUD blank after a rejoin: `JoinGame` carried a hardcoded entity
+  id 1 while the entity store had allocated 18+ (mobs occupy the low
+  ids), so every self-directed packet (`UpdateMobEffect`, …) went to an
+  entity the client does not know as itself. The game loop now sends
+  `JoinGame` with the allocated id first in the join burst, with the
+  cache centre/radius the network layer used to send; the network keeps
+  its placeholder only for protocol-only runs with no game attached.
+  This also closes the round-1 "speed showed as slowness" loop: icons
+  were addressed to the wrong entity, not mislabelled. Falsification:
+  the new `join_entity_id` suite (rejoin ids differ and match the
+  server-side player; fails with the game-side send removed). Socket
+  harnesses that tick the game manually now log in through
+  `login_join_tick`, which ticks while the login is in flight — the
+  game-sent `JoinGame` would otherwise deadlock them.
+- No red hurt flash: corrects round 1's "animation 2" — the packet
+  layout was jar-verified but the id was convention, and the convention
+  is wrong on a modern client. Jar `LivingEntity` never broadcasts event
+  2 on the hurt path (its constants there are 3 = death, 35 = totem, 46,
+  60, 67); the red is the dedicated `hurt_animation` packet (clientbound
+  play 42: `VarInt` id + `f32` yaw, jar `ClientboundHurtAnimationPacket`,
+  built from `getId` + `getHurtDir`; the id is cross-checked against
+  Pumpkin's list — all 15 shared clientbound play ids match).
+  `damage_entity` broadcasts it on every applied hit with the
+  vanilla/Pumpkin yaw (damage direction minus victim yaw, 0.0 with no
+  attacker). Falsification: the hurt-flash test pins 42 + yaw ≈ 180° for
+  a west-side swing (fails with the event-2 arm restored), plus a
+  `mc-protocol` byte golden. Death animation (event 3 + `DYING` pose +
+  delayed removal) stays a named gap — the entity is still removed on
+  the killing tick.
+- Open (needs owner re-test on the new binary with one action at a
+  time): red flash on screen, effect icons after `/effect give`, XP past
+  level 1, table-placement disconnect. For the disconnect the client's
+  `Failed to handle packet` ERROR lines above the disconnect WARN are
+  the missing evidence — the reason line alone is mojibake.
+
 ## Unreleased — Phase 15 (Observability + Core Hardening)
 
 ### P15-08 — Hardening review sign-off (all clauses re-evidenced)

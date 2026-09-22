@@ -55,9 +55,11 @@ impl Bridge {
             .await
             .expect("listener starts");
         let addr = service.local_addr();
-        let (client, _join) = TestClient::login_join(addr, "Trader")
-            .await
-            .expect("login completes");
+        let (client, _join) = TestClient::login_join_tick(addr, "Trader", || {
+            game.tick().expect("tick");
+        })
+        .await
+        .expect("login completes");
 
         for _ in 0..40 {
             game.tick().expect("tick");
@@ -339,9 +341,11 @@ async fn a_truncated_click_payload_ends_only_that_connection() {
     );
     // The listener is still serving: a fresh client can log in.
     let addr = bridge.service.local_addr();
-    let (_fresh, _join) = TestClient::login_join(addr, "Survivor")
-        .await
-        .expect("the server must still accept logins after a malformed packet");
+    let (_fresh, _join) = TestClient::login_join_tick(addr, "Survivor", || {
+        bridge.game.tick().expect("tick");
+    })
+    .await
+    .expect("the server must still accept logins after a malformed packet");
     bridge.service.shutdown().await;
 }
 

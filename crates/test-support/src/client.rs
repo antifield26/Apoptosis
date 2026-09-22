@@ -236,6 +236,36 @@ impl TestClient {
         ))
     }
 
+    /// [`login_join`](Self::login_join) while driving an external ticker.
+    ///
+    /// `JoinGame` now comes from the game loop, so a harness that ticks its
+    /// game manually would deadlock awaiting it: the login only completes
+    /// once the game processes the join, and the game is only ticked after
+    /// the login returns. This polls the login and runs `tick` whenever it
+    /// would otherwise stall, which is what the live lifecycle does
+    /// continuously. Harnesses on the full lifecycle keep using
+    /// [`login_join`](Self::login_join).
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError`] when any stage fails or the server kicks the client.
+    pub async fn login_join_tick(
+        addr: SocketAddr,
+        name: &str,
+        mut tick: impl FnMut(),
+    ) -> ServerResult<(Self, JoinResult)> {
+        let login = Self::login_join(addr, name);
+        tokio::pin!(login);
+        let mut interval = tokio::time::interval(Duration::from_millis(10));
+        loop {
+            tokio::select! {
+                biased;
+                result = &mut login => return result,
+                _ = interval.tick() => tick(),
+            }
+        }
+    }
+
     /// Login stage: optional `SetCompression`, then `LoginSuccess`, then the
     /// `LoginAcknowledged` reply.
     async fn complete_login(&mut self) -> ServerResult<LoginSuccess> {

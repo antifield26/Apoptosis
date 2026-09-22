@@ -805,23 +805,29 @@ impl RemoveEntities {
 /// `minecraft:entity_event` (clientbound play 34): a one-byte entity animation.
 ///
 /// Body: fixed `int` entity id then one `u8` event id — the id is NOT a
-/// `VarInt` (jar `ClientboundEntityEventPacket` reads `readInt`; a VarInt
-/// here desynchronised the client on the first hit — owner session). The
-/// hurt flash is event **2** — the long-standing vanilla convention
-/// (`LivingEntity` broadcasts it on every landed hit, including killing
-/// blows, with death animation 3 alongside on lethal ones). Medium
-/// confidence on the event id (no captured 34 body exists); a wrong byte
-/// plays the wrong animation but cannot desynchronise anything, and the
-/// owner session verifies it visually.
+/// `VarInt` (jar `ClientboundEntityEventPacket` reads `readInt`; a `VarInt`
+/// here desynchronised the client on the first hit — owner session).
+///
+/// What event 2 is **not**: the hurt flash. Jar `LivingEntity` never
+/// broadcasts event 2 on the hurt path (it sends damage events; its
+/// broadcast constants are 3 = death, 35 = totem, 46, 60, 67), and the owner
+/// session confirmed hits with no red. The red flash is [`HurtAnimation`].
+/// Medium-to-low confidence on any other event id (no captured 34 body
+/// exists); a wrong byte plays the wrong animation but cannot desynchronise
+/// anything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EntityEvent {
-    /// Entity the animation plays on (fixed int, not VarInt).
+    /// Entity the animation plays on (fixed int, not `VarInt`).
     pub entity_id: i32,
-    /// Animation id (2 = hurt flash).
+    /// Animation id (3 = death; 2 is not the hurt flash, see above).
     pub event: u8,
 }
 
 /// Hurt-flash animation id for [`EntityEvent`].
+///
+/// Kept for the death path (`EntityEvent` 3 is jar-confirmed in
+/// `LivingEntity.die`); 2 is **not** the hurt flash on a modern client, so
+/// nothing sends this anymore — see [`HurtAnimation`].
 pub const ENTITY_EVENT_HURT: u8 = 2;
 
 impl Packet for EntityEvent {
@@ -852,6 +858,56 @@ impl Packet for EntityEvent {
         let mut writer = PacketWriter::new();
         writer.write_i32(self.entity_id);
         writer.write_u8(self.event);
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:hurt_animation` (clientbound play 42): the red hurt flash.
+///
+/// Body: `VarInt` entity id then `f32` hurt yaw (jar
+/// `ClientboundHurtAnimationPacket` reads `readVarInt` + `readFloat`, and
+/// its `LivingEntity` constructor wires `getId` + `getHurtDir`). Sent on
+/// every applied hit, lethal included; `ServerPlayer.indicateDamage`
+/// builds exactly this for the victim's own screen tilt, and Pumpkin's
+/// damage path broadcasts it to tracking players for mobs. The yaw is the
+/// damage direction (`atan2(src.z - tgt.z, src.x - tgt.x)` in degrees,
+/// minus the victim's yaw); 0.0 when there is no attacker.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HurtAnimation {
+    /// Hurt entity id.
+    pub entity_id: i32,
+    /// Hurt yaw in degrees.
+    pub yaw: f32,
+}
+
+impl Packet for HurtAnimation {
+    const ID: i32 = crate::ids::clientbound::play::HURT_ANIMATION;
+
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] on truncation (a fixed two-field body).
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let packet = Self {
+            entity_id: reader.read_varint()?,
+            yaw: reader.read_f32()?,
+        };
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "hurt_animation has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(packet)
+    }
+
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] when the body cannot be encoded, which for these field types means never.
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.entity_id);
+        writer.write_f32(self.yaw);
         Ok(writer.finish())
     }
 }
@@ -2076,11 +2132,11 @@ impl PlayIntent {
 mod tests {
     use super::{
         BlockDestruction, COMMAND_MAX_CHARS, ConfigurationAcknowledged, ContainerClose,
-        ContainerSetData, ENTITY_EVENT_HURT, EntityEvent, ForgetLevelChunk, JoinGame, KeepAlive,
-        LightData, LightUpdate, MENU_FURNACE, MENU_GENERIC_9X3, MENU_GENERIC_9X6, MENU_HOPPER,
-        OpenScreen, PlayDisconnect, PlayIntent, PlayPingRequest, PlayPong, PlayerPosition,
-        RemoveMobEffect, SIGNATURE_LEN, SetChunkCacheCenter, SetChunkCacheRadius, SetCursorItem,
-        UpdateMobEffect,
+        ContainerSetData, ENTITY_EVENT_HURT, EntityEvent, ForgetLevelChunk, HurtAnimation,
+        JoinGame, KeepAlive, LightData, LightUpdate, MENU_FURNACE, MENU_GENERIC_9X3,
+        MENU_GENERIC_9X6, MENU_HOPPER, OpenScreen, PlayDisconnect, PlayIntent, PlayPingRequest,
+        PlayPong, PlayerPosition, RemoveMobEffect, SIGNATURE_LEN, SetChunkCacheCenter,
+        SetChunkCacheRadius, SetCursorItem, UpdateMobEffect,
     };
     use crate::packets::Packet;
     use crate::text::TextComponent;
@@ -3584,6 +3640,26 @@ mod tests {
         assert_eq!(ENTITY_EVENT_HURT, 2);
         assert!(EntityEvent::decode(&[]).is_err());
         assert!(EntityEvent::decode(&[99]).is_err());
+    }
+
+    #[test]
+    fn hurt_animation_round_trip_and_rejects_truncation() {
+        let hurt = HurtAnimation {
+            entity_id: 99,
+            yaw: 180.0,
+        };
+        assert_eq!(
+            HurtAnimation::decode(&hurt.encode().expect("encodes")).expect("decodes"),
+            hurt
+        );
+        // VarInt 99 (one byte), then 180.0f32 big-endian: 0x43 0x34 0x00 0x00.
+        assert_eq!(
+            hurt.encode().expect("encodes"),
+            [99, 0x43, 0x34, 0x00, 0x00]
+        );
+        assert!(HurtAnimation::decode(&[]).is_err());
+        assert!(HurtAnimation::decode(&[99]).is_err());
+        assert!(HurtAnimation::decode(&[99, 0x43]).is_err());
     }
 
     #[test]

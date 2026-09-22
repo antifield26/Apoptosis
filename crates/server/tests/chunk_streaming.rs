@@ -124,6 +124,9 @@ fn teleporting_away_forgets_the_departed_chunks_by_name() {
 fn view_distance_is_clamped_confirmed_and_honoured() {
     let mut harness = Harness::new("p14-view-distance");
     let (id, mut out) = harness.join("Viewer");
+    // Drain the join burst: it carries the initial radius confirm, and only
+    // confirms from here on are evidence.
+    while out.try_recv().is_some() {}
 
     let send_view_distance = |harness: &mut Harness, distance: i8| {
         harness
@@ -212,7 +215,7 @@ fn view_distance_is_clamped_confirmed_and_honoured() {
 
 #[test]
 fn crossing_into_a_new_chunk_updates_the_cache_center_first() {
-    // Owner finding (soak): the center went out once at enter-play and never
+    // Owner finding (soak): the center went out once in the join burst and never
     // again, so walking far showed nothing new and respawning far away stuck
     // on "Loading terrain". The center must lead the chunks on every chunk
     // crossing — including teleports and respawns, which move without walking.

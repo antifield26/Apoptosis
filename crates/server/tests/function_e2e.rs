@@ -65,9 +65,11 @@ impl Harness {
             .await
             .expect("listener starts");
         let addr = service.local_addr();
-        let (client, _join) = TestClient::login_join(addr, "Caller")
-            .await
-            .expect("login completes");
+        let (client, _join) = TestClient::login_join_tick(addr, "Caller", || {
+            game.tick().expect("tick");
+        })
+        .await
+        .expect("login completes");
         for _ in 0..40 {
             game.tick().expect("tick");
             if game.player_count() > 0 {

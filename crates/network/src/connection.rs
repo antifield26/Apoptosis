@@ -437,10 +437,23 @@ impl Session {
         codec: &mut FrameCodec,
         shutdown: &NetworkShutdown,
     ) -> ServerResult<()> {
-        self.enter_play(writer).await?;
-        // Join the game loop, if one is running: it takes over the world side and
-        // pushes packets back through `outbound`.
+        // Join the game loop first when one is running: the game owns the
+        // world-side join packets (notably `JoinGame`, which must carry the
+        // real player entity id — the network layer cannot know it before the
+        // entity store allocates it, and the hardcoded 1 this layer used to
+        // send broke every rejoin's self-directed packets, e.g. the effect
+        // icons never appeared because `UpdateMobEffect` went to an entity
+        // the client does not know as itself). Protocol-only runs (no game
+        // loop) keep the local fallback below.
         let mut outbound = self.publish_join();
+        if outbound.is_none() {
+            self.enter_play(writer).await?;
+        } else {
+            tracing::info!(
+                name = %self.profile.clone().map_or("?".to_owned(), |profile| profile.name),
+                "player entered play state (join packets come from the game loop)"
+            );
+        }
         let mut last_keepalive_sent = Instant::now();
         loop {
             // One timer at a time: when idle it fires to send a keepalive;
@@ -511,6 +524,11 @@ impl Session {
         }
     }
 
+    /// Tell the connection its play-phase preamble when no game loop is attached.
+    ///
+    /// Protocol-only runs (Phase 02) have no entity store, so there is no real
+    /// player entity id to report and 1 is the honest placeholder. Live runs
+    /// never call this: the game loop sends `JoinGame` with the allocated id.
     async fn enter_play(&mut self, writer: &mut OwnedWriteHalf) -> ServerResult<()> {
         let profile = self
             .profile

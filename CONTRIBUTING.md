@@ -32,13 +32,13 @@ and [docs/operations/RUNBOOK.md](docs/operations/RUNBOOK.md)).
 
 | Gate | Command | Current state (2026-09-15) |
 |---|---|---|
-| Tests | `cargo test --workspace --no-fail-fast` | 1 575 passed / 0 failed / 35 ignored, 125 suites |
+| Tests | `cargo test --workspace --no-fail-fast` | 1 577 passed / 0 failed / 35 ignored, 126 suites |
 | Formatting | `cargo fmt --all -- --check` | clean |
 | Lints | `cargo clippy --workspace --all-targets -- -D warnings` | clean |
 | aarch64 | `cargo check --target aarch64-unknown-linux-gnu --workspace --all-targets` | clean |
 | Licences/deps | `cargo deny check licenses bans sources` | clean |
 
-The 34 ignored tests are on-demand: the benchmark harness (`pi_profile`,
+The 35 ignored tests are on-demand: the benchmark harness (`pi_profile`,
 `tick_baseline`), the differential suites below, `vanilla_loot` (3),
 `vanilla_chunk_light` (2), the light suites (4) and `terrain_distribution`
 (3) — full breakdown in [docs/testing/TEST-MATRIX.md](docs/testing/TEST-MATRIX.md).

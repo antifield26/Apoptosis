@@ -23,10 +23,9 @@ use mc_protocol::RawPacket;
 use mc_protocol::packets::Packet;
 use mc_protocol::packets::play::{
     BIOMES_PER_SECTION, BlockChangedAck, BlockUpdate, ChunkSection, ContainerSetContent,
-    ContainerSetData, ENTITY_EVENT_HURT, EntityEvent, ForgetLevelChunk, HEIGHTMAP_WORLD_SURFACE,
-    Heightmap, LevelChunkWithLight, LightUpdate, NETWORK_BIOME_MIN_BITS,
-    PalettedContainer as WireContainer, SetChunkCacheCenter, SetChunkCacheRadius, SetTime,
-    block_position,
+    ContainerSetData, ForgetLevelChunk, HEIGHTMAP_WORLD_SURFACE, Heightmap, HurtAnimation,
+    LevelChunkWithLight, LightUpdate, NETWORK_BIOME_MIN_BITS, PalettedContainer as WireContainer,
+    SetChunkCacheCenter, SetChunkCacheRadius, SetTime, block_position,
 };
 use mc_protocol::text::TextComponent;
 use mc_simulation::{PhaseRunner, TickPhase};
@@ -2881,6 +2880,43 @@ impl Game {
         true
     }
 
+    /// The red hurt flash for one applied hit: `hurt_animation` (clientbound
+    /// play 42) to every ready client, lethal hits included.
+    ///
+    /// Owner session: landed hits showed no red, because the server sent
+    /// `entity_event` 2 — which is not the flash on a modern client (jar
+    /// `LivingEntity` never broadcasts 2 on the hurt path; its constants
+    /// there are 3 = death, 35 = totem, 46, 60, 67). The red comes from this
+    /// packet (jar `ClientboundHurtAnimationPacket`: `VarInt` id + `f32`
+    /// yaw; `ServerPlayer.indicateDamage` sends exactly it, Pumpkin's damage
+    /// path broadcasts it to tracking players). The yaw mirrors
+    /// vanilla/Pumpkin: the damage direction in degrees minus the victim's
+    /// yaw, 0.0 with no attacker.
+    fn broadcast_hurt_animation(&self, id: EntityId, attacker: Option<Attacker>) {
+        let Some(victim) = self.entities.get(id) else {
+            return;
+        };
+        let yaw = attacker.map_or(0.0, |atk| {
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "hurt yaw is a visual tilt; f64 direction math narrowed to the f32 wire field"
+            )]
+            let directed = (atk.pos.z - victim.position.z)
+                .atan2(atk.pos.x - victim.position.x)
+                .to_degrees() as f32
+                - victim.yaw;
+            directed
+        });
+        let packet = HurtAnimation {
+            entity_id: id.get(),
+            yaw,
+        };
+        if let Ok(raw) = packet.to_raw() {
+            let mut report = TickReport::default();
+            self.broadcast_all(&raw, &mut report);
+        }
+    }
+
     /// Apply damage to a living entity, flagging it removed when it dies.
     ///
     /// Returns whether this hit was lethal. Non-living entities are immune rather
@@ -2953,21 +2989,7 @@ impl Game {
         entity.health = (entity.health - amount).max(0.0);
         entity.invulnerable_ticks = INVULNERABLE_TICKS;
         let died = entity.health <= 0.0;
-        let numeric = id.get();
-        // Hurt flash (owner session: landed hits showed no red): vanilla
-        // broadcasts animation 2 on every applied hit, lethal included.
-        // The `entity` borrow ends here (only owned copies flow on), so the
-        // broadcast below compiles against `&self`.
-        {
-            let packet = EntityEvent {
-                entity_id: numeric,
-                event: ENTITY_EVENT_HURT,
-            };
-            if let Ok(raw) = packet.to_raw() {
-                let mut report = TickReport::default();
-                self.broadcast_all(&raw, &mut report);
-            }
-        }
+        self.broadcast_hurt_animation(id, attacker);
         if !died {
             return false;
         }

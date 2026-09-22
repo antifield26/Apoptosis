@@ -312,6 +312,19 @@ pub mod clientbound {
         pub const REMOVE_ENTITIES: i32 = 77;
         /// `minecraft:entity_event` — a one-byte entity animation (hurt, death…).
         pub const ENTITY_EVENT: i32 = 34;
+        /// `minecraft:hurt_animation` — the red hurt flash plus model tilt.
+        ///
+        /// The hurt flash is **not** `entity_event` 2 on a modern client: jar
+        /// `LivingEntity` broadcasts damage events on the hurt path and never
+        /// event 2 (its event constants there are 3 = death, 35 = totem, 46,
+        /// 60, 67). The red comes from this packet — jar
+        /// `ClientboundHurtAnimationPacket` is `VarInt` entity id + `f32`
+        /// hurt yaw, built from the victim (`getId` + `getHurtDir`), and
+        /// `ServerPlayer.indicateDamage` sends exactly it. Id 42 is
+        /// cross-checked against Pumpkin's packet list: all 15 clientbound
+        /// play ids the two trees share match, so the surrounding table is
+        /// the same.
+        pub const HURT_ANIMATION: i32 = 42;
         /// `minecraft:remove_mob_effect` — clear one effect icon.
         pub const REMOVE_MOB_EFFECT: i32 = 78;
         /// `minecraft:set_chunk_cache_radius`

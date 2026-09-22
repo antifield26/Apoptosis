@@ -26,7 +26,7 @@
 //! That a held item's damage is used (it is not: the fist figure is applied
 //! whatever is held — a named gap, see the parity matrix). Knockback motion
 //! rides the decaying channel (pinned above) and the hurt flash rides
-//! `entity_event` 2 (pinned below); what they look like on a real client
+//! `hurt_animation` (pinned below); what they look like on a real client
 //! is owner-verified.
 
 // Health is compared exactly on purpose: every value here is reached by adding or
@@ -42,7 +42,7 @@ use mc_network::bridge::{
 };
 use mc_protocol::ids::clientbound;
 use mc_protocol::packets::Packet;
-use mc_protocol::packets::play::{EntityEvent, PlayIntent};
+use mc_protocol::packets::play::{HurtAnimation, PlayIntent};
 use mc_server::game::{Game, INVULNERABLE_TICKS};
 use mc_server::storage::WorldService;
 use mc_test_support::fixtures::TempDir;
@@ -253,25 +253,28 @@ fn a_swing_shoves_the_mob_away_from_the_attacker() {
 #[test]
 fn a_landed_hit_announces_the_hurt_flash() {
     // Owner session: landed hits showed no red flash — damage applied with
-    // no `entity_event` on the wire. Every applied hit now broadcasts
-    // animation 2 for the victim.
+    // no red on the wire. The red is `hurt_animation` (clientbound play 42),
+    // not `entity_event` 2 (jar `LivingEntity` never broadcasts 2 on the hurt
+    // path; its constants there are 3 = death, 35 = totem, 46, 60, 67).
+    // Every applied hit broadcasts one for the victim. The harness swings
+    // from 2 blocks west (-x) of a fresh (yaw 0) zombie, so the hurt yaw is
+    // atan2(0, -2) = +180 degrees.
     let mut harness = Harness::new("p17-hurt-flash");
     let mut out = harness.join("Pusher");
     let zombie = harness.summon_nearby(MobKind::Zombie);
     harness.swing(zombie.get());
     let mut flashes = Vec::new();
     while let Some(raw) = out.try_recv() {
-        if raw.id == clientbound::play::ENTITY_EVENT {
-            flashes.push(EntityEvent::decode(&raw.payload).expect("decodes"));
+        if raw.id == clientbound::play::HURT_ANIMATION {
+            flashes.push(HurtAnimation::decode(&raw.payload).expect("decodes"));
         }
     }
-    assert_eq!(
-        flashes,
-        vec![EntityEvent {
-            entity_id: zombie.get(),
-            event: mc_protocol::packets::play::ENTITY_EVENT_HURT,
-        }],
-        "one hurt flash for the victim"
+    assert_eq!(flashes.len(), 1, "one hurt flash for the victim");
+    assert_eq!(flashes[0].entity_id, zombie.get(), "flash names the victim");
+    assert!(
+        (flashes[0].yaw - 180.0).abs() < 0.01,
+        "hurt yaw points back at the attacker, got {}",
+        flashes[0].yaw
     );
 }
 

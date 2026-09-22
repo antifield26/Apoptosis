@@ -55,9 +55,11 @@ impl Bridge {
             .expect("listener starts");
         let addr = service.local_addr();
 
-        let (client, join) = TestClient::login_join(addr, "Bridger")
-            .await
-            .expect("a real socket login completes");
+        let (client, join) = TestClient::login_join_tick(addr, "Bridger", || {
+            game.tick().expect("tick");
+        })
+        .await
+        .expect("a real socket login completes");
         assert_eq!(join.login.name, "Bridger");
 
         // The connection task queued the join; tick until the game applies it.
