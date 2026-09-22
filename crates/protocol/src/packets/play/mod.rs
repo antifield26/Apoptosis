@@ -804,16 +804,18 @@ impl RemoveEntities {
 
 /// `minecraft:entity_event` (clientbound play 34): a one-byte entity animation.
 ///
-/// Body: `VarInt` entity id, one `u8` event id. The hurt flash is event
-/// **2** — the long-standing vanilla convention (`LivingEntity` broadcasts
-/// it on every landed hit, including killing blows, with death animation 3
-/// alongside on lethal ones). Medium confidence on the exact id (no
-/// captured 34 body exists); a wrong byte plays the wrong animation but
-/// cannot desynchronise anything, and the owner session verifies it
-/// visually.
+/// Body: fixed `int` entity id then one `u8` event id — the id is NOT a
+/// `VarInt` (jar `ClientboundEntityEventPacket` reads `readInt`; a VarInt
+/// here desynchronised the client on the first hit — owner session). The
+/// hurt flash is event **2** — the long-standing vanilla convention
+/// (`LivingEntity` broadcasts it on every landed hit, including killing
+/// blows, with death animation 3 alongside on lethal ones). Medium
+/// confidence on the event id (no captured 34 body exists); a wrong byte
+/// plays the wrong animation but cannot desynchronise anything, and the
+/// owner session verifies it visually.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EntityEvent {
-    /// Entity the animation plays on.
+    /// Entity the animation plays on (fixed int, not VarInt).
     pub entity_id: i32,
     /// Animation id (2 = hurt flash).
     pub event: u8,
@@ -831,7 +833,7 @@ impl Packet for EntityEvent {
     fn decode(payload: &[u8]) -> ServerResult<Self> {
         let mut reader = PacketReader::new(payload);
         let packet = Self {
-            entity_id: reader.read_varint()?,
+            entity_id: reader.read_i32()?,
             event: reader.read_u8()?,
         };
         if !reader.is_empty() {
@@ -848,7 +850,7 @@ impl Packet for EntityEvent {
     /// [`ServerError::Protocol`] when the body cannot be encoded, which for these field types means never.
     fn encode(&self) -> ServerResult<Vec<u8>> {
         let mut writer = PacketWriter::new();
-        writer.write_varint(self.entity_id);
+        writer.write_i32(self.entity_id);
         writer.write_u8(self.event);
         Ok(writer.finish())
     }
@@ -3574,8 +3576,11 @@ mod tests {
             EntityEvent::decode(&hurt.encode().expect("encodes")).expect("decodes"),
             hurt
         );
-        // VarInt 99, one event byte, nothing else.
-        assert_eq!(hurt.encode().expect("encodes"), [99, ENTITY_EVENT_HURT]);
+        // Fixed int 99, one event byte, nothing else.
+        assert_eq!(
+            hurt.encode().expect("encodes"),
+            [0, 0, 0, 99, ENTITY_EVENT_HURT]
+        );
         assert_eq!(ENTITY_EVENT_HURT, 2);
         assert!(EntityEvent::decode(&[]).is_err());
         assert!(EntityEvent::decode(&[99]).is_err());
