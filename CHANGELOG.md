@@ -317,7 +317,8 @@ simulation and need a controlled single-action repro):
   throw along the look (jar `createItemStackToDrop`: eye − 0.3 spawn,
   0.3 aimed + 0.1 up, 40-tick delay, thrower set; the ±0.02 spread is
   omitted as cosmetic to keep the seeded stream stable), pinned by
-  direction + delay asserts in the same case. Owner re-test pending.
+  direction + delay asserts in the same case. Owner-verified: Q throws
+  forward and no longer vacuums back.
 - Placement disconnect diagnostics: the server logged nothing — no
   kick, no error, a clean TCP close, and no placement intent either.
   Root-caused since: vanilla `UseItemOn` ends with a `worldBorderHit`
