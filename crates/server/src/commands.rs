@@ -323,7 +323,7 @@ impl Game {
             "op" => Ok(self.command_op(id, parsed)),
             "deop" => Ok(self.command_deop(id, parsed)),
             "gamemode" => Ok(self.command_gamemode(id, parsed)),
-            "give" => Ok(self.command_give(id, parsed)),
+            "give" => Ok(self.command_give(id, parsed, report)),
             "effect" => Ok(self.command_effect(id, parsed, report)),
             "kill" => Ok(self.command_kill(id, parsed)),
             "seed" => Ok(self.command_seed()),
@@ -637,6 +637,7 @@ impl Game {
         &mut self,
         id: mc_network::bridge::ConnectionId,
         parsed: &mc_command::dispatch::ParsedCommand,
+        report: &mut TickReport,
     ) -> CommandResult {
         let target = parsed.string(0).unwrap_or("");
         if !target.eq_ignore_ascii_case(&parsed.source.name) {
@@ -658,7 +659,7 @@ impl Game {
             .integer(2)
             .and_then(|count| i32::try_from(count).ok())
             .unwrap_or(1);
-        match self.give_player_item(id, item_id, count) {
+        match self.give_player_item(id, item_id, count, report) {
             None => CommandResult::message("You are not online."),
             Some((placed, 0)) => {
                 CommandResult::message(format!("Gave {placed} [{name}] to {}", parsed.source.name))
@@ -749,7 +750,7 @@ impl Game {
         session.player.give_effect(kind.id(), amplifier, duration);
         let packet = mc_protocol::packets::play::UpdateMobEffect {
             entity_id: session.entity.get(),
-            effect_id: kind.id(),
+            effect_id: kind.wire_id(),
             amplifier,
             duration,
             flags: mc_protocol::packets::play::UpdateMobEffect::flags_for(false),
@@ -779,7 +780,7 @@ impl Game {
             session
                 .player
                 .clear_effect(kind.id())
-                .then_some(kind.id())
+                .then_some(kind.wire_id())
                 .into_iter()
                 .collect()
         } else {
@@ -787,7 +788,12 @@ impl Game {
             for effect_id in &ids {
                 session.player.clear_effect(*effect_id);
             }
-            ids
+            // Stored ids ride the legacy table; only modelled kinds have a
+            // known wire id, and an unmodelled icon is skipped rather than
+            // mislabelled (see `wire_id_of`).
+            ids.into_iter()
+                .filter_map(mc_entity::effect::wire_id_of)
+                .collect()
         };
         for effect_id in &removed {
             let packet = mc_protocol::packets::play::RemoveMobEffect {

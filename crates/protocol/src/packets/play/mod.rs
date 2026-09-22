@@ -93,9 +93,9 @@ pub use self::inventory::{
     MAX_CONTAINER_SLOTS, MAX_ITEM_COMPONENTS, MAX_METADATA_ENTRIES, MENU_CRAFTING, MENU_FURNACE,
     MENU_GENERIC_3X3, MENU_GENERIC_9X3, MENU_GENERIC_9X6, MENU_HOPPER, METADATA_INDEX_CREEPER_FUSE,
     METADATA_INDEX_HEALTH, METADATA_INDEX_ORB_VALUE, METADATA_TERMINATOR, METADATA_TYPE_BYTE,
-    METADATA_TYPE_FLOAT, METADATA_TYPE_INT, METADATA_TYPE_ITEM_STACK, METADATA_TYPE_VARIANTS,
-    METADATA_TYPE_VARINT, MOB_EFFECT_FLAG_AMBIENT, MOB_EFFECT_FLAG_ICON, MOB_EFFECT_FLAG_PARTICLES,
-    MetadataValue, OpenScreen, RemoveMobEffect, SetCursorItem, SetEntityData, UpdateMobEffect,
+    METADATA_TYPE_FLOAT, METADATA_TYPE_ITEM_STACK, METADATA_TYPE_VARIANTS, METADATA_TYPE_VARINT,
+    MOB_EFFECT_FLAG_AMBIENT, MOB_EFFECT_FLAG_ICON, MOB_EFFECT_FLAG_PARTICLES, MetadataValue,
+    OpenScreen, RemoveMobEffect, SetCursorItem, SetEntityData, UpdateMobEffect,
 };
 pub use self::light::{
     LIGHT_ARRAY_BYTES, LightData, LightUpdate, MAX_LIGHT_SECTIONS, read_light_data,
@@ -799,6 +799,58 @@ impl RemoveEntities {
             entity_ids.push(reader.read_varint()?);
         }
         Ok(Self { entity_ids })
+    }
+}
+
+/// `minecraft:entity_event` (clientbound play 34): a one-byte entity animation.
+///
+/// Body: `VarInt` entity id, one `u8` event id. The hurt flash is event
+/// **2** — the long-standing vanilla convention (`LivingEntity` broadcasts
+/// it on every landed hit, including killing blows, with death animation 3
+/// alongside on lethal ones). Medium confidence on the exact id (no
+/// captured 34 body exists); a wrong byte plays the wrong animation but
+/// cannot desynchronise anything, and the owner session verifies it
+/// visually.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EntityEvent {
+    /// Entity the animation plays on.
+    pub entity_id: i32,
+    /// Animation id (2 = hurt flash).
+    pub event: u8,
+}
+
+/// Hurt-flash animation id for [`EntityEvent`].
+pub const ENTITY_EVENT_HURT: u8 = 2;
+
+impl Packet for EntityEvent {
+    const ID: i32 = crate::ids::clientbound::play::ENTITY_EVENT;
+
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] on truncation (a fixed two-field body).
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let packet = Self {
+            entity_id: reader.read_varint()?,
+            event: reader.read_u8()?,
+        };
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "entity_event has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(packet)
+    }
+
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] when the body cannot be encoded, which for these field types means never.
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.entity_id);
+        writer.write_u8(self.event);
+        Ok(writer.finish())
     }
 }
 
@@ -1923,6 +1975,16 @@ impl PlayIntent {
             serverbound::play::SWING => Some(Self::Swing {
                 hand: reader.read_varint()?,
             }),
+            serverbound::play::ATTACK => {
+                // 26.1 attacks ride their own packet (jar:
+                // `ServerboundAttackPacket`, one entity VarInt) — not
+                // `interact` kind 1, which is why real-client swings
+                // vanished into `unmodelled play packet` while every
+                // scripted test (built intents directly) stayed green.
+                // It feeds the same attack arm as an interact-attack.
+                let entity = reader.read_varint()?;
+                Some(Self::Interact { entity, kind: 1 })
+            }
             serverbound::play::INTERACT => {
                 let entity = reader.read_varint()?;
                 let kind = reader.read_varint()?;
@@ -2012,10 +2074,11 @@ impl PlayIntent {
 mod tests {
     use super::{
         BlockDestruction, COMMAND_MAX_CHARS, ConfigurationAcknowledged, ContainerClose,
-        ContainerSetData, ForgetLevelChunk, JoinGame, KeepAlive, LightData, LightUpdate,
-        MENU_FURNACE, MENU_GENERIC_9X3, MENU_GENERIC_9X6, MENU_HOPPER, OpenScreen, PlayDisconnect,
-        PlayIntent, PlayPingRequest, PlayPong, PlayerPosition, RemoveMobEffect, SIGNATURE_LEN,
-        SetChunkCacheCenter, SetChunkCacheRadius, SetCursorItem, UpdateMobEffect,
+        ContainerSetData, ENTITY_EVENT_HURT, EntityEvent, ForgetLevelChunk, JoinGame, KeepAlive,
+        LightData, LightUpdate, MENU_FURNACE, MENU_GENERIC_9X3, MENU_GENERIC_9X6, MENU_HOPPER,
+        OpenScreen, PlayDisconnect, PlayIntent, PlayPingRequest, PlayPong, PlayerPosition,
+        RemoveMobEffect, SIGNATURE_LEN, SetChunkCacheCenter, SetChunkCacheRadius, SetCursorItem,
+        UpdateMobEffect,
     };
     use crate::packets::Packet;
     use crate::text::TextComponent;
@@ -2685,6 +2748,23 @@ mod tests {
         // Truncated payloads are errors, not panics.
         assert!(PlayIntent::decode(ids::USE_ITEM_ON, &[0x00]).is_err());
         assert!(PlayIntent::decode(ids::SET_CARRIED_ITEM, &[0x01]).is_err());
+
+        // 26.1 attacks ride packet id 1 with a single entity VarInt (jar
+        // `ServerboundAttackPacket`), not interact kind 1: thirteen real
+        // swings vanished into `unmodelled` before this arm existed.
+        let mut writer = PacketWriter::new();
+        writer.write_varint(99);
+        let bytes = writer.finish();
+        assert_eq!(
+            PlayIntent::decode(ids::ATTACK, &bytes)
+                .expect("decodes")
+                .expect("recognized"),
+            PlayIntent::Interact {
+                entity: 99,
+                kind: 1
+            }
+        );
+        assert!(PlayIntent::decode(ids::ATTACK, &[]).is_err());
     }
 
     // -----------------------------------------------------------------------
@@ -3482,6 +3562,23 @@ mod tests {
             spawn
         );
         assert!(SetDefaultSpawnPosition::decode(&[0x00; 4]).is_err());
+    }
+
+    #[test]
+    fn entity_event_round_trip_and_rejects_truncation() {
+        let hurt = EntityEvent {
+            entity_id: 99,
+            event: ENTITY_EVENT_HURT,
+        };
+        assert_eq!(
+            EntityEvent::decode(&hurt.encode().expect("encodes")).expect("decodes"),
+            hurt
+        );
+        // VarInt 99, one event byte, nothing else.
+        assert_eq!(hurt.encode().expect("encodes"), [99, ENTITY_EVENT_HURT]);
+        assert_eq!(ENTITY_EVENT_HURT, 2);
+        assert!(EntityEvent::decode(&[]).is_err());
+        assert!(EntityEvent::decode(&[99]).is_err());
     }
 
     #[test]

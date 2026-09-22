@@ -23,9 +23,10 @@ use mc_protocol::RawPacket;
 use mc_protocol::packets::Packet;
 use mc_protocol::packets::play::{
     BIOMES_PER_SECTION, BlockChangedAck, BlockUpdate, ChunkSection, ContainerSetContent,
-    ContainerSetData, ForgetLevelChunk, HEIGHTMAP_WORLD_SURFACE, Heightmap, LevelChunkWithLight,
-    LightUpdate, NETWORK_BIOME_MIN_BITS, PalettedContainer as WireContainer, SetChunkCacheCenter,
-    SetChunkCacheRadius, SetTime, block_position,
+    ContainerSetData, ENTITY_EVENT_HURT, EntityEvent, ForgetLevelChunk, HEIGHTMAP_WORLD_SURFACE,
+    Heightmap, LevelChunkWithLight, LightUpdate, NETWORK_BIOME_MIN_BITS,
+    PalettedContainer as WireContainer, SetChunkCacheCenter, SetChunkCacheRadius, SetTime,
+    block_position,
 };
 use mc_protocol::text::TextComponent;
 use mc_simulation::{PhaseRunner, TickPhase};
@@ -2795,6 +2796,16 @@ impl Game {
             }
         }
 
+        // Knockback channel: fold the impulse in after steering and
+        // before the move (see `Entity::fold_knockback` for why the
+        // channel exists).
+        {
+            let Some(entity) = self.entities.get_mut(id) else {
+                return false;
+            };
+            entity.fold_knockback(&mut velocity);
+        }
+
         // Effect ticks (P16-03): damage through the shared path (the hurt
         // window, armour-zero for mobs, loot/XP on death all apply), with
         // the poison floor at half a heart; regeneration heals toward max.
@@ -2941,9 +2952,28 @@ impl Game {
         }
         entity.health = (entity.health - amount).max(0.0);
         entity.invulnerable_ticks = INVULNERABLE_TICKS;
-        if entity.health > 0.0 {
+        let died = entity.health <= 0.0;
+        let numeric = id.get();
+        // Hurt flash (owner session: landed hits showed no red): vanilla
+        // broadcasts animation 2 on every applied hit, lethal included.
+        // The `entity` borrow ends here (only owned copies flow on), so the
+        // broadcast below compiles against `&self`.
+        {
+            let packet = EntityEvent {
+                entity_id: numeric,
+                event: ENTITY_EVENT_HURT,
+            };
+            if let Ok(raw) = packet.to_raw() {
+                let mut report = TickReport::default();
+                self.broadcast_all(&raw, &mut report);
+            }
+        }
+        if !died {
             return false;
         }
+        let Some(entity) = self.entities.get_mut(id) else {
+            return false;
+        };
         let body = &entity.body;
         let kind = match body {
             EntityBody::Mob(mob) => Some(mob.kind),
@@ -3282,7 +3312,7 @@ impl Game {
                         entity_id: id.get(),
                         entries: vec![(
                             mc_protocol::packets::play::METADATA_INDEX_ORB_VALUE,
-                            mc_protocol::packets::play::MetadataValue::Int(orb.value),
+                            mc_protocol::packets::play::MetadataValue::VarInt(orb.value),
                         )],
                     }
                     .to_raw()?;
@@ -3560,9 +3590,12 @@ impl Game {
         let mut report = TickReport::default();
         for (id, entity_id, expired) in effect_events {
             for effect_id in expired {
+                let Some(wire_id) = mc_entity::effect::wire_id_of(effect_id) else {
+                    continue;
+                };
                 let packet = mc_protocol::packets::play::RemoveMobEffect {
                     entity_id,
-                    effect_id,
+                    effect_id: wire_id,
                 };
                 let _ = self.send(id, &packet, &mut report);
             }
@@ -3934,7 +3967,7 @@ impl Game {
                         entity_id: id.get(),
                         entries: vec![(
                             mc_protocol::packets::play::METADATA_INDEX_ORB_VALUE,
-                            mc_protocol::packets::play::MetadataValue::Int(orb.value),
+                            mc_protocol::packets::play::MetadataValue::VarInt(orb.value),
                         )],
                     }
                     .to_raw()?,

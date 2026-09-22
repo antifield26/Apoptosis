@@ -310,6 +310,8 @@ pub mod clientbound {
         pub const SET_CHUNK_CACHE_CENTER: i32 = 94;
         /// `minecraft:remove_entities` — despawn one or more entities by id.
         pub const REMOVE_ENTITIES: i32 = 77;
+        /// `minecraft:entity_event` — a one-byte entity animation (hurt, death…).
+        pub const ENTITY_EVENT: i32 = 34;
         /// `minecraft:remove_mob_effect` — clear one effect icon.
         pub const REMOVE_MOB_EFFECT: i32 = 78;
         /// `minecraft:set_chunk_cache_radius`

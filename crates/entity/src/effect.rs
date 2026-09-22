@@ -18,7 +18,16 @@
 //! `update_mob_effect` yet, so a player sees no icon even when the server applies
 //! the modifier — recorded in the parity matrix rather than implied away.
 
-/// Effect ids as sent on the wire (`update_mob_effect`).
+/// Effect ids, stable identity for storage and tests (P05-10).
+///
+/// The legacy 1-based numbering is ALSO the wire numbering: the update and
+/// remove packets carry the effect as a `Holder<MobEffect>`, whose codec
+/// writes `raw_id + 1` for registry references while the legacy table runs
+/// exactly one above the 0-based raw ids (speed 1 for raw 0) — verified by
+/// `javap -c` on the 26.1.2 jar (`ByteBufCodecs$30`) and against pumpkin's
+/// generated table (speed raw 0 … wither raw 19). [`EffectKind::wire_id`]
+/// names the value so the rule has one home; playerdata persists the same
+/// table.
 ///
 /// Only the ids whose numeric effect this crate applies are named; a numeric id
 /// that is not recognised is still stored (so a future effect can round-trip) but
@@ -114,6 +123,23 @@ impl EffectKind {
         }
     }
 
+    /// The id the 26.1 client reads on the wire.
+    ///
+    /// This is the legacy table value **unchanged**: `update_mob_effect`
+    /// carries the effect as a `Holder<MobEffect>`, whose codec writes
+    /// `raw_id + 1` for registry references — and the legacy table already
+    /// runs one above the 0-based raw ids (speed 1 for raw 0), so the two
+    /// off-by-ones cancel. Verified by `javap -c` on the 26.1.2 jar
+    /// (`ByteBufCodecs$30`: decode reads `byIdOrThrow(id - 1)`, encode
+    /// writes `getIdOrThrow + 1`; pumpkin's generated table agrees speed
+    /// raw 0). An earlier "fix" that sent `id - 1` showed a BLANK icon on
+    /// a real client (0 is the inline-holder marker) and was reverted —
+    /// do not reintroduce it without jar evidence.
+    #[must_use]
+    pub const fn wire_id(self) -> i32 {
+        self.id()
+    }
+
     /// Stable name for logs.
     #[must_use]
     pub const fn name(self) -> &'static str {
@@ -156,13 +182,26 @@ impl EffectKind {
     }
 }
 
+/// The wire id of a stored effect id, or `None` when the stored id names
+/// no modelled kind.
+///
+/// The update/remove packets must carry registry raw ids; a stored id from
+/// outside the modelled set (a future effect round-tripping through
+/// playerdata) has no known raw id, so callers skip its packet rather than
+/// send a neighbouring effect's icon.
+#[must_use]
+pub fn wire_id_of(stored: i32) -> Option<i32> {
+    EffectKind::from_id(stored).map(EffectKind::wire_id)
+}
+
 /// One active effect on an entity.
 ///
 /// Field names match what the tick loop and the (future) `update_mob_effect`
 /// encoder need.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ActiveEffect {
-    /// Wire id of the effect.
+    /// Stored (legacy 1-based) id of the effect; see [`EffectKind::wire_id`]
+    /// for what goes on the wire.
     pub id: i32,
     /// Amplifier, 0-based (amplifier 0 is "level I").
     pub amplifier: i32,
@@ -280,8 +319,34 @@ pub fn can_kill(effect: &ActiveEffect) -> bool {
 mod tests {
     use super::{
         ActiveEffect, EffectKind, can_kill, damage_over_time, damage_taken_multiplier, effect_id,
-        movement_speed_multiplier,
+        movement_speed_multiplier, wire_id_of,
     };
+
+    #[test]
+    fn wire_ids_match_the_vanilla_registry() {
+        // The 26.1 client reads effect ids as `Holder<MobEffect>`, whose
+        // codec writes `raw_id + 1` for registry references — exactly the
+        // legacy table (verified by javap on the 26.1.2 jar and against
+        // pumpkin's generated raw ids: speed raw 0 … wither raw 19). A
+        // reverted experiment sending `id - 1` showed a BLANK icon on a
+        // real client (0 is the inline-holder marker): do not subtract.
+        let expected = [
+            (EffectKind::Speed, 1),
+            (EffectKind::Slowness, 2),
+            (EffectKind::Strength, 5),
+            (EffectKind::Weakness, 18),
+            (EffectKind::Resistance, 11),
+            (EffectKind::Poison, 19),
+            (EffectKind::Wither, 20),
+            (EffectKind::Regeneration, 10),
+        ];
+        for (kind, wire) in expected {
+            assert_eq!(kind.wire_id(), wire, "{kind:?}");
+            assert_eq!(wire_id_of(kind.id()), Some(wire));
+        }
+        assert_eq!(wire_id_of(effect_id::JUMP_BOOST), None);
+        assert_eq!(wire_id_of(-1), None);
+    }
 
     #[test]
     fn ids_round_trip_for_modelled_effects() {

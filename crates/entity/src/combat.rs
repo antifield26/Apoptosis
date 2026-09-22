@@ -68,6 +68,22 @@ impl DamageSource {
 /// adds nothing on top of the base (pumpkin `player.rs:1339-1343`).
 pub const BASE_MELEE_KNOCKBACK: f64 = 0.4;
 
+/// Per-tick decay of the unresolved knockback impulse.
+///
+/// Approximation with a visible target: 0.4 strength travels about a block
+/// total (0.4 + 0.24 + …), a shove rather than a launch. Vanilla decays
+/// through block friction (~0.91), which would carry over four blocks;
+/// the runbook's "~0.4 recoil" reads closer to one, so this stays until a
+/// capture measures a real shove.
+/// Per-tick decay of the unresolved knockback impulse.
+///
+/// Approximation with a visible target: 0.4 strength travels about a block
+/// total (0.4 + 0.24 + …), a shove rather than a launch. Vanilla decays
+/// through block friction (~0.91), which would carry over four blocks;
+/// the runbook's "~0.4 recoil" reads closer to one, so this stays until a
+/// capture measures a real shove.
+pub const KNOCKBACK_DECAY: f64 = 0.6;
+
 /// Vanilla `CombatRules.getDamageAfterAbsorb` with breach level 0 (breach is
 /// an enchantment effect, deferred with the rest of enchantment combat math).
 ///

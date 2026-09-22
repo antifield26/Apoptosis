@@ -15,12 +15,16 @@ use super::{packed_len, read_count};
 /// Wire type id for [`MetadataValue::Byte`].
 pub const METADATA_TYPE_BYTE: i32 = 0;
 
-/// Wire type id for [`MetadataValue::VarInt`].
+/// Wire type id for [`MetadataValue::VarInt`]: vanilla's `INT` serializer.
+///
+/// The 26.1 serializer table (pumpkin `meta_data_type`, `v26_1` column)
+/// names no fixed-width `i32` serializer at all: `INT` **is** a `VarInt`
+/// (id 1), `LONG` is id 2. An earlier revision of this file modelled a
+/// fixed-int type 2 and sent orb values through it; a real client
+/// disconnected with a protocol error on the first orb spawn (killing any
+/// mob), because type 2 decodes as a `VarLong`. The fixed variant is gone;
+/// orb values ride [`MetadataValue::VarInt`].
 pub const METADATA_TYPE_VARINT: i32 = 1;
-
-/// Wire type id for [`MetadataValue::Int`]: a fixed-width big-endian `i32`,
-/// as the experience-orb value slot carries it.
-pub const METADATA_TYPE_INT: i32 = 2;
 
 /// Wire type id for [`MetadataValue::Float`].
 pub const METADATA_TYPE_FLOAT: i32 = 3;
@@ -55,12 +59,13 @@ pub const METADATA_TERMINATOR: u8 = 0xFF;
 pub const METADATA_INDEX_HEALTH: u8 = 9;
 
 /// The metadata slot index an experience orb's value rides on: **8**, with
-/// [`METADATA_TYPE_INT`].
+/// [`METADATA_TYPE_VARINT`] (vanilla's `INT` serializer is a `VarInt`).
 ///
 /// From the 26.x tracked-data table (pumpkin `experience_orb.DATA_VALUE`,
-/// index 8, `INT` serializer); orbs in this build always carry exactly this
-/// one entry, so the constant is asserted by construction in the announce
-/// path rather than by a capture (no orb-value body was captured).
+/// index 8, `INT` serializer). A fixed-int type 2 rode here before and
+/// disconnected real clients on the first orb spawn — type 2 is `LONG` —
+/// so the encoding is pinned byte-exact by `orb_value_encodes_varint`
+/// below rather than by assertion alone.
 pub const METADATA_INDEX_ORB_VALUE: u8 = 8;
 
 /// The metadata slot index a creeper's fuse/state rides on: **16**, with
@@ -73,9 +78,9 @@ pub const METADATA_INDEX_CREEPER_FUSE: u8 = 16;
 
 /// One entity metadata value.
 ///
-/// Byte, `VarInt`, fixed-int, float, item-stack and registry-variant-holder
-/// shapes are modelled. Vanilla's remaining type ids (4, 5, 6, …: string,
-/// component, …) are deliberately **not** decoded here: a wrong guess would
+/// Byte, `VarInt`, float, item-stack and registry-variant-holder shapes
+/// are modelled. Vanilla's remaining type ids (2 `LONG`, 4, 5, 6, …:
+/// string, component, …) are deliberately **not** decoded here: a wrong guess would
 /// silently misparse a later entry and desynchronise the rest of the list, so
 /// [`SetEntityData::decode`] rejects them with an explicit error instead
 /// (AGENTS.md section 3.3). Adding one is a new variant plus its `type_id`
@@ -84,10 +89,8 @@ pub const METADATA_INDEX_CREEPER_FUSE: u8 = 16;
 pub enum MetadataValue {
     /// Type id [`METADATA_TYPE_BYTE`]: a signed byte held as its raw `u8`.
     Byte(u8),
-    /// Type id [`METADATA_TYPE_VARINT`].
+    /// Type id [`METADATA_TYPE_VARINT`]: vanilla's `INT` serializer.
     VarInt(i32),
-    /// Type id [`METADATA_TYPE_INT`]: a fixed big-endian `i32` (not a `VarInt`).
-    Int(i32),
     /// Type id [`METADATA_TYPE_FLOAT`].
     Float(f32),
     /// One of [`METADATA_TYPE_VARIANTS`]: a registry-variant holder, the
@@ -120,7 +123,6 @@ impl MetadataValue {
         match self {
             Self::Byte(_) => METADATA_TYPE_BYTE,
             Self::VarInt(_) => METADATA_TYPE_VARINT,
-            Self::Int(_) => METADATA_TYPE_INT,
             Self::Float(_) => METADATA_TYPE_FLOAT,
             Self::Variant { kind, .. } => kind,
             Self::ItemStack { .. } => METADATA_TYPE_ITEM_STACK,
@@ -132,7 +134,6 @@ impl MetadataValue {
         match self {
             Self::Byte(value) => writer.write_u8(value),
             Self::VarInt(value) => writer.write_varint(value),
-            Self::Int(value) => writer.write_i32(value),
             Self::Float(value) => writer.write_f32(value),
             Self::Variant { id, .. } => writer.write_varint(id),
             Self::ItemStack { count, item_id } => {
@@ -155,7 +156,6 @@ impl MetadataValue {
         match type_id {
             METADATA_TYPE_BYTE => Ok(Self::Byte(reader.read_u8()?)),
             METADATA_TYPE_VARINT => Ok(Self::VarInt(reader.read_varint()?)),
-            METADATA_TYPE_INT => Ok(Self::Int(reader.read_i32()?)),
             METADATA_TYPE_FLOAT => Ok(Self::Float(reader.read_f32()?)),
             METADATA_TYPE_ITEM_STACK => {
                 let count = reader.read_varint()?;
@@ -748,7 +748,9 @@ pub const MOB_EFFECT_FLAG_ICON: i8 = 0x04;
 pub struct UpdateMobEffect {
     /// Entity carrying the effect (a player, for this server).
     pub entity_id: i32,
-    /// Effect registry id (vanilla `MobEffect` id, e.g. poison 19).
+    /// Effect registry raw id plus the holder offset (`minecraft:mob_effect`
+    /// holder codec writes `raw + 1`; e.g. poison raw 18 rides value 19 —
+    /// see `mc_entity::effect::EffectKind::wire_id`).
     pub effect_id: i32,
     /// Amplifier, 0-based.
     pub amplifier: i32,
@@ -810,7 +812,8 @@ impl Packet for UpdateMobEffect {
 pub struct RemoveMobEffect {
     /// Entity that lost the effect.
     pub entity_id: i32,
-    /// Effect registry id.
+    /// Effect registry raw id plus the holder offset (see
+    /// [`UpdateMobEffect`] for the field).
     pub effect_id: i32,
 }
 

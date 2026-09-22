@@ -600,11 +600,14 @@ impl Game {
         // loses the icon until something re-sends it.
         if let Some(session) = self.sessions.get(&id) {
             for (effect_id, effect) in &session.player.effects {
+                let Some(wire_id) = mc_entity::effect::wire_id_of(*effect_id) else {
+                    continue;
+                };
                 self.send(
                     id,
                     &mc_protocol::packets::play::UpdateMobEffect {
                         entity_id: session.entity.get(),
-                        effect_id: *effect_id,
+                        effect_id: wire_id,
                         amplifier: effect.amplifier,
                         duration: effect.duration,
                         flags: mc_protocol::packets::play::UpdateMobEffect::flags_for(
@@ -1163,6 +1166,7 @@ impl Game {
         id: mc_network::bridge::ConnectionId,
         item: i32,
         count: i32,
+        report: &mut TickReport,
     ) -> Option<(i32, i32)> {
         let stack = mc_entity::stack::ItemStack::new(item, count).ok()?;
         let leftover = {
@@ -1177,6 +1181,10 @@ impl Game {
                 .map_or(mc_world::Vec3::default(), |s| s.player.position);
             let _ = self.spawn_item(leftover, position);
         }
+        // The client renders its own window copy: without the re-mirror the
+        // given items sit server-side invisible until the next
+        // inventory-touching action (owner session finding).
+        self.sync_menu_from_inventory(id, report);
         Some((count - dropped, dropped))
     }
 

@@ -24,8 +24,10 @@
 //! ## What these do not prove
 //!
 //! That a held item's damage is used (it is not: the fist figure is applied
-//! whatever is held — a named gap, see the parity matrix), and that a real
-//! client's knockback or animation matches (P11-10).
+//! whatever is held — a named gap, see the parity matrix). Knockback motion
+//! rides the decaying channel (pinned above) and the hurt flash rides
+//! `entity_event` 2 (pinned below); what they look like on a real client
+//! is owner-verified.
 
 // Health is compared exactly on purpose: every value here is reached by adding or
 // subtracting 1.0 from a whole number, so each is exactly representable in `f32`
@@ -38,7 +40,9 @@ use mc_entity::stack::ItemStack;
 use mc_network::bridge::{
     ClientEvent, ClientEventKind, ConnectionId, InboundReceiver, OutboundSender, game_channel,
 };
-use mc_protocol::packets::play::PlayIntent;
+use mc_protocol::ids::clientbound;
+use mc_protocol::packets::Packet;
+use mc_protocol::packets::play::{EntityEvent, PlayIntent};
 use mc_server::game::{Game, INVULNERABLE_TICKS};
 use mc_server::storage::WorldService;
 use mc_test_support::fixtures::TempDir;
@@ -197,32 +201,78 @@ fn a_swing_with_a_diamond_sword_deals_seven() {
 
 #[test]
 fn a_swing_shoves_the_mob_away_from_the_attacker() {
-    // P16-01: vanilla base knockback (0.4) along the attacker-to-victim line.
-    // The victim here is fresh (zero velocity, hurt window open) so the shove
-    // reads exactly; gravity acts afterwards, so only the horizontal part and
-    // the direction are pinned, not the full tick's motion.
+    // P16-01: vanilla base knockback (0.4) along the attacker-to-victim line,
+    // P17 owner session: the impulse rides the knockback channel (the AI
+    // overwrites velocity x/z every tick, which used to erase a
+    // velocity-carried shove before it ever moved — only the vertical pop
+    // showed on screen). The victim here is fresh (zero impulse, hurt
+    // window open) so the channel reads exactly; one tick folds 0.4 into
+    // motion and decays it to 0.24; the snap ends it at 0.0.
     let mut harness = Harness::new("p16-knockback");
     harness.join("Pusher");
     let zombie = harness.summon_nearby(MobKind::Zombie);
     harness.swing(zombie.get());
 
-    let velocity = harness
+    let victim = harness.game.entity_store().get(zombie).expect("victim");
+    // The harness swings from 2 blocks west (-x) of the target: the shove
+    // must point +x with the base magnitude, and leave y to gravity.
+    assert_eq!(
+        victim.knockback.x, 0.4,
+        "shove points away from the attacker, got {:?}",
+        victim.knockback
+    );
+    assert_eq!(
+        victim.knockback.z, 0.0,
+        "no sideways component on an axis swing"
+    );
+    harness.run(1);
+    let decayed = harness
         .game
         .entity_store()
         .get(zombie)
         .expect("victim")
-        .velocity;
-    // The harness swings from 2 blocks west (-x) of the target: the shove
-    // must point +x with the base magnitude, and leave y to gravity.
+        .knockback
+        .x;
     assert!(
-        velocity.x > 0.3,
-        "shove points away from the attacker, got {velocity:?}"
+        (decayed - 0.24).abs() < 1e-9,
+        "one integration folds and decays 0.4 to 0.24, got {decayed}"
     );
-    assert!(
-        velocity.x <= 0.4 + 1e-9,
-        "base knockback is 0.4, got {velocity:?}"
+    harness.run(30);
+    assert_eq!(
+        harness
+            .game
+            .entity_store()
+            .get(zombie)
+            .expect("victim")
+            .knockback,
+        mc_world::Vec3::ZERO,
+        "the snap ends the shove instead of drifting forever"
     );
-    assert_eq!(velocity.z, 0.0, "no sideways component on an axis swing");
+}
+
+#[test]
+fn a_landed_hit_announces_the_hurt_flash() {
+    // Owner session: landed hits showed no red flash — damage applied with
+    // no `entity_event` on the wire. Every applied hit now broadcasts
+    // animation 2 for the victim.
+    let mut harness = Harness::new("p17-hurt-flash");
+    let mut out = harness.join("Pusher");
+    let zombie = harness.summon_nearby(MobKind::Zombie);
+    harness.swing(zombie.get());
+    let mut flashes = Vec::new();
+    while let Some(raw) = out.try_recv() {
+        if raw.id == clientbound::play::ENTITY_EVENT {
+            flashes.push(EntityEvent::decode(&raw.payload).expect("decodes"));
+        }
+    }
+    assert_eq!(
+        flashes,
+        vec![EntityEvent {
+            entity_id: zombie.get(),
+            event: mc_protocol::packets::play::ENTITY_EVENT_HURT,
+        }],
+        "one hurt flash for the victim"
+    );
 }
 
 #[test]

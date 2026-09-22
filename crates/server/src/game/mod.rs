@@ -1838,7 +1838,11 @@ impl Game {
             return false;
         };
         if session.outbound.try_send(raw).is_err() {
-            warn!(id = %id, "outbound queue full; the player will be disconnected");
+            // `report.packets` counts every send attempted this tick (this
+            // failed one included), so the number separates a steady
+            // over-producer (high count) from a dead reader (low count with
+            // a full queue) — owner-session diagnosis, not a second rule.
+            warn!(id = %id, queued_this_tick = report.packets, "outbound queue full; the player will be disconnected");
             // Recorded here and enforced by the Network phase, which owns `&mut self`.
             if !report.overflowed.contains(&id) {
                 report.overflowed.push(id);

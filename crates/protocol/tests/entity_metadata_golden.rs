@@ -39,7 +39,8 @@
 
 use mc_protocol::packets::Packet;
 use mc_protocol::packets::play::{
-    METADATA_INDEX_HEALTH, METADATA_TYPE_FLOAT, METADATA_TYPE_ITEM_STACK, SetEntityData,
+    METADATA_INDEX_HEALTH, METADATA_INDEX_ORB_VALUE, METADATA_TYPE_FLOAT, METADATA_TYPE_ITEM_STACK,
+    SetEntityData,
 };
 
 /// Decode a committed fixture, comment lines dropped.
@@ -148,6 +149,35 @@ fn a_truncated_terminator_is_an_error_even_on_captured_data() {
     assert!(
         SetEntityData::decode(&bytes).is_err(),
         "a body that runs out without 0xFF must be refused, not half-read"
+    );
+}
+
+#[test]
+fn orb_value_encodes_index_type_and_varint() {
+    // A real client disconnected with a protocol error on the first orb
+    // spawn: the value rode a fixed-int type 2, which is vanilla `LONG`
+    // (a VarLong), desynchronising the whole body. Index 8 with the
+    // varint serializer (vanilla `INT`) is `08 01 03 FF` for value 3 —
+    // byte-exact, not asserted-by-construction.
+    let packet = SetEntityData {
+        entity_id: 1,
+        entries: vec![(
+            METADATA_INDEX_ORB_VALUE,
+            mc_protocol::packets::play::MetadataValue::VarInt(3),
+        )],
+    };
+    assert_eq!(
+        packet.encode().expect("encodes"),
+        vec![0x01, 0x08, 0x01, 0x03, 0xFF],
+        "entity 1, index 8, varint type 1, value 3, terminator"
+    );
+    assert_eq!(METADATA_INDEX_ORB_VALUE, 8);
+    // The old shape — fixed-int type 2 with four bytes — is now refused:
+    // type 2 is vanilla `LONG`, so accepting it would walk the wrong width
+    // and desynchronise the body, the exact kill-disconnect.
+    assert!(
+        SetEntityData::decode(&[0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x03, 0xFF]).is_err(),
+        "a LONG-typed orb value must be refused, not walked as four bytes"
     );
 }
 

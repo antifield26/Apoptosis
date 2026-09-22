@@ -159,6 +159,15 @@ pub struct Entity {
     pub position: Vec3,
     /// Current velocity (blocks per tick).
     pub velocity: Vec3,
+    /// Unresolved horizontal knockback impulse (blocks per tick).
+    ///
+    /// The AI steering overwrites `velocity` x/z every tick, which used to
+    /// erase a shove before it ever moved the victim (only the vertical
+    /// pop, which steering never touches, showed on screen). The impulse
+    /// rides here instead and decays geometrically at integration; walk
+    /// behaviour with no knockback is byte-identical. Transient: never
+    /// persisted, never sent (motion is position deltas on the wire).
+    pub knockback: Vec3,
     /// Horizontal facing in degrees.
     pub yaw: f32,
     /// Vertical facing in degrees.
@@ -200,6 +209,7 @@ impl Entity {
             body,
             position,
             velocity: Vec3::default(),
+            knockback: Vec3::default(),
             yaw: 0.0,
             pitch: 0.0,
             on_ground: false,
@@ -278,6 +288,12 @@ impl Entity {
     /// `strength <= 0.0` is a no-op, so a fully resisted shove still slows
     /// nothing. Callers pre-scale by knockback resistance; see
     /// [`crate::combat::BASE_MELEE_KNOCKBACK`].
+    ///
+    /// The horizontal impulse rides [`Self::knockback`], not `velocity`: the
+    /// mob AI overwrites velocity x/z every tick (walk vector or halt),
+    /// which erased a velocity-carried shove before it ever moved the
+    /// victim — only the vertical pop showed on screen. Integration folds
+    /// the impulse in and decays it (see [`crate::combat::KNOCKBACK_DECAY`]).
     pub fn apply_knockback(&mut self, from: Vec3, attacker_yaw: f32, strength: f64) {
         if strength <= 0.0 {
             return;
@@ -298,11 +314,38 @@ impl Entity {
         } else {
             self.velocity.y
         };
-        self.velocity = Vec3::new(
-            self.velocity.x / 2.0 - dx * strength,
-            y,
-            self.velocity.z / 2.0 - dz * strength,
+        self.velocity = Vec3::new(self.velocity.x / 2.0, y, self.velocity.z / 2.0);
+        // Halved like velocity (vanilla's shape, bounded under spam), and
+        // clamped for the same hostile-input reason as `add_velocity`.
+        self.knockback = Vec3::new(
+            (self.knockback.x / 2.0 - dx * strength).clamp(-MAX_VELOCITY, MAX_VELOCITY),
+            0.0,
+            (self.knockback.z / 2.0 - dz * strength).clamp(-MAX_VELOCITY, MAX_VELOCITY),
         );
+    }
+
+    /// Fold the unresolved knockback impulse into `velocity` and decay it.
+    ///
+    /// Called by integration after steering and before the move: the AI
+    /// steering overwrites velocity x/z every tick, which used to erase
+    /// shoves before they moved — only the vertical pop showed on screen.
+    /// Walk behaviour with no knockback is untouched (zero folds nothing).
+    /// Snapped below epsilon so a shove ends instead of drifting (and
+    /// moving) forever.
+    pub fn fold_knockback(&mut self, velocity: &mut Vec3) {
+        if self.knockback == Vec3::ZERO {
+            return;
+        }
+        velocity.x += self.knockback.x;
+        velocity.z += self.knockback.z;
+        self.knockback.x *= crate::combat::KNOCKBACK_DECAY;
+        self.knockback.z *= crate::combat::KNOCKBACK_DECAY;
+        if self.knockback.x.abs() < 1e-4 {
+            self.knockback.x = 0.0;
+        }
+        if self.knockback.z.abs() < 1e-4 {
+            self.knockback.z = 0.0;
+        }
     }
 
     /// Ticks down the per-entity timers by one.
@@ -867,8 +910,10 @@ mod tests {
 
     #[test]
     fn knockback_shoves_away_from_the_attacker() {
-        // Attacker two blocks west (-x); the victim must gain +x velocity of
-        // exactly the strength on flat ground, plus the grounded pop.
+        // Attacker two blocks west (-x); the horizontal impulse rides the
+        // knockback channel (the AI overwrites velocity x/z every tick, so
+        // a velocity-carried shove never moved on screen); the grounded pop
+        // stays on velocity.y.
         let mut store = EntityStore::new();
         let id = store
             .spawn(
@@ -879,10 +924,14 @@ mod tests {
         let victim = store.get_mut(id).expect("victim");
         victim.on_ground = true;
         victim.apply_knockback(Vec3::new(-2.0, 64.0, 0.0), 0.0, 0.4);
-        let velocity = store.get(id).expect("victim").velocity;
-        assert_eq!(velocity.x, 0.4, "full strength along +x, away from -x");
-        assert_eq!(velocity.z, 0.0);
-        assert_eq!(velocity.y, 0.4, "grounded pop caps at 0.4");
+        let victim = store.get(id).expect("victim");
+        assert_eq!(victim.velocity.x, 0.0, "no impulse left on velocity.x");
+        assert_eq!(
+            victim.knockback.x, 0.4,
+            "full strength along +x, away from -x"
+        );
+        assert_eq!(victim.knockback.z, 0.0);
+        assert_eq!(victim.velocity.y, 0.4, "grounded pop caps at 0.4");
     }
 
     #[test]
@@ -898,13 +947,19 @@ mod tests {
         victim.on_ground = false;
         victim.velocity = Vec3::new(1.0, 2.0, 0.0);
         victim.apply_knockback(Vec3::new(-2.0, 64.0, 0.0), 0.0, 0.4);
-        let velocity = store.get(id).expect("victim").velocity;
-        assert_eq!(velocity.x, 0.9, "old motion halved, shove added away");
-        assert_eq!(velocity.y, 2.0, "airborne y untouched");
+        let victim = store.get(id).expect("victim");
+        assert_eq!(
+            victim.velocity.x, 0.5,
+            "old motion halved, impulse on the channel"
+        );
+        assert_eq!(victim.knockback.x, 0.4, "shove added away");
+        assert_eq!(victim.velocity.y, 2.0, "airborne y untouched");
         // Zero strength is a no-op: it must not even halve.
         let victim = store.get_mut(id).expect("victim");
         victim.apply_knockback(Vec3::new(-2.0, 64.0, 0.0), 0.0, 0.0);
-        assert_eq!(store.get(id).expect("victim").velocity, velocity);
+        let after = store.get(id).expect("victim");
+        assert_eq!(after.velocity.x, 0.5);
+        assert_eq!(after.knockback.x, 0.4);
     }
 
     #[test]
@@ -922,9 +977,36 @@ mod tests {
         let victim = store.get_mut(id).expect("victim");
         victim.on_ground = true;
         victim.apply_knockback(Vec3::new(0.0, 64.0, 0.0), 0.0, 0.4);
-        let velocity = store.get(id).expect("victim").velocity;
-        assert_eq!(velocity.x, 0.0);
-        assert_eq!(velocity.z, 0.4);
-        assert_eq!(velocity.y, 0.4);
+        let victim = store.get(id).expect("victim");
+        assert_eq!(victim.knockback.x, 0.0);
+        assert_eq!(victim.knockback.z, 0.4);
+        assert_eq!(victim.velocity.y, 0.4);
+    }
+
+    #[test]
+    fn fold_knockback_moves_decays_and_snaps() {
+        let mut store = EntityStore::new();
+        let id = store
+            .spawn(
+                EntityBody::Mob(Mob::new(MobKind::Zombie)),
+                Vec3::new(0.0, 64.0, 0.0),
+            )
+            .expect("spawn");
+        let victim = store.get_mut(id).expect("victim");
+        victim.knockback = Vec3::new(0.4, 0.0, 0.0);
+        let mut velocity = Vec3::ZERO;
+        victim.fold_knockback(&mut velocity);
+        assert_eq!(velocity.x, 0.4, "the fold moves");
+        assert_eq!(
+            store.get(id).expect("victim").knockback.x,
+            0.24,
+            "and decays 0.4 to 0.24"
+        );
+        // Zero channel folds nothing, not even dust.
+        let victim = store.get_mut(id).expect("victim");
+        victim.knockback = Vec3::ZERO;
+        let mut velocity = Vec3::new(0.1, 0.0, 0.0);
+        victim.fold_knockback(&mut velocity);
+        assert_eq!(velocity.x, 0.1);
     }
 }

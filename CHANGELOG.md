@@ -204,6 +204,53 @@ repeated-craft shift-click (one consume per click instead of per batch —
 same totals, more clicks). Falsification: hardcoded width 2 and
 unconsumed shift-take each fail their probe. Gate 1570/0/35/125.
 
+### Owner session findings round 1 (unreleased, against `efd48f8`)
+
+Real client on 25567, eight findings, seven fixed or diagnosed here:
+
+- `/give` never re-mirrored the menu: items sat server-side invisible
+  until the next inventory-touching action. `give_player_item` now runs
+  the shared `sync_menu_from_inventory` (same path as placement).
+- Attacks vanished silently: 26.1 swings ride a DEDICATED packet id 1
+  (`ServerboundAttackPacket`, one entity VarInt — jar-verified), not
+  `interact` kind 1. The id was named in `ids.rs` but never decoded, so
+  13 real swings logged as `unmodelled` while every scripted test (built
+  intents directly) stayed green — the exact coverage hole. Decode now
+  feeds the existing attack arm; falsification is the new decode case
+  (remove the arm and real swings go back to unmodelled).
+- Effect icons: first blamed on 1-based vs 0-based ids and "fixed" by
+  subtracting one — which showed a BLANK icon, because 0 is the
+  inline-holder marker. `javap -c` on the 26.1.2 jar settled it:
+  `ByteBufCodecs$30` writes `raw_id + 1` for registry references, and
+  the legacy table already runs one above raw (speed 1 for raw 0), so
+  the original bytes were correct and the subtraction was reverted the
+  same session (the blank icon IS its falsification). The round-1
+  "speed showed as slowness" report is unexplained by the bytes and
+  needs a re-test — possibly a stale icon or a misread. `wire_id()`
+  now names the rule in one place with the jar citation, and unmodelled
+  stored ids skip their packet instead of mislabelling.
+- Horizontal knockback never moved: the AI steering overwrites
+  velocity.x/z every tick, erasing a velocity-carried shove before
+  integration (only the vertical pop showed — exactly the report). The
+  impulse rides a new decaying `Entity::knockback` channel folded in
+  after steering (`KNOCKBACK_DECAY` 0.6, epsilon snap); walk behaviour
+  without knockback is untouched. Falsification: deleting the fold
+  block leaves the channel stuck at 0.4.
+- No red hurt flash: damage applied with no `entity_event` on the wire.
+  Landed hits now broadcast animation 2 (jar-verified packet layout;
+  the id itself is long-standing convention, owner-verified visually).
+- Kill disconnects with a protocol error: orb value rode a fixed-int
+  type 2, which is vanilla `LONG` — every orb spawn desynchronised the
+  metadata body. Values ride `VarInt` now and the bogus variant is
+  deleted; an `08 01 03 FF` golden plus a type-2 refusal pin it.
+- Outbound-queue disconnect 3 s after a rejoin: the queue-full warn now
+  carries the tick's send count, separating a steady over-producer from
+  a dead reader. Root cause still open — needs a live repro while
+  tailing the log (crafting-table placement is the unlogged suspect;
+  neither it nor any attack appears in 40 k lines of log).
+- Open (needs owner re-test): player attacks, effect icons, table
+  placement ghost/drop.
+
 ## Unreleased — Phase 15 (Observability + Core Hardening)
 
 ### P15-08 — Hardening review sign-off (all clauses re-evidenced)
