@@ -357,6 +357,14 @@ simulation and need a controlled single-action repro):
   (`particle_status`, jar field order — the rig's "trailing `0x00` of
   unknown semantics", which now round-trips in the capture sweep).
   Owner re-test pending (the falsification for the whole effect saga).
+- Effect modifiers systematically absent (owner-verified with
+  Slowness II after the byte-identity work: correct icon, normal
+  countdown, zero movement/FOV change). The `update_mob_effect` bytes
+  now match a live 26.1.2 server field-for-field for the same command,
+  so there is nothing left on the wire to fix — the client holds an
+  instance it does not apply. Recorded as a named gap; the next step,
+  if any, is client-side (a second vanilla client against the same
+  session would separate "our session" from "this client").
 - Placement disconnect diagnostics: the server logged nothing — no
   kick, no error, a clean TCP close, and no placement intent either.
   Root-caused since: vanilla `UseItemOn` ends with a `worldBorderHit`
