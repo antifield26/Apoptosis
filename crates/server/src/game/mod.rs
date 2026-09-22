@@ -403,6 +403,14 @@ fn find_land_spawn(
 /// `game_event` (clientbound play 38) with the body `26 0d 00000000` — id 38, event **13**, value `0.0`.
 pub const GAME_EVENT_LEVEL_CHUNKS_LOAD_START: u8 = 13;
 
+/// `ClientboundGameEventPacket.Type.CHANGE_GAME_MODE` on the wire.
+///
+/// The client learns a gamemode change only from this packet (jar
+/// static init: `CHANGE_GAME_MODE` is constructed with `iconst_3`);
+/// without it `/gamemode` moves server state the client never hears
+/// about until rejoin. `param` carries the mode id.
+pub const GAME_EVENT_CHANGE_GAME_MODE: u8 = 3;
+
 /// How many chunks a tick may relight and announce.
 ///
 /// Each one is a full recompute of the chunk plus a packet of a few kilobytes, so this bounds the tick's cost

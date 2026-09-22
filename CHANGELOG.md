@@ -336,8 +336,14 @@ simulation and need a controlled single-action repro):
   sync now sends deltas with the revision unchanged; only clicks bump
   it, on both sides in lockstep. Falsification: the new
   `inventory_duplication` case keeps a client-side counter across a
-  ground pickup (fails with the bump restored). Owner re-test pending
-  (move items, then click).
+  ground pickup (fails with the bump restored). Owner-verified: moving
+  items sticks.
+- `/gamemode` confirmed but never applied until rejoin: the server
+  moved its own state and never told the client, which learns a flip
+  only from `GameEvent` 3 (`CHANGE_GAME_MODE`, jar static init
+  `iconst_3`; param carries the mode id). `set_player_game_mode` now
+  sends it. Pinned by a `GAME_EVENT` assert in the gamemode test.
+  Owner re-test pending.
 - Placement disconnect diagnostics: the server logged nothing — no
   kick, no error, a clean TCP close, and no placement intent either.
   Root-caused since: vanilla `UseItemOn` ends with a `worldBorderHit`

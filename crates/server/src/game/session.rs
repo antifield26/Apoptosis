@@ -30,11 +30,12 @@ use super::{
     ACTION_ABORT_DESTROY_BLOCK, ACTION_DROP_ONE_ITEM, ACTION_DROP_STACK,
     ACTION_FINISH_DESTROY_BLOCK, ACTION_START_DESTROY_BLOCK, ACTION_SWAP_ITEM_WITH_OFFHAND,
     CHAT_TYPE_CHAT, CLIENT_COMMAND_RESPAWN, ChestHalves, EYE_HEIGHT, FALL_DAMAGE_THRESHOLD,
-    GAME_EVENT_LEVEL_CHUNKS_LOAD_START, Game, NO_BLOCK_CHANGE_SEQUENCE, OpenKind, TickReport,
-    block_reach, chest_title, chunk_of, clockwise, counter_clockwise, entity_reach, face_offset,
-    floor_to_i32, horizontal_offset, is_chest_family, is_container_block, mark_block_dirty,
-    mirror_inventory, open_kind_for, recompute_crafting_result, refuse_join, take_craft_result,
-    targets_a_block, wire_stack, write_back_block, write_back_inventory,
+    GAME_EVENT_CHANGE_GAME_MODE, GAME_EVENT_LEVEL_CHUNKS_LOAD_START, Game,
+    NO_BLOCK_CHANGE_SEQUENCE, OpenKind, TickReport, block_reach, chest_title, chunk_of, clockwise,
+    counter_clockwise, entity_reach, face_offset, floor_to_i32, horizontal_offset, is_chest_family,
+    is_container_block, mark_block_dirty, mirror_inventory, open_kind_for,
+    recompute_crafting_result, refuse_join, take_craft_result, targets_a_block, wire_stack,
+    write_back_block, write_back_inventory,
 };
 
 /// One connected player's server-side state.
@@ -1198,12 +1199,21 @@ impl Game {
         &mut self,
         id: mc_network::bridge::ConnectionId,
         mode: GameMode,
+        report: &mut TickReport,
     ) -> bool {
         let Some(session) = self.sessions.get_mut(&id) else {
             return false;
         };
         session.player.game_mode = mode;
         session.menu.set_creative(mode.is_creative());
+        // The client applies a gamemode change only on this packet; the
+        // chat confirm alone leaves it rendering the old mode until
+        // rejoin (owner session).
+        let packet = GameEvent {
+            event: GAME_EVENT_CHANGE_GAME_MODE,
+            value: f32::from(mode.id()),
+        };
+        let _ = self.send(id, &packet, report);
         true
     }
 

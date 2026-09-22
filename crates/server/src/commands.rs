@@ -332,7 +332,7 @@ impl Game {
             "function" => self.command_function(id, parsed, report),
             "op" => Ok(self.command_op(id, parsed)),
             "deop" => Ok(self.command_deop(id, parsed)),
-            "gamemode" => Ok(self.command_gamemode(id, parsed)),
+            "gamemode" => Ok(self.command_gamemode(id, parsed, report)),
             "give" => Ok(self.command_give(id, parsed, report)),
             "effect" => Ok(self.command_effect(id, parsed, report)),
             "kill" => Ok(self.command_kill(id, parsed)),
@@ -615,6 +615,7 @@ impl Game {
         &mut self,
         id: mc_network::bridge::ConnectionId,
         parsed: &mc_command::dispatch::ParsedCommand,
+        report: &mut TickReport,
     ) -> CommandResult {
         let Some(word) = parsed.string(0) else {
             return CommandResult::message("Usage: /gamemode <mode> [target]");
@@ -630,7 +631,7 @@ impl Game {
                 "Cannot change {target:?}'s game mode: this build only changes the invoking player"
             ));
         }
-        if !self.set_player_game_mode(id, mode) {
+        if !self.set_player_game_mode(id, mode, report) {
             return CommandResult::message("You are not online.");
         }
         let name = match mode {

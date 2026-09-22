@@ -15,7 +15,7 @@ use mc_network::bridge::{
 };
 use mc_protocol::ids::clientbound;
 use mc_protocol::packets::Packet;
-use mc_protocol::packets::play::SystemChat;
+use mc_protocol::packets::play::{GameEvent, SystemChat};
 use mc_server::game::{Game, TickReport};
 use mc_server::ops::OperatorList;
 use mc_server::storage::WorldService;
@@ -155,6 +155,29 @@ fn gamemode_flips_the_mode_field_and_denies_level_zero() {
     assert!(
         lines.iter().any(|line| line.contains("Creative Mode")),
         "reply names the mode, saw {lines:?}"
+    );
+    // The client learns the flip only from the game-event packet: the
+    // chat confirm alone leaves it rendering the old mode until rejoin
+    // (owner session). Re-run the flip on a fresh drain and read the
+    // raw event, because `command()` consumes non-chat packets.
+    let mut report = TickReport::default();
+    harness
+        .game
+        .dispatch_command(id, "gamemode creative", &mut report)
+        .expect("answered");
+    let mut modes = Vec::new();
+    while let Some(raw) = out.try_recv() {
+        if raw.id == clientbound::play::GAME_EVENT {
+            modes.push(GameEvent::decode(&raw.payload).expect("decodes"));
+        }
+    }
+    assert_eq!(
+        modes,
+        vec![GameEvent {
+            event: 3,
+            value: 1.0
+        }],
+        "one change-mode event naming creative"
     );
 
     let lines = harness.command(id, &mut out, "gamemode s");
