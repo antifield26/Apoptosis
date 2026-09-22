@@ -266,13 +266,35 @@ simulation and need a controlled single-action repro):
   `JoinGame` with the allocated id first in the join burst, with the
   cache centre/radius the network layer used to send; the network keeps
   its placeholder only for protocol-only runs with no game attached.
-  This also closes the round-1 "speed showed as slowness" loop: icons
-  were addressed to the wrong entity, not mislabelled. Falsification:
-  the new `join_entity_id` suite (rejoin ids differ and match the
-  server-side player; fails with the game-side send removed). Socket
-  harnesses that tick the game manually now log in through
+  Falsification: the new `join_entity_id` suite (rejoin ids differ and
+  match the server-side player; fails with the game-side send removed).
+  Socket harnesses that tick the game manually now log in through
   `login_join_tick`, which ticks while the login is in flight — the
   game-sent `JoinGame` would otherwise deadlock them.
+- "Speed shows as Slowness": corrects round 1's codec reading, not just
+  its conclusion. The effect packets go through `MobEffect.STREAM_CODEC`
+  = `ByteBufCodecs.holderRegistry` (anonymous class `$29`, re-read by
+  `javap -c`: `IdMap.getIdOrThrow` written as a bare `VarInt`, no
+  offset) — round 1 had examined `holder` / `$30` (the inline-capable
+  variant, `raw_id + 1`) and concluded the legacy 1-based table already
+  satisfied the wire. It does not: the wire wants raw ids, exactly the
+  observed +1 shift. `EffectKind::wire_id` now subtracts the one (speed
+  stored 1 rides 0); storage and logs keep the legacy table. The
+  round-1 "subtract-one showed blank" observation is discarded with the
+  codec it rested on — it ran under the broken `JoinGame` regime, where
+  the icon packet went to the wrong entity whatever id it carried.
+  Falsification: the `mc-entity` wire pin now expects raw ids, and
+  `admin_commands` pins poison 18 on both the icon and the removal
+  (fail with the identity mapping restored). Owner re-test pending:
+  `give speed` should show Speed and actually hasten (the client applies
+  movement speed from its own effect state, so the earlier
+  "not effective" should go away with the icon).
+- Placement disconnect diagnostics: the server logged nothing — no
+  kick, no error, a clean TCP close, and no placement intent either.
+  `apply_use_item_on` now logs the intent (INFO) and every kick logs
+  its reason (INFO), so intake versus response separates in the log on
+  the next repro. Still needs from the owner: which block was placed
+  and held, and the full `latest.log` tail (not one line).
 - No red hurt flash: corrects round 1's "animation 2" — the packet
   layout was jar-verified but the id was convention, and the convention
   is wrong on a modern client. Jar `LivingEntity` never broadcasts event

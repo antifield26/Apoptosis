@@ -239,10 +239,10 @@ fn leaving_and_rejoining_resyncs_the_icons() {
     while let Some(raw) = out.try_recv() {
         if raw.id == clientbound::play::UPDATE_MOB_EFFECT {
             updates += 1;
-            // Stored id 1 is speed; the holder codec adds one for the
-            // registry reference, so the wire also carries 1.
+            // Stored id 1 is speed; the wire carries the raw registry id,
+            // so speed rides 0 (the holder codec writes no offset).
             let packet = UpdateMobEffect::decode(&raw.payload).expect("decodes");
-            assert_eq!(packet.effect_id, 1, "speed rides wire id 1");
+            assert_eq!(packet.effect_id, 0, "speed rides wire id 0");
         }
     }
     assert_eq!(updates, 1, "one icon packet on rejoin");

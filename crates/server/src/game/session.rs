@@ -3497,6 +3497,10 @@ impl Game {
         report: &mut TickReport,
     ) {
         let (x, y, z) = unpack_block_position(position);
+        // Owner-session placement disconnects arrive with no server-side
+        // trace at all, so the intent itself is logged: intake versus
+        // response is then separable in the log.
+        info!(id = %id, x, y, z, face, hand, "use item on block");
         if !self.within_reach(id, x, y, z) {
             debug!(id = %id, "rejected placement outside reach");
             return;

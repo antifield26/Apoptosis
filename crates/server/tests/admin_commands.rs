@@ -704,8 +704,8 @@ fn effect_give_reaches_the_hud_and_clear_removes_it() {
                 mc_protocol::packets::play::UpdateMobEffect::decode(&raw.payload).expect("decodes");
             assert_eq!(
                 (body.effect_id, body.amplifier, body.duration),
-                (19, 0, 1200),
-                "the HUD packet carries the stored effect"
+                (18, 0, 1200),
+                "the HUD packet carries the raw registry id (stored 19 minus the legacy one)"
             );
         }
     }
@@ -724,6 +724,12 @@ fn effect_give_reaches_the_hud_and_clear_removes_it() {
     while let Some(raw) = out.try_recv() {
         if raw.id == clientbound::play::REMOVE_MOB_EFFECT {
             removals += 1;
+            let body =
+                mc_protocol::packets::play::RemoveMobEffect::decode(&raw.payload).expect("decodes");
+            assert_eq!(
+                body.effect_id, 18,
+                "the removal names the same raw id as the icon"
+            );
         }
     }
     assert_eq!(removals, 1, "exactly one removal packet");

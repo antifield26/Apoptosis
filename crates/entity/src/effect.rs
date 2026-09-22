@@ -20,14 +20,19 @@
 
 /// Effect ids, stable identity for storage and tests (P05-10).
 ///
-/// The legacy 1-based numbering is ALSO the wire numbering: the update and
-/// remove packets carry the effect as a `Holder<MobEffect>`, whose codec
-/// writes `raw_id + 1` for registry references while the legacy table runs
-/// exactly one above the 0-based raw ids (speed 1 for raw 0) — verified by
-/// `javap -c` on the 26.1.2 jar (`ByteBufCodecs$30`) and against pumpkin's
-/// generated table (speed raw 0 … wither raw 19). [`EffectKind::wire_id`]
-/// names the value so the rule has one home; playerdata persists the same
-/// table.
+/// The legacy 1-based numbering is storage (and log) identity only — it is
+/// NOT the wire numbering. The update and remove packets carry the effect
+/// as a `Holder<MobEffect>` through `MobEffect.STREAM_CODEC`, which is
+/// `ByteBufCodecs.holderRegistry` (anonymous class `$29`, verified by
+/// `javap -c` on the 26.1.2 jar): encode writes the raw registry id with
+/// `VarInt`, no offset (`IdMap.getIdOrThrow` straight into the buffer;
+/// decode is `byIdOrThrow` of the same number). Round 1 examined the wrong
+/// codec (`holder` / `$30`, the inline-capable variant that writes
+/// `raw_id + 1` with 0 as the inline marker) and concluded the legacy
+/// table already satisfied the wire — a live client then showed
+/// `/effect give speed` as Slowness, exactly the +1 shift. [`EffectKind::wire_id`]
+/// subtracts the one back to the raw id; playerdata persists the legacy
+/// table unchanged.
 ///
 /// Only the ids whose numeric effect this crate applies are named; a numeric id
 /// that is not recognised is still stored (so a future effect can round-trip) but
@@ -123,21 +128,19 @@ impl EffectKind {
         }
     }
 
-    /// The id the 26.1 client reads on the wire.
+    /// The id the 26.1 client reads on the wire: the raw registry id.
     ///
-    /// This is the legacy table value **unchanged**: `update_mob_effect`
-    /// carries the effect as a `Holder<MobEffect>`, whose codec writes
-    /// `raw_id + 1` for registry references — and the legacy table already
-    /// runs one above the 0-based raw ids (speed 1 for raw 0), so the two
-    /// off-by-ones cancel. Verified by `javap -c` on the 26.1.2 jar
-    /// (`ByteBufCodecs$30`: decode reads `byIdOrThrow(id - 1)`, encode
-    /// writes `getIdOrThrow + 1`; pumpkin's generated table agrees speed
-    /// raw 0). An earlier "fix" that sent `id - 1` showed a BLANK icon on
-    /// a real client (0 is the inline-holder marker) and was reverted —
-    /// do not reintroduce it without jar evidence.
+    /// `update_mob_effect` / `remove_mob_effect` carry the effect through
+    /// `MobEffect.STREAM_CODEC` = `ByteBufCodecs.holderRegistry` (`$29`,
+    /// jar-verified: `IdMap.getIdOrThrow` written as a bare `VarInt`, no
+    /// offset), so the legacy stored id minus one is the wire value
+    /// (speed stored 1 rides 0). Round 1 read the wrong codec (`holder` /
+    /// `$30`, `raw_id + 1`) and sent the stored id unchanged; a live client
+    /// showed speed as Slowness, the exact +1 shift, and this subtraction
+    /// is the correction. Do not "simplify" it away without jar evidence.
     #[must_use]
     pub const fn wire_id(self) -> i32 {
-        self.id()
+        self.id() - 1
     }
 
     /// Stable name for logs.
@@ -324,21 +327,23 @@ mod tests {
 
     #[test]
     fn wire_ids_match_the_vanilla_registry() {
-        // The 26.1 client reads effect ids as `Holder<MobEffect>`, whose
-        // codec writes `raw_id + 1` for registry references — exactly the
-        // legacy table (verified by javap on the 26.1.2 jar and against
-        // pumpkin's generated raw ids: speed raw 0 … wither raw 19). A
-        // reverted experiment sending `id - 1` showed a BLANK icon on a
-        // real client (0 is the inline-holder marker): do not subtract.
+        // The 26.1 client reads effect ids through `MobEffect.STREAM_CODEC`
+        // = `ByteBufCodecs.holderRegistry` (`$29`, jar-verified: raw
+        // registry id as a bare `VarInt`, no offset — pumpkin's generated
+        // raw ids: speed raw 0 … wither raw 19). The stored table is legacy
+        // 1-based, so the wire value is one less. Round 1 read the wrong
+        // codec (`holder` / `$30`, `raw_id + 1`) and sent the stored value;
+        // a live client showed speed as Slowness, the exact +1 shift this
+        // pin guards against.
         let expected = [
-            (EffectKind::Speed, 1),
-            (EffectKind::Slowness, 2),
-            (EffectKind::Strength, 5),
-            (EffectKind::Weakness, 18),
-            (EffectKind::Resistance, 11),
-            (EffectKind::Poison, 19),
-            (EffectKind::Wither, 20),
-            (EffectKind::Regeneration, 10),
+            (EffectKind::Speed, 0),
+            (EffectKind::Slowness, 1),
+            (EffectKind::Strength, 4),
+            (EffectKind::Weakness, 17),
+            (EffectKind::Resistance, 10),
+            (EffectKind::Poison, 18),
+            (EffectKind::Wither, 19),
+            (EffectKind::Regeneration, 9),
         ];
         for (kind, wire) in expected {
             assert_eq!(kind.wire_id(), wire, "{kind:?}");

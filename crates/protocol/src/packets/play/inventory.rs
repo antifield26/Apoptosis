@@ -748,9 +748,8 @@ pub const MOB_EFFECT_FLAG_ICON: i8 = 0x04;
 pub struct UpdateMobEffect {
     /// Entity carrying the effect (a player, for this server).
     pub entity_id: i32,
-    /// Effect registry raw id plus the holder offset (`minecraft:mob_effect`
-    /// holder codec writes `raw + 1`; e.g. poison raw 18 rides value 19 —
-    /// see `mc_entity::effect::EffectKind::wire_id`).
+    /// Effect registry raw id (`MobEffect.STREAM_CODEC` writes the raw id
+    /// as a bare `VarInt` — see `mc_entity::effect::EffectKind::wire_id`).
     pub effect_id: i32,
     /// Amplifier, 0-based.
     pub amplifier: i32,
@@ -812,8 +811,7 @@ impl Packet for UpdateMobEffect {
 pub struct RemoveMobEffect {
     /// Entity that lost the effect.
     pub entity_id: i32,
-    /// Effect registry raw id plus the holder offset (see
-    /// [`UpdateMobEffect`] for the field).
+    /// Effect registry raw id (same codec as [`UpdateMobEffect`]).
     pub effect_id: i32,
 }
 

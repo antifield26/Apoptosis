@@ -148,7 +148,10 @@ test onto packet 42 with yaw ≈ 180° (fails with the event-2 arm
 restored), moved six socket suites onto `login_join_tick` (the
 game-sent `JoinGame` would otherwise deadlock manually-ticked
 harnesses), and fixed the view-distance test's join-burst drain — none
-of the three moves the count.
+of the three moves the count. The owner round-2 effect-id correction
+(`wire_id` minus one, `mc-entity` pin plus `admin_commands` icon/removal
+pins onto raw ids) likewise rewrites existing tests, so the total stays
+**1 577**.
 The 35 ignored = the 8 differential
 suites in the last section (16 tests) + `vanilla_loot` 3 + `vanilla_chunk_light` 2
 + `vanilla_light_differential` 1 + `light_update_trigger` 1 + `sky_light_surface` 2

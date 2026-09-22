@@ -129,6 +129,15 @@ impl Session {
 
     /// Send the state-appropriate disconnect packet, then close.
     async fn kick(&self, writer: &mut OwnedWriteHalf, state: ConnectionState, reason: &str) {
+        // Owner-session placement disconnects: the client shows only a
+        // garbled reason line, so every kick lands here in the log with its
+        // reason — a kick and a raw TCP close are otherwise
+        // indistinguishable from the game side.
+        tracing::info!(
+            name = %self.profile.clone().map_or("?".to_owned(), |profile| profile.name),
+            %reason,
+            "kicking player"
+        );
         let text = TextComponent::literal(reason);
         let result = match state {
             ConnectionState::Login => {
