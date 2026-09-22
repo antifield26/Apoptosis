@@ -2,7 +2,7 @@
 
 日期：2026-09-21（审计执行日）
 工作区：`C:\Users\25371\projects\MinecraftServer` · main · v0.2.0
-方法：承诺（`mc-rust-agent-prompts` P00~P16 + TASK-INDEX + EXIT-GATES）→ 当前代码树 → **可运行证据**；文档默认不可信。
+方法：承诺（阶段提示词包 P00~P16 + TASK-INDEX + EXIT-GATES，本地 gitignored 提示词目录）→ 当前代码树 → **可运行证据**；文档默认不可信。
 分报告：`target/audit16/A1..A7-*.md`（本审计工作底稿，gitignored）。
 **审计与修复分离**：本文件只给 verdict / 失实清单 / 修复队列，不改产品行为。
 
@@ -12,7 +12,7 @@
 
 | 项 | 结果 |
 |---|---|
-| `python tools/gates/run.py --quick` | **every gate passed** · `tests: 1583 passed, 0 failed, 35 ignored, 126 suites` |
+| `python tools/gates/run.py --quick` | **every gate passed** · `tests: 1587 passed, 0 failed, 35 ignored, 126 suites`（含 AUDIT-16 修复新增 4 测；审计时点为 1583） |
 | `cargo fmt --all -- --check` | clean |
 | `cargo clippy --workspace --all-targets -- -D warnings` | clean |
 | 端口 | 未绑 25565；未动 25567；未杀 `java.exe` |
@@ -109,7 +109,7 @@ F-15/16/17/18/19（措辞、ignored 拆解、ADR amend、RELEASE 样本）等，
 
 ### 审计更正
 - **A6 称 `target/p13-wire/` 丢失**：父代理核实 **存在**。A6 失实，F-26 降级为表述问题。
-- **多路子代理称 PHASE/TASK-INDEX 不在树上**：实际在 gitignored `mc-rust-agent-prompts/`；审计入口应写该路径。
+- **多路子代理称 PHASE/TASK-INDEX 不在树上**：实际在本地 gitignored 提示词目录；审计入口应指向该目录（勿写进已提交文档的可解析路径）。
 
 ---
 
