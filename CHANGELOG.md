@@ -328,6 +328,16 @@ simulation and need a controlled single-action repro):
   menu's own state id instead of a hardcoded 0. Falsification: the new
   `inventory_duplication` case pins window slot 38 for hotbar 2.
   Owner re-test pending.
+- Probabilistic placement failures: the menu revision advanced on
+  server-side inventory changes (drops, gives, placements, pickups),
+  but a real client numbers its clicks with its own counter, which
+  moves only when IT clicks — so the next click after any such change
+  arrived "stale" and was eaten (full_resync) instead of applied. The
+  sync now sends deltas with the revision unchanged; only clicks bump
+  it, on both sides in lockstep. Falsification: the new
+  `inventory_duplication` case keeps a client-side counter across a
+  ground pickup (fails with the bump restored). Owner re-test pending
+  (move items, then click).
 - Placement disconnect diagnostics: the server logged nothing — no
   kick, no error, a clean TCP close, and no placement intent either.
   Root-caused since: vanilla `UseItemOn` ends with a `worldBorderHit`

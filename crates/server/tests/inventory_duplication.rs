@@ -97,6 +97,16 @@ impl Harness {
         self.game.tick().expect("tick");
     }
 
+    fn run(&mut self, ticks: usize) {
+        for _ in 0..ticks {
+            self.game.tick().expect("tick");
+        }
+    }
+
+    fn menu_cursor(&self, id: ConnectionId) -> Option<mc_entity::stack::ItemStack> {
+        self.game.menu_cursor(id)
+    }
+
     /// A `container_click` that does nothing at all: slot 0 with an empty cursor and
     /// an empty slot. It used to be enough to resurrect a dropped stack.
     fn idle_click(&mut self) {
@@ -278,6 +288,78 @@ fn switching_hotbar_syncs_the_window_hotbar_slot() {
         "the menu's own revision, which the next click echoes"
     );
     assert_eq!(synced[0].item.count, 0, "hotbar 2 is empty here");
+}
+
+#[test]
+fn a_server_side_change_does_not_eat_the_next_click() {
+    // Owner session: moving items probabilistically failed to place. A
+    // real client numbers its clicks with its own counter, which moves
+    // only when IT clicks — so a server-side inventory change (here a
+    // ground pickup) must not advance the shared revision, or the next
+    // click arrives "stale" and is eaten (full_resync) instead of
+    // applied. This harness keeps a client-side counter like vanilla
+    // rather than echoing the server's revision back.
+    let mut harness = Harness::new("p06-click-lockstep");
+    harness
+        .game
+        .grant_item(harness.id, "minecraft:stone", 10)
+        .expect("granted");
+    let mut client_state = 0;
+    let click = |harness: &mut Harness, state: i32, slot: i16| {
+        harness.intent(PlayIntent::ContainerClick {
+            window_id: 0,
+            state_id: state,
+            slot,
+            button: 0,
+            click_type: ClickType::Pickup.id(),
+        });
+    };
+    // Pick up the stone from hotbar 0 (window slot 36).
+    click(&mut harness, client_state, 36);
+    client_state += 1;
+    assert_eq!(
+        harness.menu_cursor(harness.id).map(|stack| stack.count()),
+        Some(10),
+        "first click applies"
+    );
+    // Put it into main slot 10.
+    click(&mut harness, client_state, 10);
+    client_state += 1;
+    assert!(
+        harness
+            .menu_cursor(harness.id)
+            .is_none_or(|stack| stack.is_empty()),
+        "second click places it"
+    );
+    // A ground pickup lands server-side with no click involved.
+    let dirt = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:dirt")
+        .expect("dirt");
+    let at = harness.game.player(harness.id).expect("player").position;
+    harness
+        .game
+        .spawn_item(
+            mc_entity::stack::ItemStack::new(dirt, 5).expect("stack"),
+            at,
+        )
+        .expect("drop spawns");
+    harness.run(12);
+    assert_eq!(
+        harness.inventory_total(),
+        15,
+        "the dirt arrived without any click"
+    );
+    // The next click still carries the client's own counter — and must
+    // still apply rather than resync.
+    click(&mut harness, client_state, 10);
+    assert_eq!(
+        harness.menu_cursor(harness.id).map(|stack| stack.count()),
+        Some(10),
+        "the stone comes back to the cursor after a server-side change"
+    );
 }
 
 #[test]

@@ -1415,10 +1415,13 @@ impl Game {
         if changed.is_empty() {
             return;
         }
-        // The state id advances because the window the client is looking at changed;
-        // a client that clicks afterwards must carry the new revision.
-        session.menu.bump_state();
-        let state = session.menu.state_id().max(state);
+        // No state bump here: the revision is a click protocol, advanced by
+        // clicks on both sides in lockstep. A real client numbers its clicks
+        // with its own counter, which moves only when IT clicks — a bump for
+        // a server-side change (drop, give, placement, pickup) would leave
+        // the next click "stale" and eaten, which is exactly the owner
+        // report of probabilistic placement failures. The deltas below
+        // carry the current revision unchanged.
 
         for (slot, item) in changed {
             let packet = ContainerSetSlot {
