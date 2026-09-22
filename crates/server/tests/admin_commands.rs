@@ -736,6 +736,29 @@ fn effect_give_reaches_the_hud_and_clear_removes_it() {
 }
 
 #[test]
+fn effect_give_accepts_the_self_selector() {
+    // Owner session: the server refused `@s` as a stranger everywhere a
+    // target is required. `@s` names the invoking player; anything wider
+    // still needs a selector engine this build does not have.
+    let mut harness = Harness::new("p16-effect-self", ops_for("Chief", 4));
+    let (id, mut out) = harness.join("Chief");
+    let lines = harness.command(id, &mut out, "effect give @s minecraft:poison 60");
+    assert!(
+        lines.iter().any(|line| line.contains("poison")),
+        "the give confirms, saw {lines:?}"
+    );
+    assert!(
+        harness
+            .game
+            .player(id)
+            .expect("player")
+            .effects
+            .contains_key(&19),
+        "poison stored on the invoker"
+    );
+}
+
+#[test]
 fn effect_refuses_unknown_names_and_strangers() {
     // P16-03: unmodelled effects are refused with the modelled list, and
     // targeting anyone but self is refused like give/kill.

@@ -526,8 +526,15 @@ struct GroundItem {
 
 /// Ground stacks of the same item within half a block merge (P11-09), squared.
 const ITEM_MERGE_RADIUS_SQR: f64 = 0.25;
-/// A ground stack is collected when a player is within one block (P11-05), squared.
+/// A ground stack or orb is collected when a player is within one block
+/// (P11-05 items, P16-02 orbs), squared.
 const ITEM_PICKUP_RADIUS_SQR: f64 = 1.0;
+/// Orb magnetism reach (vanilla `ExperienceOrb`: nearest-player scan at 8
+/// blocks, tracking dropped past 64 squared), squared.
+const ORB_FOLLOW_RADIUS_SQR: f64 = 64.0;
+/// Orb magnetism pull (vanilla `followNearbyPlayer`: `normalize(vec) *
+/// (1 - dist/8)^2 * 0.1`, steering at the eye midpoint).
+const ORB_FOLLOW_ACCEL: f64 = 0.1;
 const ACTION_START_DESTROY_BLOCK: i32 = 0;
 /// `player_action` status: finish digging (creative instant break, survival result).
 const ACTION_FINISH_DESTROY_BLOCK: i32 = 2;

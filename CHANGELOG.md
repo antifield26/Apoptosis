@@ -290,6 +290,22 @@ simulation and need a controlled single-action repro):
   still open — the client applies movement speed from its own effect
   state, so a correct icon should hasten; the test method matters here
   (see the verdict request below).
+- Orb stall at the feet ("magnetised then circles, never picked up",
+  probabilistic): missing magnetism, not a pickup-radius defect. Vanilla
+  `ExperienceOrb.followNearbyPlayer` (jar-read: nearest alive
+  non-spectator within 8 blocks, `(1 - dist/8)^2 * 0.1` toward the eye
+  midpoint) never existed here, so an orb that stopped outside the
+  1-block reach sat forever on drag-asymptote micro-creep. Homing is
+  wired into the Entities phase ahead of integration, plus a rest snap
+  (1e-4, same as the knockback snap) so settled orbs truly stop.
+  Falsification: the new homing test rides an orb in from 5 blocks
+  (fails with the steering call removed); the snap test pins exact
+  zero. Owner re-test pending (kill past level 1 and watch the orbs
+  come in).
+- `@s` refused as a stranger: the five self-only command gates now
+  accept `@s` as the invoking player (`targets_self`); wider selectors
+  still need an engine this build does not have and are refused with
+  the caller's own reason. Pinned by an `admin_commands` case.
 - Placement disconnect diagnostics: the server logged nothing — no
   kick, no error, a clean TCP close, and no placement intent either.
   Root-caused since: vanilla `UseItemOn` ends with a `worldBorderHit`

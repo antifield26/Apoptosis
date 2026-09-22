@@ -347,3 +347,102 @@ fn a_player_death_scatters_capped_xp() {
     );
     assert_eq!(harness.orbs().1, 21, "min(7 * level, 100) on the ground");
 }
+
+#[test]
+fn an_orb_five_blocks_out_is_magnetised_into_pickup() {
+    // Owner session: orbs that stopped outside the 1-block reach sat
+    // forever — drag-asymptote micro-creep never crosses the boundary,
+    // and the client reads it as orbs circling at the feet. Vanilla
+    // homing (jar `ExperienceOrb.followNearbyPlayer`: nearest player
+    // within 8 blocks, `(1 - dist/8)^2 * 0.1` toward the eye midpoint)
+    // guarantees contact. Flat test ground (seeded hills would measure
+    // terrain, not homing); the orb starts 5 blocks east with no
+    // velocity.
+    let mut harness = Harness::new("p17-orb-homing");
+    harness.join("Magnet");
+    let at = harness.game.player(harness.id).expect("player").position;
+    flat_strip(&mut harness, &at);
+    harness
+        .game
+        .spawn_orb(3, mc_world::Vec3::new(at.x + 5.0, at.y, at.z))
+        .expect("orb spawns");
+    harness.run(400);
+    assert_eq!(harness.orbs(), (0, 0), "the magnetism rode the orb in");
+    assert_eq!(
+        harness
+            .game
+            .player(harness.id)
+            .expect("player")
+            .total_experience,
+        3,
+        "and the points landed"
+    );
+}
+
+#[test]
+fn a_nearly_still_orb_snaps_to_rest() {
+    // Drag multiplies without ever reaching zero, so a settled orb kept
+    // a nonzero velocity and drifted (and re-announced) forever. Thirty
+    // blocks out no homing interferes, so this pins the snap alone.
+    let mut harness = Harness::new("p17-orb-rest");
+    harness.join("Watcher");
+    let at = harness.game.player(harness.id).expect("player").position;
+    flat_strip(&mut harness, &at);
+    let orb = harness
+        .game
+        .spawn_orb(3, mc_world::Vec3::new(at.x + 30.0, at.y, at.z))
+        .expect("orb spawns");
+    harness
+        .game
+        .entity_store_mut()
+        .get_mut(orb)
+        .expect("orb")
+        .velocity = mc_world::Vec3::new(1e-5, 0.0, 1e-5);
+    harness.run(5);
+    assert_eq!(
+        harness.game.entity_store().get(orb).expect("orb").velocity,
+        mc_world::Vec3::ZERO,
+        "micro-drift ends instead of creeping forever"
+    );
+}
+
+/// A flat stone strip with cleared headroom under the player's feet, so
+/// orb motion measures physics — not the seeded hills (inside a hill an
+/// orb could not move at all; over a pit it would fall away, and either
+/// failure would read as a homing/rest defect).
+///
+/// Values are floored before narrowing, so the truncation lint's
+/// complaint does not apply; the crate root documents the same
+/// exemption.
+#[allow(clippy::cast_possible_truncation)]
+fn flat_strip(harness: &mut Harness, at: &mc_world::Vec3) {
+    let stone = harness
+        .game
+        .registries()
+        .blocks
+        .default_state("minecraft:stone")
+        .expect("stone");
+    let air = harness.game.registries().blocks.air_id();
+    let (cx, cy, cz) = (
+        at.x.floor() as i32,
+        at.y.floor() as i32,
+        at.z.floor() as i32,
+    );
+    for x in (cx - 32)..=(cx + 32) {
+        for z in (cz - 2)..=(cz + 2) {
+            harness.game.load_chunk(ChunkPos::new(x >> 4, z >> 4));
+            harness
+                .game
+                .world_mut()
+                .set_block(x, cy - 1, z, stone)
+                .expect("floor");
+            for y in [cy, cy + 1, cy + 2] {
+                harness
+                    .game
+                    .world_mut()
+                    .set_block(x, y, z, air)
+                    .expect("cleared");
+            }
+        }
+    }
+}

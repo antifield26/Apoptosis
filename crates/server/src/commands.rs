@@ -101,6 +101,16 @@ impl CommandResult {
 }
 
 impl Game {
+    /// Whether a command target names the invoking player: their own name,
+    /// or `@s` (vanilla's self selector — what the client sends when the
+    /// owner types `@s`, which used to be refused as a stranger).
+    /// Anything else needs a selector engine or cross-player authority
+    /// this build does not have, and each caller refuses it with its own
+    /// reason.
+    fn targets_self(target: &str, source: &str) -> bool {
+        target == "@s" || target.eq_ignore_ascii_case(source)
+    }
+
     /// Build the command tree this server supports.
     ///
     /// A free method rather than a `const`, because `CommandTree::insert` is fallible and
@@ -502,7 +512,7 @@ impl Game {
         let Some(target) = parsed.string(0) else {
             return CommandResult::message("Usage: /tp <target> <pos>");
         };
-        if !target.eq_ignore_ascii_case(&parsed.source.name) {
+        if !Self::targets_self(target, &parsed.source.name) {
             return CommandResult::message(format!(
                 "Cannot teleport {target:?}: this build only teleports the invoking \
                  player ({})",
@@ -615,7 +625,7 @@ impl Game {
             );
         };
         let target = parsed.string(1).unwrap_or(&parsed.source.name);
-        if !target.eq_ignore_ascii_case(&parsed.source.name) {
+        if !Self::targets_self(target, &parsed.source.name) {
             return CommandResult::message(format!(
                 "Cannot change {target:?}'s game mode: this build only changes the invoking player"
             ));
@@ -640,7 +650,7 @@ impl Game {
         report: &mut TickReport,
     ) -> CommandResult {
         let target = parsed.string(0).unwrap_or("");
-        if !target.eq_ignore_ascii_case(&parsed.source.name) {
+        if !Self::targets_self(target, &parsed.source.name) {
             return CommandResult::message(format!(
                 "Cannot give to {target:?}: this build only gives to the invoking player"
             ));
@@ -678,7 +688,7 @@ impl Game {
         parsed: &mc_command::dispatch::ParsedCommand,
     ) -> CommandResult {
         let target = parsed.string(0).unwrap_or(&parsed.source.name);
-        if !target.eq_ignore_ascii_case(&parsed.source.name) {
+        if !Self::targets_self(target, &parsed.source.name) {
             return CommandResult::message(format!(
                 "Cannot kill {target:?}: this build only kills the invoking player"
             ));
@@ -709,7 +719,7 @@ impl Game {
     ) -> CommandResult {
         let action = parsed.string(0).unwrap_or("");
         let target = parsed.string(1).unwrap_or(&parsed.source.name);
-        if !target.eq_ignore_ascii_case(&parsed.source.name) {
+        if !Self::targets_self(target, &parsed.source.name) {
             return CommandResult::message(format!(
                 "Cannot affect {target:?}: this build only targets the invoking player"
             ));

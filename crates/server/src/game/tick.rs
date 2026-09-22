@@ -16,6 +16,7 @@ use mc_entity::mob::{
 use mc_entity::pathfind::{BlockView, SearchLimits, find_path};
 
 use mc_entity::player::DamageOutcome;
+use mc_entity::player::GameMode;
 use mc_network::bridge::{ClientEvent, ClientEventKind, ConnectionId};
 use mc_persistence::chunk::ChunkPos;
 use mc_persistence::level::Difficulty;
@@ -40,9 +41,10 @@ use super::{
     AiRng, CHAT_TYPE_CHAT, CHUNKS_PER_TICK, ENTITY_GRAVITY, EYE_HEIGHT, FALL_DAMAGE_THRESHOLD,
     FOOD_TICK_INTERVAL, Game, GroundItem, INVULNERABLE_TICKS, ITEM_MERGE_RADIUS_SQR,
     ITEM_PICKUP_RADIUS_SQR, LIGHT_UPDATES_PER_TICK, MOB_LOOKAHEAD_BLOCKS, NO_BLOCK_CHANGE_SEQUENCE,
-    OpenKind, PENDING_INTENT_BUDGET, PLAINS_BIOME_ID, REST_EPSILON, TickReport,
-    UNLOAD_MARGIN_CHUNKS, block_reach, chunk_of, floor_to_i32, is_container_block, light_fields,
-    mark_block_dirty, mirror_inventory, open_kind_for, wire_angle, wire_stack,
+    ORB_FOLLOW_ACCEL, ORB_FOLLOW_RADIUS_SQR, OpenKind, PENDING_INTENT_BUDGET, PLAINS_BIOME_ID,
+    REST_EPSILON, TickReport, UNLOAD_MARGIN_CHUNKS, block_reach, chunk_of, floor_to_i32,
+    is_container_block, light_fields, mark_block_dirty, mirror_inventory, open_kind_for,
+    wire_angle, wire_stack,
 };
 
 /// The live world as a pathfinding view: solidity is movement-blocking
@@ -53,6 +55,24 @@ struct WorldView<'a>(&'a World);
 impl BlockView for WorldView<'_> {
     fn is_solid(&self, x: i32, y: i32, z: i32) -> bool {
         self.0.is_solid(x, y, z)
+    }
+}
+
+/// Zero velocity components below epsilon so a settled entity truly rests.
+///
+/// Drag multiplies toward zero without reaching it, so without this an orb
+/// (or anything else snapped here) keeps a nonzero velocity and drifts —
+/// and re-announces — forever, reading on-screen as motion that never
+/// ends. Same 1e-4 as the knockback snap in `Entity::fold_knockback`.
+fn snap_rest(velocity: &mut Vec3) {
+    if velocity.x.abs() < 1e-4 {
+        velocity.x = 0.0;
+    }
+    if velocity.y.abs() < 1e-4 {
+        velocity.y = 0.0;
+    }
+    if velocity.z.abs() < 1e-4 {
+        velocity.z = 0.0;
     }
 }
 
@@ -1245,6 +1265,9 @@ impl Game {
         // Natural spawning runs at the head of the Entities phase, every tick,
         // where vanilla's spawn cycle sits relative to entity ticking.
         self.run_spawn_cycle();
+        // Orb magnetism steers before integration (vanilla folds the homing
+        // into each orb's own tick, ahead of its move — same ordering).
+        self.home_orbs_to_players();
         // Collected first: the loop mutates the store, so it cannot hold the
         // iterator. `ids()` is ascending because the store is a `BTreeMap`.
         let ids: Vec<EntityId> = self.entities.ids().collect();
@@ -1494,6 +1517,67 @@ impl Game {
                 };
                 drop_entity.removed = true;
             }
+        }
+    }
+
+    /// Orb magnetism (vanilla `ExperienceOrb.followNearbyPlayer`, read from
+    /// the 26.1.2 jar): every orb steers toward the nearest ready, living,
+    /// non-spectator player within 8 blocks, adding `normalize(vec) *
+    /// (1 - dist/8)^2 * 0.1` to its velocity, aimed at the player's eye
+    /// midpoint. Past 8 blocks nothing tracks (vanilla drops the target
+    /// past 64 squared). Without this, an orb that stops outside the
+    /// 1-block pickup reach sits forever — the owner "orbits at feet"
+    /// stall, where drag-asymptote micro-creep never crosses the boundary.
+    fn home_orbs_to_players(&mut self) {
+        let players: Vec<mc_world::Vec3> = self
+            .sessions
+            .values()
+            .filter(|session| {
+                session.ready
+                    && session.player.is_alive()
+                    && session.player.game_mode != GameMode::Spectator
+            })
+            .map(|session| {
+                let at = session.player.position;
+                Vec3::new(at.x, at.y + EYE_HEIGHT / 2.0, at.z)
+            })
+            .collect();
+        if players.is_empty() {
+            return;
+        }
+        // Collected first: the loop writes velocities back, so it cannot
+        // hold the store borrow.
+        let orbs: Vec<(EntityId, mc_world::Vec3)> = self
+            .entities
+            .iter()
+            .filter_map(|entity| match &entity.body {
+                EntityBody::Orb(_) => Some((entity.id, entity.position)),
+                _ => None,
+            })
+            .collect();
+        for (id, at) in orbs {
+            let Some(target) = players.iter().min_by(|a, b| {
+                let da = (a.x - at.x).powi(2) + (a.y - at.y).powi(2) + (a.z - at.z).powi(2);
+                let db = (b.x - at.x).powi(2) + (b.y - at.y).powi(2) + (b.z - at.z).powi(2);
+                da.total_cmp(&db)
+            }) else {
+                continue;
+            };
+            let dx = target.x - at.x;
+            let dy = target.y - at.y;
+            let dz = target.z - at.z;
+            let dist_sqr = dx * dx + dy * dy + dz * dz;
+            if dist_sqr > ORB_FOLLOW_RADIUS_SQR || dist_sqr == 0.0 {
+                continue;
+            }
+            let pull = 1.0 - dist_sqr.sqrt() / 8.0;
+            let push = pull * pull * ORB_FOLLOW_ACCEL / dist_sqr.sqrt();
+            let Some(entity) = self.entities.get_mut(id) else {
+                continue;
+            };
+            entity.velocity.x += dx * push;
+            entity.velocity.y += dy * push;
+            entity.velocity.z += dz * push;
         }
     }
 
@@ -2783,6 +2867,8 @@ impl Game {
                 // constant (P16-02); despawn and sweep like drops.
                 orb.on_ground = on_ground;
                 velocity = orb.tick_physics(velocity);
+                // Settled orbs must truly stop (see `snap_rest`).
+                snap_rest(&mut velocity);
                 orb.tick_age();
                 entity.velocity = velocity;
                 if orb.should_despawn() {
