@@ -991,15 +991,16 @@ impl Game {
                         mark_block_dirty(&mut self.world, pos.x, pos.z);
                     }
                 }
-                // A crafting table returns its grid on close (P17-02 Step C):
-                // vanilla hands the grid contents back, spilling what does
-                // not fit at the player's feet like the cursor below.
-                if self
-                    .sessions
-                    .get(&id)
-                    .and_then(|s| s.open_kind)
-                    .is_some_and(|kind| kind == OpenKind::Crafting)
-                {
+                // A crafting grid returns its contents on close (P17-02 Step C):
+                // vanilla hands the grid back, spilling what does not fit at
+                // the player's feet. Both the 3×3 table **and** the player
+                // window's 2×2 count — gating on `OpenKind::Crafting` alone
+                // dropped the 2×2 leftovers (owner-session "遗留物品概率消失").
+                let returns_grid = self.sessions.get(&id).is_some_and(|s| {
+                    s.open_kind == Some(OpenKind::Crafting)
+                        || s.menu.window_id() == mc_container::PLAYER_WINDOW_ID
+                });
+                if returns_grid {
                     self.return_craft_grid(id);
                 }
                 // Cursor first, so a failed inventory write can still drop it.
@@ -3967,7 +3968,13 @@ impl Game {
             return;
         }
         // P13-02: a placed wire, torch, lever or neighbour of one wakes the model.
-        self.redstone_feed(tx, ty, tz, block_id);
+        // An **unpowered** button/lever is not a power event: feeding it here
+        // ran the source arm and left the button lit with no pulse (owner-session
+        // A2 "放置时立即激活长红石信号").
+        let starts_dark = block.ends_with("_button") || block == "minecraft:lever";
+        if !starts_dark {
+            self.redstone_feed(tx, ty, tz, block_id);
+        }
         self.consume_held(id, hand, report);
         debug!(id = %id, block = %block, x = tx, y = ty, z = tz, "block placed");
     }
