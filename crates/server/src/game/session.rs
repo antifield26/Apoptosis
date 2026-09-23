@@ -74,6 +74,10 @@ pub(crate) struct Session {
     pub(crate) view_distance: i32,
     /// Position at the start of this tick, for fall-damage accounting.
     pub(crate) tick_start_y: f64,
+    /// Whether the player is holding sneak (`player_command` 0/1). Vanilla
+    /// lets a sneaking player place onto a container instead of opening it,
+    /// and re-aim a hopper instead of opening it (owner-session B5).
+    pub(crate) is_sneaking: bool,
     /// What this connection is permitted to do.
     ///
     /// Set at join from `ops.json` (listed uuids hold their file level,
@@ -494,6 +498,7 @@ impl Game {
                 sent_chunks: BTreeSet::new(),
                 center: chunk_of(at.x, at.z),
                 tick_start_y: at.y,
+                is_sneaking: false,
                 // The operator list is the authority: a listed uuid gets its file level,
                 // and anyone else is level 0. `ops.json` stores the hyphenated uuid, which is
                 // what `Uuid`'s `Display` produces — the conversion is a real one, since the
@@ -2884,22 +2889,25 @@ impl Game {
 
     /// Flip a door-like block on right-click (P17-01): doors (both halves),
     /// trapdoors and fence gates. Iron doors and the iron trapdoor refuse —
-    /// redstone-only in vanilla (pumpkin `can_open_door`).
+    /// redstone-only in vanilla (pumpkin `can_open_door`) — and return `false`
+    /// so the caller can fall through to placement (owner-session A1).
+    ///
+    /// Returns `true` when the interaction consumed the click.
     ///
     /// State writes land in the world's change list (broadcast) and feed
     /// redstone (an observer facing the door must see the flip), exactly
     /// like the lever path.
-    fn toggle_door_like(&mut self, id: ConnectionId, x: i32, y: i32, z: i32, name: &str) {
+    fn toggle_door_like(&mut self, id: ConnectionId, x: i32, y: i32, z: i32, name: &str) -> bool {
         if !mc_redstone::blocks::hand_toggleable(name) {
             debug!(id = %id, name, "iron doors and trapdoors need redstone");
-            return;
+            return false;
         }
         let Some(state) = self.world.get_block_loaded(x, y, z) else {
-            return;
+            return false;
         };
         let Ok(props) = self.registries.blocks.properties_of(state) else {
             debug!(id = %id, "door state is missing from the registry");
-            return;
+            return false;
         };
         let is_open = props
             .iter()
@@ -2922,13 +2930,13 @@ impl Game {
         }
         let Ok(new_id) = self.registries.blocks.state_id(name, &flipped) else {
             debug!(id = %id, "toggled door state does not resolve");
-            return;
+            return false;
         };
         if new_id == state {
-            return;
+            return true;
         }
         if self.world.set_block(x, y, z, new_id).is_err() {
-            return;
+            return false;
         }
         self.redstone_feed(x, y, z, new_id);
         // Doors flip both halves (pumpkin `toggle_door`); the lone half
@@ -2960,8 +2968,92 @@ impl Game {
                     self.redstone_feed(ox, oy, oz, other_id);
                 }
             }
+            // A double-door pair (same facing, opposite hinge, same half) opens
+            // together in vanilla (owner-session A1: "并排的门只开选中的一扇").
+            self.toggle_paired_door(x, y, z, name, half, &props, is_open);
         }
         debug!(id = %id, name, x, y, z, open = !is_open, "door-like toggled");
+        true
+    }
+
+    /// Open or close the adjacent door that forms a double-door pair.
+    ///
+    /// Vanilla pairs two doors that share a facing, sit side-by-side along the
+    /// facing's perpendicular, and carry opposite hinges. Toggling one leaf
+    /// toggles the other (owner-session A1).
+    fn toggle_paired_door(
+        &mut self,
+        x: i32,
+        y: i32,
+        z: i32,
+        name: &str,
+        half: &str,
+        props: &[(String, String)],
+        was_open: bool,
+    ) {
+        let Some(facing) = props
+            .iter()
+            .find(|(key, _)| key == "facing")
+            .map(|(_, value)| value.clone())
+        else {
+            return;
+        };
+        let Some(hinge) = props
+            .iter()
+            .find(|(key, _)| key == "hinge")
+            .map(|(_, value)| value.clone())
+        else {
+            return;
+        };
+        // Perpendicular step: doors face north/south (z) or east/west (x), so
+        // the pair sits along the other axis. Two candidates (left and right).
+        let steps: [(i32, i32); 2] = match facing.as_str() {
+            "north" | "south" => [(1, 0), (-1, 0)],
+            _ => [(0, 1), (0, -1)],
+        };
+        for (dx, dz) in steps {
+            let Some(other) = self.world.get_block_loaded(x + dx, y, z + dz) else {
+                continue;
+            };
+            let Ok(other_name) = self.registries.blocks.block_name(other) else {
+                continue;
+            };
+            if other_name != name {
+                continue;
+            }
+            let Ok(mut other_props) = self.registries.blocks.properties_of(other) else {
+                continue;
+            };
+            let other_facing = other_props
+                .iter()
+                .find(|(key, _)| key == "facing")
+                .map(|(_, value)| value.clone());
+            let other_hinge = other_props
+                .iter()
+                .find(|(key, _)| key == "hinge")
+                .map(|(_, value)| value.clone());
+            let other_half = other_props
+                .iter()
+                .find(|(key, _)| key == "half")
+                .map(|(_, value)| value.clone());
+            if other_facing.as_deref() != Some(facing.as_str())
+                || other_half.as_deref() != Some(half)
+                || other_hinge.as_deref() == Some(hinge.as_str())
+            {
+                continue;
+            }
+            for (key, value) in &mut other_props {
+                if key == "open" {
+                    *value = (!was_open).to_string();
+                }
+            }
+            if let Ok(other_id) = self.registries.blocks.state_id(other_name, &other_props)
+                && other_id != other
+                && self.world.set_block(x + dx, y, z + dz, other_id).is_ok()
+            {
+                self.redstone_feed(x + dx, y, z + dz, other_id);
+            }
+        }
     }
 
     /// The player's horizontal facing as a cardinal (`north` = -Z).
@@ -3637,41 +3729,54 @@ impl Game {
             debug!(id = %id, "rejected placement outside reach");
             return;
         }
-        // Containers open on right-click before any placement: a chest does
-        // something even with an empty hand, and holding a placeable block
-        // must not place *through* a chest (vanilla opens unless sneaking,
-        // and sneaking is not modelled — opening wins).
-        if self
-            .clicked_block_name(x, y, z)
-            .is_some_and(|n| is_container_block(&n))
-        {
-            self.open_container(id, x, y, z, report);
-            return;
-        }
-        // Levers flip on right-click (P13-02): the toggle *is* the power source
-        // changing state, so it feeds the model like a placement. Before the
-        // held-item check so an empty hand flips and a held block does not
-        // place through the lever.
-        if self.clicked_block_name(x, y, z).as_deref() == Some("minecraft:lever") {
-            self.flip_lever(id, x, y, z);
-            return;
-        }
-        // Doors, trapdoors and fence gates toggle on right-click (P17-01),
-        // same position as the lever: an empty hand works and a held block
-        // must not place through them.
-        if let Some(name) = self.clicked_block_name(x, y, z)
-            && (mc_redstone::blocks::is_door(&name)
-                || mc_redstone::blocks::is_trapdoor(&name)
-                || mc_redstone::blocks::is_fence_gate(&name))
-        {
-            self.toggle_door_like(id, x, y, z, &name);
-            return;
-        }
-        // Crafting tables open on right-click (P17-02 Step C): the window is
-        // the interaction, so a held block must not place through the table.
-        if self.clicked_block_name(x, y, z).as_deref() == Some("minecraft:crafting_table") {
-            self.open_crafting_table(id, x, y, z, report);
-            return;
+        // Sneaking places instead of interacting (owner-session B5/A1): vanilla
+        // lets a sneaking player put a block onto a chest, re-aim a hopper, or
+        // place against an iron door. Without this, the container/door arms
+        // below always win and the held block never lands.
+        let sneaking = self
+            .sessions
+            .get(&id)
+            .is_some_and(|session| session.is_sneaking);
+        if !sneaking {
+            // Containers open on right-click before any placement: a chest does
+            // something even with an empty hand, and holding a placeable block
+            // must not place *through* a chest (vanilla opens unless sneaking).
+            if self
+                .clicked_block_name(x, y, z)
+                .is_some_and(|n| is_container_block(&n))
+            {
+                self.open_container(id, x, y, z, report);
+                return;
+            }
+            // Levers flip on right-click (P13-02): the toggle *is* the power source
+            // changing state, so it feeds the model like a placement. Before the
+            // held-item check so an empty hand flips and a held block does not
+            // place through the lever.
+            if self.clicked_block_name(x, y, z).as_deref() == Some("minecraft:lever") {
+                self.flip_lever(id, x, y, z);
+                return;
+            }
+            // Doors, trapdoors and fence gates toggle on right-click (P17-01),
+            // same position as the lever: an empty hand works and a held block
+            // must not place through them. Iron variants refuse the hand toggle
+            // and fall through to placement (owner-session A1 "fake placement"):
+            // the client predicts a place and the server must honour it.
+            if let Some(name) = self.clicked_block_name(x, y, z)
+                && (mc_redstone::blocks::is_door(&name)
+                    || mc_redstone::blocks::is_trapdoor(&name)
+                    || mc_redstone::blocks::is_fence_gate(&name))
+            {
+                if self.toggle_door_like(id, x, y, z, &name) {
+                    return;
+                }
+                // refused (iron): fall through to placement
+            }
+            // Crafting tables open on right-click (P17-02 Step C): the window is
+            // the interaction, so a held block must not place through the table.
+            if self.clicked_block_name(x, y, z).as_deref() == Some("minecraft:crafting_table") {
+                self.open_crafting_table(id, x, y, z, report);
+                return;
+            }
         }
         let hand = Hand::from_id(u8::try_from(hand).unwrap_or(0)).unwrap_or(Hand::Main);
         self.place_held_block(id, (x, y, z), face, hand, cursor, report);
@@ -3970,6 +4075,25 @@ impl Game {
         action: i32,
         report: &mut TickReport,
     ) -> ServerResult<()> {
+        // Vanilla `player_command` actions 0/1 are start/stop sneaking. The
+        // owner-session B5 finding (sneak cannot place onto a container) is
+        // this flag missing: vanilla lets a sneaking player place instead of
+        // opening, and re-aim a hopper instead of opening it.
+        match action {
+            0 => {
+                if let Some(session) = self.sessions.get_mut(&id) {
+                    session.is_sneaking = true;
+                }
+                return Ok(());
+            }
+            1 => {
+                if let Some(session) = self.sessions.get_mut(&id) {
+                    session.is_sneaking = false;
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
         if action != CLIENT_COMMAND_RESPAWN {
             return Ok(());
         }

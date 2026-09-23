@@ -57,19 +57,38 @@ ticking, and a chest rendering correctly after a restart.
 10. No server errors are expected in either case; copy any log lines that
     mention the chunk or block entity into the verdict.
 
-## Verdict sheet (fill in, append the answers to this file)
+## Verdict sheet (owner session, 2026-09-23)
 
-- Commit SHA tested:
-- Doors: both halves swing / iron refuses / trapdoor+gate toggle —
-- Observer: one pulse per flip / never stuck —
-- Dispenser: one item per rising edge / no stream on held power —
-- Double chest: 54 slots transact / both halves persist across close+reopen —
-- Hopper→furnace: lit without touching after loading / stone collected —
-- Crafting: sticks + slabs craft / take consumes / leftovers return —
-- Barrel title: "Barrel" —
-- Chest restart render: clean / broken (describe) —
-- Server log anomalies (paste):
+- Commit SHA tested: `2a2242a` + creative-slot fix (`c66f1d2` tree, rebuilt)
+- Doors: **FAIL** — A1. Placement flickers (shows near player, snaps far);
+  adjacent pair opens only the selected leaf; iron door/trapdoor right-click
+  with the same block flashes a "fake placement" and sneak still cannot place.
+- Observer: one pulse per flip / never stuck — **PASS**
+- Dispenser: one item per rising edge / no stream on held power — **PASS**
+  (but see A2: lever/button attach onto the dispenser)
+- Double chest: 54 slots transact / both halves persist across close+reopen — **PASS**
+- Hopper→furnace: lit without touching after loading / stone collected — **PASS**
+- Crafting: sticks + slabs craft / take consumes / leftovers return — **PASS**
+- Barrel title: "Barrel" — **PASS**
+- Chest restart render: **BROKEN** — C. No texture after rejoin; collision
+  present, open/store works, no jitter. A block-state update (break the double
+  back to a single) restores the texture.
+- Server log anomalies (paste): none recorded beyond the A1/A2 placement path
 - Anything else that looked wrong:
+  - **A2** lever/button snap onto the dispenser; the button does nothing.
+  - **B5** sneak cannot place a block onto a container, cannot re-aim a hopper,
+    and a chest sitting under a hopper will not open.
+  - Creative inventory takes now work (set_creative_mode_slot fix).
+  - Everything else in Sessions A–C passed.
+
+### Findings (agent follow-up)
+
+| ID | Symptom | Class |
+|---|---|---|
+| A1 | Door placement flicker; pair opens one leaf; iron door fake-placement | placement / interact fall-through |
+| A2 | Lever/button attach to dispenser; button inert | attachment face / power source |
+| B5 | Sneak-place on containers, hopper facing, chest under hopper | interact vs place precedence |
+| C | Chest/double chest lose texture after reconnect | chunk/block-entity announce |
 
 ## Known honest divergences (do NOT file these as new findings)
 
