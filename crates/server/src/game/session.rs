@@ -888,6 +888,14 @@ impl Game {
             PlayIntent::ClientCommand { action } => {
                 self.apply_client_command(id, action, report)?;
             }
+            // Movement flags (pumpkin `SPlayerInput`): bit 5 (32) is sneak.
+            // A real client sends this every tick while sneaking; without it
+            // `is_sneaking` never lights and B5 stays broken.
+            PlayIntent::PlayerInput { input } => {
+                if let Some(session) = self.sessions.get_mut(&id) {
+                    session.is_sneaking = input & 32 != 0;
+                }
+            }
             PlayIntent::Chat { message, .. } => {
                 info!(id = %id, %message, "player chat");
                 // **To everyone, attributed to its sender.** Vanilla sends `player_chat` (65) for a
@@ -2968,9 +2976,11 @@ impl Game {
                     self.redstone_feed(ox, oy, oz, other_id);
                 }
             }
-            // A double-door pair (same facing, opposite hinge, same half) opens
-            // together in vanilla (owner-session A1: "并排的门只开选中的一扇").
-            self.toggle_paired_door(x, y, z, name, half, &props, is_open);
+            // A double-door pair (same facing, opposite hinge) opens together
+            // in vanilla (owner-session A1). Both halves of the neighbour flip,
+            // not just the one that matches `half` — the earlier single-half
+            // walk left the opposite lower/upper half stuck.
+            self.toggle_paired_door(x, y, z, name, &props, is_open);
         }
         debug!(id = %id, name, x, y, z, open = !is_open, "door-like toggled");
         true
@@ -2980,14 +2990,13 @@ impl Game {
     ///
     /// Vanilla pairs two doors that share a facing, sit side-by-side along the
     /// facing's perpendicular, and carry opposite hinges. Toggling one leaf
-    /// toggles the other (owner-session A1).
+    /// toggles **both halves** of the other leaf (owner-session A1).
     fn toggle_paired_door(
         &mut self,
         x: i32,
         y: i32,
         z: i32,
         name: &str,
-        half: &str,
         props: &[(String, String)],
         was_open: bool,
     ) {
@@ -3006,52 +3015,51 @@ impl Game {
             return;
         };
         // Perpendicular step: doors face north/south (z) or east/west (x), so
-        // the pair sits along the other axis. Two candidates (left and right).
+        // the pair sits along the other axis.
         let steps: [(i32, i32); 2] = match facing.as_str() {
             "north" | "south" => [(1, 0), (-1, 0)],
             _ => [(0, 1), (0, -1)],
         };
         for (dx, dz) in steps {
-            let Some(other) = self.world.get_block_loaded(x + dx, y, z + dz) else {
-                continue;
-            };
-            let Ok(other_name) = self.registries.blocks.block_name(other) else {
-                continue;
-            };
-            if other_name != name {
-                continue;
-            }
-            let Ok(mut other_props) = self.registries.blocks.properties_of(other) else {
-                continue;
-            };
-            let other_facing = other_props
-                .iter()
-                .find(|(key, _)| key == "facing")
-                .map(|(_, value)| value.clone());
-            let other_hinge = other_props
-                .iter()
-                .find(|(key, _)| key == "hinge")
-                .map(|(_, value)| value.clone());
-            let other_half = other_props
-                .iter()
-                .find(|(key, _)| key == "half")
-                .map(|(_, value)| value.clone());
-            if other_facing.as_deref() != Some(facing.as_str())
-                || other_half.as_deref() != Some(half)
-                || other_hinge.as_deref() == Some(hinge.as_str())
-            {
-                continue;
-            }
-            for (key, value) in &mut other_props {
-                if key == "open" {
-                    *value = (!was_open).to_string();
+            // Flip both halves of the neighbour leaf.
+            for dy in [0, 1] {
+                let Some(other) = self.world.get_block_loaded(x + dx, y + dy, z + dz) else {
+                    continue;
+                };
+                let Ok(other_name) = self.registries.blocks.block_name(other) else {
+                    continue;
+                };
+                if other_name != name {
+                    continue;
                 }
-            }
-            if let Ok(other_id) = self.registries.blocks.state_id(other_name, &other_props)
-                && other_id != other
-                && self.world.set_block(x + dx, y, z + dz, other_id).is_ok()
-            {
-                self.redstone_feed(x + dx, y, z + dz, other_id);
+                let Ok(mut other_props) = self.registries.blocks.properties_of(other) else {
+                    continue;
+                };
+                let other_facing = other_props
+                    .iter()
+                    .find(|(key, _)| key == "facing")
+                    .map(|(_, value)| value.clone());
+                let other_hinge = other_props
+                    .iter()
+                    .find(|(key, _)| key == "hinge")
+                    .map(|(_, value)| value.clone());
+                if other_facing.as_deref() != Some(facing.as_str())
+                    || other_hinge.as_deref() == Some(hinge.as_str())
+                    || other_hinge.as_deref().is_none()
+                {
+                    continue;
+                }
+                for (key, value) in &mut other_props {
+                    if key == "open" {
+                        *value = (!was_open).to_string();
+                    }
+                }
+                if let Ok(other_id) = self.registries.blocks.state_id(other_name, &other_props)
+                    && other_id != other
+                    && self.world.set_block(x + dx, y + dy, z + dz, other_id).is_ok()
+                {
+                    self.redstone_feed(x + dx, y + dy, z + dz, other_id);
+                }
             }
         }
     }

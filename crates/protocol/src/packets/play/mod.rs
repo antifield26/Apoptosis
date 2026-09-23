@@ -1896,6 +1896,17 @@ pub enum PlayIntent {
         /// Newly selected hotbar slot (0..8).
         slot: i16,
     },
+    /// Movement input flags (`minecraft:player_input`, one `i8`).
+    ///
+    /// Jar/pumpkin `SPlayerInput`: bit 5 (32) is sneak. A real client sends
+    /// this every tick while holding a direction or sneak — decoding it is
+    /// what makes sneaking place instead of open (owner-session B5). The
+    /// other bits (forward/back/left/right/jump/sprint) stay unacted: this
+    /// server's movement is client-driven.
+    PlayerInput {
+        /// Raw flag byte; bit 5 (32) is sneak.
+        input: i8,
+    },
     /// Creative inventory placement (`minecraft:set_creative_mode_slot`).
     ///
     /// The creative tab GUI is client-side: taking an item from it sends this
@@ -2109,6 +2120,12 @@ impl PlayIntent {
             }),
             serverbound::play::SET_CARRIED_ITEM => Some(Self::SetCarriedItem {
                 slot: reader.read_i16()?,
+            }),
+            // Movement input flags (pumpkin `SPlayerInput`, one i8). Bit 5
+            // (32) is sneak — without this arm a real client's sneak never
+            // reaches the server (owner-session B5).
+            serverbound::play::PLAYER_INPUT => Some(Self::PlayerInput {
+                input: reader.read_i8()?,
             }),
             // Creative inventory take/place (jar:
             // `ServerboundSetCreativeModeSlotPacket`). A real creative client
