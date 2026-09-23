@@ -74,7 +74,7 @@ pub(crate) struct Session {
     pub(crate) view_distance: i32,
     /// Position at the start of this tick, for fall-damage accounting.
     pub(crate) tick_start_y: f64,
-    /// Whether the player is holding sneak (`player_command` 0/1). Vanilla
+    /// Whether the player is holding sneak (`player_input` bit 5). Vanilla
     /// lets a sneaking player place onto a container instead of opening it,
     /// and re-aim a hopper instead of opening it (owner-session B5).
     pub(crate) is_sneaking: bool,
@@ -4243,25 +4243,11 @@ impl Game {
         action: i32,
         report: &mut TickReport,
     ) -> ServerResult<()> {
-        // Vanilla `player_command` actions 0/1 are start/stop sneaking. The
-        // owner-session B5 finding (sneak cannot place onto a container) is
-        // this flag missing: vanilla lets a sneaking player place instead of
-        // opening, and re-aim a hopper instead of opening it.
-        match action {
-            0 => {
-                if let Some(session) = self.sessions.get_mut(&id) {
-                    session.is_sneaking = true;
-                }
-                return Ok(());
-            }
-            1 => {
-                if let Some(session) = self.sessions.get_mut(&id) {
-                    session.is_sneaking = false;
-                }
-                return Ok(());
-            }
-            _ => {}
-        }
+        // Vanilla `client_command` action 0 is **perform respawn** (jar
+        // `ServerboundClientCommandPacket`). Sneak lives on `player_input`
+        // bit 5 and the separate `player_command` packet — never on this
+        // one. Treating 0/1 as sneak here swallowed every respawn request
+        // (AUDIT-17 CI: `death_drops_…` "respawn restores the player").
         if action != CLIENT_COMMAND_RESPAWN {
             return Ok(());
         }

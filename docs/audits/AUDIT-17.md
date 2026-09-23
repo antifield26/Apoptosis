@@ -2,7 +2,7 @@
 
 日期：2026-09-23（审计执行日）
 工作区：`C:\Users\25371\projects\MinecraftServer` · main @ `571470f`
-方法：承诺（本地 gitignored 提示词包 `mc-rust-agent-prompts/`：TASK-INDEX / EXIT-GATES / PHASE）→ 当前代码树 → **可运行证据**；文档默认不可信。
+方法：承诺（本地 gitignored 提示词包：TASK-INDEX / EXIT-GATES / PHASE — **不作可解析路径引用**）→ 当前代码树 → **可运行证据**；文档默认不可信。
 分报告：`target/audit17/A-mechanisms.md` … `F-docs-gates.md`（工作底稿，gitignored）+ `BRIEF.md`（权重依据）。
 **审计与修复分离**：本文件只给 verdict / 失实清单 / 修复队列，不改产品行为。证伪探针由父代理执行并全部恢复。
 
@@ -144,8 +144,8 @@
 | ID | 位置 | 声称 | 实际 |
 |---|---|---|---|
 | F-高 | `docs/testing/P17-REVIEW.md:23` | 「Door panel toward the player = confirmed」 | **refuted**（P-1 + 红测 + Pumpkin） |
-| F-高 | `EXIT-GATES.md` §P17 Status | SATISFIED | 在 doors/hopper_furnace 红、2×2 死代码下**过强**；应降为 conditional 或重开 |
-| F-高 | TASK-INDEX P17-01..05 全 DONE | 与上同 | 同上（本地提示词包） |
+| F-高 | 本地提示词包 EXIT-GATES §P17 Status | SATISFIED | 在 doors/hopper_furnace 红、2×2 死代码下**过强**；应降为 conditional 或重开 |
+| F-高 | 本地提示词包 TASK-INDEX P17-01..05 全 DONE | 与上同 | 同上 |
 | F-中 | `protocol/.../mod.rs:1044-1048` + `chunk.rs:362,643` | packed_xz 为 u16 /「各 16-bit」 | 字段已是 u8；三处 doc 自相矛盾 |
 | F-中 | `survival_e2e.rs:1035-1036` | noop 点击不 bump state | 7753e03 起 **always bump**（A17-B-04） |
 | F-中 | `hopper_furnace.rs:170-171` | hopper 朝向 unmodelled | ebf1f19 已建模 |
@@ -192,7 +192,7 @@ AUDIT-16 修复队列核销（Lane F）：**P0 全关**（effect 修饰 + PARITY
 7. dropper type_id=6；hopper feed 原子写 + furnace dirty。
 8. packed_xz/y 文档三处对齐；`survival_e2e` / `hopper_furnace` 过时注释。
 9. TEST-MATRIX：named 闭集补 42+23+29；29→28；134/135 统一；1421/94→1454/61。
-10. EXIT-GATES §P17 / TASK-INDEX 状态降级或加条件。
+10. 本地提示词包 EXIT-GATES §P17 / TASK-INDEX 状态降级或加条件。
 
 ### P2 — 契约与历史债
 11. A12-06 双 viewer 版本号；A12-07 kind-drift；unload prune BE（P2-9）。
