@@ -1033,6 +1033,11 @@ impl Game {
                             session.open_block = None;
                             session.open_kind = None;
                         }
+                        // The client predicts the grid return but needs the
+                        // authoritative player window to *show* it — without
+                        // this the leftovers never "come back" on screen
+                        // (owner-session "工作台物品仍然没有正常回包").
+                        self.sync_menu_from_inventory(id, report);
                     }
                     Err(error) => {
                         debug!(id = %id, %error, "could not restore the player menu on close");
@@ -3184,7 +3189,13 @@ impl Game {
             debug!(id = %id, "refused to place a door under an occupied block");
             return;
         }
-        let facing = Self::opposite_facing(self.player_facing(id));
+        // Vanilla `DoorBlock.getStateForPlacement` writes
+        // `FACING = getHorizontalDirection().getOpposite()`, and
+        // `getHorizontalDirection()` is already `look.getOpposite()` — so the
+        // door's facing is the **look** direction (panel toward the player).
+        // A second opposite here put the panel on the far side of the cell
+        // and the client's prediction jumped on correction (owner-session A1).
+        let facing = self.player_facing(id);
         let hinge = self.door_hinge(x, y, z, facing, cursor);
         let lower = self.oriented_state(
             block,
@@ -3927,6 +3938,18 @@ impl Game {
                 4 => "east",
                 _ => "west",
             };
+            let Some(state) = self.oriented_state(&block, &[("facing", facing)]) else {
+                return;
+            };
+            state
+        } else if block == "minecraft:furnace"
+            || block == "minecraft:blast_furnace"
+            || block == "minecraft:smoker"
+        {
+            // Vanilla furnace `getStateForPlacement`: front faces the clicker
+            // (`getHorizontalDirection().getOpposite()`). First-state left
+            // every furnace pointing the same way (owner-session "无视玩家朝向").
+            let facing = Self::opposite_facing(self.player_facing(id));
             let Some(state) = self.oriented_state(&block, &[("facing", facing)]) else {
                 return;
             };
