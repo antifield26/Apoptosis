@@ -582,7 +582,7 @@ impl Packet for LevelChunkWithLight {
         let block_entity_count = read_count(&mut reader, "block entity", MAX_BLOCK_ENTITIES)?;
         let mut block_entities = Vec::with_capacity(block_entity_count);
         for _ in 0..block_entity_count {
-            let packed_xz = reader.read_u16()?;
+            let packed_xz = reader.read_u8()?;
             let y = reader.read_u16()?;
             let type_id = reader.read_varint()?;
             let mut rest = reader.remaining_slice();
@@ -649,7 +649,7 @@ fn encode_block_entities(
     writer.write_varint(packed_len(block_entities.len())?);
     let mut nbt_bytes = Vec::new();
     for entity in block_entities {
-        writer.write_u16(entity.packed_xz);
+        writer.write_u8(entity.packed_xz);
         writer.write_u16(entity.y);
         writer.write_varint(entity.type_id);
         nbt_bytes.clear();

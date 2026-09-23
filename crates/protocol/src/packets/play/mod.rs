@@ -1049,7 +1049,11 @@ impl Packet for RemoveEntities {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChunkBlockEntity {
     /// Packed horizontal offset: `x << 4 | z`, each `0..=15`.
-    pub packed_xz: u16,
+    ///
+    /// **One byte on the wire** (pumpkin `ChunkBlockEntity.packed_xz: u8`,
+    /// `write_u8`). An earlier model wrote `u16`, which shifted every later
+    /// field and made a real client refuse the whole chunk packet.
+    pub packed_xz: u8,
     /// Block entity y.
     pub y: u16,
     /// Block entity type registry id.

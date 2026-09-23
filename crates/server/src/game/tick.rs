@@ -4321,7 +4321,7 @@ impl Game {
                 mc_container::BlockEntityKind::Sign => 7,
             };
             block_entities.push(mc_protocol::packets::play::ChunkBlockEntity {
-                packed_xz: u16::try_from((lx << 4) | lz).unwrap_or(0),
+                packed_xz: u8::try_from((lx << 4) | lz).unwrap_or(0),
                 y: u16::try_from(pos.y).unwrap_or(0),
                 type_id,
                 data: mc_protocol::nbt::Nbt::Compound(Vec::new()),

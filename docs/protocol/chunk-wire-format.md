@@ -29,7 +29,7 @@ HEIGHTMAPS_STREAM_CODEC      -> see section 3
 VarInt  buffer length
 byte[]  buffer               -> the section blob, see section 4
 BlockEntityInfo.LIST_STREAM_CODEC -> VarInt count, then per entry:
-                                     packed u16 (x<<4|z), u16 y, VarInt type, NBT
+                                     packed u8 (x<<4|z), u16 y, VarInt type, NBT
 ```
 
 `extractChunkData` writes the section blob and then asserts
