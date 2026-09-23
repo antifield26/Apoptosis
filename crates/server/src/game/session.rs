@@ -3014,6 +3014,15 @@ impl Game {
         else {
             return;
         };
+        // Always walk the pair from the *lower* half. Clicking the upper half
+        // used to scan y and y+1 (upper + air), so the neighbour's lower half
+        // never flipped (owner-session: "选中上半部分时对侧下半部分不同步").
+        let clicked_half = props
+            .iter()
+            .find(|(key, _)| key == "half")
+            .map(|(_, value)| value.as_str())
+            .unwrap_or("lower");
+        let lower_y = if clicked_half == "upper" { y - 1 } else { y };
         // Perpendicular step: doors face north/south (z) or east/west (x), so
         // the pair sits along the other axis.
         let steps: [(i32, i32); 2] = match facing.as_str() {
@@ -3023,7 +3032,7 @@ impl Game {
         for (dx, dz) in steps {
             // Flip both halves of the neighbour leaf.
             for dy in [0, 1] {
-                let Some(other) = self.world.get_block_loaded(x + dx, y + dy, z + dz) else {
+                let Some(other) = self.world.get_block_loaded(x + dx, lower_y + dy, z + dz) else {
                     continue;
                 };
                 let Ok(other_name) = self.registries.blocks.block_name(other) else {
@@ -3056,9 +3065,9 @@ impl Game {
                 }
                 if let Ok(other_id) = self.registries.blocks.state_id(other_name, &other_props)
                     && other_id != other
-                    && self.world.set_block(x + dx, y + dy, z + dz, other_id).is_ok()
+                    && self.world.set_block(x + dx, lower_y + dy, z + dz, other_id).is_ok()
                 {
-                    self.redstone_feed(x + dx, y + dy, z + dz, other_id);
+                    self.redstone_feed(x + dx, lower_y + dy, z + dz, other_id);
                 }
             }
         }
