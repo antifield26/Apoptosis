@@ -1545,33 +1545,43 @@ impl Game {
             .insert(mc_container::BlockEntity::new(pos, kind))
     }
 
-    /// Flip a lever's `powered` property, preserving the rest (P13-02).
+    /// Flip a lever or press a button's `powered` property (P13-02, A2).
     ///
     /// Only `powered` changes: facing/face stay whatever placement gave them,
-    /// because guessing orientation would move the lever's attachment. A lever
-    /// with no `powered` property (registry drift) is left alone rather than
-    /// rewritten.
+    /// because guessing orientation would move the attachment. A button is a
+    /// **pulse**: it goes dark again after vanilla's hold time (stone 20 ticks,
+    /// wood 30) via the scheduled-tick queue. A block with no `powered`
+    /// property (registry drift) is left alone rather than rewritten.
     fn flip_lever(&mut self, id: ConnectionId, x: i32, y: i32, z: i32) {
         let Some(state) = self.world.get_block_loaded(x, y, z) else {
             return;
         };
-        let Ok(mut props) = self.registries.blocks.properties_of(state) else {
-            debug!(id = %id, "lever state is missing from the registry");
+        let Ok(name) = self.registries.blocks.block_name(state) else {
             return;
         };
-        let on = if let Some(powered) = props.iter_mut().find(|(name, _)| name == "powered") {
-            if powered.1 == "true" {
+        let name = name.to_owned();
+        let Ok(mut props) = self.registries.blocks.properties_of(state) else {
+            debug!(id = %id, "lever/button state is missing from the registry");
+            return;
+        };
+        let is_button = name.ends_with("_button");
+        let on = if let Some(powered) = props.iter_mut().find(|(key, _)| key == "powered") {
+            if is_button {
+                // A button press is a rising edge only; a second press while
+                // held does nothing extra (vanilla's click is the edge).
+                "true".clone_into(&mut powered.1);
+            } else if powered.1 == "true" {
                 "false".clone_into(&mut powered.1);
             } else {
                 "true".clone_into(&mut powered.1);
             }
             powered.1.clone()
         } else {
-            debug!(id = %id, "lever has no powered property; left alone");
+            debug!(id = %id, "lever/button has no powered property; left alone");
             return;
         };
-        let Ok(new_id) = self.registries.blocks.state_id("minecraft:lever", &props) else {
-            debug!(id = %id, "flipped lever state does not resolve");
+        let Ok(new_id) = self.registries.blocks.state_id(&name, &props) else {
+            debug!(id = %id, "flipped lever/button state does not resolve");
             return;
         };
         if new_id == state {
@@ -1580,8 +1590,25 @@ impl Game {
         if self.world.set_block(x, y, z, new_id).is_err() {
             return;
         }
-        debug!(id = %id, x, y, z, powered = on, "lever flipped");
+        debug!(id = %id, x, y, z, powered = on, "lever/button flipped");
         self.redstone_feed(x, y, z, new_id);
+        // Buttons unpress after their hold time (vanilla: stone 20, wood 30).
+        if is_button && on == "true" {
+            let hold = if name == "minecraft:stone_button"
+                || name == "minecraft:polished_blackstone_button"
+            {
+                20
+            } else {
+                30
+            };
+            self.schedule_unpress(x, y, z, hold);
+        }
+    }
+
+    /// Queue a button unpress after `ticks` (A2 pulse).
+    fn schedule_unpress(&mut self, x: i32, y: i32, z: i32, ticks: u32) {
+        // Reuse the same scheduled-tick queue observers/dispensers use.
+        let _ = self.schedule_block_tick(x, y, z, ticks);
     }
 
     /// World difficulty (P14-01).

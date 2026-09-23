@@ -578,6 +578,9 @@ impl Game {
         };
         if name == mc_redstone::OBSERVER {
             self.set_block_flag(pos.x, pos.y, pos.z, "powered", false);
+        } else if name.ends_with("_button") {
+            // A2: the button's hold time is up — unpress the pulse.
+            self.set_block_flag(pos.x, pos.y, pos.z, "powered", false);
         } else if name == mc_redstone::DISPENSER || name == mc_redstone::DROPPER {
             let triggered = self.registries.blocks.properties_of(id).is_ok_and(|props| {
                 props
@@ -4291,6 +4294,40 @@ impl Game {
 
         let light = light_fields(light, chunk.sections.len())?;
 
+        // Block entities ride the chunk packet (owner-session C: a chest with
+        // collision but no texture after rejoin). Vanilla does **not** send
+        // `block_entity_data` for a chest placement — the fixture comments say
+        // so — so the type row here is what the client's chest model keys off.
+        // Type ids: sign 7 / spawner 9 / campfire 33 are jar-captured
+        // (`block_entity_data_*.hex`); chest 1 / furnace 0 / dispenser 5 /
+        // dropper 6 sit in the same registry order those three pin.
+        let mut block_entities = Vec::new();
+        let cx0 = chunk.pos.x * 16;
+        let cz0 = chunk.pos.z * 16;
+        for pos in self.block_entities.positions() {
+            let lx = pos.x - cx0;
+            let lz = pos.z - cz0;
+            if !(0..16).contains(&lx) || !(0..16).contains(&lz) {
+                continue;
+            }
+            let Some(entity) = self.block_entities.get(pos) else {
+                continue;
+            };
+            let type_id = match entity.kind() {
+                mc_container::BlockEntityKind::Container => 1,
+                mc_container::BlockEntityKind::Furnace => 0,
+                mc_container::BlockEntityKind::Hopper => 12,
+                mc_container::BlockEntityKind::Dispenser => 5,
+                mc_container::BlockEntityKind::Sign => 7,
+            };
+            block_entities.push(mc_protocol::packets::play::ChunkBlockEntity {
+                packed_xz: u16::try_from((lx << 4) | lz).unwrap_or(0),
+                y: u16::try_from(pos.y).unwrap_or(0),
+                type_id,
+                data: mc_protocol::nbt::Nbt::Compound(Vec::new()),
+            });
+        }
+
         Ok(LevelChunkWithLight {
             chunk_x: chunk.pos.x,
             chunk_z: chunk.pos.z,
@@ -4299,7 +4336,7 @@ impl Game {
                 data: chunk.heightmap_long_array(),
             }],
             sections,
-            block_entities: Vec::new(),
+            block_entities,
             sky_light_mask: light.sky_mask,
             block_light_mask: light.block_mask,
             empty_sky_light_mask: light.empty_sky_mask,

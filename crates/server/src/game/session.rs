@@ -3765,11 +3765,16 @@ impl Game {
                 self.open_container(id, x, y, z, report);
                 return;
             }
-            // Levers flip on right-click (P13-02): the toggle *is* the power source
-            // changing state, so it feeds the model like a placement. Before the
+            // Levers and buttons flip on right-click (P13-02, owner-session A2).
+            // The toggle *is* the power source changing state. Before the
             // held-item check so an empty hand flips and a held block does not
-            // place through the lever.
-            if self.clicked_block_name(x, y, z).as_deref() == Some("minecraft:lever") {
+            // place through. Buttons are a pulse (press, then unpress).
+            let clicked = self.clicked_block_name(x, y, z);
+            if clicked.as_deref() == Some("minecraft:lever")
+                || clicked
+                    .as_deref()
+                    .is_some_and(|n| n.ends_with("_button"))
+            {
                 self.flip_lever(id, x, y, z);
                 return;
             }
