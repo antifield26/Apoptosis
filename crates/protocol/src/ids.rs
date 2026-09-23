@@ -164,8 +164,8 @@ pub mod serverbound {
         pub const PONG: i32 = 45;
         /// `minecraft:set_carried_item` (hotbar selection)
         pub const SET_CARRIED_ITEM: i32 = 53;
-        /// `minecraft:set_creative_mode_slot` — unmodelled; recorded because a
-        /// creative client may send it and we must ignore, not misread, it.
+        /// `minecraft:set_creative_mode_slot` — modelled since the owner
+        /// session proved creative takes are dropped without it.
         pub const SET_CREATIVE_MODE_SLOT: i32 = 56;
         /// `minecraft:swing` (arm animation)
         pub const SWING: i32 = 63;

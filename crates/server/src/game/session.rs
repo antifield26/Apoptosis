@@ -872,6 +872,14 @@ impl Game {
                 self.note_block_change_sequence(id, sequence);
             }
             PlayIntent::SetCarriedItem { slot } => self.apply_hotbar(id, slot, report)?,
+            // Creative inventory take/place (owner-session blocker). The
+            // creative tab GUI is client-side and invents the stack; this
+            // packet is the only place it reaches the server. Survival
+            // clients never send it, and a non-creative player who does is
+            // refused rather than given free items.
+            PlayIntent::SetCreativeModeSlot { slot, item } => {
+                self.apply_creative_slot(id, slot, item, report)?;
+            }
             PlayIntent::ClientCommand { action } => {
                 self.apply_client_command(id, action, report)?;
             }
@@ -1033,6 +1041,77 @@ impl Game {
             | PlayIntent::ChunkBatchReceived { .. }
             | PlayIntent::PlayerLoaded => {}
         }
+        Ok(())
+    }
+
+    /// Creative inventory take/place (`set_creative_mode_slot`).
+    ///
+    /// The creative tab GUI is client-side and invents the stack; this packet
+    /// is the only place it reaches the server (owner-session blocker: without
+    /// it every creative take is dropped as `unmodelled play packet`). Only a
+    /// creative player may write — a survival client that sends this is
+    /// refused rather than given free items.
+    ///
+    /// Slot `-1` is vanilla's "drop outside the window" gesture (discard).
+    /// Any other slot is the player's own window: 0 crafting result, 1..=4
+    /// grid, 5..=8 armour, 9..=35 main, 36..=44 hotbar, 45 offhand.
+    fn apply_creative_slot(
+        &mut self,
+        id: mc_network::bridge::ConnectionId,
+        slot: i16,
+        item: mc_protocol::packets::play::ItemStack,
+        report: &mut TickReport,
+    ) -> ServerResult<()> {
+        let Some(session) = self.sessions.get_mut(&id) else {
+            return Ok(());
+        };
+        if !session.player.game_mode.is_creative() {
+            debug!(id = %id, slot, "creative slot write refused outside creative mode");
+            return Ok(());
+        }
+        if slot < 0 {
+            // Drop-outside gesture: the stack is discarded. Nothing to store.
+            return Ok(());
+        }
+        let index = usize::try_from(slot).map_err(|_| {
+            ServerError::Protocol(format!("creative slot {slot} is not a window index"))
+        })?;
+        // Map the client window slot onto `PlayerInventory`'s own indices
+        // (`inventory.rs` layout): hotbar 0..=8, main 9..=35, armour 36..=39
+        // (boots..helmet), offhand 40. Window 0 is the player menu: result 0,
+        // grid 1..=4, armour 5..=8 (head..feet), main 9..=35, hotbar 36..=44,
+        // offhand 45. Creative takes name a *storage* slot; result/grid are
+        // refused (not free-item sinks).
+        let storage = match index {
+            9..=35 => index,
+            36..=44 => index - 36,
+            45 => 40,
+            // Armour is reversed: window 5 is head → inventory 39 (helmet).
+            5..=8 => 36 + (8 - index),
+            _ => {
+                debug!(id = %id, index, "creative slot write outside the storage range refused");
+                return Ok(());
+            }
+        };
+        let stack = if item.is_empty() || item.count <= 0 {
+            mc_entity::stack::ItemStack::EMPTY
+        } else {
+            mc_entity::stack::ItemStack::new(item.item_id, item.count)
+                .map_err(|error| ServerError::Protocol(format!("creative stack refused: {error}")))?
+        };
+        {
+            let session = self.sessions.get_mut(&id).expect("session checked above");
+            session
+                .player
+                .inventory
+                .set_slot(storage, stack)
+                .map_err(|error| {
+                    ServerError::Protocol(format!("creative slot {slot} refused: {error}"))
+                })?;
+        }
+        // The client renders its own window copy; re-mirror so the take sticks
+        // (same reason `give_player_item` syncs after every write).
+        self.sync_menu_from_inventory(id, report);
         Ok(())
     }
 

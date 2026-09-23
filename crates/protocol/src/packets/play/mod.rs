@@ -1896,6 +1896,21 @@ pub enum PlayIntent {
         /// Newly selected hotbar slot (0..8).
         slot: i16,
     },
+    /// Creative inventory placement (`minecraft:set_creative_mode_slot`).
+    ///
+    /// The creative tab GUI is client-side: taking an item from it sends this
+    /// packet with the destination slot and the stack the client invented.
+    /// Without it, creative takes vanish into `unmodelled play packet` —
+    /// exactly the owner-session blocker.
+    ///
+    /// Jar `ServerboundSetCreativeModeSlotPacket`: `short slot` + `ItemStack`.
+    /// Slot `-1` is the "drop outside the window" gesture (discard the stack).
+    SetCreativeModeSlot {
+        /// Destination window slot (0..=45 for the player inventory), or `-1`.
+        slot: i16,
+        /// The stack to write; empty clears the slot.
+        item: crate::packets::play::inventory::ItemStack,
+    },
     /// Container/window close.
     ContainerClose {
         /// Window id (0 is the player inventory), vanilla `CONTAINER_ID`
@@ -2094,6 +2109,15 @@ impl PlayIntent {
             }),
             serverbound::play::SET_CARRIED_ITEM => Some(Self::SetCarriedItem {
                 slot: reader.read_i16()?,
+            }),
+            // Creative inventory take/place (jar:
+            // `ServerboundSetCreativeModeSlotPacket`). A real creative client
+            // sends this whenever it pulls a stack out of a creative tab;
+            // ignoring it is what made every take vanish into
+            // `unmodelled play packet`.
+            serverbound::play::SET_CREATIVE_MODE_SLOT => Some(Self::SetCreativeModeSlot {
+                slot: reader.read_i16()?,
+                item: crate::packets::play::inventory::ItemStack::decode(&mut reader)?,
             }),
             serverbound::play::CONTAINER_CLOSE => Some(Self::ContainerClose {
                 window_id: reader.read_varint()?,
