@@ -1314,14 +1314,17 @@ impl Game {
     /// the new slot contents through the inventory re-mirror, and the removal
     /// through the entity sweep.
     fn merge_and_collect_items(&mut self) {
-        self.merge_ground_stacks();
+        let mut merge_report = std::mem::take(&mut self.report);
+        self.merge_ground_stacks(&mut merge_report);
+        self.report = merge_report;
         self.collect_items_into_players();
         self.merge_orbs();
         self.collect_orbs_into_players();
     }
 
     /// Merge adjacent same-item ground stacks into the older entity (P11-09).
-    fn merge_ground_stacks(&mut self) {
+    fn merge_ground_stacks(&mut self, report: &mut TickReport) {
+        let mut merged_keeps: Vec<(EntityId, i32, i32)> = Vec::new();
         let ground: Vec<GroundItem> = self
             .entities
             .iter()
@@ -1353,7 +1356,11 @@ impl Game {
                 if dx * dx + dy * dy + dz * dz > ITEM_MERGE_RADIUS_SQR {
                     continue;
                 }
-                let (keep, drop) = if first.age <= second.age {
+                // Older survives (vanilla). The comparison used to keep the
+                // *smaller* age — i.e. the younger stack — so a fresh Q-drop
+                // merging with an older same-item stack deleted the old one
+                // (owner-session "旧掉落物概率消失").
+                let (keep, drop) = if first.age >= second.age {
                     (first.id, second.id)
                 } else {
                     (second.id, first.id)
@@ -1396,7 +1403,13 @@ impl Game {
                 };
                 let before = keep_item.stack.count();
                 keep_item.stack.merge_capped(&mut incoming, max_stack);
-                let _merged = keep_item.stack.count() > before;
+                if keep_item.stack.count() > before {
+                    if let (Some(item_id), count) =
+                        (keep_item.item_id(), keep_item.stack.count())
+                    {
+                        merged_keeps.push((keep, item_id, count));
+                    }
+                }
                 let Some(drop_entity) = self.entities.get_mut(drop) else {
                     continue;
                 };
@@ -1407,6 +1420,21 @@ impl Game {
                 if drop_item.stack.is_empty() {
                     drop_entity.removed = true;
                 }
+            }
+        }
+        // Tell clients the survivor's new count — without this the merge looks
+        // like the dropped stack simply vanished (owner-session Q-drop).
+        for (id, item_id, count) in merged_keeps {
+            if let Ok(packet) = (mc_protocol::packets::play::SetEntityData {
+                entity_id: id.get(),
+                entries: vec![(
+                    8,
+                    mc_protocol::packets::play::MetadataValue::ItemStack { count, item_id },
+                )],
+            })
+            .to_raw()
+            {
+                self.broadcast_all(&packet, report);
             }
         }
     }
