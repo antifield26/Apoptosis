@@ -4064,10 +4064,13 @@ impl Game {
         // An **unpowered** button/lever is not a power event: feeding it here
         // ran the source arm and left the button lit with no pulse (owner-session
         // A2 "放置时立即激活长红石信号").
-        let starts_dark = block.ends_with("_button") || block == "minecraft:lever";
-        if !starts_dark {
-            self.redstone_feed(tx, ty, tz, block_id);
-        }
+        // Placement always feeds the update queue (six neighbours + self).
+        // A button/lever starts `powered=false` so it emits nothing — that is
+        // the anti-pulse pin — but the *edit* is still a redstone-relevant
+        // change and must wake neighbours (owner A2 must not skip the feed;
+        // skipping it left `redstone_pending` at 0 and broke
+        // `redstone_edits_feed_the_queue_and_dirt_does_not`).
+        self.redstone_feed(tx, ty, tz, block_id);
         self.consume_held(id, hand, report);
         debug!(id = %id, block = %block, x = tx, y = ty, z = tz, "block placed");
     }
