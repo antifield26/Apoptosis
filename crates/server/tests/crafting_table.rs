@@ -301,3 +301,20 @@ fn closing_returns_leftovers_to_the_inventory() {
         "grid plus cursor come home"
     );
 }
+
+#[test]
+fn closing_the_player_inventory_returns_the_2x2_grid() {
+    let mut harness = Harness::new("p17-player-grid-close");
+    harness.join("Pockets");
+    // Window 0: hotbar slot 0 is menu slot 36; the 2×2 grid is menu 1..=4.
+    harness.give_count("minecraft:oak_planks", 4);
+    harness.click_slot(36, 0, 0);
+    harness.click_slot(1, 1, 0);
+    harness.click_slot(2, 1, 0);
+    harness.close();
+    assert_eq!(
+        harness.inventory_count("minecraft:oak_planks"),
+        4,
+        "closing window 0 returns the 2x2 leftovers"
+    );
+}

@@ -883,7 +883,7 @@ impl Game {
             // clients never send it, and a non-creative player who does is
             // refused rather than given free items.
             PlayIntent::SetCreativeModeSlot { slot, item } => {
-                self.apply_creative_slot(id, slot, item, report)?;
+                self.apply_creative_slot(id, slot, &item, report)?;
             }
             PlayIntent::ClientCommand { action } => {
                 self.apply_client_command(id, action, report)?;
@@ -954,6 +954,41 @@ impl Game {
                 let open = self.sessions.get(&id).and_then(|s| s.open_block);
                 let current_window = self.sessions.get(&id).map(|s| s.menu.window_id());
                 if open.is_none() || current_window == Some(0) {
+                    // Closing the player inventory still has to hand the 2×2
+                    // craft grid **and** the cursor back (owner-session
+                    // leftovers). No block half to flush; the player menu
+                    // stays. These must run *before* this early-out —
+                    // AUDIT-17 A17-B-01 found the old arm dead.
+                    let is_player = self
+                        .sessions
+                        .get(&id)
+                        .is_some_and(|s| s.menu.window_id() == mc_container::PLAYER_WINDOW_ID);
+                    if is_player {
+                        self.return_craft_grid(id);
+                        let cursor = self.sessions.get(&id).map_or(
+                            mc_entity::stack::ItemStack::EMPTY,
+                            |s| s.menu.cursor(),
+                        );
+                        let leftover = if cursor.is_empty() {
+                            mc_entity::stack::ItemStack::EMPTY
+                        } else if let Some(session) = self.sessions.get_mut(&id) {
+                            session.player.inventory.add_stack(cursor)
+                        } else {
+                            cursor
+                        };
+                        if !leftover.is_empty() {
+                            let position = self
+                                .sessions
+                                .get(&id)
+                                .map_or(mc_world::Vec3::default(), |s| s.player.position);
+                            let _ = self.spawn_item(leftover, position);
+                        }
+                        if let Some(session) = self.sessions.get_mut(&id) {
+                            session
+                                .menu
+                                .set_cursor(mc_entity::stack::ItemStack::EMPTY);
+                        }
+                    }
                     return Ok(());
                 }
                 if let Some(expected) = current_window
@@ -1101,7 +1136,7 @@ impl Game {
         &mut self,
         id: mc_network::bridge::ConnectionId,
         slot: i16,
-        item: mc_protocol::packets::play::ItemStack,
+        item: &mc_protocol::packets::play::ItemStack,
         report: &mut TickReport,
     ) -> ServerResult<()> {
         let Some(session) = self.sessions.get_mut(&id) else {
@@ -1138,8 +1173,9 @@ impl Game {
         let stack = if item.is_empty() || item.count <= 0 {
             mc_entity::stack::ItemStack::EMPTY
         } else {
-            mc_entity::stack::ItemStack::new(item.item_id, item.count)
-                .map_err(|error| ServerError::Protocol(format!("creative stack refused: {error}")))?
+            mc_entity::stack::ItemStack::new(item.item_id, item.count).map_err(|error| {
+                ServerError::Protocol(format!("creative stack refused: {error}"))
+            })?
         };
         {
             let session = self.sessions.get_mut(&id).expect("session checked above");
@@ -1791,6 +1827,17 @@ impl Game {
             .unwrap_or_default();
         if grid.iter().all(mc_entity::stack::ItemStack::is_empty) {
             return;
+        }
+        // Clear the menu grid first: window 0 keeps the same menu across the
+        // close, so a leftover slot would duplicate whatever `add_stack` takes.
+        if let Some(grid) = self
+            .sessions
+            .get_mut(&id)
+            .and_then(|s| s.menu.container_mut(2))
+        {
+            for slot in 0..grid.len() {
+                let _ = grid.set(slot, mc_entity::stack::ItemStack::EMPTY);
+            }
         }
         let position = self
             .sessions
@@ -3049,8 +3096,7 @@ impl Game {
         let clicked_half = props
             .iter()
             .find(|(key, _)| key == "half")
-            .map(|(_, value)| value.as_str())
-            .unwrap_or("lower");
+            .map_or("lower", |(_, value)| value.as_str());
         let lower_y = if clicked_half == "upper" { y - 1 } else { y };
         // Perpendicular step: doors face north/south (z) or east/west (x), so
         // the pair sits along the other axis.
@@ -3094,7 +3140,10 @@ impl Game {
                 }
                 if let Ok(other_id) = self.registries.blocks.state_id(other_name, &other_props)
                     && other_id != other
-                    && self.world.set_block(x + dx, lower_y + dy, z + dz, other_id).is_ok()
+                    && self
+                        .world
+                        .set_block(x + dx, lower_y + dy, z + dz, other_id)
+                        .is_ok()
                 {
                     self.redstone_feed(x + dx, lower_y + dy, z + dz, other_id);
                 }
@@ -3213,12 +3262,10 @@ impl Game {
             return;
         }
         // Vanilla `DoorBlock.getStateForPlacement` writes
-        // `FACING = getHorizontalDirection().getOpposite()`, and
-        // `getHorizontalDirection()` is already `look.getOpposite()` — so the
-        // door's facing is the **look** direction (panel toward the player).
-        // A second opposite here put the panel on the far side of the cell
-        // and the client's prediction jumped on correction (owner-session A1).
-        let facing = self.player_facing(id);
+        // `FACING = getHorizontalDirection().getOpposite()` = `look.opposite()`
+        // (the panel faces the clicker). Pumpkin `DoorBlock.on_place` matches
+        // (`doors.rs` `get_horizontal_facing().opposite()`).
+        let facing = Self::opposite_facing(self.player_facing(id));
         let hinge = self.door_hinge(x, y, z, facing, cursor);
         let lower = self.oriented_state(
             block,
@@ -3640,25 +3687,20 @@ impl Game {
             -(left_full as i32) - (top_full as i32) + (right_full as i32) + (top_right_full as i32);
         if (!has_left || has_right) && score <= 0 {
             if (!has_right || has_left) && score >= 0 {
-                // Vanilla `DoorBlock.getHinge` (cursor fallback):
-                //   axis X → z < 0.5 ? LEFT : RIGHT
-                //   axis Z → x < 0.5 ? RIGHT : LEFT
-                // `facing` shares the look's axis (it is the opposite of the
-                // look), so east/west is X and north/south is Z. The earlier
-                // comparison had the Z branch inverted, which mirrored the
-                // hinge and made the client's predicted model jump on the
-                // correction (owner-session A1 "放置时闪现").
-                let along_x = facing == "east" || facing == "west";
-                if along_x {
-                    if cursor.2 < 0.5 {
-                        return "left";
-                    }
-                    return "right";
+                // Vanilla `DoorBlock.getHinge` cursor fallback (Pumpkin
+                // `doors.rs:136-143`), evaluated against the door's facing
+                // offset (ox, oz). Left when every armed clause holds:
+                //   (ox >= 0 || hit.z > 0.5) && (ox <= 0 || hit.z < 0.5)
+                //   && (oz >= 0 || hit.x < 0.5) && (oz <= 0 || hit.x > 0.5)
+                let (ox, oz) = (face_x, face_z);
+                if (ox >= 0 || cursor.2 > 0.5)
+                    && (ox <= 0 || cursor.2 < 0.5)
+                    && (oz >= 0 || cursor.0 < 0.5)
+                    && (oz <= 0 || cursor.0 > 0.5)
+                {
+                    return "left";
                 }
-                if cursor.0 < 0.5 {
-                    return "right";
-                }
-                return "left";
+                return "right";
             }
             return "left";
         }
@@ -3815,9 +3857,7 @@ impl Game {
             // place through. Buttons are a pulse (press, then unpress).
             let clicked = self.clicked_block_name(x, y, z);
             if clicked.as_deref() == Some("minecraft:lever")
-                || clicked
-                    .as_deref()
-                    .is_some_and(|n| n.ends_with("_button"))
+                || clicked.as_deref().is_some_and(|n| n.ends_with("_button"))
             {
                 self.flip_lever(id, x, y, z);
                 return;
@@ -3831,10 +3871,9 @@ impl Game {
                 && (mc_redstone::blocks::is_door(&name)
                     || mc_redstone::blocks::is_trapdoor(&name)
                     || mc_redstone::blocks::is_fence_gate(&name))
+                && self.toggle_door_like(id, x, y, z, &name)
             {
-                if self.toggle_door_like(id, x, y, z, &name) {
-                    return;
-                }
+                return;
                 // refused (iron): fall through to placement
             }
             // Crafting tables open on right-click (P17-02 Step C): the window is
@@ -3855,6 +3894,10 @@ impl Game {
     /// height/unloaded/occupied/inside-player refusals, orientation (doors
     /// both halves, trapdoors and gates oriented, everything else the first
     /// state), write, feed, consume, sync.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "placement is one vanilla decision tree; splitting it hides the iron fall-through arm"
+    )]
     fn place_held_block(
         &mut self,
         id: ConnectionId,

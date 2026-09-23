@@ -1041,11 +1041,12 @@ impl Packet for RemoveEntities {
 
 /// One block entity inside a chunk.
 ///
-/// `BlockEntityInfo.LIST_STREAM_CODEC`: `packedXZ` and `y` are each a 16-bit
-/// field, then a `VarInt` type id and the payload NBT. Both coordinates are
-/// modelled as the raw `u16` the wire carries; `packed_xz` is `x << 4 | z` with
-/// both in `0..=15`, so its sign bit is never set, and `y` is reinterpreted by
-/// the world layer with the dimension's own range.
+/// `BlockEntityInfo.LIST_STREAM_CODEC`: `packedXZ` is **one byte** and `y` is
+/// a **16-bit signed** field (pumpkin `ChunkBlockEntity`: `packed_xz: u8`,
+/// `y: i16`), then a `VarInt` type id and the payload NBT. `packed_xz` is
+/// `x << 4 | z` with both in `0..=15`. `y` is the world Y (negative under
+/// overworld sea level) and must keep its sign — clamping it to `u16` sent
+/// every underground chest to Y=0 (AUDIT-17 A17-D-01).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChunkBlockEntity {
     /// Packed horizontal offset: `x << 4 | z`, each `0..=15`.
@@ -1054,8 +1055,8 @@ pub struct ChunkBlockEntity {
     /// `write_u8`). An earlier model wrote `u16`, which shifted every later
     /// field and made a real client refuse the whole chunk packet.
     pub packed_xz: u8,
-    /// Block entity y.
-    pub y: u16,
+    /// Block entity y (signed; overworld min is -64).
+    pub y: i16,
     /// Block entity type registry id.
     pub type_id: i32,
     /// Block entity payload (nameless network NBT compound).
@@ -2941,7 +2942,7 @@ mod tests {
             sections: overworld_sections(),
             block_entities: vec![ChunkBlockEntity {
                 packed_xz: 5,
-                y: 70,
+                y: -60,
                 type_id: 4,
                 data: Nbt::Compound(vec![(
                     "id".to_owned(),
@@ -3269,6 +3270,8 @@ mod tests {
         // Heightmaps: one entry, id HEIGHTMAP_WORLD_SURFACE (1), 3 longs.
         assert_eq!(&body[8..11], &[0x01, 0x01, 0x03]);
         assert_eq!(LevelChunkWithLight::decode(&body).expect("decodes"), packet);
+        // Underground y keeps its sign through the 16-bit field (AUDIT-17).
+        assert_eq!(packet.block_entities[0].y, -60);
 
         let raw = packet.to_raw().expect("raw");
         assert_eq!(raw.id, LevelChunkWithLight::ID);

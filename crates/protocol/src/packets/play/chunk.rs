@@ -359,7 +359,7 @@ pub const OVERWORLD_SECTIONS: usize = 24;
 ///             i16 block_count, i16 fluid_count,
 ///             block states container, biomes container
 /// VarInt  block_entity count
-///           per entry: u16 packed xz, u16 y, VarInt type id, NBT data
+///           per entry: u8 packed xz, i16 y, VarInt type id, NBT data
 /// VarInt  sky light mask          \
 /// VarInt  block light mask         |  bit i ↔ light section i - 1
 /// VarInt  empty sky light mask     |
@@ -583,7 +583,7 @@ impl Packet for LevelChunkWithLight {
         let mut block_entities = Vec::with_capacity(block_entity_count);
         for _ in 0..block_entity_count {
             let packed_xz = reader.read_u8()?;
-            let y = reader.read_u16()?;
+            let y = reader.read_i16()?;
             let type_id = reader.read_varint()?;
             let mut rest = reader.remaining_slice();
             let data = Nbt::read_network(&mut rest)?;
@@ -650,7 +650,7 @@ fn encode_block_entities(
     let mut nbt_bytes = Vec::new();
     for entity in block_entities {
         writer.write_u8(entity.packed_xz);
-        writer.write_u16(entity.y);
+        writer.write_i16(entity.y);
         writer.write_varint(entity.type_id);
         nbt_bytes.clear();
         entity.data.write_network(&mut nbt_bytes)?;

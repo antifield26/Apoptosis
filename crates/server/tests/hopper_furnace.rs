@@ -283,6 +283,10 @@ fn hopper_above_feeds_smeltables_and_holds_fuel_back() {
     harness.place("minecraft:dirt", fx + 1, fy, fz, 1);
     harness.place("minecraft:hopper", fx + 1, fy + 1, fz, 4);
     assert_eq!(harness.name_at(fx, fy + 1, fz), "minecraft:hopper");
+    // Scaffold side-placement yields facing=east; feeding the furnace below
+    // needs the hopper to output downward (vanilla `HopperBlock` placement
+    // from the furnace's top face does this; the test forces it explicitly).
+    harness.set_facing(fx, fy + 1, fz, "down");
     harness.fill(fx, fy + 1, fz, 0, "minecraft:cobblestone", 5);
     harness.run(10);
     let (item, count) = harness.furnace_slot(fx, fy, fz, 0);
@@ -371,6 +375,7 @@ fn a_fed_furnace_cooks_and_the_hopper_below_collects() {
     harness.place("minecraft:dirt", fx - 2, fy - 1, fz, 1);
     harness.place("minecraft:hopper", fx + 1, fy + 1, fz, 4);
     harness.place("minecraft:hopper", fx - 2, fy, fz, 5);
+    harness.set_facing(fx, fy + 1, fz, "down");
     harness.set_facing(fx - 1, fy, fz, "east");
     let air = harness.game.registries().blocks.air_id();
     harness

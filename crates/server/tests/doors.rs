@@ -199,7 +199,9 @@ fn placing_a_door_sets_both_oriented_halves() {
     assert_eq!(harness.prop(at.0, at.1, at.2, "half"), "lower");
     assert_eq!(harness.prop(at.0, at.1 + 1, at.2, "half"), "upper");
     assert_eq!(harness.prop(at.0, at.1, at.2, "open"), "false");
-    // Symmetric stone floor, centred cursor: the hinge tiebreak lands left.
+    // Look south → door facing north. Symmetric stone floor, centred cursor
+    // (0.5, 0.5, 0.5): Pumpkin's hinge compound is not-left at hit.x==0.5
+    // for north, so the tiebreak lands right.
     assert_eq!(harness.prop(at.0, at.1, at.2, "hinge"), "right");
 }
 

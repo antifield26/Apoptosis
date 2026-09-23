@@ -4,7 +4,7 @@
 //! No logic changed; `super` keeps the struct, the sessions and the
 //! persistence.
 
-use mc_core::error::ServerResult;
+use mc_core::error::{ServerError, ServerResult};
 use mc_core::tick::Tick;
 use mc_entity::combat::{
     Attacker, BASE_MELEE_KNOCKBACK, CombatStats, DamageSource, armor_absorb, worn_stats,
@@ -1104,6 +1104,10 @@ impl Game {
     /// side stays put. Hopper slots are tried in order; the first valid stack
     /// with room in the target moves one item. Unknown items (failed lookups)
     /// fail safe as "not valid" rather than as fuel.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one hopper→furnace sided feed with atomic commit; splitting loses the rollback arm"
+    )]
     fn hopper_feed_furnace(
         &mut self,
         hopper: mc_container::BlockPos,
@@ -1178,23 +1182,39 @@ impl Game {
             } else {
                 into.grow(1);
             }
-            if let Some(entity) = self.block_entities.get_mut(hopper)
-                && let Some(items) = entity.data.items_mut()
-                && let Some(slot_stack) = items.get_mut(index)
-            {
-                *slot_stack = taken;
-            } else {
+            // Commit both halves only after both destinations resolve
+            // (AUDIT-17 A17-B-02: a mid-write failure destroyed the item).
+            let hopper_ok = self
+                .block_entities
+                .get_mut(hopper)
+                .and_then(|e| e.data.items_mut())
+                .and_then(|items| items.get_mut(index))
+                .is_some_and(|slot_stack| {
+                    *slot_stack = taken;
+                    true
+                });
+            if !hopper_ok {
                 return false;
             }
-            if let Some(entity) = self.block_entities.get_mut(furnace)
-                && let Some(items) = entity.data.items_mut()
-                && let Some(slot_stack) = items.get_mut(slot)
+            if let Some(slot_stack) = self
+                .block_entities
+                .get_mut(furnace)
+                .and_then(|e| e.data.items_mut())
+                .and_then(|items| items.get_mut(slot))
             {
                 *slot_stack = into;
             } else {
+                // Roll the hopper half back so the item cannot vanish.
+                if let Some(entity) = self.block_entities.get_mut(hopper)
+                    && let Some(items) = entity.data.items_mut()
+                    && let Some(slot_stack) = items.get_mut(index)
+                {
+                    *slot_stack = *stack;
+                }
                 return false;
             }
             mark_block_dirty(&mut self.world, hopper.x, hopper.z);
+            mark_block_dirty(&mut self.world, furnace.x, furnace.z);
             return true;
         }
         false
@@ -1403,12 +1423,10 @@ impl Game {
                 };
                 let before = keep_item.stack.count();
                 keep_item.stack.merge_capped(&mut incoming, max_stack);
-                if keep_item.stack.count() > before {
-                    if let (Some(item_id), count) =
-                        (keep_item.item_id(), keep_item.stack.count())
-                    {
-                        merged_keeps.push((keep, item_id, count));
-                    }
+                if keep_item.stack.count() > before
+                    && let (Some(item_id), count) = (keep_item.item_id(), keep_item.stack.count())
+                {
+                    merged_keeps.push((keep, item_id, count));
                 }
                 let Some(drop_entity) = self.entities.get_mut(drop) else {
                     continue;
@@ -4277,6 +4295,10 @@ impl Game {
     ///
     /// [`ServerError::CorruptData`] when a block id is not in the registry —the
     /// alternative would be silently sending a wrong block.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one chunk packet builder; the block-entity type table is the bulk"
+    )]
     pub fn vanilla_chunk_packet(&self, chunk: &Chunk) -> ServerResult<LevelChunkWithLight> {
         let mut sections = Vec::with_capacity(chunk.sections.len());
         for section in &chunk.sections {
@@ -4357,16 +4379,33 @@ impl Game {
             let Some(entity) = self.block_entities.get(pos) else {
                 continue;
             };
+            let block_name = self
+                .world
+                .get_block_loaded(pos.x, pos.y, pos.z)
+                .and_then(|id| self.registries.blocks.block_name(id).ok());
             let type_id = match entity.kind() {
                 mc_container::BlockEntityKind::Container => 1,
                 mc_container::BlockEntityKind::Furnace => 0,
                 mc_container::BlockEntityKind::Hopper => 12,
-                mc_container::BlockEntityKind::Dispenser => 5,
+                mc_container::BlockEntityKind::Dispenser => {
+                    // Droppers share the dispenser payload kind but take
+                    // type id 6 (the captured registry order).
+                    if block_name.is_some_and(|n| n.ends_with("dropper")) {
+                        6
+                    } else {
+                        5
+                    }
+                }
                 mc_container::BlockEntityKind::Sign => 7,
             };
+            // Y is signed on the wire (pumpkin `i16`); underground chests sit
+            // at y < 0 and must not collapse to 0 (AUDIT-17 A17-D-01).
+            let y = i16::try_from(pos.y).map_err(|_| {
+                ServerError::Invariant(format!("block entity y {} outside i16", pos.y))
+            })?;
             block_entities.push(mc_protocol::packets::play::ChunkBlockEntity {
                 packed_xz: u8::try_from((lx << 4) | lz).unwrap_or(0),
-                y: u16::try_from(pos.y).unwrap_or(0),
+                y,
                 type_id,
                 data: mc_protocol::nbt::Nbt::Compound(Vec::new()),
             });
