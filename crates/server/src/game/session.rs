@@ -3979,16 +3979,19 @@ impl Game {
             state
         } else if block.ends_with("_button") || block == "minecraft:lever" {
             // Attach to the clicked face (vanilla `FaceAttachedHorizontal`):
-            // floor/ceiling/wall plus a horizontal facing. First-state left
-            // every lever/button looking like it snapped onto whatever was
-            // nearby (owner-session A2 "自动吸附到发射器上").
+            // floor/ceiling/wall plus a horizontal facing. A **wall** placement
+            // takes `facing` from the clicked face itself — deriving it from
+            // the look snapped the button onto an empty face at steep angles
+            // (owner-session A2 "角度较大时…吸附到空面"). Floor/ceiling keep
+            // the clicker's horizontal look.
+            let face_id = face;
             let face = match face {
                 1 => "floor",
                 0 => "ceiling",
                 _ => "wall",
             };
             let facing = if face == "wall" {
-                Self::opposite_facing(self.player_facing(id))
+                Self::face_facing(face_id).unwrap_or_else(|| self.player_facing(id))
             } else {
                 self.player_facing(id)
             };
