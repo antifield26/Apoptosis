@@ -3358,10 +3358,11 @@ impl Game {
 
     /// Whether a chest-family open is blocked from above (P17-02 Step B).
     ///
-    /// Vanilla refuses when a solid block sits above either half (pumpkin
-    /// `is_chest_blocked`); barrels ignore cover. Unknown or unloaded cells
-    /// above count as blocking — fail-closed, since the click was real but
-    /// the space above cannot be verified.
+    /// Vanilla refuses when an **occluding** (full-cube) block sits above
+    /// either half (pumpkin `is_chest_blocked`); barrels ignore cover. A
+    /// hopper is not a full cube and does **not** block — owner-session B5
+    /// ("漏斗下的箱子无法打开") was this test using collision solidity.
+    /// Unknown or unloaded cells above count as blocking — fail-closed.
     fn chest_blocked_above(&self, x: i32, y: i32, z: i32) -> bool {
         let mut cells = vec![(x, y + 1, z)];
         if let Some((nx, ny, nz)) = self.chest_partner(x, y, z) {
@@ -3370,7 +3371,7 @@ impl Game {
         cells.into_iter().any(|(ax, ay, az)| {
             self.world
                 .get_block_loaded(ax, ay, az)
-                .is_none_or(|id| mc_world::is_solid_or_unknown(&self.registries.blocks, id))
+                .is_none_or(|id| mc_world::is_full_cube(&self.registries.blocks, id))
         })
     }
     /// Read a hopper-touchable inventory at `pos` (P17-02 Step B).
@@ -3604,17 +3605,25 @@ impl Game {
             -(left_full as i32) - (top_full as i32) + (right_full as i32) + (top_right_full as i32);
         if (!has_left || has_right) && score <= 0 {
             if (!has_right || has_left) && score >= 0 {
-                // Integer face components against the 0..1 cursor: the
-                // comparisons below are the reference's float form with the
-                // casts folded away (components are all -1, 0 or 1).
-                if (face_x >= 0 || cursor.2 > 0.5)
-                    && (face_x <= 0 || cursor.2 < 0.5)
-                    && (face_z >= 0 || cursor.0 < 0.5)
-                    && (face_z <= 0 || cursor.0 > 0.5)
-                {
-                    return "left";
+                // Vanilla `DoorBlock.getHinge` (cursor fallback):
+                //   axis X → z < 0.5 ? LEFT : RIGHT
+                //   axis Z → x < 0.5 ? RIGHT : LEFT
+                // `facing` shares the look's axis (it is the opposite of the
+                // look), so east/west is X and north/south is Z. The earlier
+                // comparison had the Z branch inverted, which mirrored the
+                // hinge and made the client's predicted model jump on the
+                // correction (owner-session A1 "放置时闪现").
+                let along_x = facing == "east" || facing == "west";
+                if along_x {
+                    if cursor.2 < 0.5 {
+                        return "left";
+                    }
+                    return "right";
                 }
-                return "right";
+                if cursor.0 < 0.5 {
+                    return "right";
+                }
+                return "left";
             }
             return "left";
         }
@@ -3901,6 +3910,46 @@ impl Game {
             let Some(state) =
                 self.oriented_state(&block, &[("facing", facing), ("triggered", "false")])
             else {
+                return;
+            };
+            state
+        } else if block == "minecraft:hopper" {
+            // Vanilla `HopperBlock.getStateForPlacement`: `facing` is the
+            // **output**, `clickedFace.getOpposite()` — click a top face and
+            // the hopper points down; click a side and it points into that
+            // side's block (owner-session B5 "无法改变漏斗指向").
+            let facing = match face {
+                0 => "up",
+                1 => "down",
+                2 => "south",
+                3 => "north",
+                4 => "east",
+                _ => "west",
+            };
+            let Some(state) = self.oriented_state(&block, &[("facing", facing)]) else {
+                return;
+            };
+            state
+        } else if block.ends_with("_button") || block == "minecraft:lever" {
+            // Attach to the clicked face (vanilla `FaceAttachedHorizontal`):
+            // floor/ceiling/wall plus a horizontal facing. First-state left
+            // every lever/button looking like it snapped onto whatever was
+            // nearby (owner-session A2 "自动吸附到发射器上").
+            let face = match face {
+                1 => "floor",
+                0 => "ceiling",
+                _ => "wall",
+            };
+            let facing = if face == "wall" {
+                Self::opposite_facing(self.player_facing(id))
+            } else {
+                self.player_facing(id)
+            };
+            let mut props = vec![("face", face), ("facing", facing)];
+            if block == "minecraft:lever" {
+                props.push(("powered", "false"));
+            }
+            let Some(state) = self.oriented_state(&block, &props) else {
                 return;
             };
             state
