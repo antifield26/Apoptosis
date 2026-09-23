@@ -3427,7 +3427,11 @@ impl Game {
                 // spawn at rest: vanilla's `LpVec3` encodes a stationary
                 // movement as one zero byte.
                 data: 0,
-                movement: (0.0, 0.0, 0.0),
+                // The throw impulse lives on the entity after `throw_held`;
+                // sending zeros made the client simulate from rest while the
+                // server flew the item forward — the two fought and the drop
+                // jittered (owner-session "丢出时异常抖动").
+                movement: (entity.velocity.x, entity.velocity.y, entity.velocity.z),
             }
             .to_raw()?;
             if self.broadcast_chunk(chunk_of(position.x, position.z), &packet, report) > 0 {
