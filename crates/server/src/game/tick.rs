@@ -700,6 +700,7 @@ impl Game {
         // Collected first so the mutable walk over block entities ends before
         // any `&self` send below.
         let mut deltas: Vec<(mc_container::BlockPos, [i16; 4])> = Vec::new();
+        let mut lit_flips: Vec<(mc_container::BlockPos, bool)> = Vec::new();
         // Furnaces whose *items* changed need the hopper-style content resync
         // below (data slots alone leave the open menu showing pre-tick stacks,
         // which the next click would flush back over the smelted output).
@@ -755,6 +756,13 @@ impl Game {
             *burn_total = state.burn_ticks_total;
             *cook_progress = state.cook_progress;
             *cook_total = state.cook_total;
+            // Furnace flame (owner-session "熔炉无燃烧动画"): the client draws
+            // the fire from the block's `lit` property, not the block entity.
+            let lit_now = *burn_ticks > 0;
+            let lit_was = before[0] > 0;
+            if lit_now != lit_was {
+                lit_flips.push((pos, lit_now));
+            }
             let after = [*burn_ticks, *burn_total, *cook_progress, *cook_total];
             if before != after || *items != before_items {
                 mark_block_dirty(&mut self.world, pos.x, pos.z);
@@ -776,6 +784,10 @@ impl Game {
                     deltas.push((pos, narrow));
                 }
             }
+        }
+        // Apply furnace `lit` flips after the entity borrow ends.
+        for (pos, lit) in lit_flips {
+            self.set_block_flag(pos.x, pos.y, pos.z, "lit", lit);
         }
 
         // Phase 1b: hoppers transfer every 8 game ticks when busy (P12-04).

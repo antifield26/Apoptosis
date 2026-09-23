@@ -3945,10 +3945,7 @@ impl Game {
             } else {
                 self.player_facing(id)
             };
-            let mut props = vec![("face", face), ("facing", facing)];
-            if block == "minecraft:lever" {
-                props.push(("powered", "false"));
-            }
+            let props = [("face", face), ("facing", facing), ("powered", "false")];
             let Some(state) = self.oriented_state(&block, &props) else {
                 return;
             };

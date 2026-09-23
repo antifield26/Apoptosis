@@ -996,9 +996,12 @@ impl Menu {
             ClickType::QuickCraft => self.click_quick_craft(click),
             ClickType::PickupAll => self.click_pickup_all(click),
         }?;
-        if !outcome.is_noop() {
-            self.bump_state();
-        }
+        // **Always** bump after a click that passed the state-id check. The
+        // real client advances its own counter on every click it sends,
+        // including ones that change nothing; skipping the bump on a noop
+        // left the pair out of step and the *next* click was eaten as stale
+        // (owner-session: "放置概率失败" / "假复制" / "物品消失").
+        self.bump_state();
         if outcome.full_resync {
             outcome.changed_slots.clear();
             outcome.cursor_changed = false;

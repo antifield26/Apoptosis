@@ -255,10 +255,10 @@ fn the_state_id_advances_on_every_accepted_click() {
         "an accepted click bumps the revision"
     );
 
-    // A click that changes nothing must not bump the revision. Picking up from an
-    // empty slot with an empty cursor is the honest no-op; note that the *same*
-    // click with a full cursor would legitimately place the stack, so the cursor
-    // has to be empty for this to test what it claims.
+    // A click that changes nothing **still** bumps the revision: a real client
+    // advances its own counter on every click it sends (owner-session: skipping
+    // the bump on a no-op left the pair out of step and the next click was
+    // eaten as stale — "放置概率失败" / "假复制" / "物品消失").
     let mut empty = chest_menu();
     let before = empty.state_id();
     apply(&mut empty, 5, 0, ClickType::Pickup);
@@ -268,8 +268,8 @@ fn the_state_id_advances_on_every_accepted_click() {
     );
     assert_eq!(
         empty.state_id(),
-        before,
-        "a no-op must not bump the revision"
+        before + 1,
+        "every accepted click bumps the revision, including a no-op"
     );
 }
 
