@@ -1033,11 +1033,34 @@ impl Game {
                             session.open_block = None;
                             session.open_kind = None;
                         }
-                        // The client predicts the grid return but needs the
-                        // authoritative player window to *show* it — without
-                        // this the leftovers never "come back" on screen
-                        // (owner-session "工作台物品仍然没有正常回包").
-                        self.sync_menu_from_inventory(id, report);
+                        // The new menu already holds the returned grid
+                        // (mirrored above), so a delta sync would compare the
+                        // menu to itself and send nothing — the leftovers only
+                        // appeared on the next interaction (owner-session
+                        // "再次与工作台交互时才回包"). Send every slot.
+                        let (window, state, slots) = {
+                            let Some(session) = self.sessions.get(&id) else {
+                                return Ok(());
+                            };
+                            let window = i32::from(session.menu.window_id());
+                            let state = session.menu.state_id();
+                            let slots: Vec<(i16, mc_protocol::packets::play::ItemStack)> = (0
+                                ..session.menu.slot_count())
+                                .map(|slot| {
+                                    (slot as i16, wire_stack(session.menu.display_stack(slot)))
+                                })
+                                .collect();
+                            (window, state, slots)
+                        };
+                        for (slot, item) in slots {
+                            let packet = ContainerSetSlot {
+                                window_id: window,
+                                state_id: state,
+                                slot,
+                                item,
+                            };
+                            self.send(id, &packet, report)?;
+                        }
                     }
                     Err(error) => {
                         debug!(id = %id, %error, "could not restore the player menu on close");
