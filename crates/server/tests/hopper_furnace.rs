@@ -168,7 +168,9 @@ impl Harness {
     }
 
     /// White-box facing surgery (hopper placement orientation is unmodelled —
-    /// first state wins — so sideways hoppers are staged, like the floor).
+    /// Scaffold side-placement yields a sideways hopper; feeding a neighbour
+    /// needs `set_facing` (vanilla placement from the top face yields `down`
+    /// — see the top-feed test).
     fn set_facing(&mut self, x: i32, y: i32, z: i32, facing: &str) {
         let id = self.game.world().get_block_loaded(x, y, z).expect("loaded");
         let name = self

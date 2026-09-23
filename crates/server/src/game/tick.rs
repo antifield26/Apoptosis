@@ -4228,6 +4228,16 @@ impl Game {
                 // here is what keeps the mark's meaning "this live chunk must not
                 // be written".
                 self.placeholder_without_storage.remove(&pos);
+                // AUDIT-17 A17-D-03: drop the chunk's block entities with it,
+                // or the store leaks one payload per abandoned chest/hopper.
+                let stale: Vec<_> = self
+                    .block_entities
+                    .positions()
+                    .filter(|p| (p.x >> 4) == pos.x && (p.z >> 4) == pos.z)
+                    .collect();
+                for be_pos in stale {
+                    self.block_entities.remove(be_pos);
+                }
             }
             for session in self.sessions.values_mut() {
                 if session.sent_chunks.remove(&pos) {

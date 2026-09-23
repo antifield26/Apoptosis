@@ -3279,6 +3279,23 @@ mod tests {
     }
 
     #[test]
+    fn chunk_block_entity_packed_xz_is_one_byte() {
+        // AUDIT-17 A17-E-08: a u16 packed_xz silently shifts every later field
+        // and a real client refuses the whole chunk packet. Pin the width.
+        let packet = sample_chunk();
+        let body = packet.encode().expect("encodes");
+        // Scan for the single block-entity row: packed_xz=5, y=-60 (0xFFC4),
+        // type_id=4, then the NBT payload.
+        let needle = [0x05u8, 0xFF, 0xC4];
+        let hit = body
+            .windows(3)
+            .position(|w| w == needle)
+            .expect("packed_xz + signed y appear as three consecutive bytes");
+        // Immediately after: VarInt type id 4.
+        assert_eq!(body[hit + 3], 4, "type id follows without a padding byte");
+    }
+
+    #[test]
     fn level_chunk_with_light_light_mask_carries_full_array_count() {
         let mut packet = sample_chunk();
         packet.sky_light_mask = vec![0, 2];

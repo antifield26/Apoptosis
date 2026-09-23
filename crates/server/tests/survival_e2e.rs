@@ -1032,7 +1032,8 @@ fn a_stale_result_take_consumes_nothing() {
     assert_eq!(grid_before, 2);
     // Bump the state with a real move: quick-move the stones in hotbar 1
     // (menu 37) elsewhere in the player inventory. An empty-slot pickup is a
-    // no-op that does NOT bump state, which is why the first version of this
+    // Every accepted click bumps state (including no-ops, 7753e03); this
+    // test uses a real quick-move so the bump is observable either way.
     // test accidentally sent a fresh state and crafted for real.
     let fresh = harness.game.menu_state_id(harness.id).expect("state");
     harness.intent(PlayIntent::ContainerClick {

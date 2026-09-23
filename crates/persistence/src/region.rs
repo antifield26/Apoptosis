@@ -885,12 +885,10 @@ mod tests {
     }
 
     #[test]
-    fn the_location_word_is_written_last() {
-        // P08-07: the parity matrix claimed "header word last" with no test
-        // behind it (Audit 05). This is that test: after writing a chunk over
-        // an existing one, the on-disk location word must point at a payload
-        // whose length field fits the allocated sectors — i.e. the commit point
-        // landed after the payload, not before it.
+    fn the_location_word_commits_to_a_fitting_payload() {
+        // P08-07 / AUDIT-16 P-2: this is an end-state pin (location points at a
+        // self-consistent payload), not a claim that the word is journal-absolute
+        // last. Sequence lives in `location_word_is_written_after_payload`.
         use std::io::{Read, Seek, SeekFrom};
         let (_dir, path) = temp_region("region-ordering");
         let mut region = RegionFile::open(&path).expect("opens");

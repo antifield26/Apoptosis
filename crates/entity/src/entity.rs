@@ -708,12 +708,27 @@ mod tests {
 
     #[test]
     fn spawning_respects_the_cap() {
-        // The cap exists so a runaway spawner cannot exhaust memory; fill a small
-        // store by lowering the effective count through repeated spawns is too slow,
-        // so assert the guard's shape instead: a fresh store is far below the cap.
-        let store = store_with_mobs(4);
-        assert!(store.len() < MAX_ENTITIES);
-        assert_eq!(store.len(), 4);
+        // Fill the store to the real cap and prove the next spawn is refused
+        // (AUDIT-17: the old `len() < MAX_ENTITIES` assertion passed at any cap).
+        let mut store = EntityStore::new();
+        for _ in 0..MAX_ENTITIES {
+            store
+                .spawn(
+                    EntityBody::Orb(crate::orb::Orb::new(1)),
+                    Vec3::new(0.0, 64.0, 0.0),
+                )
+                .expect("under the cap");
+        }
+        assert_eq!(store.len(), MAX_ENTITIES);
+        assert!(
+            store
+                .spawn(
+                    EntityBody::Orb(crate::orb::Orb::new(1)),
+                    Vec3::new(0.0, 64.0, 0.0)
+                )
+                .is_err(),
+            "the cap refuses the next spawn"
+        );
     }
 
     #[test]

@@ -3188,7 +3188,8 @@ impl Game {
         }
     }
 
-    /// Opposite cardinal (door fronts face the clicker).
+    /// Opposite cardinal (door `facing` is `look.opposite()` — panel toward
+    /// the clicker; vanilla `DoorBlock.getStateForPlacement`).
     #[allow(
         clippy::match_same_arms,
         reason = "the wildcard names the fallback for corrupt input; the south arm names the verified rule, and merging them hides which facings are real"
