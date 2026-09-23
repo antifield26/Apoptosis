@@ -122,6 +122,56 @@ filled; the effect-modifier gap is recorded, not hidden.
 
 ## Unreleased — Phase 17 (World Interaction)
 
+### P17-05 owner session + follow-up fixes
+
+The build-session verdict (`docs/testing/P17-BUILD-SESSION.md`) passed
+Sessions A–C except a named list of real-client findings. Each was
+root-caused against vanilla/jar semantics and fixed in follow-up commits
+(`80d4558`…`2984341`):
+
+- **Creative inventory takes** — `set_creative_mode_slot` (packet 56) was
+  unmodelled, so every creative-tab take was dropped (`c66f1d2`).
+- **Door facing / flicker** — `DoorBlock` writes
+  `FACING = getHorizontalDirection().getOpposite()`, and that helper is
+  already `look.getOpposite()`, so the door faces the **look** (panel toward
+  the player). The extra opposite put the panel on the far side and the
+  client's prediction jumped (`08cd8b9`). Hinge cursor fallback follows
+  `DoorBlock.getHinge` (`ebf1f19`).
+- **Double-door pair** — same facing, opposite hinge, both halves of the
+  neighbour leaf flip together; the walk starts at the lower half
+  (`80d4558`, `d95ce2a`).
+- **Iron door/trapdoor** — a refused hand toggle falls through to placement
+  (no more fake-placement ghost) (`80d4558`).
+- **Lever/button** — face/facing from the clicked face; wall attachments do
+  **not** derive facing from the look (steep-angle snap onto empty faces);
+  unpowered placement skips `redstone_feed`; buttons pulse (stone 20 /
+  wood 30) and unpress (`ebf1f19`, `ae94f4b`, `2984341`).
+- **Hopper facing** — output is `clickedFace.getOpposite()` (`ebf1f19`).
+- **Chest under hopper** — cover test is full-cube occlusion, not collision
+  solidity (`ebf1f19`).
+- **Sneak place** — `player_input` (packet 43, `i8`, bit 5 = sneak) decoded;
+  sneaking places instead of opening (`a9b1c63`).
+- **Chest texture after reconnect** — chunk packets carry the block-entity
+  type rows (`f16b25a`); `packed_xz` is one byte on the wire, not two
+  (`777a4e0`).
+- **Menu revision** — every accepted click bumps `state_id`, including
+  no-ops (the real client's counter advances on every click) (`7753e03`).
+- **Crafting leftovers** — player-window 2×2 returns on close, and the
+  close path force-sends window 0 (a delta sync against the already-mirrored
+  menu sent nothing) (`ae94f4b`, `f1582fa`).
+- **Furnace** — `lit` flips with burn (client draws the flame from the
+  block property); front faces the clicker (`7753e03`, `08cd8b9`).
+- **Ground items** — merge keeps the **older** stack (the comparison used
+  to keep the younger, so a fresh Q-drop deleted an older same-item stack);
+  the survivor's count rides `set_entity_data` (`747836b`).
+- **Throw jitter** — `add_entity` carries the throw impulse instead of
+  `(0,0,0)`, so the client does not simulate from rest against a flying
+  server item (`dbf8a7d`).
+
+Named, still open: chest open/close animation (`block_event` unmodelled);
+A2 probabilistic empty-face snap (mitigated by the clicked-face fix, not
+re-reported).
+
 ### P17-04 — Observer/dispenser differentials against a live 26.1.2 server
 
 The P17-01 "facing/output question" is settled by measurement, not by
