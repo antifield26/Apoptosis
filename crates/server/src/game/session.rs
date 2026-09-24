@@ -7,8 +7,10 @@
 
 use mc_core::error::{ServerError, ServerResult};
 use mc_entity::combat::FIST_DAMAGE;
+use mc_entity::enchant;
 use mc_entity::entity::{EntityBody, EntityId};
-use mc_entity::inventory::Hand;
+use mc_entity::inventory::{ARMOR_SLOTS, ARMOR_START, Hand};
+use mc_entity::wear::{self, WearOutcome};
 
 use mc_entity::player::{DamageOutcome, GameMode, Player};
 use mc_network::bridge::{ConnectionId, OutboundSender};
@@ -28,14 +30,14 @@ use tracing::{debug, info, warn};
 
 use super::{
     ACTION_ABORT_DESTROY_BLOCK, ACTION_DROP_ONE_ITEM, ACTION_DROP_STACK,
-    ACTION_FINISH_DESTROY_BLOCK, ACTION_START_DESTROY_BLOCK, ACTION_SWAP_ITEM_WITH_OFFHAND,
-    CHAT_TYPE_CHAT, CLIENT_COMMAND_RESPAWN, ChestHalves, EYE_HEIGHT, FALL_DAMAGE_THRESHOLD,
-    GAME_EVENT_CHANGE_GAME_MODE, GAME_EVENT_LEVEL_CHUNKS_LOAD_START, Game,
-    NO_BLOCK_CHANGE_SEQUENCE, OpenKind, TickReport, block_reach, chest_title, chunk_of, clockwise,
-    counter_clockwise, entity_reach, face_offset, floor_to_i32, horizontal_offset, is_chest_family,
-    is_container_block, mark_block_dirty, mirror_inventory, open_kind_for,
-    recompute_crafting_result, refuse_join, take_craft_result, targets_a_block, wire_stack,
-    write_back_block, write_back_inventory,
+    ACTION_FINISH_DESTROY_BLOCK, ACTION_RELEASE_USE_ITEM, ACTION_START_DESTROY_BLOCK,
+    ACTION_SWAP_ITEM_WITH_OFFHAND, CHAT_TYPE_CHAT, CLIENT_COMMAND_RESPAWN, ChestHalves, EYE_HEIGHT,
+    FALL_DAMAGE_THRESHOLD, GAME_EVENT_CHANGE_GAME_MODE, GAME_EVENT_LEVEL_CHUNKS_LOAD_START, Game,
+    NO_BLOCK_CHANGE_SEQUENCE, OpenKind, TickReport, block_reach, block_slots_of, chest_title,
+    chunk_of, clockwise, counter_clockwise, entity_reach, face_offset, floor_to_i32,
+    horizontal_offset, is_chest_family, is_container_block, mark_block_dirty, mirror_inventory,
+    open_kind_for, recompute_crafting_result, refuse_join, take_craft_result, targets_a_block,
+    wire_stack, write_back_block_slots, write_back_inventory,
 };
 
 /// One connected player's server-side state.
@@ -74,10 +76,6 @@ pub(crate) struct Session {
     pub(crate) view_distance: i32,
     /// Position at the start of this tick, for fall-damage accounting.
     pub(crate) tick_start_y: f64,
-    /// Whether the player is holding sneak (`player_input` bit 5). Vanilla
-    /// lets a sneaking player place onto a container instead of opening it,
-    /// and re-aim a hopper instead of opening it (owner-session B5).
-    pub(crate) is_sneaking: bool,
     /// What this connection is permitted to do.
     ///
     /// Set at join from `ops.json` (listed uuids hold their file level,
@@ -117,6 +115,11 @@ pub(crate) struct Session {
     pub(crate) open_kind: Option<OpenKind>,
     /// Whether this player may receive world packets.
     pub(crate) ready: bool,
+    /// `player_input` flag byte (bit 4 jump, bit 5 sneak, bit 6 sprint).
+    ///
+    /// Packed rather than three bools so `Session` stays under clippy's
+    /// excessive-bools bar; the bits are the jar/pumpkin `SPlayerInput` layout.
+    pub(crate) input_flags: u8,
     /// Ticks of shared hurt invulnerability left (P11-06): a mob hit inside the
     /// window is refused, exactly like `Entity::invulnerable_ticks` for
     /// non-players, which the authoritative `Player` does not carry.
@@ -148,6 +151,80 @@ pub(crate) struct Session {
     /// started with. Creative never sets this (instant breaks); abort, held
     /// change, target loss and walking out of reach clear it.
     pub(crate) dig: Option<DigState>,
+    /// Container-0 slots this session edited on the open block menu (A12-06).
+    pub(crate) block_dirty: BTreeSet<u16>,
+    /// Exhaustion accrued since the last food tick (P18-06 jar table).
+    ///
+    /// Movement, jumps, attacks, hurt and mining add here; the food tick drains
+    /// it into [`mc_entity::player::Player::tick_food_ex`]. Passing 0.0 there
+    /// instead is the named-red neutralisation of the sprint table.
+    pub(crate) food_exhaustion: f32,
+    /// Eat/drink in progress (P18-06): ticks left until the food applies.
+    pub(crate) eating: Option<EatState>,
+}
+
+/// One `UseItem` consumable in progress (P18-06).
+///
+/// `ticks_left` counts down in `tick_session_vitals`; at zero the held stack's
+/// `food`/`consumable` apply and one item is consumed. Releasing early
+/// (`player_action` status 5) clears this without restoring anything.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct EatState {
+    /// Ticks remaining before `consume_seconds` elapses.
+    pub(crate) ticks_left: u32,
+    /// Hand the use started in (0 main, 1 off).
+    pub(crate) hand: mc_entity::inventory::Hand,
+}
+
+/// Apply one `on_consume_effects` entry, limited to the P16-03 modelled set.
+///
+/// The wire shape of `ConsumeEffect` is unmodelled (P18-01a keeps the list as
+/// opaque NBT). This walks a tolerant compound shape — `effects` list of
+/// `{id|effect, amplifier, duration}` — and only calls [`Player::give_effect`]
+/// for an id/name [`mc_entity::effect::EffectKind`] already models. Anything
+/// else is ignored rather than guessed.
+fn apply_consume_effect(player: &mut mc_entity::player::Player, tag: &mc_nbt::NbtTag) {
+    let Some(entries) = tag.entries() else {
+        return;
+    };
+    // A single effect compound, or a wrapper with an `effects` list.
+    let mut pending: Vec<&mc_nbt::NbtTag> = Vec::new();
+    for (key, value) in entries {
+        match key.as_str() {
+            "effects" => {
+                if let Some(list) = value.get_list("effects").or(match value {
+                    mc_nbt::NbtTag::List(items) => Some(items.as_slice()),
+                    _ => None,
+                }) {
+                    pending.extend(list.iter());
+                }
+            }
+            "id" | "effect" | "amplifier" | "duration" => {
+                pending.push(tag);
+                break;
+            }
+            _ => {}
+        }
+    }
+    for effect in pending {
+        let id = effect
+            .get_str("id")
+            .or_else(|| effect.get_str("effect"))
+            .and_then(mc_entity::effect::EffectKind::from_name)
+            .map(mc_entity::effect::EffectKind::id)
+            .or_else(|| {
+                effect
+                    .get_i32("id")
+                    .and_then(mc_entity::effect::EffectKind::from_id)
+                    .map(mc_entity::effect::EffectKind::id)
+            });
+        let Some(id) = id else {
+            continue;
+        };
+        let amplifier = effect.get_i32("amplifier").unwrap_or(0);
+        let duration = effect.get_i32("duration").unwrap_or(1);
+        player.give_effect(id, amplifier, duration);
+    }
 }
 
 /// One survival dig in progress.
@@ -192,6 +269,23 @@ pub(crate) struct BreakTarget {
 impl Session {
     pub(crate) fn aabb(&self) -> Aabb {
         Aabb::player(self.player.position)
+    }
+
+    /// Whether the player is holding sneak (`player_input` bit 5). Vanilla
+    /// lets a sneaking player place onto a container instead of opening it,
+    /// and re-aim a hopper instead of opening it (owner-session B5).
+    pub(crate) fn is_sneaking(&self) -> bool {
+        self.input_flags & 32 != 0
+    }
+
+    /// Whether the player is sprinting (`player_input` bit 6).
+    pub(crate) fn is_sprinting(&self) -> bool {
+        self.input_flags & 64 != 0
+    }
+
+    /// Whether the player is holding jump (`player_input` bit 4).
+    pub(crate) fn is_jumping(&self) -> bool {
+        self.input_flags & 16 != 0
     }
 
     /// The chunk this player currently stands in.
@@ -289,7 +383,7 @@ impl Game {
         if !carried.is_empty() {
             let leftover = session.player.inventory.add_stack(carried);
             if leftover.is_empty() {
-                debug!(id = %id, items = carried.count(), "returned the cursor to the inventory");
+                debug!(id = %id, "returned the cursor to the inventory");
             } else {
                 // The inventory was full. Report the loss rather than hiding it; a
                 // drop entity needs a position and this path has already released the
@@ -498,7 +592,7 @@ impl Game {
                 sent_chunks: BTreeSet::new(),
                 center: chunk_of(at.x, at.z),
                 tick_start_y: at.y,
-                is_sneaking: false,
+                input_flags: 0,
                 // The operator list is the authority: a listed uuid gets its file level,
                 // and anyone else is level 0. `ops.json` stores the hyphenated uuid, which is
                 // what `Uuid`'s `Display` produces — the conversion is a real one, since the
@@ -517,6 +611,9 @@ impl Game {
                 last_death_location: None,
                 ack_block_changes_up_to: NO_BLOCK_CHANGE_SEQUENCE,
                 dig: None,
+                block_dirty: BTreeSet::new(),
+                food_exhaustion: 0.0,
+                eating: None,
             },
         );
 
@@ -590,7 +687,7 @@ impl Game {
                     .menu
                     .full_contents()
                     .iter()
-                    .copied()
+                    .cloned()
                     .map(wire_stack)
                     .collect(),
                 carried: wire_stack(session.menu.cursor()),
@@ -838,12 +935,26 @@ impl Game {
                                 yaw: session.player.yaw,
                             }
                         });
+                        // Wear the weapon when the swing connects with a live
+                        // target outside its hurt window (vanilla `hurtEnemy`).
+                        let connects = self.entities.get(target).is_some_and(|entity| {
+                            entity.kind().is_living()
+                                && entity.is_alive()
+                                && entity.invulnerable_ticks == 0
+                        });
                         let died = self.damage_entity(
                             target,
                             damage,
                             mc_entity::combat::DamageSource::PlayerAttack,
                             attacker,
                         );
+                        if connects {
+                            self.wear_held(id, wear::WEAR_ON_ATTACK, report);
+                        }
+                        // jar `FoodConstants.EXHAUSTION_ATTACK`.
+                        if let Some(session) = self.sessions.get_mut(&id) {
+                            session.food_exhaustion += mc_entity::player::EXHAUSTION_ATTACK;
+                        }
                         debug!(id = %id, target = %target, damage, died, "player attack");
                     }
                 }
@@ -867,14 +978,12 @@ impl Game {
                 self.note_block_change_sequence(id, sequence);
                 self.apply_use_item_on(id, position, face, hand, (cursor_x, cursor_y, cursor_z), report);
             }
-            PlayIntent::UseItem { sequence, .. } => {
-                // The item use itself stays the no-op it was (no consumable, no
-                // projectile, no bucket is modelled). Its **sequence** is not a
-                // no-op, though: vanilla feeds it into the same high-water mark
-                // from `handleUseItem`, because the client may have predicted a
-                // block change the use caused, and an unacked prediction freezes
-                // that position on the client.
+            PlayIntent::UseItem { sequence, hand, .. } => {
+                // Vanilla feeds the sequence into the same high-water mark from
+                // `handleUseItem`. The use itself starts a consumable (P18-06)
+                // when the held stack is edible.
                 self.note_block_change_sequence(id, sequence);
+                self.start_eat(id, hand);
             }
             PlayIntent::SetCarriedItem { slot } => self.apply_hotbar(id, slot, report)?,
             // Creative inventory take/place (owner-session blocker). The
@@ -888,12 +997,21 @@ impl Game {
             PlayIntent::ClientCommand { action } => {
                 self.apply_client_command(id, action, report)?;
             }
-            // Movement flags (pumpkin `SPlayerInput`): bit 5 (32) is sneak.
-            // A real client sends this every tick while sneaking; without it
-            // `is_sneaking` never lights and B5 stays broken.
+            // Movement flags (pumpkin `SPlayerInput`): bit 5 (32) is sneak,
+            // bit 4 (16) jump, bit 6 (64) sprint (P18-06 exhaustion table).
             PlayIntent::PlayerInput { input } => {
                 if let Some(session) = self.sessions.get_mut(&id) {
-                    session.is_sneaking = input & 32 != 0;
+                    let was_jumping = session.is_jumping();
+                    session.input_flags = input as u8;
+                    // Rising edge of jump: jar `jumpFromGround` charges once.
+                    if session.is_jumping() && !was_jumping {
+                        let cost = if session.is_sprinting() {
+                            mc_entity::player::EXHAUSTION_SPRINT_JUMP
+                        } else {
+                            mc_entity::player::EXHAUSTION_JUMP
+                        };
+                        session.food_exhaustion += cost;
+                    }
                 }
             }
             PlayIntent::Chat { message, .. } => {
@@ -1004,26 +1122,39 @@ impl Game {
                     // `open` came out of this same session map lines above, so
                     // absence here is a desync bug, surfaced as a typed error
                     // rather than the `expect` this replaced (AGENTS.md §9).
-                    let menu = &self
-                        .sessions
-                        .get(&id)
-                        .ok_or_else(|| {
+                    let (double, dirty, block_slots) = {
+                        let session = self.sessions.get(&id).ok_or_else(|| {
                             ServerError::Invariant(format!(
                                 "container close for {id:?} with no session"
                             ))
-                        })?
-                        .menu;
-                    let double =
-                        menu.container(0).is_some_and(|c| c.len() == 54);
-                    if double {
-                        let items: Vec<mc_entity::stack::ItemStack> =
-                            menu.container(0).map_or(Vec::new(), |c| {
+                        })?;
+                        let double =
+                            session.menu.container(0).is_some_and(|c| c.len() == 54);
+                        let block_slots: Vec<mc_entity::stack::ItemStack> = session
+                            .menu
+                            .container(0)
+                            .map_or(Vec::new(), |c| {
                                 (0..c.len()).map(|i| c.get(i)).collect()
                             });
-                        self.flush_double_menu(id, pos, items, report);
-                    } else if let Some(entity) = self.block_entities.get_mut(pos) {
-                        write_back_block(menu, entity);
+                        (double, session.block_dirty.clone(), block_slots)
+                    };
+                    if double {
+                        self.flush_double_menu(id, pos, block_slots, report);
+                    } else if !dirty.is_empty() {
+                        if let Some(entity) = self.block_entities.get_mut(pos)
+                            && let Some(items) = entity.data.items_mut()
+                        {
+                            for &slot in &dirty {
+                                let index = usize::from(slot);
+                                if index < items.len() && index < block_slots.len() {
+                                    items[index] = block_slots[index].clone();
+                                }
+                            }
+                        }
                         mark_block_dirty(&mut self.world, pos.x, pos.z);
+                    }
+                    if let Some(session) = self.sessions.get_mut(&id) {
+                        session.block_dirty.clear();
                     }
                 }
                 // A crafting grid returns its contents on close (P17-02 Step C):
@@ -1552,6 +1683,99 @@ impl Game {
         Ok(())
     }
 
+    /// Efficiency level of the held item (0 when absent or unenchanted).
+    pub(crate) fn held_efficiency_level(&self, id: ConnectionId) -> i32 {
+        self.sessions.get(&id).map_or(0, |session| {
+            enchant::level_of(
+                session.player.inventory.selected_item().enchantments(),
+                enchant::EFFICIENCY,
+            )
+        })
+    }
+
+    /// Spend durability on the held item (P18-01b wear).
+    ///
+    /// Rolls Unbreaking from the game RNG; a broken tool leaves the slot empty
+    /// and is logged (the item-break *sound* has no protocol channel yet —
+    /// named gap in the parity matrix). Always safe on an empty or
+    /// non-damageable hand.
+    pub(crate) fn wear_held(&mut self, id: ConnectionId, amount: i32, report: &mut TickReport) {
+        let tool_roll = self.random.next_i32() as u32;
+        let armor_roll = self.random.next_f32();
+        let Some(mut stack) = self
+            .sessions
+            .get_mut(&id)
+            .map(|session| session.player.inventory.take_held(Hand::Main))
+        else {
+            return;
+        };
+        if stack.is_empty() {
+            return;
+        }
+        if let Some(name) = stack
+            .item_id()
+            .and_then(|item| self.registries.items.name(item).ok().map(str::to_owned))
+        {
+            wear::ensure_durability(&mut stack, &name);
+        }
+        let is_armor = stack
+            .item_id()
+            .and_then(|item| self.registries.items.name(item).ok())
+            .is_some_and(wear::is_armor_item);
+        let outcome = wear::apply_wear(&mut stack, amount, is_armor, tool_roll, armor_roll);
+        if let Some(session) = self.sessions.get_mut(&id) {
+            let _ = session.player.inventory.replace_held(Hand::Main, stack);
+        }
+        if outcome == WearOutcome::Broken {
+            info!(id = %id, "held item broke at max durability");
+            self.sync_menu_from_inventory(id, report);
+        } else if outcome == WearOutcome::Survived {
+            self.sync_menu_from_inventory(id, report);
+        }
+    }
+
+    /// Spend `WEAR_ON_HIT` on each worn armour piece after a landed hit
+    /// (P18-01b). Breaks empty the slot and resync.
+    pub(crate) fn wear_armor_on_hit(&mut self, id: ConnectionId) {
+        let tool_roll = self.random.next_i32() as u32;
+        let armor_roll = self.random.next_f32();
+        let Some(pieces) = self.sessions.get(&id).map(|session| {
+            (ARMOR_START..ARMOR_START + ARMOR_SLOTS)
+                .map(|slot| (slot, session.player.inventory.slot(slot)))
+                .filter(|(_, stack)| !stack.is_empty())
+                .collect::<Vec<_>>()
+        }) else {
+            return;
+        };
+        let mut broke = false;
+        let mut survived = false;
+        for (slot, mut stack) in pieces {
+            if let Some(name) = stack
+                .item_id()
+                .and_then(|item| self.registries.items.name(item).ok().map(str::to_owned))
+            {
+                wear::ensure_durability(&mut stack, &name);
+            }
+            let outcome =
+                wear::apply_wear(&mut stack, wear::WEAR_ON_HIT, true, tool_roll, armor_roll);
+            if let Some(session) = self.sessions.get_mut(&id) {
+                let _ = session.player.inventory.set_slot(slot, stack);
+            }
+            match outcome {
+                WearOutcome::Broken => broke = true,
+                WearOutcome::Survived => survived = true,
+                WearOutcome::Untouched => {}
+            }
+        }
+        if broke {
+            info!(id = %id, "an armour piece broke at max durability");
+        }
+        if broke || survived {
+            let mut report = TickReport::default();
+            self.sync_menu_from_inventory(id, &mut report);
+        }
+    }
+
     /// Re-mirror the menu from the authoritative inventory and tell the client.
     ///
     /// Called after any action that mutated the inventory without going through the
@@ -1727,6 +1951,7 @@ impl Game {
             let Some(session) = self.sessions.get_mut(&id) else {
                 return;
             };
+            session.block_dirty.clear();
             let window = session.next_window;
             session.next_window = if window >= 127 { 1 } else { window + 1 };
             window
@@ -1780,7 +2005,7 @@ impl Game {
                 .menu
                 .full_contents()
                 .iter()
-                .copied()
+                .cloned()
                 .map(wire_stack)
                 .collect();
             (
@@ -1892,20 +2117,30 @@ impl Game {
             return;
         };
         let pos = mc_container::BlockPos::new(x, y, z);
-        // Ensure the block entity exists so the menu has somewhere to flush to.
-        if self.block_entities.get(pos).is_none() {
-            let entity_kind = match kind {
-                OpenKind::Chest => mc_container::BlockEntityKind::Container,
-                OpenKind::Furnace => mc_container::BlockEntityKind::Furnace,
-                OpenKind::Hopper => mc_container::BlockEntityKind::Hopper,
-                OpenKind::Dispenser => mc_container::BlockEntityKind::Dispenser,
-                // Crafting tables never reach this path (no block entity);
-                // matching here keeps the entity mapping exhaustive if a
-                // caller ever routes one through.
-                OpenKind::Crafting => return,
-            };
-            self.block_entities
-                .insert(mc_container::BlockEntity::new(pos, entity_kind));
+        // Ensure the block entity exists and matches the block's kind (A12-07).
+        let expected_kind = match kind {
+            OpenKind::Chest => mc_container::BlockEntityKind::Container,
+            OpenKind::Furnace => mc_container::BlockEntityKind::Furnace,
+            OpenKind::Hopper => mc_container::BlockEntityKind::Hopper,
+            OpenKind::Dispenser => mc_container::BlockEntityKind::Dispenser,
+            OpenKind::Crafting => return,
+        };
+        let kind_mismatch = self
+            .block_entities
+            .get(pos)
+            .is_some_and(|e| e.kind() != expected_kind);
+        if self.block_entities.get(pos).is_none() || kind_mismatch {
+            let displaced = self.place_block_entity(pos, expected_kind);
+            if let Some(old) = displaced
+                && let Some(items) = old.data.items()
+            {
+                let centre = Vec3::new(f64::from(x) + 0.5, f64::from(y) + 0.5, f64::from(z) + 0.5);
+                for stack in items.iter().filter(|s| !s.is_empty()) {
+                    if let Err(error) = self.spawn_item(stack.clone(), centre) {
+                        warn!(%pos, %error, "a replaced container's item could not be spawned");
+                    }
+                }
+            }
             mark_block_dirty(&mut self.world, x, z);
         }
         // A double chest's partner needs its entity too (P17-02 Step B).
@@ -1936,6 +2171,7 @@ impl Game {
             let Some(session) = self.sessions.get_mut(&id) else {
                 return;
             };
+            session.block_dirty.clear();
             let window = session.next_window;
             session.next_window = if window >= 127 { 1 } else { window + 1 };
             window
@@ -1986,7 +2222,7 @@ impl Game {
                     }
                 };
                 for (index, stack) in slots.iter().enumerate().take(size) {
-                    let _ = block.set(index, *stack);
+                    let _ = block.set(index, stack.clone());
                 }
                 let menu =
                     match mc_container::Menu::chest(window, block, player_container, stack_sizes) {
@@ -2014,7 +2250,7 @@ impl Game {
                         }
                     };
                 for (index, stack) in items.iter().enumerate().take(3) {
-                    let _ = block.set(index, *stack);
+                    let _ = block.set(index, stack.clone());
                 }
                 let menu =
                     match mc_container::Menu::furnace(window, block, player_container, stack_sizes)
@@ -2037,7 +2273,7 @@ impl Game {
                         }
                     };
                 for (index, stack) in items.iter().enumerate().take(5) {
-                    let _ = block.set(index, *stack);
+                    let _ = block.set(index, stack.clone());
                 }
                 let menu = match mc_container::Menu::hopper(
                     window,
@@ -2063,7 +2299,7 @@ impl Game {
                         }
                     };
                 for (index, stack) in items.iter().enumerate().take(9) {
-                    let _ = block.set(index, *stack);
+                    let _ = block.set(index, stack.clone());
                 }
                 let menu = match mc_container::Menu::dispenser(
                     window,
@@ -2095,7 +2331,7 @@ impl Game {
                 .menu
                 .full_contents()
                 .iter()
-                .copied()
+                .cloned()
                 .map(wire_stack)
                 .collect();
             (
@@ -2251,7 +2487,7 @@ impl Game {
                     let packet = ContainerSetContent {
                         window_id: wire_window,
                         state_id: state,
-                        slots: contents.iter().copied().map(wire_stack).collect(),
+                        slots: contents.iter().cloned().map(wire_stack).collect(),
                         carried: wire_stack(session.menu.cursor()),
                     };
                     if let Err(error) = self.send(id, &packet, report) {
@@ -2278,7 +2514,7 @@ impl Game {
             let packet = ContainerSetContent {
                 window_id: wire_window,
                 state_id: state,
-                slots: contents.iter().copied().map(wire_stack).collect(),
+                slots: contents.iter().cloned().map(wire_stack).collect(),
                 carried: wire_stack(session.menu.cursor()),
             };
             // The borrow of `session` ends here; the send needs `&self`.
@@ -2322,7 +2558,7 @@ impl Game {
             // A thrown item appears just in front of the thrower's feet, which is
             // where Vanilla drops it from.
             for stack in &outcome.dropped {
-                if let Err(error) = self.spawn_item(*stack, position) {
+                if let Err(error) = self.spawn_item(stack.clone(), position) {
                     warn!(id = %id, %error, "a dropped item could not be spawned");
                 }
             }
@@ -2341,11 +2577,22 @@ impl Game {
             // inventory back through it); if it vanished since, there is no
             // menu left to flush, so skipping beats the `expect` this
             // replaced — and the signature stays `()` (AGENTS.md §9).
-            if let Some(session) = self.sessions.get(&id) {
-                let menu = &session.menu;
-                if let Some(entity) = self.block_entities.get_mut(pos) {
-                    write_back_block(menu, entity);
-                    mark_block_dirty(&mut self.world, pos.x, pos.z);
+            let dirty = self
+                .sessions
+                .get(&id)
+                .map_or_else(std::collections::BTreeSet::new, |s| {
+                    block_slots_of(&s.menu, &outcome.changed_slots)
+                });
+            if !dirty.is_empty() {
+                if let Some(session) = self.sessions.get_mut(&id) {
+                    session.block_dirty.extend(dirty.iter().copied());
+                }
+                if let Some(session) = self.sessions.get(&id) {
+                    let menu = &session.menu;
+                    if let Some(entity) = self.block_entities.get_mut(pos) {
+                        write_back_block_slots(menu, entity, &dirty);
+                        mark_block_dirty(&mut self.world, pos.x, pos.z);
+                    }
                 }
             }
         }
@@ -2426,9 +2673,30 @@ impl Game {
 
         let mut fell_damage = 0.0f32;
         {
+            // Horizontal distance this step, for the P18-06 exhaustion table.
+            // Swimmable cells charge the swim rate; a sprint charges the sprint
+            // rate; walking and crouching are free (jar `FoodConstants`).
+            let dxz = ((applied.x - current.x).powi(2) + (applied.z - current.z).powi(2)).sqrt();
+            let feet_block = self
+                .world
+                .get_block_loaded(feet_x, feet_y, feet_z)
+                .unwrap_or(0);
+            let swimming = mc_world::collision::is_liquid(&self.registries.blocks, feet_block);
             let Some(session) = self.sessions.get_mut(&id) else {
                 return;
             };
+            if dxz > 0.0 {
+                let cost = if swimming {
+                    mc_entity::player::EXHAUSTION_SWIM * dxz as f32
+                } else if session.is_sprinting() {
+                    mc_entity::player::EXHAUSTION_SPRINT * dxz as f32
+                } else if session.is_sneaking() {
+                    mc_entity::player::EXHAUSTION_CROUCH * dxz as f32
+                } else {
+                    mc_entity::player::EXHAUSTION_WALK * dxz as f32
+                };
+                session.food_exhaustion += cost;
+            }
             session.player.position = mc_world::Vec3::new(applied.x, applied.y, applied.z);
             if let Some((yaw, pitch)) = rotation {
                 session.player.yaw = yaw;
@@ -2648,8 +2916,15 @@ impl Game {
             ACTION_DROP_ONE_ITEM => {
                 self.throw_held(id, true, report);
             }
+            ACTION_RELEASE_USE_ITEM => {
+                // Releasing early restores nothing (`releasing_early_restores_nothing`).
+                if let Some(session) = self.sessions.get_mut(&id) {
+                    session.eating = None;
+                }
+            }
             ACTION_SWAP_ITEM_WITH_OFFHAND => {
                 if let Some(session) = self.sessions.get_mut(&id) {
+                    session.eating = None;
                     let main = session.player.inventory.take_held(Hand::Main);
                     let off = session.player.inventory.take_held(Hand::Off);
                     let _ = session.player.inventory.replace_held(Hand::Main, off);
@@ -2711,6 +2986,61 @@ impl Game {
         }
     }
 
+    /// Start eating/drinking the held consumable (P18-06 `UseItem`).
+    ///
+    /// Requires both `food` and `consumable` on the stack. `always_eat` lets a
+    /// full player eat; otherwise the player must be below full hunger. The
+    /// duration is `consume_seconds * 20` ticks (fixed 20 TPS).
+    pub(crate) fn start_eat(&mut self, id: ConnectionId, hand: i32) {
+        let hand = if hand == 1 { Hand::Off } else { Hand::Main };
+        let Some(session) = self.sessions.get_mut(&id) else {
+            return;
+        };
+        // A second use restarts rather than stacking.
+        session.eating = None;
+        let stack = session.player.inventory.held_item(hand);
+        let (Some(food), Some(consumable)) = (stack.food(), stack.consumable()) else {
+            return;
+        };
+        let full = session.player.food >= mc_entity::player::MAX_FOOD;
+        if full && !food.can_always_eat {
+            return;
+        }
+        let ticks = (f64::from(consumable.consume_seconds) * 20.0)
+            .round()
+            .max(1.0) as u32;
+        session.eating = Some(EatState {
+            ticks_left: ticks,
+            hand,
+        });
+    }
+
+    /// Finish a consumable: apply nutrition/saturation and consume one item.
+    ///
+    /// Consume effects are limited to the P16-03 modelled set
+    /// ([`mc_entity::effect::EffectKind`]); anything else in
+    /// `on_consume_effects` is preserved on the stack and not interpreted.
+    pub(crate) fn finish_eat(&mut self, id: ConnectionId) {
+        let Some(session) = self.sessions.get_mut(&id) else {
+            return;
+        };
+        let Some(eat) = session.eating.take() else {
+            return;
+        };
+        let mut stack = session.player.inventory.held_item(eat.hand);
+        let (Some(food), Some(consumable)) = (stack.food().cloned(), stack.consumable().cloned())
+        else {
+            return;
+        };
+        session.player.eat(food.nutrition, food.saturation);
+        for effect in &consumable.on_consume_effects {
+            apply_consume_effect(&mut session.player, effect);
+        }
+        stack.shrink(1);
+        let _ = session.player.inventory.replace_held(eat.hand, stack);
+        self.sync_menu_from_inventory(id, &mut TickReport::default());
+    }
+
     /// Break a block right now: air, redstone wake, drops, menu sync.
     ///
     /// Shared by creative instant breaks, zero-hardness survival breaks, and
@@ -2733,6 +3063,16 @@ impl Game {
             return;
         }
         debug!(id = %id, x = target.x, y = target.y, z = target.z, "block broken");
+        // P18-01b: a survival break costs the held tool one durability
+        // (creative is free). Happens before the drop roll so a tool that
+        // breaks on this block is gone when loot is computed.
+        if !creative {
+            self.wear_held(id, wear::WEAR_ON_DIG, report);
+        }
+        // jar `FoodConstants.EXHAUSTION_MINE` on a survival break.
+        if !creative && let Some(session) = self.sessions.get_mut(&id) {
+            session.food_exhaustion += mc_entity::player::EXHAUSTION_MINE;
+        }
         // P13-02: breaking a component — or a block next to one — wakes
         // the model with the *removed* id, so dust re-evaluates.
         self.redstone_feed(target.x, target.y, target.z, target.block);
@@ -2862,6 +3202,7 @@ impl Game {
             self.held_item_name(id).as_deref(),
             &name,
             self.on_ground(id),
+            self.held_efficiency_level(id),
         ) {
             mc_registry::DigRate::Unbreakable => {
                 debug!(id = %id, name, "refused to break unbreakable block in survival");
@@ -3519,7 +3860,7 @@ impl Game {
                 Some(entity) => match entity.data.items_mut() {
                     Some(slots) if slots.len() == 27 => {
                         for (index, slot) in slots.iter_mut().enumerate() {
-                            *slot = items[index];
+                            *slot = items[index].clone();
                         }
                         true
                     }
@@ -3534,7 +3875,7 @@ impl Game {
                 Some(entity) => match entity.data.items_mut() {
                     Some(slots) if slots.len() == 27 => {
                         for (index, slot) in slots.iter_mut().enumerate() {
-                            *slot = items[27 + index];
+                            *slot = items[27 + index].clone();
                         }
                         true
                     }
@@ -3553,7 +3894,7 @@ impl Game {
             && slots.len() == items.len()
         {
             for (index, slot) in slots.iter_mut().enumerate() {
-                *slot = items[index];
+                *slot = items[index].clone();
             }
             true
         } else {
@@ -3837,10 +4178,7 @@ impl Game {
         // lets a sneaking player put a block onto a chest, re-aim a hopper, or
         // place against an iron door. Without this, the container/door arms
         // below always win and the held block never lands.
-        let sneaking = self
-            .sessions
-            .get(&id)
-            .is_some_and(|session| session.is_sneaking);
+        let sneaking = self.sessions.get(&id).is_some_and(Session::is_sneaking);
         if !sneaking {
             // Containers open on right-click before any placement: a chest does
             // something even with an empty hand, and holding a placeable block
@@ -4115,7 +4453,7 @@ impl Game {
                 && slots.len() == head.len()
             {
                 for (index, slot) in slots.iter_mut().enumerate() {
-                    *slot = head[index];
+                    *slot = head[index].clone();
                 }
                 mark_block_dirty(&mut self.world, pos.x, pos.z);
             } else {
@@ -4130,7 +4468,7 @@ impl Game {
                 Some(entity) => match entity.data.items_mut() {
                     Some(slots) if slots.len() == 27 => {
                         for (index, slot) in slots.iter_mut().enumerate() {
-                            *slot = items[index];
+                            *slot = items[index].clone();
                         }
                         true
                     }
@@ -4149,7 +4487,7 @@ impl Game {
                 Some(entity) => match entity.data.items_mut() {
                     Some(slots) if slots.len() == 27 => {
                         for (index, slot) in slots.iter_mut().enumerate() {
-                            *slot = items[27 + index];
+                            *slot = items[27 + index].clone();
                         }
                         true
                     }
@@ -4399,14 +4737,10 @@ impl Game {
             session.player.position.y + EYE_HEIGHT,
             session.player.position.z,
         );
-        // The held item's `attack_range` component extends this gate once
-        // components land (P18); until then the hook reports zero for every
-        // item and the gate is byte-for-byte today's.
+        // The held item's `attack_range` component extends this gate (P18-01a):
+        // `max_reach - 3.0` over the base, 0 when the component is absent.
         let held = session.player.inventory.selected_item();
-        let bonus = held
-            .item_id()
-            .and_then(|held_id| self.registries.items.name(held_id).ok())
-            .map_or(0.0, mc_entity::combat::attack_range_bonus);
+        let bonus = mc_entity::combat::attack_range_bonus(held.attack_range());
         let reach = entity_reach() + bonus;
         entity.hitbox().distance_to_sqr(eye) < reach * reach
     }

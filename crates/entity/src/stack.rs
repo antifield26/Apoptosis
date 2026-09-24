@@ -1,8 +1,8 @@
 //! Item stacks.
 //!
 //! An [`ItemStack`] is the unit the inventory, the container payload and the
-//! player's `playerdata/<uuid>.dat` all agree on: a numeric item id plus a
-//! count. Two rules drive the whole type:
+//! player's `playerdata/<uuid>.dat` all agree on: a numeric item id, a count,
+//! and the P18-01a data-component patch. Two rules drive the identity half:
 //!
 //! - **`item_id == 0` is `minecraft:air`** and means "nothing"; the registry's
 //!   own table confirms it (`items.tsv` line 1 is `0\tminecraft:air\t-`). An
@@ -11,6 +11,10 @@
 //!   returns `Option<i32>` and the fields are private, so a caller cannot feed
 //!   an empty stack into an item lookup without going through
 //!   [`ItemStack::is_empty`] first.
+//!
+//! Components ride the same value so inventory moves carry them. Empty stacks
+//! share [`ItemComponents::EMPTY`] and stay cheap; a non-empty patch makes the
+//! stack `Clone` rather than `Copy` (a `Vec` cannot be `Copy`).
 //!
 //! ## Stack size limits, and why they are a table *and* a lookup
 //!
@@ -32,15 +36,20 @@
 //!
 //! - `stacksTo` is **data**: a datapack can change it, and per-stack
 //!   `components` (`max_stack_size`) can override it per item. This crate
-//!   models the hard-coded 26.1.2 vanilla table only.
+//!   models the hard-coded 26.1.2 vanilla table only; a `max_stack_size`
+//!   component is preserved but does not yet retarget [`StackSizeTable`].
 //! - The table covers the families the task named (tools, armour, buckets,
 //!   potions, ender pearls, snowballs, eggs, signs, minecarts, boats) plus the
 //!   other vanilla stack-1 consumables/containers (stews, pies, cake, golden
 //!   apples, saddle, written books, totem, bundle). It is **not** a port of
 //!   every `stacksTo` call site in the game.
-//! - Item **durability**, enchantments and components are not modelled at all:
-//!   a stack here is an identity plus a count (AGENTS.md section 3.3).
+//! - Durability **wear** and the four enchantment *effects* live in [`crate::wear`]
+//!   and [`crate::enchant`]; this module stores and round-trips the components
+//!   (AGENTS.md section 3.3).
 
+use crate::components::{
+    AttackRange, Consumable, DataComponent, EnchantEntry, Food, ItemComponents,
+};
 use mc_core::error::{ServerError, ServerResult};
 use mc_registry::ItemRegistry;
 use std::fmt;
@@ -61,32 +70,25 @@ pub const MAX_STACK_SIZE_1: i32 = 1;
 /// [`ItemStack::new`] enforces without a registry.
 pub const HARD_MAX_STACK_SIZE: i32 = DEFAULT_MAX_STACK_SIZE;
 
-/// A count of items of one type.
+/// A count of items of one type, plus its data-component patch.
 ///
 /// Guarantees: `item_id >= 0`, `0 <= count <= 64`, and `item_id == 0` implies
 /// `count == 0`. The per-item cap from the stack-size table is applied by the
 /// owner of the table (see [`StackSizeTable`]), because a stack on its own has
 /// no registry to consult.
 ///
-/// `PartialOrd`/`Ord` order by `(item_id, count)` so a container payload can be
-/// sorted deterministically for golden comparisons (AGENTS.md section 3.6).
-///
-/// ```
-/// # use mc_entity::ItemStack;
-/// let mut stack = ItemStack::new(1, 64).expect("stone stacks to 64");
-/// assert_eq!(stack.count(), 64);
-/// assert_eq!(stack.grow(10), 10, "a full stack cannot take more");
-/// assert_eq!(stack.shrink(4), 4);
-/// assert_eq!(stack.count(), 60);
-/// assert!(ItemStack::EMPTY.is_empty());
-/// assert_eq!(ItemStack::EMPTY.item_id(), None);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// `Eq`/`Hash` include the component patch (float fields compared by bit
+/// pattern), so two renamed swords are not the same stack. Merge uses
+/// [`ItemStack::same_item`], which is the identity half only plus matching
+/// components — vanilla will not combine a damaged and a fresh pickaxe.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ItemStack {
     /// `minecraft:air` (0) for an empty stack, otherwise a registry id.
     item_id: i32,
     /// Number of items, `0` for an empty stack.
     count: i32,
+    /// Data components (P18-01a), empty for a plain stack.
+    components: ItemComponents,
 }
 
 impl ItemStack {
@@ -94,9 +96,10 @@ impl ItemStack {
     pub const EMPTY: Self = Self {
         item_id: AIR_ITEM_ID,
         count: 0,
+        components: ItemComponents::EMPTY,
     };
 
-    /// Build a stack of `item_id` with `count` items.
+    /// Build a stack of `item_id` with `count` items and no components.
     ///
     /// `count <= 0`, or `item_id == 0`, yields [`ItemStack::EMPTY`]: vanilla
     /// treats a non-positive count as "no items", and `air` is not a carryable
@@ -122,7 +125,31 @@ impl ItemStack {
         if item_id == AIR_ITEM_ID || count <= 0 {
             return Ok(Self::EMPTY);
         }
-        Ok(Self { item_id, count })
+        Ok(Self {
+            item_id,
+            count,
+            components: ItemComponents::EMPTY,
+        })
+    }
+
+    /// Build a stack of `item_id`/`count` carrying `components`.
+    ///
+    /// Same limits as [`ItemStack::new`]; a non-empty patch on an empty stack
+    /// is discarded with the stack (air holds nothing).
+    ///
+    /// # Errors
+    ///
+    /// As for [`ItemStack::new`].
+    pub fn with_components(
+        item_id: i32,
+        count: i32,
+        components: ItemComponents,
+    ) -> ServerResult<Self> {
+        let mut stack = Self::new(item_id, count)?;
+        if !stack.is_empty() {
+            stack.components = components;
+        }
+        Ok(stack)
     }
 
     /// Build a stack **without** any limit check, for tests that need to
@@ -135,7 +162,11 @@ impl ItemStack {
     #[cfg(test)]
     #[must_use]
     pub(crate) const fn from_raw_parts(item_id: i32, count: i32) -> Self {
-        Self { item_id, count }
+        Self {
+            item_id,
+            count,
+            components: ItemComponents::EMPTY,
+        }
     }
 
     /// Replace this stack with [`ItemStack::EMPTY`], yielding what was held.
@@ -173,10 +204,84 @@ impl ItemStack {
         }
     }
 
-    /// Whether `other` is a non-empty stack of the same item.
+    /// The data-component patch (P18-01a).
+    #[must_use]
+    pub const fn components(&self) -> &ItemComponents {
+        &self.components
+    }
+
+    /// Mutable access to the data-component patch.
+    pub fn components_mut(&mut self) -> &mut ItemComponents {
+        &mut self.components
+    }
+
+    /// `minecraft:food`, if this stack is edible (P18-06).
+    #[must_use]
+    pub fn food(&self) -> Option<&Food> {
+        self.components.food()
+    }
+
+    /// `minecraft:consumable`, if this stack can be used up (P18-06).
+    #[must_use]
+    pub fn consumable(&self) -> Option<&Consumable> {
+        self.components.consumable()
+    }
+
+    /// `minecraft:attack_range`, if this stack extends entity reach.
+    #[must_use]
+    pub fn attack_range(&self) -> Option<&AttackRange> {
+        self.components.attack_range()
+    }
+
+    /// `minecraft:damage` (durability spent), if present.
+    #[must_use]
+    pub fn damage(&self) -> Option<i32> {
+        self.components.damage()
+    }
+
+    /// `minecraft:max_damage` (durability total), if present.
+    #[must_use]
+    pub fn max_damage(&self) -> Option<i32> {
+        self.components.max_damage()
+    }
+
+    /// `minecraft:custom_name`, if present.
+    #[must_use]
+    pub fn custom_name(&self) -> Option<&str> {
+        self.components.custom_name()
+    }
+
+    /// `minecraft:repair_cost`, if present (stored for P21 anvils).
+    #[must_use]
+    pub fn repair_cost(&self) -> Option<i32> {
+        self.components.repair_cost()
+    }
+
+    /// `minecraft:enchantments`, if present.
+    #[must_use]
+    pub fn enchantments(&self) -> Option<&[EnchantEntry]> {
+        self.components.enchantments()
+    }
+
+    /// `minecraft:stored_enchantments`, if present.
+    #[must_use]
+    pub fn stored_enchantments(&self) -> Option<&[EnchantEntry]> {
+        self.components.stored_enchantments()
+    }
+
+    /// Attach or replace one component.
+    pub fn set_component(&mut self, component: DataComponent) {
+        if !self.is_empty() {
+            self.components.set(component);
+        }
+    }
+
+    /// Whether `other` is a non-empty stack of the same item **and** the same
+    /// components — the merge key. A damaged and a fresh tool are different
+    /// stacks; vanilla's `isSameItemSameComponents`.
     #[must_use]
     pub fn same_item(&self, other: &Self) -> bool {
-        !self.is_empty() && self.item_id == other.item_id
+        !self.is_empty() && self.item_id == other.item_id && self.components == other.components
     }
 
     /// Whether this stack is within the limits [`ItemStack::new`] enforces **on `item_id` and `count`**.
@@ -209,9 +314,12 @@ impl ItemStack {
         }
         let taken = n.min(self.count);
         self.count -= taken;
+        // A split keeps the same components on both halves (vanilla copies the
+        // whole stack and shrinks the count).
         let out = Self {
             item_id: self.item_id,
             count: taken,
+            components: self.components.clone(),
         };
         if self.count <= 0 {
             *self = Self::EMPTY;
@@ -890,6 +998,19 @@ mod tests {
             ItemStack::new(1, -5).expect("negative count"),
             ItemStack::EMPTY
         );
+    }
+
+    /// A12-03 hostile width: a decoded stack's count cannot exceed the hard
+    /// stack limit. The entity type already refuses this in `new`; this pins
+    /// the same bound against a hand-built count so a future `from_raw` leak
+    /// fails here rather than at the inventory's per-item check.
+    #[test]
+    fn hostile_counts_are_refused_or_normalised() {
+        assert!(ItemStack::new(1, 65).is_err());
+        assert!(ItemStack::new(1, i32::MAX).is_err());
+        assert!(ItemStack::new(1, i32::MIN).is_ok_and(|s| s.is_empty()));
+        assert!(ItemStack::new(-1, 1).is_err());
+        assert!(ItemStack::new(1, 64).is_ok_and(|s| s.count() == 64));
     }
 
     #[test]

@@ -239,7 +239,7 @@ impl ClickOutcome {
             .extend(other.changed_slots.iter().copied());
         self.cursor_changed |= other.cursor_changed;
         self.full_resync |= other.full_resync;
-        self.dropped.extend(other.dropped.iter().copied());
+        self.dropped.extend(other.dropped.iter().cloned());
     }
 }
 
@@ -762,8 +762,8 @@ impl Menu {
 
     /// The cursor stack.
     #[must_use]
-    pub const fn cursor(&self) -> ItemStack {
-        self.cursor
+    pub fn cursor(&self) -> ItemStack {
+        self.cursor.clone()
     }
 
     /// The stack shown in a menu slot, or empty when out of range.
@@ -777,7 +777,7 @@ impl Menu {
 
     /// The item's own maximum stack size.
     #[must_use]
-    pub fn item_limit(&self, stack: ItemStack) -> i32 {
+    pub fn item_limit(&self, stack: &ItemStack) -> i32 {
         match stack.item_id() {
             Some(id) => self.stack_sizes.max_stack_size(id),
             None => 0,
@@ -787,7 +787,7 @@ impl Menu {
     /// The effective limit for a menu slot: the item's maximum, capped by the
     /// slot's own ceiling.
     #[must_use]
-    pub fn slot_limit(&self, index: usize, stack: ItemStack) -> i32 {
+    pub fn slot_limit(&self, index: usize, stack: &ItemStack) -> i32 {
         let Some(mapping) = self.slots.get(index) else {
             return 0;
         };
@@ -820,18 +820,21 @@ impl Menu {
                 "menu slot {index} does not exist"
             )));
         };
-        let limit = self.slot_limit(index, stack);
+        let limit = self.slot_limit(index, &stack);
         let stack = if stack.is_empty() || stack.count() <= limit {
             stack
         } else {
-            ItemStack::new(stack.item_id().unwrap_or(0), limit)?
+            // Clamp the count while keeping the component patch.
+            let mut clamped = ItemStack::new(stack.item_id().unwrap_or(0), limit)?;
+            *clamped.components_mut() = stack.components().clone();
+            clamped
         };
         self.containers[usize::from(mapping.container)].set(usize::from(mapping.slot), stack)
     }
 
     /// Set the cursor, clamping to the item's own limit.
     pub fn set_cursor(&mut self, mut stack: ItemStack) {
-        let limit = self.item_limit(stack);
+        let limit = self.item_limit(&stack);
         if !stack.is_empty() && stack.count() > limit {
             stack.shrink(stack.count() - limit);
         }
@@ -847,8 +850,8 @@ impl Menu {
         if stack.is_empty() {
             return ItemStack::EMPTY;
         }
-        let limit = self.item_limit(stack);
-        let mut cursor = self.cursor;
+        let limit = self.item_limit(&stack);
+        let mut cursor = self.cursor.clone();
         let remainder = cursor.merge_capped(&mut stack, limit);
         self.cursor = cursor;
         if remainder > 0 {
@@ -890,7 +893,7 @@ impl Menu {
         if !existing.is_empty() && !existing.same_item(&stack) {
             return stack;
         }
-        let limit = self.slot_limit(index, stack);
+        let limit = self.slot_limit(index, &stack);
         if existing.is_empty() {
             let mut placed = stack;
             let mut overflow = ItemStack::EMPTY;
@@ -904,7 +907,7 @@ impl Menu {
             let _ = self.set_slot(index, placed);
             return overflow;
         }
-        let mut merged = existing;
+        let mut merged = existing.clone();
         let mut incoming = stack;
         let remainder = merged.merge_capped(&mut incoming, limit);
         if merged != existing {
@@ -1082,7 +1085,7 @@ impl Menu {
         if !slot_stack.same_item(&self.cursor) {
             // Different items: a left click swaps, a right click does nothing.
             if !click.secondary {
-                let cursor = self.cursor;
+                let cursor = self.cursor.clone();
                 self.set_slot(index, cursor)?;
                 self.set_cursor(slot_stack);
                 outcome.changed_slots.insert(index as u16);
@@ -1092,7 +1095,7 @@ impl Menu {
         }
 
         // Same item: merge.
-        let room = self.slot_limit(index, slot_stack) - slot_stack.count();
+        let room = self.slot_limit(index, &slot_stack) - slot_stack.count();
         if room <= 0 {
             return Ok(outcome);
         }
@@ -1180,10 +1183,10 @@ impl Menu {
             if !a.is_empty() && !partner_mapping.may_place() {
                 return Ok(outcome);
             }
-            if !b.is_empty() && b.count() > self.slot_limit(index, b) {
+            if !b.is_empty() && b.count() > self.slot_limit(index, &b) {
                 return Ok(outcome);
             }
-            if !a.is_empty() && a.count() > self.slot_limit(usize::from(partner), a) {
+            if !a.is_empty() && a.count() > self.slot_limit(usize::from(partner), &a) {
                 return Ok(outcome);
             }
             self.set_slot(index, b)?;
@@ -1192,7 +1195,7 @@ impl Menu {
             outcome.changed_slots.insert(partner);
         } else if b.is_empty() && mapping.may_place() {
             // With a cursor, an empty partner takes the cursor.
-            let cursor = self.cursor;
+            let cursor = self.cursor.clone();
             let overflow = self.insert(usize::from(partner), cursor);
             if overflow.is_empty() {
                 self.set_cursor(ItemStack::EMPTY);
@@ -1218,7 +1221,7 @@ impl Menu {
             return Ok(outcome);
         }
         let count = if click.button == 2 {
-            self.item_limit(stack)
+            self.item_limit(&stack)
         } else {
             stack.count()
         };
@@ -1322,7 +1325,7 @@ impl Menu {
                                 if !target.is_empty() && !target.same_item(&self.cursor) {
                                     return None;
                                 }
-                                let room = self.slot_limit(usize::from(*slot), self.cursor)
+                                let room = self.slot_limit(usize::from(*slot), &self.cursor)
                                     - target.count();
                                 (room > 0).then_some((*slot, room))
                             })
@@ -1361,7 +1364,7 @@ impl Menu {
                             }
                             let target = self.display_stack(usize::from(slot));
                             let room =
-                                self.slot_limit(usize::from(slot), self.cursor) - target.count();
+                                self.slot_limit(usize::from(slot), &self.cursor) - target.count();
                             if room <= 0 {
                                 continue;
                             }
@@ -1393,7 +1396,7 @@ impl Menu {
         if !mapping.may_pickup() {
             return Ok(outcome);
         }
-        let mut gathered = self.cursor;
+        let mut gathered = self.cursor.clone();
         if gathered.is_empty() {
             let target = self.display_stack(index);
             if target.is_empty() {
@@ -1405,7 +1408,7 @@ impl Menu {
         if gathered.is_empty() {
             return Ok(outcome);
         }
-        let limit = self.item_limit(gathered);
+        let limit = self.item_limit(&gathered);
         for slot in 0..self.slots.len() {
             if gathered.count() >= limit {
                 break;

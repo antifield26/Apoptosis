@@ -338,7 +338,8 @@ fn transacting_then_closing_splits_back_into_halves() {
         .block_entities()
         .get(mc_container::BlockPos::new(ax, ay, az))
         .and_then(|e| e.data.items())
-        .expect("west items")[3];
+        .expect("west items")[3]
+        .clone();
     assert_eq!(west.item_id(), Some(harness.item("minecraft:stone")));
 }
 

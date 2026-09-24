@@ -2,8 +2,8 @@
 //! ignored (P07-07, P07-15).
 
 use super::{
-    Axes, Condition, ExecuteError, MAX_MODIFIERS, Modifier, UNSUPPORTED_CONDITIONS,
-    UNSUPPORTED_MODIFIERS, align, parse, resolve_coordinates,
+    Anchor, Axes, Condition, ExecuteError, FacingTarget, MAX_MODIFIERS, Modifier, RotationSource,
+    UNSUPPORTED_CONDITIONS, UNSUPPORTED_MODIFIERS, align, parse, resolve_coordinates,
 };
 use crate::selector::SelectorKind;
 
@@ -323,6 +323,70 @@ fn bare_tilde_resolves_to_the_source_and_not_to_zero() {
         resolve_coordinates(Some(5), Some(-3), None, source),
         (5, -3, -20)
     );
+}
+
+#[test]
+fn rotated_facing_and_anchored_parse_in_every_supported_form() {
+    let chain = parse_str(
+        "rotated as @p facing entity @e eyes anchored feet rotated 90 ~ facing 1 2 3 run say hi",
+    )
+    .expect("parses");
+    assert_eq!(chain.modifiers.len(), 5);
+    assert!(matches!(
+        &chain.modifiers[0],
+        Modifier::Rotated(RotationSource::As(s)) if s.kind == SelectorKind::NearestPlayer
+    ));
+    assert!(matches!(
+        &chain.modifiers[1],
+        Modifier::Facing(FacingTarget::Entity {
+            anchor: Anchor::Eyes,
+            ..
+        })
+    ));
+    assert!(matches!(
+        &chain.modifiers[2],
+        Modifier::Anchored(Anchor::Feet)
+    ));
+    assert!(matches!(
+        &chain.modifiers[3],
+        Modifier::Rotated(RotationSource::Fixed {
+            yaw: Some(yaw),
+            pitch: None
+        }) if (*yaw - 90.0).abs() < f64::EPSILON
+    ));
+    assert!(matches!(
+        &chain.modifiers[4],
+        Modifier::Facing(FacingTarget::Position {
+            x: Some(1),
+            y: Some(2),
+            z: Some(3)
+        })
+    ));
+    assert!(chain.has_rotation_modifier());
+
+    // `facing entity` defaults its anchor to `eyes`, like Vanilla.
+    let chain = parse_str("facing entity @s run x").expect("parses");
+    assert!(matches!(
+        &chain.modifiers[0],
+        Modifier::Facing(FacingTarget::Entity {
+            anchor: Anchor::Eyes,
+            ..
+        })
+    ));
+
+    // Bad anchors and incomplete forms are refused with a reason.
+    for text in [
+        "anchored waist run x",
+        "anchored run x",
+        "rotated 90 run x",
+        "rotated as run x",
+        "facing entity run x",
+        "facing 1 2 run x",
+        "rotated nan 0 run x",
+    ] {
+        let error = parse_str(text).expect_err(text);
+        assert!(!error.to_string().is_empty(), "{text}");
+    }
 }
 
 #[test]

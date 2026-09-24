@@ -57,8 +57,8 @@ pub mod tree;
 pub use argument::Coordinate;
 pub use argument::{Argument, ArgumentKind, ArgumentValue, ParseError, ValueRange};
 pub use dispatch::{CommandOutcome, Dispatcher, Suggestion};
-pub use execute::{ExecuteChain, ExecuteError, Modifier};
-pub use selector::{Selector, SelectorError, SelectorKind};
+pub use execute::{Anchor, ExecuteChain, ExecuteError, FacingTarget, Modifier, RotationSource};
+pub use selector::{Selector, SelectorError, SelectorKind, sort_and_limit};
 pub use source::{CommandSource, PermissionLevel, SourceKind};
 pub use tree::{Command, CommandTree, TreeError};
 

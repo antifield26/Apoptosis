@@ -101,13 +101,17 @@
 //! - no items falling slower in water ([`item_entity`]);
 //! - no container transactions (clicks, drags, shift-click, cursor stack);
 //! - no crafting: payload slots 0 and 1..=4 are always empty;
-//! - armour/toughness absorb and `DamageSource` typing exist (P16-01); no
-//!   enchantments or absorption hearts;
+//! - armour/toughness absorb, `DamageSource` typing (P16-01) and the four
+//!   P18-01b enchantment *effects* (Efficiency, Sharpness, Protection,
+//!   Unbreaking) exist; absorption hearts and every *other* enchantment stay
+//!   inert (see [`enchant::INERT_ENCHANTMENTS`]);
 //! - no `keepInventory` game rule lookup (the caller passes the flag) and no
 //!   item dropping (the caller receives the stacks);
 //! - no difficulty: starvation damage is the normal/hard value;
-//! - no per-stack `components`/durability/enchantments, so a datapack's
-//!   `max_stack_size` override is not honoured.
+//! - durability wear (dig/attack/hit) and break-at-max are applied
+//!   ([`wear`]); the item-break *sound* has no protocol channel yet (named
+//!   gap in the parity matrix). A datapack's `max_stack_size` override is
+//!   preserved as a component but does not retarget [`StackSizeTable`].
 
 #![forbid(unsafe_code)]
 // Entity code crosses numeric domains constantly: an item count is an `i32` on
@@ -125,7 +129,9 @@
 )]
 
 pub mod combat;
+pub mod components;
 pub mod effect;
+pub mod enchant;
 pub mod entity;
 pub mod identity;
 pub mod inventory;
@@ -137,6 +143,21 @@ pub mod player;
 pub mod profile;
 pub mod projectile;
 pub mod stack;
+pub mod wear;
+
+pub use components::{
+    AttackRange, Consumable, ConsumeAnimation, DataComponent, Food, ItemComponents, SoundRef,
+    decode_payload, encode_payload, from_nbt as components_from_nbt, payload_prefix_len,
+    to_nbt as components_to_nbt, unknown_from_wire,
+};
+pub use enchant::{
+    EFFICIENCY, INERT_ENCHANTMENTS, PROTECTION, SHARPNESS, UNBREAKING, damage_after_protection,
+    level_of as enchant_level, protection_points, sharpness_bonus, unbreaking_applies,
+};
+pub use wear::{
+    WEAR_ON_ATTACK, WEAR_ON_DIG, WEAR_ON_HIT, WearOutcome, apply_wear, ensure_durability,
+    is_armor_item, max_damage_of,
+};
 
 pub use effect::ActiveEffect;
 pub use entity::{AIR_TICKS, Entity, EntityBody, EntityId, EntityKind, EntityStore, MAX_ENTITIES};
@@ -152,8 +173,11 @@ pub use mob::{
 };
 pub use pathfind::{BlockView, SearchLimits, SearchStats, find_path, find_path_with_stats};
 pub use player::{
-    DamageOutcome, EXHAUSTION_PER_POINT, GameMode, MAX_FOOD, MAX_HEALTH, MAX_SATURATION, Player,
-    REGEN_FOOD_THRESHOLD, STARVATION_DAMAGE,
+    DamageOutcome, EXHAUSTION_ATTACK, EXHAUSTION_CAP, EXHAUSTION_CROUCH, EXHAUSTION_HURT,
+    EXHAUSTION_JUMP, EXHAUSTION_MINE, EXHAUSTION_PER_POINT, EXHAUSTION_SPRINT,
+    EXHAUSTION_SPRINT_JUMP, EXHAUSTION_SWIM, EXHAUSTION_WALK, GameMode, MAX_FOOD, MAX_HEALTH,
+    MAX_SATURATION, Player, REGEN_FOOD_THRESHOLD, STARVATION_DAMAGE, STARVE_FLOOR_EASY,
+    STARVE_FLOOR_HARD, STARVE_FLOOR_NORMAL, starve_floor,
 };
 pub use profile::{GameProfile, validate_username};
 pub use projectile::{MAX_LIFETIME_ARROW, MAX_LIFETIME_SNOWBALL, Projectile, ProjectileKind};

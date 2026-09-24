@@ -146,7 +146,7 @@ impl PlayerInventory {
     #[must_use]
     pub fn new(stack_sizes: StackSizeTable) -> Self {
         Self {
-            slots: [ItemStack::EMPTY; LAST_STORED_SLOT + 1],
+            slots: std::array::from_fn(|_| ItemStack::EMPTY),
             selected_hotbar: 0,
             stack_sizes,
         }
@@ -165,7 +165,7 @@ impl PlayerInventory {
     /// the honest answer for a slot this type does not have.
     #[must_use]
     pub fn slot(&self, index: usize) -> ItemStack {
-        self.slots.get(index).copied().unwrap_or(ItemStack::EMPTY)
+        self.slots.get(index).cloned().unwrap_or(ItemStack::EMPTY)
     }
 
     /// Write a stored slot.
@@ -183,7 +183,7 @@ impl PlayerInventory {
                 "inventory slot {index} is out of range (0..={LAST_STORED_SLOT})"
             )));
         }
-        let limit = self.limit_for(stack);
+        let limit = self.limit_for(&stack);
         if stack.count() > limit {
             return Err(ServerError::InvalidAction(format!(
                 "slot {index}: item {} x{} exceeds the maximum stack size {limit}",
@@ -295,7 +295,7 @@ impl PlayerInventory {
         let mut out = Vec::new();
         for slot in &mut self.slots {
             if !slot.is_empty() {
-                out.push(*slot);
+                out.push(slot.clone());
                 *slot = ItemStack::EMPTY;
             }
         }
@@ -307,7 +307,7 @@ impl PlayerInventory {
         if stack.is_empty() {
             return ItemStack::EMPTY;
         }
-        let limit = self.limit_for(stack);
+        let limit = self.limit_for(&stack);
         let candidates = (0..HOTBAR_SLOTS).chain(MAIN_START..ARMOR_START);
         // Pass 1: top up stacks of the same item. `merge_capped` is called on
         // the *slot*, so the slot is filled and `stack` keeps what did not fit.
@@ -315,7 +315,7 @@ impl PlayerInventory {
             if !self.slots[index].same_item(&stack) {
                 continue;
             }
-            let mut target = self.slots[index];
+            let mut target = self.slots[index].clone();
             target.merge_capped(&mut stack, limit);
             self.slots[index] = target;
             if stack.is_empty() {
@@ -398,16 +398,25 @@ impl PlayerInventory {
         let mut payload = vec![ItemStack::EMPTY; CONTAINER_SLOT_COUNT];
         // Hotbar -> client 36..=44.
         for index in 0..HOTBAR_SLOTS {
-            payload[MAIN_START + MAIN_SLOTS + index] = self.slots[index];
+            payload[MAIN_START + MAIN_SLOTS + index] = self.slots[index].clone();
         }
         // Main inventory -> client 9..=35 (the same indices).
-        payload[MAIN_START..ARMOR_START].copy_from_slice(&self.slots[MAIN_START..ARMOR_START]);
+        for (dst, src) in payload[MAIN_START..ARMOR_START]
+            .iter_mut()
+            .zip(&self.slots[MAIN_START..ARMOR_START])
+        {
+            *dst = src.clone();
+        }
         // Armour: stored boots..helmet (36..=39) -> menu 5..=8 in the same order,
         // because the jar's `SLOT_IDS` loop starts at FEET. See the doc comment
         // above for the bytecode this comes from. Offhand (40) -> menu 45.
-        payload[ARMOR_MENU_START..ARMOR_MENU_START + ARMOR_SLOTS]
-            .copy_from_slice(&self.slots[ARMOR_START..ARMOR_START + ARMOR_SLOTS]);
-        payload[OFFHAND_MENU_SLOT] = self.slots[OFFHAND_SLOT];
+        for (dst, src) in payload[ARMOR_MENU_START..ARMOR_MENU_START + ARMOR_SLOTS]
+            .iter_mut()
+            .zip(&self.slots[ARMOR_START..ARMOR_START + ARMOR_SLOTS])
+        {
+            *dst = src.clone();
+        }
+        payload[OFFHAND_MENU_SLOT] = self.slots[OFFHAND_SLOT].clone();
         payload
     }
 
@@ -419,7 +428,7 @@ impl PlayerInventory {
 
     /// Maximum stack size to apply to `stack` (1 for an empty stack, which is
     /// never inserted anyway).
-    fn limit_for(&self, stack: ItemStack) -> i32 {
+    fn limit_for(&self, stack: &ItemStack) -> i32 {
         stack
             .item_id()
             .map_or(1, |id| self.stack_sizes.max_stack_size(id))

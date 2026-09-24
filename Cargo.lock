@@ -305,6 +305,7 @@ version = "0.2.0"
 dependencies = [
  "flate2",
  "mc-core",
+ "mc-entity",
  "mc-nbt",
  "mc-test-support",
  "serde_json",
@@ -411,6 +412,7 @@ dependencies = [
  "mc-persistence",
  "mc-registry",
  "mc-world",
+ "serde_json",
  "thiserror",
  "tracing",
 ]

@@ -2617,3 +2617,280 @@ fn a_drop_that_falls_is_announced_as_a_relative_move() {
          hanging where it was spawned while the server's copy reaches the ground"
     );
 }
+
+/// A12-06: two viewers of the same chest interleave writes to *different*
+/// slots. Both writes must survive — the old `write_back_block` overwrote the
+/// whole array from each session's stale snapshot (last-writer-wins).
+#[test]
+fn two_viewers_interleaving_writes_to_different_slots_keep_both() {
+    use mc_network::bridge::{ClientEvent, ClientEventKind, ConnectionId, OutboundSender};
+
+    let mut harness = Harness::new("a12-06-dual-viewer");
+    let (sx, sy, sz) = harness.build_floor();
+    let id_a = harness.id;
+    let id_b = ConnectionId(2);
+    let mut out_a = harness.join("Alice");
+
+    // Second session on the same game.
+    let (outbound_b, mut out_b) = OutboundSender::pair(id_b, 8192);
+    harness
+        .events
+        .try_send(ClientEvent {
+            id: id_b,
+            kind: ClientEventKind::Joined {
+                profile: mc_network::auth::offline_profile("Bob"),
+                outbound: outbound_b,
+            },
+        })
+        .expect("second join queued");
+    harness.game.tick().expect("tick applies the join");
+    let _ = Harness::drain_ids(&mut out_a);
+    let _ = Harness::drain_ids(&mut out_b);
+
+    let chest = harness
+        .game
+        .registries()
+        .blocks
+        .default_state("minecraft:chest")
+        .expect("chest");
+    let at = (sx + 1, sy, sz);
+    harness
+        .game
+        .world_mut()
+        .set_block(at.0, at.1, at.2, chest)
+        .expect("place chest");
+    let pos = mc_container::BlockPos::new(at.0, at.1, at.2);
+    harness.run(1);
+    assert!(
+        harness.game.block_entities().get(pos).is_some(),
+        "the placed chest has an entity before either viewer opens it"
+    );
+
+    let stone = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:stone")
+        .expect("stone");
+    let dirt = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:dirt")
+        .expect("dirt");
+
+    // Both open the same chest.
+    for (id, out) in [(id_a, &mut out_a), (id_b, &mut out_b)] {
+        let _ = Harness::drain_ids(out);
+        harness
+            .events
+            .try_send(ClientEvent {
+                id,
+                kind: ClientEventKind::Intent(PlayIntent::UseItemOn {
+                    hand: 0,
+                    position: block_position(at.0, at.1, at.2),
+                    face: 1,
+                    cursor_x: 0.5,
+                    cursor_y: 1.0,
+                    cursor_z: 0.5,
+                    inside_block: false,
+                    world_border_hit: false,
+                    sequence: 90,
+                }),
+            })
+            .expect("open queued");
+        harness.game.tick().expect("tick opens");
+    }
+    let window_a = i32::from(
+        harness
+            .game
+            .menu_window_id(id_a)
+            .expect("Alice's chest window"),
+    );
+    let window_b = i32::from(
+        harness
+            .game
+            .menu_window_id(id_b)
+            .expect("Bob's chest window"),
+    );
+
+    // Alice picks up stone from her hotbar (menu 54) and places it into chest
+    // slot 0 (menu 0). Two accepted clicks, each writing only its own slots.
+    {
+        let player = harness.game.player_mut(id_a).expect("Alice");
+        player
+            .inventory
+            .set_slot(
+                0,
+                mc_entity::stack::ItemStack::new(stone, 7).expect("stack"),
+            )
+            .expect("give Alice stone");
+    }
+    harness
+        .events
+        .try_send(ClientEvent {
+            id: id_a,
+            kind: ClientEventKind::Intent(PlayIntent::ContainerClick {
+                window_id: window_a,
+                state_id: harness.game.menu_state_id(id_a).expect("state"),
+                slot: 54,
+                button: 0,
+                click_type: 0, // pickup onto cursor
+            }),
+        })
+        .expect("Alice pickup queued");
+    harness.game.tick().expect("Alice picks up");
+    harness
+        .events
+        .try_send(ClientEvent {
+            id: id_a,
+            kind: ClientEventKind::Intent(PlayIntent::ContainerClick {
+                window_id: window_a,
+                state_id: harness.game.menu_state_id(id_a).expect("state"),
+                slot: 0,
+                button: 0,
+                click_type: 0, // place into chest slot 0
+            }),
+        })
+        .expect("Alice place queued");
+    harness.game.tick().expect("Alice places into slot 0");
+
+    // Bob picks up dirt and places it into chest slot 1 — a *different* slot.
+    {
+        let player = harness.game.player_mut(id_b).expect("Bob");
+        player
+            .inventory
+            .set_slot(0, mc_entity::stack::ItemStack::new(dirt, 4).expect("stack"))
+            .expect("give Bob dirt");
+    }
+    harness
+        .events
+        .try_send(ClientEvent {
+            id: id_b,
+            kind: ClientEventKind::Intent(PlayIntent::ContainerClick {
+                window_id: window_b,
+                state_id: harness.game.menu_state_id(id_b).expect("state"),
+                slot: 54,
+                button: 0,
+                click_type: 0,
+            }),
+        })
+        .expect("Bob pickup queued");
+    harness.game.tick().expect("Bob picks up");
+    harness
+        .events
+        .try_send(ClientEvent {
+            id: id_b,
+            kind: ClientEventKind::Intent(PlayIntent::ContainerClick {
+                window_id: window_b,
+                state_id: harness.game.menu_state_id(id_b).expect("state"),
+                slot: 1,
+                button: 0,
+                click_type: 0, // place into chest slot 1
+            }),
+        })
+        .expect("Bob place queued");
+    harness.game.tick().expect("Bob places into slot 1");
+
+    // Both slots must hold their writer's stack. The old full-array
+    // write-back would have let Bob's click restore Alice's slot 0 to empty.
+    let items = harness
+        .game
+        .block_entities()
+        .get(pos)
+        .expect("chest entity")
+        .data
+        .items()
+        .expect("chest slots");
+    assert_eq!(
+        items[0].item_id(),
+        Some(stone),
+        "Alice's write to slot 0 must survive Bob's write to slot 1"
+    );
+    assert_eq!(items[0].count(), 7, "Alice's count is intact");
+    assert_eq!(
+        items[1].item_id(),
+        Some(dirt),
+        "Bob's write to slot 1 must survive alongside Alice's"
+    );
+    assert_eq!(items[1].count(), 4, "Bob's count is intact");
+
+    // Closing Alice must also leave Bob's slot alone.
+    harness
+        .events
+        .try_send(ClientEvent {
+            id: id_a,
+            kind: ClientEventKind::Intent(PlayIntent::ContainerClose {
+                window_id: window_a,
+            }),
+        })
+        .expect("Alice close queued");
+    harness.game.tick().expect("Alice closes");
+    let items = harness
+        .game
+        .block_entities()
+        .get(pos)
+        .expect("chest entity")
+        .data
+        .items()
+        .expect("chest slots");
+    assert_eq!(
+        items[1].item_id(),
+        Some(dirt),
+        "Alice's close must not clobber Bob's slot 1"
+    );
+    assert_eq!(items[1].count(), 4);
+}
+
+/// A12-10: a hopper cooldown tick-down is a payload mutation and must mark
+/// the chunk dirty, or a pure cooldown drain never reaches the autosave.
+#[test]
+fn a_hopper_cooldown_tick_marks_its_chunk_dirty() {
+    let mut harness = Harness::new("a12-10-hopper-dirty");
+    let (sx, sy, sz) = harness.build_floor();
+    let _out = harness.join("Keeper");
+    let hopper = harness
+        .game
+        .registries()
+        .blocks
+        .default_state("minecraft:hopper")
+        .expect("hopper");
+    let at = (sx + 1, sy, sz);
+    harness
+        .game
+        .world_mut()
+        .set_block(at.0, at.1, at.2, hopper)
+        .expect("place hopper");
+    harness.run(1);
+    let pos = mc_container::BlockPos::new(at.0, at.1, at.2);
+    {
+        let entity = harness
+            .game
+            .block_entities_mut()
+            .get_mut(pos)
+            .expect("hopper entity");
+        if let mc_container::BlockEntityData::Hopper { cooldown, .. } = &mut entity.data {
+            *cooldown = 3;
+        } else {
+            panic!("expected a hopper payload");
+        }
+    }
+    // Clear any dirty the placement left behind, so the assertion is about
+    // the cooldown tick alone.
+    let chunk = mc_world::ChunkPos {
+        x: at.0 >> 4,
+        z: at.2 >> 4,
+    };
+    if let Some(c) = harness.game.world_mut().chunk_mut(chunk) {
+        c.dirty = false;
+    }
+    assert!(
+        !harness.game.world().chunk(chunk).expect("chunk").dirty,
+        "the chunk must start clean for this pin"
+    );
+    harness.run(1);
+    assert!(
+        harness.game.world().chunk(chunk).expect("chunk").dirty,
+        "a cooldown tick-down must mark the hopper's chunk dirty (A12-10)"
+    );
+}

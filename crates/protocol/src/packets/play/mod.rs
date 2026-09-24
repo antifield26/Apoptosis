@@ -90,10 +90,11 @@ pub use self::chunk::{
 };
 pub use self::inventory::{
     ContainerClose, ContainerSetContent, ContainerSetData, ContainerSetSlot, ItemStack,
-    MAX_CONTAINER_SLOTS, MAX_ITEM_COMPONENTS, MAX_METADATA_ENTRIES, MENU_CRAFTING, MENU_FURNACE,
-    MENU_GENERIC_3X3, MENU_GENERIC_9X3, MENU_GENERIC_9X6, MENU_HOPPER, METADATA_INDEX_CREEPER_FUSE,
-    METADATA_INDEX_HEALTH, METADATA_INDEX_ORB_VALUE, METADATA_TERMINATOR, METADATA_TYPE_BYTE,
-    METADATA_TYPE_FLOAT, METADATA_TYPE_ITEM_STACK, METADATA_TYPE_VARIANTS, METADATA_TYPE_VARINT,
+    MAX_CONTAINER_SLOTS, MAX_ITEM_COMPONENTS, MAX_ITEM_COUNT, MAX_MENU_TYPE, MAX_METADATA_ENTRIES,
+    MAX_WINDOW_ID, MENU_CRAFTING, MENU_FURNACE, MENU_GENERIC_3X3, MENU_GENERIC_9X3,
+    MENU_GENERIC_9X6, MENU_HOPPER, METADATA_INDEX_CREEPER_FUSE, METADATA_INDEX_HEALTH,
+    METADATA_INDEX_ORB_VALUE, METADATA_TERMINATOR, METADATA_TYPE_BYTE, METADATA_TYPE_FLOAT,
+    METADATA_TYPE_ITEM_STACK, METADATA_TYPE_VARIANTS, METADATA_TYPE_VARINT,
     MOB_EFFECT_FLAG_AMBIENT, MOB_EFFECT_FLAG_ICON, MOB_EFFECT_FLAG_PARTICLES, MetadataValue,
     OpenScreen, RemoveMobEffect, SetCursorItem, SetEntityData, UpdateMobEffect,
 };
@@ -4130,7 +4131,7 @@ mod tests {
     }
 
     #[test]
-    fn item_stack_encodes_unmodelled_components_and_refuses_to_guess_them() {
+    fn item_stack_encodes_unmodelled_components_and_frames_the_last_one() {
         let with_component = ItemStack {
             item_id: 5,
             count: 1,
@@ -4139,14 +4140,174 @@ mod tests {
         let mut writer = PacketWriter::new();
         with_component.encode(&mut writer).expect("encodes");
         let body = writer.finish();
+        // count 1, id 5, one added (type 7, payload AA BB), zero removed.
         assert_eq!(body, [0x01, 0x05, 0x01, 0x07, 0xAA, 0xBB, 0x00]);
 
+        // Type 7 is unmodelled but the last added component with an empty
+        // removed list, so the payload is framed as `remaining - 0x00`.
         let mut reader = crate::wire::PacketReader::new(&body);
-        assert!(
-            ItemStack::decode(&mut reader).is_err(),
-            "component payload framing is unmodelled, so it must be refused"
-        );
+        let decoded = ItemStack::decode(&mut reader).expect("decodes");
+        assert!(reader.is_empty());
+        assert_eq!(decoded, with_component);
+        let mut writer = PacketWriter::new();
+        decoded.encode(&mut writer).expect("re-encodes");
+        assert_eq!(writer.finish(), body, "wire bytes round-trip");
+
+        // A mid-list unknown is refused rather than guessed.
+        let mid_list = [0x01, 0x05, 0x02, 0x07, 0xAA, 0x03, 0x01, 0x00];
+        assert!(ItemStack::decode(&mut crate::wire::PacketReader::new(&mid_list)).is_err());
+
         assert!(ItemStack::decode(&mut crate::wire::PacketReader::new(&[0x05])).is_err());
+    }
+
+    #[test]
+    fn item_stack_wire_golden_round_trips_known_components() {
+        use mc_entity::components::{
+            AttackRange, Consumable, ConsumeAnimation, DataComponent, Food, ItemComponents,
+            SoundRef, encode_payload,
+        };
+        // Hand-built patch: damage + max_damage + repair_cost + custom_name +
+        // enchantments + food + consumable + attack_range.
+        let mut components = ItemComponents::new();
+        components.set(DataComponent::Damage(5));
+        components.set(DataComponent::MaxDamage(250));
+        components.set(DataComponent::RepairCost(3));
+        components.set(DataComponent::CustomName("Sharp".to_owned()));
+        components.set(DataComponent::Enchantments(vec![(9, 3), (13, 1)]));
+        components.set(DataComponent::Food(Food {
+            nutrition: 5,
+            saturation: 6.0,
+            can_always_eat: false,
+        }));
+        components.set(DataComponent::Consumable(Consumable {
+            consume_seconds: 1.6,
+            animation: ConsumeAnimation::Eat,
+            sound: SoundRef::Named {
+                name: "minecraft:entity.generic.eat".to_owned(),
+                range: None,
+            },
+            consume_particles: true,
+            on_consume_effects: Vec::new(),
+        }));
+        components.set(DataComponent::AttackRange(AttackRange {
+            max_reach: 5.0,
+            ..AttackRange::default()
+        }));
+        let typed = ItemStack::from_typed_components(942, 1, &components).expect("encodes");
+        let mut writer = PacketWriter::new();
+        typed.encode(&mut writer).expect("wire encode");
+        let golden = writer.finish();
+        let mut reader = crate::wire::PacketReader::new(&golden);
+        let decoded = ItemStack::decode(&mut reader).expect("wire decode");
+        assert!(reader.is_empty(), "the body is fully consumed");
+        let mut writer = PacketWriter::new();
+        decoded.encode(&mut writer).expect("re-encode");
+        assert_eq!(writer.finish(), golden, "wire golden bytes round-trip");
+        let typed_again = decoded.to_typed_components().expect("typed");
+        assert_eq!(typed_again.food().map(|f| f.nutrition), Some(5));
+        assert_eq!(
+            typed_again.consumable().map(|c| c.consume_seconds),
+            Some(1.6)
+        );
+        assert_eq!(typed_again.attack_range().map(|r| r.max_reach), Some(5.0));
+        // Perturbation: flipping the damage payload's VarInt changes the value.
+        let mut perturbed = golden.clone();
+        let pos = perturbed
+            .windows(2)
+            .position(|w| w == [0x03, 0x05])
+            .expect("damage payload in golden");
+        perturbed[pos + 1] = 0x06;
+        let mut reader = crate::wire::PacketReader::new(&perturbed);
+        let decoded = ItemStack::decode(&mut reader).expect("perturbed decodes");
+        let typed = decoded.to_typed_components().expect("typed");
+        assert_eq!(typed.damage(), Some(6), "perturbation is visible");
+        let mut writer = PacketWriter::new();
+        decoded.encode(&mut writer).expect("encodes");
+        assert_ne!(writer.finish(), golden);
+        for component in components.entries() {
+            let payload = encode_payload(component).expect("payload");
+            assert_eq!(
+                mc_entity::components::decode_payload(component.type_id(), &payload)
+                    .expect("decode"),
+                *component
+            );
+        }
+    }
+
+    /// A12-03: a hostile count on the wire is refused, not accepted as a
+    /// huge or negative stack.
+    #[test]
+    fn item_stack_decode_rejects_hostile_counts() {
+        // count = 65 (over the stack limit), id 5, empty patch.
+        let over = [65u8, 0x05, 0x00, 0x00];
+        assert!(
+            ItemStack::decode(&mut crate::wire::PacketReader::new(&over)).is_err(),
+            "a count above the stack limit is hostile input"
+        );
+        // count = i32::MAX as a VarInt (0xFF, 0xFF, 0xFF, 0xFF, 0x07).
+        let huge = [0xFFu8, 0xFF, 0xFF, 0xFF, 0x07, 0x05, 0x00, 0x00];
+        assert!(
+            ItemStack::decode(&mut crate::wire::PacketReader::new(&huge)).is_err(),
+            "a huge count is hostile input"
+        );
+        // count = -1 as a VarInt (0xFF, 0xFF, 0xFF, 0xFF, 0x0F).
+        let neg = [0xFFu8, 0xFF, 0xFF, 0xFF, 0x0F];
+        assert!(
+            ItemStack::decode(&mut crate::wire::PacketReader::new(&neg)).is_err(),
+            "a negative count is hostile input"
+        );
+        // Boundary: 64 is legal.
+        let ok = [64u8, 0x05, 0x00, 0x00];
+        assert!(ItemStack::decode(&mut crate::wire::PacketReader::new(&ok)).is_ok());
+    }
+
+    /// A12-03: `open_screen` range-checks its `VarInt`s (window id, menu type).
+    #[test]
+    fn open_screen_rejects_out_of_range_varints() {
+        let title = {
+            let mut bytes = Vec::new();
+            TextComponent::literal("X")
+                .to_nbt()
+                .write_network(&mut bytes)
+                .expect("nbt");
+            bytes
+        };
+        // window_id = 0 (player inventory is never opened this way).
+        let mut body = vec![0x00, 0x02];
+        body.extend_from_slice(&title);
+        assert!(OpenScreen::decode(&body).is_err(), "window id 0 is illegal");
+
+        // window_id = 128 (past the 1..=127 hand-out range).
+        let mut body = vec![0x80, 0x01, 0x02];
+        body.extend_from_slice(&title);
+        assert!(
+            OpenScreen::decode(&body).is_err(),
+            "window id 128 is illegal"
+        );
+
+        // menu_type = 25 (past the 0..=24 registry table).
+        let mut body = vec![0x01, 0x19];
+        body.extend_from_slice(&title);
+        assert!(
+            OpenScreen::decode(&body).is_err(),
+            "menu type 25 is illegal"
+        );
+
+        // menu_type = -1 as a VarInt.
+        let mut body = vec![0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F];
+        body.extend_from_slice(&title);
+        assert!(
+            OpenScreen::decode(&body).is_err(),
+            "negative menu type is illegal"
+        );
+
+        // Boundary: window 1, menu 24 is legal.
+        let mut body = vec![0x01, 0x18];
+        body.extend_from_slice(&title);
+        assert!(
+            OpenScreen::decode(&body).is_ok(),
+            "the top of both ranges is legal"
+        );
     }
 
     #[test]

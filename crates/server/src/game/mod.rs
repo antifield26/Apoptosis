@@ -565,6 +565,8 @@ const ACTION_ABORT_DESTROY_BLOCK: i32 = 1;
 const ACTION_DROP_STACK: i32 = 3;
 /// `player_action` status: drop one held item (Q).
 const ACTION_DROP_ONE_ITEM: i32 = 4;
+/// `player_action` status: release the item being used (cancel eat/drink).
+const ACTION_RELEASE_USE_ITEM: i32 = 5;
 /// `player_action` status: swap the held item with the offhand.
 const ACTION_SWAP_ITEM_WITH_OFFHAND: i32 = 6;
 
@@ -1320,7 +1322,7 @@ impl Game {
                 let mc_entity::EntityBody::Item(item) = &entity.body else {
                     return None;
                 };
-                Some((item.stack, entity.position))
+                Some((item.stack.clone(), entity.position))
             })
             .collect()
     }
@@ -2104,12 +2106,20 @@ fn write_back_inventory(
     }
 }
 
-/// Copy a block menu's block container (index 0) back into its block entity.
+/// Copy selected slots of a block menu's block container (index 0) back into
+/// its block entity (A12-06).
 ///
 /// The player half goes through [`write_back_inventory`]; this is the block
-/// half. A missing entity or a size mismatch is a no-op rather than a panic:
-/// the menu still holds the items, so the next open replays them.
-fn write_back_block(menu: &mc_container::Menu, entity: &mut mc_container::BlockEntity) {
+/// half. Only the **container** slot indices in `dirty` are written: a full
+/// overwrite is last-writer-wins across two viewers of the same block, and each
+/// session's menu is a snapshot that still holds the other viewer's slots as
+/// they were at open. A missing entity or a size mismatch is a no-op rather
+/// than a panic: the menu still holds the items, so the next open replays them.
+fn write_back_block_slots(
+    menu: &mc_container::Menu,
+    entity: &mut mc_container::BlockEntity,
+    dirty: &std::collections::BTreeSet<u16>,
+) {
     let Some(container) = menu.container(0) else {
         return;
     };
@@ -2119,9 +2129,26 @@ fn write_back_block(menu: &mc_container::Menu, entity: &mut mc_container::BlockE
     if items.len() != container.len() {
         return;
     }
-    for (index, slot) in items.iter_mut().enumerate() {
-        *slot = container.get(index);
+    for &slot in dirty {
+        let index = usize::from(slot);
+        if index < items.len() {
+            items[index] = container.get(index);
+        }
     }
+}
+
+/// Container-0 slot indices behind the given **menu** slots (A12-06).
+fn block_slots_of(
+    menu: &mc_container::Menu,
+    changed: &std::collections::BTreeSet<u16>,
+) -> std::collections::BTreeSet<u16> {
+    changed
+        .iter()
+        .filter_map(|&menu_slot| {
+            let mapping = menu.mapping(usize::from(menu_slot))?;
+            (mapping.container == 0).then_some(mapping.slot)
+        })
+        .collect()
 }
 
 /// Recompute a crafting result from the grid (P12-07 player menu, P17-02 table).
@@ -2181,16 +2208,25 @@ fn take_craft_result(
     }
     if let Some(container) = menu.container_mut(2) {
         for (index, stack) in grid.iter().enumerate() {
-            let _ = container.set(index, *stack);
+            let _ = container.set(index, stack.clone());
         }
     }
     Ok(true)
 }
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "callers hand over owned stacks from a slot read; the signature documents the move"
+)]
 fn wire_stack(stack: mc_entity::stack::ItemStack) -> mc_protocol::packets::play::ItemStack {
     match stack.item_id() {
         Some(id) if !stack.is_empty() => {
-            mc_protocol::packets::play::ItemStack::simple(id, stack.count())
+            mc_protocol::packets::play::ItemStack::from_typed_components(
+                id,
+                stack.count(),
+                stack.components(),
+            )
+            .unwrap_or_else(|_| mc_protocol::packets::play::ItemStack::simple(id, stack.count()))
         }
         _ => mc_protocol::packets::play::ItemStack::empty(),
     }

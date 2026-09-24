@@ -25,13 +25,13 @@
 //!
 //! - **No difficulty scaling.** Starvation damage is 1.0, the normal/hard value;
 //!   peaceful, easy scaling and mob damage scaling are not modelled.
-//! - **No enchantments, absorption or fire.** [`Player::apply_damage`] takes a
+//! - **No absorption hearts or fire.** [`Player::apply_damage`] takes a
 //!   [`DamageSource`](crate::combat::DamageSource) plus armour stats: melee,
-//!   fall and starvation typing and armour/toughness absorb are modelled;
-//!   knockback lands on entity-store victims (mob bodies), not on player
-//!   projections, which carry no velocity under client-driven motion;
-//!   enchantment math, absorption hearts and fire/drowning/void sources are
-//!   not.
+//!   fall and starvation typing, armour/toughness absorb and Protection
+//!   (P18-01b) are modelled; knockback lands on entity-store victims (mob
+//!   bodies), not on player projections, which carry no velocity under
+//!   client-driven motion; absorption hearts and fire/drowning/void sources
+//!   are not.
 //! - **No natural health regeneration.** [`Player::tick_food`] models the food
 //!   *budget* (exhaustion/saturation/regen/starve) but there is no per-tick
 //!   simulation driver, no `foodTickTimer` phase, and no peaceful-mode instant
@@ -78,16 +78,109 @@ pub const MAX_FOOD: i32 = 20;
 pub const MAX_SATURATION: f32 = 5.0;
 
 /// Exhaustion that must accrue before one saturation/food point is spent.
+///
+/// **jar** — `FoodConstants.EXHAUSTION_DROP` (`javap -c -p -constants` on the
+/// 26.1.2 server jar).
 pub const EXHAUSTION_PER_POINT: f32 = 4.0;
 
-/// Damage dealt per starvation tick at food level 0 (normal/hard difficulty).
+/// Cap on the exhaustion field (`FoodData.addExhaustion`).
+///
+/// **jar** — `Math.min(level + amount, 40.0f)`.
+pub const EXHAUSTION_CAP: f32 = 40.0;
+
+/// Sprinting exhaustion per horizontal block.
+///
+/// **jar** — `FoodConstants.EXHAUSTION_SPRINT` (`0.1f`), applied by
+/// `ServerPlayer` as `distance_cm * 0.01f * EXHAUSTION_SPRINT`.
+pub const EXHAUSTION_SPRINT: f32 = 0.1;
+
+/// Walking exhaustion per block.
+///
+/// **jar** — `FoodConstants.EXHAUSTION_WALK` (`0.0f`).
+pub const EXHAUSTION_WALK: f32 = 0.0;
+
+/// Sneaking exhaustion per block.
+///
+/// **jar** — `FoodConstants.EXHAUSTION_CROUCH` (`0.0f`).
+pub const EXHAUSTION_CROUCH: f32 = 0.0;
+
+/// Swimming exhaustion per block.
+///
+/// **jar** — `FoodConstants.EXHAUSTION_SWIM` (`0.01f`), applied by `ServerPlayer`
+/// as `distance_cm * 0.01f * EXHAUSTION_SWIM`.
+pub const EXHAUSTION_SWIM: f32 = 0.01;
+
+/// Standing jump.
+///
+/// **jar** — `FoodConstants.EXHAUSTION_JUMP` (`0.05f`), from `jumpFromGround`.
+pub const EXHAUSTION_JUMP: f32 = 0.05;
+
+/// Sprint jump.
+///
+/// **jar** — `FoodConstants.EXHAUSTION_SPRINT_JUMP` (`0.2f`), from `jumpFromGround`.
+pub const EXHAUSTION_SPRINT_JUMP: f32 = 0.2;
+
+/// One landed melee swing.
+///
+/// **jar** — `FoodConstants.EXHAUSTION_ATTACK` (`0.1f`).
+pub const EXHAUSTION_ATTACK: f32 = 0.1;
+
+/// Taking a damage instance.
+///
+/// **jar** — `DamageSource.getFoodExhaustion()` → `DamageType.exhaustion()`;
+/// the 26.1.2 damage-type table uses `0.1f` for the sources this build models
+/// (melee, fall, arrow, explosion, effect ticks).
+pub const EXHAUSTION_HURT: f32 = 0.1;
+
+/// Breaking one block.
+///
+/// **jar** — `FoodConstants.EXHAUSTION_MINE` (`0.005f`).
+pub const EXHAUSTION_MINE: f32 = 0.005;
+
+/// Damage dealt per starvation tick at food level 0.
+///
+/// **jar** — `FoodData.tick` starve arm (`fconst_1` into `hurtServer`).
+/// Whether it *lands* is the difficulty floor in [`Player::tick_food_ex`].
 pub const STARVATION_DAMAGE: f32 = 1.0;
 
 /// Health restored per saturation-regeneration tick.
+///
+/// **jar** — `FoodData.tick` saturated arm: `heal(min(sat, 6.0) / 6.0)`.
 pub const REGEN_HEALTH_PER_TICK: f32 = 1.0;
 
 /// Food level at or above which natural regeneration runs.
+///
+/// **jar** — `FoodConstants.HEAL_LEVEL`.
 pub const REGEN_FOOD_THRESHOLD: i32 = 18;
+
+/// Starvation health floor on **easy**: hunger stops hurting at 10 HP.
+///
+/// **jar** — `FoodData.tick` starve arm: damage only while `health > 10.0f`
+/// (or on hard). **derived** mapping of that predicate onto a named floor.
+pub const STARVE_FLOOR_EASY: f32 = 10.0;
+
+/// Starvation health floor on **normal**: hunger stops hurting at 1 HP.
+///
+/// **jar** — the same starve arm's `health > 1.0f && NORMAL` branch.
+pub const STARVE_FLOOR_NORMAL: f32 = 1.0;
+
+/// Starvation health floor on **hard**: hunger can kill (0 HP).
+///
+/// **jar** — hard always deals, with no lower bound.
+pub const STARVE_FLOOR_HARD: f32 = 0.0;
+
+/// Health floor before starvation damage, or `f32::INFINITY` to never starve.
+///
+/// **derived** from the jar starve arm (`FoodData.tick`): easy only damages
+/// above 10, normal above 1, hard always. Peaceful never starves because food
+/// never depletes there.
+#[must_use]
+pub const fn starve_floor(difficulty_starve_floor: Option<f32>) -> f32 {
+    match difficulty_starve_floor {
+        Some(floor) => floor,
+        None => f32::INFINITY,
+    }
+}
 
 /// `DataVersion` written by 26.1.2 (measured on a real world; see
 /// `mc_persistence::level::DATA_VERSION_26_1_2`). Repeated here as a literal
@@ -417,8 +510,10 @@ impl Player {
     /// 4. Health floors at 0.0 and is *reported* dead on the call that reaches
     ///    it; it never goes negative.
     ///
-    /// `amount` is damage after armour and effects, which this crate does not
-    /// model (see the module gap list).
+    /// Armour absorb runs first (unless the source bypasses it); Protection
+    /// enchantment points then cut the remainder (P18-01b, matching pumpkin's
+    /// armour-then-magic order). Effects (Resistance) are the caller's
+    /// multiplier, as before.
     pub fn apply_damage(
         &mut self,
         amount: f32,
@@ -442,6 +537,8 @@ impl Player {
         } else {
             crate::combat::armor_absorb(amount, armor.armor, armor.toughness)
         };
+        // P18-01b Protection: after armour, before the health write.
+        let amount = crate::enchant::damage_after_protection(amount, armor.protection);
         let dealt = amount.min(self.health);
         self.health -= dealt;
         if self.health <= 0.0 {
@@ -555,6 +652,40 @@ impl Player {
         };
     }
 
+    /// Accrue action exhaustion (jar `FoodData.addExhaustion`).
+    ///
+    /// Caps at [`EXHAUSTION_CAP`]; a non-finite or non-positive amount is
+    /// ignored. Spending into saturation/food happens in [`Player::tick_food`].
+    pub fn add_exhaustion(&mut self, amount: f32) {
+        if amount.is_finite() && amount > 0.0 {
+            self.exhaustion = (self.exhaustion + amount).min(EXHAUSTION_CAP);
+        }
+    }
+
+    /// Eat one food: `nutrition` hunger points and `saturation_restored`
+    /// saturation points (jar `FoodData.add` / `eat(FoodProperties)`).
+    ///
+    /// Saturation caps at the **food level** (vanilla's rule), not at
+    /// [`MAX_SATURATION`] — bread restores 6.0 saturation into 15 food and
+    /// keeps all of it. Returns the amounts actually applied, so a caller can
+    /// report a clamped restore honestly.
+    pub fn eat(&mut self, nutrition: i32, saturation_restored: f32) -> (i32, f32) {
+        let food_before = self.food;
+        let sat_before = self.saturation;
+        if nutrition.is_positive() {
+            self.food = self.food.saturating_add(nutrition).clamp(0, MAX_FOOD);
+        }
+        if saturation_restored.is_finite() && saturation_restored > 0.0 {
+            #[allow(
+                clippy::cast_precision_loss,
+                reason = "food is clamped to 0..=20, exactly representable in f32"
+            )]
+            let cap = self.food as f32;
+            self.saturation = (self.saturation + saturation_restored).clamp(0.0, cap);
+        }
+        (self.food - food_before, self.saturation - sat_before)
+    }
+
     /// The highest saturation a given food level allows
     /// (`min(5.0, food as f32)`, never negative).
     #[must_use]
@@ -574,6 +705,14 @@ impl Player {
         self.food >= REGEN_FOOD_THRESHOLD && self.health < MAX_HEALTH
     }
 
+    /// Advance the food/health budget by one exhaustion step (hard floor).
+    ///
+    /// Equivalent to [`Player::tick_food_ex`] with [`STARVE_FLOOR_HARD`]:
+    /// starvation can kill. Existing callers that mean "no difficulty" use this.
+    pub fn tick_food(&mut self, exhaustion_delta: f32) -> DamageOutcome {
+        self.tick_food_ex(exhaustion_delta, STARVE_FLOOR_HARD)
+    }
+
     /// Advance the food/health budget by one exhaustion step.
     ///
     /// `exhaustion_delta` is the exhaustion this tick's actions accrued (sprint,
@@ -582,22 +721,26 @@ impl Player {
     /// block breaking, which this crate does not own. A non-finite or negative
     /// value is ignored.
     ///
+    /// `starve_floor` is the health hunger may not drop below (jar `FoodData.tick`
+    /// starve arm): 10.0 easy, 1.0 normal, 0.0 hard, `f32::INFINITY` never.
+    ///
     /// Order of operations (vanilla `FoodData.tick` + `addExhaustion`):
     ///
     /// 1. Accrue `exhaustion_delta`; every full [`EXHAUSTION_PER_POINT`] spends
     ///    one point, saturation first and food after it.
     /// 2. Clamp saturation to the food level — vanilla does this because
     ///    saturation may never exceed the food that supports it.
-    /// 3. Regenerate when food `>= 18`: at food `>= 20` with saturation left,
-    ///    heal one point and spend saturation; otherwise (or when saturation is
-    ///    gone) heal one point and spend food. This is the tiered
-    ///    saturation/food regeneration.
-    /// 4. Starve at food `0`: [`STARVATION_DAMAGE`] health, which *can* kill.
+    /// 3. Saturation fast regen when food is full and saturation remains: heal
+    ///    one point and spend saturation (jar `HEALTH_TICK_COUNT_SATURATED`
+    ///    tier). This is the branch `saturation_fast_regen_spends_saturation_not_food`
+    ///    pins.
+    /// 4. Natural regen when food `>= 18`: heal one point and spend food.
+    /// 5. Starve at food `0`: [`STARVATION_DAMAGE`] health, floored by
+    ///    `starve_floor` — which *can* kill on hard.
     ///
     /// Returns the [`DamageOutcome`] of the starvation step, so a caller can see
-    /// a death caused by hunger. There is no simulation driver calling this yet;
-    /// the tick loop owns that.
-    pub fn tick_food(&mut self, exhaustion_delta: f32) -> DamageOutcome {
+    /// a death caused by hunger.
+    pub fn tick_food_ex(&mut self, exhaustion_delta: f32, starve_floor: f32) -> DamageOutcome {
         if exhaustion_delta.is_finite() && exhaustion_delta > 0.0 {
             self.exhaustion += exhaustion_delta;
         }
@@ -628,7 +771,7 @@ impl Player {
             self.heal(REGEN_HEALTH_PER_TICK);
         }
 
-        if self.food == 0 {
+        if self.food == 0 && self.health > starve_floor {
             return self.apply_damage(
                 STARVATION_DAMAGE,
                 DamageSource::Starvation,
@@ -967,6 +1110,10 @@ impl Player {
     /// invariant, not a data problem. It is an error rather than a placeholder
     /// name so a corrupted item can never be written to disk under a name that
     /// would later load as a *different* item (AGENTS.md sections 3.3, 9).
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one vanilla field table; splitting it would hide the measured layout"
+    )]
     pub fn to_nbt(&self, items: &ItemRegistry) -> ServerResult<NbtTag> {
         let mut entries: Vec<(String, NbtTag)> = vec![
             ("DataVersion".to_owned(), NbtTag::Int(DATA_VERSION_26_1_2)),
@@ -1039,7 +1186,7 @@ impl Player {
                     "inventory slot {index} holds item id {item_id}, which the item registry does not contain"
                 ))
             })?;
-            inventory.push(NbtTag::compound([
+            let mut entry = vec![
                 (
                     "Slot".to_owned(),
                     NbtTag::Byte(byte_from_i32(
@@ -1052,7 +1199,13 @@ impl Player {
                     "Count".to_owned(),
                     NbtTag::Byte(byte_from_i32(stack.count(), "item count")),
                 ),
-            ]));
+            ];
+            // P18-01a: the data-component patch rides the same entry. Unknown
+            // components are preserved byte-identically (see `components`).
+            if let Some(components) = crate::components::to_nbt(stack.components()) {
+                entry.push(("components".to_owned(), components));
+            }
+            inventory.push(NbtTag::Compound(entry));
         }
         if !inventory.is_empty() {
             entries.push(("Inventory".to_owned(), NbtTag::List(inventory)));
@@ -1159,6 +1312,15 @@ fn read_inventory(root: &NbtTag, items: &ItemRegistry) -> ServerResult<PlayerInv
         let Ok(stack) = ItemStack::new(item_id, count) else {
             continue;
         };
+        // P18-01a: attach the data-component patch when present. A malformed
+        // patch is corrupt data (it changes identity/behaviour), matching the
+        // unknown-item-name rule above.
+        let stack = if let Some(components_tag) = entry.get("components") {
+            let components = crate::components::from_nbt(components_tag)?;
+            ItemStack::with_components(item_id, count, components).unwrap_or(stack)
+        } else {
+            stack
+        };
         if stack.is_empty() || slot > crate::inventory::LAST_STORED_SLOT {
             continue;
         }
@@ -1245,8 +1407,9 @@ mod tests {
     // values that must be bit-identical.
     #![allow(clippy::float_cmp)]
     use super::{
-        DamageOutcome, EXHAUSTION_PER_POINT, GameMode, MAX_FOOD, MAX_HEALTH, MAX_SATURATION,
-        Player, REGEN_FOOD_THRESHOLD, STARVATION_DAMAGE, Vec3,
+        DamageOutcome, EXHAUSTION_CAP, EXHAUSTION_PER_POINT, GameMode, MAX_FOOD, MAX_HEALTH,
+        MAX_SATURATION, Player, REGEN_FOOD_THRESHOLD, STARVATION_DAMAGE, STARVE_FLOOR_EASY,
+        STARVE_FLOOR_HARD, STARVE_FLOOR_NORMAL, Vec3,
     };
     use crate::combat::{CombatStats, DamageSource};
     use crate::inventory::{LAST_STORED_SLOT, PlayerInventory, inventory_for_registry};
@@ -1436,6 +1599,7 @@ mod tests {
             armor: 15.0,
             toughness: 0.0,
             knockback_resistance: 0.0,
+            protection: 0.0,
         };
         let mut player = survivor();
         let outcome = player.apply_damage(7.0, DamageSource::MobAttack, &iron);
@@ -1846,6 +2010,108 @@ mod tests {
         assert_eq!(decoded.to_nbt(&items).expect("re-encodes"), root);
     }
 
+    /// Disk pin (P18-01a): playerdata with data components is byte-stable
+    /// through save→load→save, and unknown components survive with identical
+    /// wire payload bytes.
+    #[test]
+    fn playerdata_components_round_trip_is_byte_stable_and_keeps_unknowns() {
+        use crate::components::{
+            AttackRange, Consumable, ConsumeAnimation, DataComponent, Food, ItemComponents,
+            SoundRef, unknown_from_wire,
+        };
+        let items = registry();
+        let mut player = survivor();
+        let mut components = ItemComponents::new();
+        components.set(DataComponent::Damage(2));
+        components.set(DataComponent::MaxDamage(250));
+        components.set(DataComponent::RepairCost(4));
+        components.set(DataComponent::CustomName("Doom".to_owned()));
+        components.set(DataComponent::Enchantments(vec![(33, 2)]));
+        components.set(DataComponent::StoredEnchantments(vec![(8, 1)]));
+        components.set(DataComponent::Food(Food {
+            nutrition: 4,
+            saturation: 2.4,
+            can_always_eat: true,
+        }));
+        components.set(DataComponent::Consumable(Consumable {
+            consume_seconds: 1.2,
+            animation: ConsumeAnimation::Drink,
+            sound: SoundRef::Id(7),
+            consume_particles: false,
+            on_consume_effects: Vec::new(),
+        }));
+        components.set(DataComponent::AttackRange(AttackRange {
+            max_reach: 4.5,
+            ..AttackRange::default()
+        }));
+        let unknown_payload = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x99];
+        components.set(unknown_from_wire(77, &unknown_payload));
+        let enchanted = ItemStack::with_components(DIAMOND_PICKAXE, 1, components).expect("stack");
+        player
+            .inventory
+            .set_slot(20, enchanted)
+            .expect("hotbar slot");
+
+        let root = player.to_nbt(&items).expect("encodes");
+        // Byte-stable through the full disk path.
+        let mut bytes = Vec::new();
+        mc_nbt::write_unnamed(&root, &mut bytes).expect("write");
+        let slice = &bytes[..];
+        let reloaded_tag = mc_nbt::read_unnamed(slice, mc_nbt::Limits::DISK).expect("read");
+        let decoded = Player::from_nbt(&reloaded_tag, profile(), 7, &items).expect("loads");
+        let stack = decoded.inventory.slot(20);
+        assert_eq!(stack.damage(), Some(2));
+        assert_eq!(stack.max_damage(), Some(250));
+        assert_eq!(stack.repair_cost(), Some(4));
+        assert_eq!(stack.custom_name(), Some("Doom"));
+        assert_eq!(stack.enchantments(), Some(&[(33, 2)][..]));
+        assert_eq!(stack.stored_enchantments(), Some(&[(8, 1)][..]));
+        let food = stack.food().expect("food survives");
+        assert_eq!(food.nutrition, 4);
+        assert!(food.can_always_eat);
+        let consumable = stack.consumable().expect("consumable survives");
+        assert_eq!(consumable.consume_seconds, 1.2);
+        assert_eq!(consumable.animation, ConsumeAnimation::Drink);
+        assert_eq!(
+            stack.attack_range().map(|r| r.max_reach),
+            Some(4.5),
+            "attack_range closes the P16-01 hook"
+        );
+        let unknown = stack
+            .components()
+            .unknowns()
+            .next()
+            .expect("unknown was not dropped");
+        match unknown {
+            DataComponent::Unknown { wire, type_id, .. } => {
+                assert_eq!(*type_id, 77);
+                assert_eq!(wire, &unknown_payload, "unknown payload bytes identical");
+            }
+            other => panic!("expected Unknown, got {other:?}"),
+        }
+        // Byte-stable: re-encode matches the first write exactly.
+        let mut bytes2 = Vec::new();
+        mc_nbt::write_unnamed(&decoded.to_nbt(&items).expect("re-encodes"), &mut bytes2)
+            .expect("write");
+        assert_eq!(bytes, bytes2, "playerdata save→load→save is byte-stable");
+        // Perturbation: a changed damage value changes the bytes.
+        let mut perturbed = decoded.clone();
+        let damaged = ItemStack::with_components(DIAMOND_PICKAXE, 1, {
+            let mut c = decoded.inventory.slot(20).components().clone();
+            c.set(DataComponent::Damage(3));
+            c
+        })
+        .expect("stack");
+        perturbed
+            .inventory
+            .set_slot(20, damaged)
+            .expect("replace stack");
+        let mut bytes3 = Vec::new();
+        mc_nbt::write_unnamed(&perturbed.to_nbt(&items).expect("encodes"), &mut bytes3)
+            .expect("write");
+        assert_ne!(bytes, bytes3, "perturbation changes the file bytes");
+    }
+
     #[test]
     fn effects_round_trip_through_playerdata() {
         let items = registry();
@@ -1936,6 +2202,70 @@ mod tests {
         assert!(player.tick_effects(1, &CombatStats::ZERO).is_empty());
         assert_eq!(player.tick_effects(2, &CombatStats::ZERO), vec![SPEED]);
         assert!(player.effects.is_empty());
+    }
+
+    #[test]
+    fn eat_applies_bread_nutrition_and_saturation() {
+        let mut player = survivor();
+        player.set_food(10);
+        player.set_saturation(0.0);
+        let (nutrition, saturation) = player.eat(5, 6.0);
+        assert_eq!(nutrition, 5, "bread nutrition is 5");
+        assert_eq!(saturation, 6.0, "bread saturation restore is 6.0");
+        assert_eq!(player.food, 15);
+        assert_eq!(player.saturation, 6.0);
+        // Cap at the food level (vanilla `FoodData.add`), not MAX_SATURATION.
+        player.set_food(20);
+        // Bypass `set_saturation`'s project cap: vanilla allows up to the food
+        // level (20), and `eat` must honour that.
+        player.saturation = 18.0;
+        let (_, sat) = player.eat(5, 6.0);
+        assert_eq!(player.food, 20, "food never exceeds 20");
+        assert_eq!(player.saturation, 20.0, "saturation caps at the food level");
+        assert!(sat < 6.0, "the restore is clamped honestly");
+    }
+
+    #[test]
+    fn starvation_floors_follow_difficulty() {
+        // Easy: stops at 10 HP.
+        let mut player = survivor();
+        player.set_food(0);
+        player.set_saturation(0.0);
+        player.set_health(10.5);
+        let outcome = player.tick_food_ex(0.0, STARVE_FLOOR_EASY);
+        assert!(outcome.applied);
+        player.set_health(10.0);
+        let outcome = player.tick_food_ex(0.0, STARVE_FLOOR_EASY);
+        assert!(!outcome.applied, "easy floor is 10 HP");
+        assert_eq!(player.health, 10.0);
+
+        // Normal: stops at 1 HP.
+        let mut player = survivor();
+        player.set_food(0);
+        player.set_saturation(0.0);
+        player.set_health(1.0);
+        let outcome = player.tick_food_ex(0.0, STARVE_FLOOR_NORMAL);
+        assert!(!outcome.applied, "normal floor is 1 HP");
+
+        // Hard: can kill.
+        let mut player = survivor();
+        player.set_food(0);
+        player.set_saturation(0.0);
+        player.set_health(0.5);
+        let outcome = player.tick_food_ex(0.0, STARVE_FLOOR_HARD);
+        assert!(outcome.applied && outcome.died, "hard starvation kills");
+    }
+
+    #[test]
+    fn add_exhaustion_caps_and_ignores_hostile_input() {
+        let mut player = survivor();
+        player.add_exhaustion(3.5);
+        assert_eq!(player.exhaustion, 3.5);
+        player.add_exhaustion(-1.0);
+        player.add_exhaustion(f32::NAN);
+        assert_eq!(player.exhaustion, 3.5, "hostile amounts are ignored");
+        player.add_exhaustion(100.0);
+        assert_eq!(player.exhaustion, EXHAUSTION_CAP, "capped at 40.0");
     }
 
     #[test]

@@ -255,20 +255,6 @@ pub const MAX_METADATA_ENTRIES: usize = 256;
 
 /// An item stack as it appears in inventory packets (protocol 775).
 ///
-/// ```text
-/// VarInt item id        (0 = empty; nothing follows)
-/// if id != 0:
-///   VarInt count
-///   VarInt number of data components
-///   per component: VarInt type id, then component data
-/// ```
-///
-/// Protocol 775 does **not** carry the pre-1.20.5 `slot` / `change count` bytes
-/// after the count. Data component payloads are not modelled here: each is
-/// carried as pre-encoded bytes, which keeps the encoder honest about the
-/// framing it *does* know (id, count, component count, component type id)
-/// without inventing component codecs for Phase 04. The empty stack is
-/// `item_id == 0`, and then `count`/`components` must be empty too.
 /// One optional slot on the wire, exactly as 26.1.2's
 /// `ItemStack.createOptionalStreamCodec` reads it (`ItemStack$1` +
 /// `DataComponentPatch$3`, bytecode-read from the jar):
@@ -276,7 +262,16 @@ pub const MAX_METADATA_ENTRIES: usize = 256;
 /// `count VarInt`; a count `<= 0` is the whole stack (bare `0x00`, the only
 /// bytes an empty slot ever occupies). Otherwise `item id VarInt`, then the
 /// component patch: `added-count VarInt`, that many `(type, value)` entries,
-/// `removed-count VarInt`, that many bare type ids.
+/// `removed-count VarInt`, that many bare type ids. Protocol 775 does **not**
+/// carry the pre-1.20.5 `slot` / `change count` bytes after the count.
+///
+/// Component values are framed by each type's stream codec (P18-01a):
+/// `damage`/`max_damage`/`repair_cost` are `VarInt`s, `enchantments` a counted
+/// `(id, level)` list, `custom_name` a network-NBT string, `attack_range` six
+/// `f32`s, `food`/`consumable` the pumpkin shapes. An unmodelled type is kept
+/// as raw bytes only when it is the **last** added component and the removed
+/// list is empty (then `payload = remaining` minus the trailing `0x00`);
+/// mid-list unknowns are refused rather than guessed (AGENTS.md section 3.3).
 ///
 /// Two consequences this crate got wrong before the P14-09 walk (a picked-up
 /// cobblestone was the first non-empty stack a real client ever had to
@@ -290,8 +285,8 @@ pub struct ItemStack {
     pub item_id: i32,
     /// Stack size; ignored when `item_id` is 0.
     pub count: i32,
-    /// Added `(component type id, pre-encoded component data)` pairs.
-    /// Removed components are unmodelled: this crate never sends any and
+    /// Added `(component type id, pre-encoded component data)` pairs, in wire
+    /// order. Removed components are unmodelled: this crate never sends any and
     /// refuses to receive any rather than dropping them silently.
     pub components: Vec<(i32, Vec<u8>)>,
 }
@@ -321,6 +316,47 @@ impl ItemStack {
             count,
             components: Vec::new(),
         }
+    }
+
+    /// Decode the typed component patch (P18-01a).
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] when a modelled payload is truncated.
+    pub fn to_typed_components(&self) -> ServerResult<mc_entity::ItemComponents> {
+        let mut entries = Vec::new();
+        for (type_id, payload) in &self.components {
+            if mc_entity::components::DataComponent::is_known_type(*type_id) {
+                entries.push(mc_entity::components::decode_payload(*type_id, payload)?);
+            } else {
+                entries.push(mc_entity::unknown_from_wire(*type_id, payload));
+            }
+        }
+        Ok(mc_entity::ItemComponents::from_entries(entries))
+    }
+
+    /// Build from typed components (P18-01a).
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Invariant`] when a modelled payload cannot be encoded.
+    pub fn from_typed_components(
+        item_id: i32,
+        count: i32,
+        components: &mc_entity::ItemComponents,
+    ) -> ServerResult<Self> {
+        let mut wire = Vec::new();
+        for component in components.entries() {
+            wire.push((
+                component.type_id(),
+                mc_entity::components::encode_payload(component)?,
+            ));
+        }
+        Ok(Self {
+            item_id,
+            count,
+            components: wire,
+        })
     }
 
     /// Encode the stack, returning the number of bytes written.
@@ -357,15 +393,32 @@ impl ItemStack {
 
     /// Decode one stack.
     ///
+    /// Component values are framed by each modelled type's codec (P18-01a).
+    /// An unmodelled type is kept as raw bytes only when it is the **last**
+    /// added component and the removed list is empty (`payload = remaining`
+    /// minus the trailing zero count); mid-list unknowns are refused rather
+    /// than guessed (AGENTS.md section 3.3).
+    ///
     /// # Errors
     ///
-    /// [`ServerError::Protocol`] for a negative item id, an absurd component
+    /// [`ServerError::Protocol`] for a negative item id, a count outside
+    /// `0..=`[`MAX_ITEM_COUNT`] (A12-03 hostile width), an absurd component
     /// count, a removed-component list (unmodelled — refused, never dropped),
-    /// or a truncated payload.
+    /// a mid-list unmodelled component, or a truncated payload.
     pub fn decode(reader: &mut PacketReader<'_>) -> ServerResult<Self> {
         let count = reader.read_varint()?;
-        if count <= 0 {
+        if count < 0 {
+            return Err(ServerError::Protocol(format!(
+                "item stack count {count} is negative"
+            )));
+        }
+        if count == 0 {
             return Ok(Self::empty());
+        }
+        if count > MAX_ITEM_COUNT {
+            return Err(ServerError::Protocol(format!(
+                "item stack count {count} exceeds the {MAX_ITEM_COUNT} stack limit"
+            )));
         }
         let item_id = reader.read_varint()?;
         if item_id < 0 {
@@ -378,16 +431,43 @@ impl ItemStack {
             return Ok(Self::empty());
         }
         let added = read_count(reader, "item component", MAX_ITEM_COMPONENTS)?;
-        // Component payload lengths are not self-describing in a way this crate
-        // models, so each component owns the bytes it declares. Without a
-        // length field the only safe assumption is "the rest of the packet",
-        // which is why this decoder accepts at most zero added components and
-        // rejects anything else rather than guessing.
-        if added > 0 {
-            return Err(ServerError::Protocol(format!(
-                "{added} item data components present but component \
-                 payload framing is unmodelled"
-            )));
+        let mut components = Vec::with_capacity(added.min(64));
+        for index in 0..added {
+            let type_id = reader.read_varint()?;
+            let payload = if mc_entity::components::DataComponent::is_known_type(type_id) {
+                let before = reader.remaining_slice();
+                let len = mc_entity::components::payload_prefix_len(type_id, before)?;
+                let bytes = reader.read_bytes(len)?.to_vec();
+                // Fail fast on a mistyped payload rather than forwarding it.
+                mc_entity::components::decode_payload(type_id, &bytes)?;
+                bytes
+            } else if index + 1 == added {
+                // Last added component: the rest of the body is `payload` plus
+                // the removed-count VarInt. An empty removed list is a single
+                // trailing `0x00`, which is the only shape this build can
+                // frame without guessing. Leave that byte for `read_count`.
+                let rest = reader.remaining_slice();
+                if rest.is_empty() {
+                    return Err(ServerError::Protocol(
+                        "unmodelled item component with no payload".to_owned(),
+                    ));
+                }
+                if *rest.last().unwrap_or(&0xFF) != 0 {
+                    return Err(ServerError::Protocol(format!(
+                        "unmodelled item component type {type_id} cannot be framed when the \
+                         removed-component list is non-empty"
+                    )));
+                }
+                let payload_len = rest.len() - 1;
+                reader.advance(payload_len)?;
+                rest[..payload_len].to_vec()
+            } else {
+                return Err(ServerError::Protocol(format!(
+                    "unmodelled item data component type id {type_id} in a multi-component \
+                     patch (only the last added component may be opaque)"
+                )));
+            };
+            components.push((type_id, payload));
         }
         let removed = read_count(reader, "removed item component", MAX_ITEM_COMPONENTS)?;
         if removed > 0 {
@@ -399,7 +479,7 @@ impl ItemStack {
         Ok(Self {
             item_id,
             count,
-            components: Vec::new(),
+            components,
         })
     }
 }
@@ -409,6 +489,13 @@ impl ItemStack {
 /// Only `0` is currently decodable (see [`ItemStack::decode`]); the constant
 /// exists so the rejection message is a range check rather than a magic number.
 pub const MAX_ITEM_COMPONENTS: usize = 1024;
+
+/// Largest legal item count on the wire (vanilla `stacksTo` ceiling).
+///
+/// A decoded count above this is hostile input, not a rounding accident
+/// (A12-03). Matches `mc_entity::stack::HARD_MAX_STACK_SIZE` without pulling
+/// that crate into the protocol layer.
+pub const MAX_ITEM_COUNT: i32 = 64;
 
 /// `minecraft:container_set_slot` (clientbound play).
 ///
@@ -560,6 +647,16 @@ pub const MENU_GENERIC_3X3: i32 = 6;
 /// Crafting table 3×3 plus result (P17-02 Step C, same jar table).
 pub const MENU_CRAFTING: i32 = 12;
 
+/// Highest `MenuType` registry id in the 26.1.2 table (0..=24).
+///
+/// `open_screen` carries this as a bare `VarInt`; without a ceiling a hostile
+/// value is accepted and echoed to the client (A12-03).
+pub const MAX_MENU_TYPE: i32 = 24;
+
+/// Window ids this server hands out for block menus (`1..=127`; 0 is the
+/// player inventory and is never opened via `open_screen`).
+pub const MAX_WINDOW_ID: i32 = 127;
+
 /// `minecraft:open_screen` (clientbound play 59).
 ///
 /// Body, from `javap -c -p` on
@@ -581,10 +678,26 @@ pub struct OpenScreen {
 impl Packet for OpenScreen {
     const ID: i32 = clientbound::play::OPEN_SCREEN;
 
+    /// Decode an `open_screen`.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] when `window_id` or `menu_type` is outside the
+    /// legal range (A12-03), the title is truncated, or trailing bytes remain.
     fn decode(payload: &[u8]) -> ServerResult<Self> {
         let mut reader = PacketReader::new(payload);
         let window_id = reader.read_varint()?;
+        if window_id <= 0 || window_id > MAX_WINDOW_ID {
+            return Err(ServerError::Protocol(format!(
+                "open_screen window id {window_id} is outside 1..={MAX_WINDOW_ID}"
+            )));
+        }
         let menu_type = reader.read_varint()?;
+        if !(0..=MAX_MENU_TYPE).contains(&menu_type) {
+            return Err(ServerError::Protocol(format!(
+                "open_screen menu type {menu_type} is outside 0..={MAX_MENU_TYPE}"
+            )));
+        }
         let rest = reader.take_remaining();
         let mut rest = rest;
         let nbt = Nbt::read_network(&mut rest)?;

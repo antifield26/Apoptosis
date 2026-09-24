@@ -1,5 +1,6 @@
-//! World generation: seeds, noise, biomes, terrain, features and the
-//! existing-world-first chunk provider (P07-13..P07-17).
+//! World generation: seeds, noise, biomes, terrain, features, structures,
+//! pack-driven ores and carvers, and the existing-world-first chunk provider
+//! (P07-13..P07-17, P18-03).
 //!
 //! ## Why this crate exists, in the phase prompt's own order
 //!
@@ -15,9 +16,9 @@
 //! 2. [`seed`] makes generation a pure function of `(world seed, chunk position)`
 //!    so a generated chunk is reproducible for ever, in any order (AGENTS.md
 //!    §3.6);
-//! 3. [`noise`], [`terrain`], [`biome`], [`features`], and now [`structures`] then
-//!    produce terrain that is *labelled as ours* at every step — see "no parity
-//!    claim" below.
+//! 3. [`noise`], [`terrain`], [`biome`], [`features`], [`structures`], and now
+//!    [`ore`] + [`carver`] then produce terrain that is *labelled as ours* at
+//!    every step — see "no parity claim" below.
 //!
 //! ## No parity claim — what this is and is not
 //!
@@ -37,7 +38,9 @@
 //! | Structure *files* | the 26.1.2 `.nbt` format, **measured** (1 202 files, `DataVersion` 4790); `palettes` (plural, 20 shipwreck files) and block-entity `nbt` are **not** modelled |
 //! | Structure *placement* | one whole template per selected chunk on a documented grid; **not** Vanilla's `RandomSpreadStructurePlacement`, and **not** jigsaw assembly |
 //! | Structure *types* | templates a data pack ships; mineshafts, strongholds and fortresses are procedural in Vanilla and **are not implemented** |
-//! | Ores, caves, ravines, lakes, decoration | **not implemented** — see [`features`] |
+//! | **Ores** | **pack-driven** counts, y bands, size and air-exposure discard from `configured_feature`/`placed_feature` (P18-03); blob geometry is our approximation of `OreFeature` |
+//! | **Caves / canyons** | **pack-driven** cave + canyon carvers (P18-03), dry air only — lakes and water-filled carvers are P20-01b |
+//! | Lakes, springs, aquifers, water in carvers | **not implemented** (P20-01b) |
 //!
 //! Every constant in this crate carries one of four labels: **verified** (with a
 //! source), **derived** (from something verified, derivation written out),
@@ -54,6 +57,18 @@
 //! `mc_world::Chunk` cannot write into a neighbour (it wraps horizontally rather
 //! than erroring), why the default policy therefore refuses a structure that does
 //! not fit in one chunk, and exactly how many of the real templates that affects.
+//!
+//! ## Generation order for one chunk (P18-03)
+//!
+//! ```text
+//! terrain fill  →  carvers (cave/canyon, dry)  →  ore veins  →  trees / structures
+//! ```
+//!
+//! Carvers run before ores so a vein can be exposed to cave air and hit its
+//! `discard_chance_on_air_exposure`, which is the buried-vein behaviour the
+//! pack encodes. [`ore`] and [`carver`] are separate passes so a caller can
+//! skip either; `tests/ore_carver_stats.rs` measures both over a 32×32-chunk
+//! region with tolerances written before the run.
 
 #![forbid(unsafe_code)]
 // Terrain, noise and features narrow and widen constantly: block coordinates are
@@ -65,13 +80,17 @@
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
     clippy::cast_sign_loss,
-    clippy::cast_lossless
+    clippy::cast_lossless,
+    clippy::cast_precision_loss
 )]
 
 pub mod biome;
+pub mod carver;
 pub mod existing;
 pub mod features;
 pub mod noise;
+pub mod ore;
+pub mod pack_json;
 pub mod placement;
 pub mod seed;
 pub mod structure;
@@ -79,6 +98,10 @@ pub mod structures;
 pub mod terrain;
 
 pub use biome::{BIOMES, Biome, BiomeSource, SurfaceBlocks};
+pub use carver::{
+    CARVER_SOURCE_RADIUS_CHUNKS, CarverConfig, CarverKind, CarverSet, CarverStats,
+    OVERWORLD_CARVERS, carve_chunk, carved_air_fraction, chunk_volume, with_no_replaceables,
+};
 pub use existing::{
     ChunkLookup, ChunkProvider, FnLookup, MapLookup, NoStorage, ProviderError, ProviderStats,
     StoredChunk,
@@ -88,6 +111,11 @@ pub use features::{
     populate_oak_trees_flat, tree_fits_in_chunk,
 };
 pub use noise::{FractalNoise, MAX_OCTAVES, PerlinNoise};
+pub use ore::{
+    MAX_ATTEMPTS_PER_FEATURE, OVERWORLD_ORE_PLACED_FEATURES, OreConfig, OreFeature, OreSet,
+    OreStats, OreTarget, ore_blocks_by_band, ore_state_ids, populate_ores,
+};
+pub use pack_json::{Attempts, FloatRange, HeightDist, TagTable, YAnchor};
 pub use placement::{
     AirPolicy, Anchor, CrossChunk, PlacementReport, blocks_outside_chunk, fits_in_chunk, place,
 };

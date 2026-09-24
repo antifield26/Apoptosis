@@ -13,12 +13,15 @@
 //!
 //! - **Structures**: villages, temples, mineshafts, strongholds, ruined portals,
 //!   ocean monuments, shipwrecks, igloos, pillager outposts, ancient cities.
-//! - **Ores**: coal, iron, copper, gold, redstone, lapis, diamond, emerald,
-//!   quartz, deepslate variants, and every other ore vein or blob.
-//! - **Caves and ravines**: no carver of any kind, so the world is solid.
+//! - **Ores and carvers live elsewhere**: this module is still **only trees**.
+//!   Ore veins are [`crate::ore`] (P18-03, pack-driven) and caves/canyons are
+//!   [`crate::carver`] (P18-03, dry). Emerald (mountains-only) and every Nether
+//!   ore are not in the overworld set; P21-02 owns the Nether.
 //! - **Lakes, springs, aquifers, water and lava pockets**: water exists only as
 //!   sea-level filling from [`crate::terrain`]; there is no lake or spring
-//!   feature, and no aquifer can carve a cave full of water.
+//!   feature, and no aquifer can carve a cave full of water. Cave and canyon
+//!   **carvers** now exist ([`crate::carver`], P18-03) but they leave dry air —
+//!   water-filled carver output and lakes are P20-01b.
 //! - **Other trees**: birch, spruce, jungle, acacia, dark oak, mangrove, cherry,
 //!   pale oak, azalea; and for oak itself no big oak, no branches, no vines, no
 //!   bee nests.
@@ -29,10 +32,11 @@
 //!   [`crate::terrain`], but there is no snowfall, no ice and no freezing.
 //! - **Fossils, geodes, amethyst, dripstone, sculk, tuff blobs, and the
 //!   dirt/gravel/granite/diorite/andesite discs.**
-//! - **Vanilla's placed-feature system**: no `count`/`rarity_filter`/`in_square`/
-//!   `heightmap` placement modifiers, no feature ordering, no `PlacedFeature`
-//!   JSON, no datapack features. The density rule below is a direct per-column
-//!   probability instead.
+//! - **Vanilla's placed-feature system *for trees***: no `count`/`rarity_filter`/
+//!   `in_square`/`heightmap` placement modifiers here, no feature ordering, no
+//!   `PlacedFeature` JSON for vegetation. Ores *do* read placed-feature JSON
+//!   ([`crate::ore`], P18-03); this module's density rule stays a direct
+//!   per-column probability.
 //! - **Block *states***: logs are placed in their default (`axis=y`) state and
 //!   leaves in their default (`distance=7`, `persistent=false`,
 //!   `waterlogged=false`) state. Vanilla sets leaf `distance` from the trunk and

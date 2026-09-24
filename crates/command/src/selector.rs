@@ -34,7 +34,7 @@
 //! | `limit` | yes | positive integer |
 //! | `sort` | yes | `nearest`, `furthest`, `random`, `arbitrary` |
 //! | `x`, `y`, `z` | yes | the centre a `distance` is measured from |
-//! | `dx`, `dy`, `dz` | no | a box volume; refused rather than ignored |
+//! | `dx`, `dy`, `dz` | yes | a box volume from `(x,y,z)` by those spans |
 //! | `scores`, `tag`, `team`, `nbt`, `predicate`, `advancements`, `level`-as-object | **no** | refused by name |
 //! | `rotated`, `type`-as-tag | **no** | refused by name |
 //!
@@ -300,6 +300,17 @@ pub struct Selector {
     pub sort: Sort,
     /// The centre a `distance` is measured from, if the selector overrode the source's.
     pub position: Option<(f64, f64, f64)>,
+    /// Box spans from `position` (or the source's), Vanilla's `dx`/`dy`/`dz`.
+    ///
+    /// A negative span extends the box the other way; [`Selector::matches`]
+    /// normalises the two corners. `None` on an axis means "no box filter on
+    /// that axis" only when **all three** are absent — a written `dx=0` is a
+    /// one-block-wide slab, not "ignore x".
+    pub dx: Option<f64>,
+    /// See [`Selector::dx`].
+    pub dy: Option<f64>,
+    /// See [`Selector::dx`].
+    pub dz: Option<f64>,
 }
 
 impl Selector {
@@ -316,6 +327,9 @@ impl Selector {
             limit: None,
             sort: Sort::Nearest,
             position: None,
+            dx: None,
+            dy: None,
+            dz: None,
         }
     }
 
@@ -407,9 +421,6 @@ pub enum SelectorError {
 /// server does not support `tag=`" is actionable, "invalid selector" is not.
 pub const UNSUPPORTED_OPTIONS: &[&str] = &[
     "advancements",
-    "dx",
-    "dy",
-    "dz",
     "nbt",
     "predicate",
     "scores",
@@ -470,7 +481,7 @@ pub fn parse(text: &str) -> Result<Selector, SelectorError> {
         }
         if matches!(
             key,
-            "distance" | "level" | "limit" | "sort" | "x" | "y" | "z"
+            "distance" | "level" | "limit" | "sort" | "x" | "y" | "z" | "dx" | "dy" | "dz"
         ) {
             if seen.iter().any(|earlier| earlier == key) {
                 return Err(SelectorError::DuplicateOption(key.to_owned()));
@@ -574,6 +585,14 @@ fn apply_option(selector: &mut Selector, key: &str, value: &str) -> Result<(), S
                 _ => (x, y, number),
             });
         }
+        "dx" | "dy" | "dz" => {
+            let number = parse_number(value).map_err(bad)?;
+            match key {
+                "dx" => selector.dx = Some(number),
+                "dy" => selector.dy = Some(number),
+                _ => selector.dz = Some(number),
+            }
+        }
         other => return Err(SelectorError::UnsupportedOption(other.to_owned())),
     }
     Ok(())
@@ -617,6 +636,15 @@ impl Selector {
             + usize::from(self.distance.is_some())
             + usize::from(self.level.is_some())
             + self.game_modes.len()
+            + usize::from(self.dx.is_some())
+            + usize::from(self.dy.is_some())
+            + usize::from(self.dz.is_some())
+    }
+
+    /// Whether the selector carries a `dx`/`dy`/`dz` box filter.
+    #[must_use]
+    pub const fn has_box(&self) -> bool {
+        self.dx.is_some() || self.dy.is_some() || self.dz.is_some()
     }
 
     /// Whether an entity passes every filter.
@@ -682,6 +710,13 @@ impl Selector {
             }
         }
 
+        if self.has_box() {
+            let origin = self.position.unwrap_or(centre);
+            if !self.box_contains(origin, facts.position) {
+                return false;
+            }
+        }
+
         if let Some(bound) = self.level {
             // A non-player has no experience level, so a level filter excludes it. Vanilla
             // does the same: `@e[level=..]` matches only entities that have a level.
@@ -720,6 +755,32 @@ impl Selector {
 
         true
     }
+
+    /// Whether `point` sits inside the `dx`/`dy`/`dz` box from `origin`.
+    ///
+    /// Vanilla intersects the entity's **bounding box** with the volume. This
+    /// build's [`EntityFacts`] carry a point (the feet position), so the test is
+    /// point-in-box with the span normalised for a negative `dx`/`dy`/`dz`. A
+    /// one-block span (`dx=0`) is the closed interval `[origin, origin]` on that
+    /// axis, matching Vanilla's inclusive end when the span is zero.
+    fn box_contains(&self, origin: (f64, f64, f64), point: (f64, f64, f64)) -> bool {
+        let axis = |span: Option<f64>, origin: f64, value: f64| -> bool {
+            let Some(span) = span else {
+                // An axis with no span is not filtered (the caller only reaches
+                // here when at least one axis has one).
+                return true;
+            };
+            let (min, max) = if span >= 0.0 {
+                (origin, origin + span)
+            } else {
+                (origin + span, origin)
+            };
+            value >= min && value <= max
+        };
+        axis(self.dx, origin.0, point.0)
+            && axis(self.dy, origin.1, point.1)
+            && axis(self.dz, origin.2, point.2)
+    }
 }
 
 /// Whether a filter id matches an entity's type.
@@ -730,6 +791,51 @@ impl Selector {
 /// the leading `#`.
 fn type_matches(filter: &ResourceId, type_id: &str) -> bool {
     format!("{}:{}", filter.namespace(), filter.value()) == type_id
+}
+
+/// Apply `sort` and `limit` to matched entity indices.
+///
+/// `distance[i]` is entity `i`'s distance from the selector centre (ignored by
+/// `arbitrary`). `random_u32` supplies the shuffle for `sort=random`; a fixed
+/// seed makes that order reproducible (AGENTS.md §3.6). Returns the kept
+/// indices, already truncated to the effective limit.
+///
+/// The sort lives here rather than in a caller because it is the *meaning* of
+/// `sort=`/`limit=`, the same reason [`Selector::matches`] does.
+#[must_use]
+pub fn sort_and_limit(
+    selector: &Selector,
+    distance: &[f64],
+    random_u32: &mut dyn FnMut() -> u32,
+) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..distance.len()).collect();
+    match selector.sort {
+        Sort::Nearest => order.sort_by(|a, b| {
+            distance[*a]
+                .partial_cmp(&distance[*b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.cmp(b))
+        }),
+        Sort::Furthest => order.sort_by(|a, b| {
+            distance[*b]
+                .partial_cmp(&distance[*a])
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.cmp(b))
+        }),
+        Sort::Random => {
+            // Fisher–Yates over a caller-supplied stream, so the caller's seed
+            // decides the order and a test can pin it.
+            for i in (1..order.len()).rev() {
+                let j = (random_u32() as usize) % (i + 1);
+                order.swap(i, j);
+            }
+        }
+        Sort::Arbitrary => {}
+    }
+    if let Some(limit) = selector.effective_limit() {
+        order.truncate(limit as usize);
+    }
+    order
 }
 
 #[cfg(test)]

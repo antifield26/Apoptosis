@@ -21,11 +21,14 @@
 //! | `at <selector>` | yes | replaces position, rotation and dimension |
 //! | `positioned <x y z>` | yes | replaces position only |
 //! | `align <axes>` | yes | truncates the named axes to whole blocks |
+//! | `rotated as <selector>` / `rotated <yaw> <pitch>` | yes | replaces rotation |
+//! | `facing <x y z>` / `facing entity <selector> [eyes\|feet]` | yes | sets rotation to look at a point |
+//! | `anchored <eyes\|feet>` | yes | sets the anchor `facing`/local coords measure from |
 //! | `if entity <selector>` | yes | true when the selector matches anything |
 //! | `unless entity <selector>` | yes | the negation |
 //! | `if block <pos> <block>` | yes | true when the block matches |
 //! | `unless block <pos> <block>` | yes | the negation |
-//! | `rotated`, `facing`, `anchored`, `in` | **no** | refused by name |
+//! | `in`, `on` | **no** | refused by name |
 //! | `store …` | **no** | refused by name |
 //! | `if`/`unless` with `data`/`score`/`predicate`/`biome`/`loaded`/`blocks`/`function` | **no** | refused by name |
 //!
@@ -76,10 +79,85 @@ pub enum Modifier {
     },
     /// `align <axes>` — truncate the named axes.
     Align(Axes),
+    /// `rotated as <selector>` or `rotated <yaw> <pitch>`.
+    Rotated(RotationSource),
+    /// `facing <x y z>` or `facing entity <selector> [eyes|feet]`.
+    Facing(FacingTarget),
+    /// `anchored <eyes|feet>`.
+    Anchored(Anchor),
     /// `if <condition>` — run only when it holds.
     If(Condition),
     /// `unless <condition>` — run only when it does not hold.
     Unless(Condition),
+}
+
+/// Where `rotated` takes its angles from.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RotationSource {
+    /// `rotated as <selector>` — the first match's rotation.
+    As(Box<Selector>),
+    /// `rotated <yaw> <pitch>` — absolute degrees, or `None` per axis for a bare `~`.
+    Fixed {
+        /// Yaw in degrees, or `None` for a bare `~`.
+        yaw: Option<f64>,
+        /// Pitch in degrees, or `None` for a bare `~`.
+        pitch: Option<f64>,
+    },
+}
+
+/// What `facing` looks at.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FacingTarget {
+    /// `facing <x y z>` — a world point.
+    Position {
+        /// X, or `None` for a bare `~`.
+        x: Option<i32>,
+        /// Y, or `None` for a bare `~`.
+        y: Option<i32>,
+        /// Z, or `None` for a bare `~`.
+        z: Option<i32>,
+    },
+    /// `facing entity <selector> [eyes|feet]`.
+    Entity {
+        /// Whose position to look at.
+        selector: Box<Selector>,
+        /// Which point of that entity; defaults to `eyes` like Vanilla.
+        anchor: Anchor,
+    },
+}
+
+/// The point of an entity that `facing entity` / `anchored` measure from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Anchor {
+    /// The feet (entity origin).
+    #[default]
+    Feet,
+    /// The eyes (feet + eye height).
+    Eyes,
+}
+
+impl Anchor {
+    /// Parse `eyes` or `feet`.
+    ///
+    /// # Errors
+    ///
+    /// A message naming the unknown word.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        match text {
+            "eyes" => Ok(Self::Eyes),
+            "feet" => Ok(Self::Feet),
+            other => Err(format!("{other:?} is not an anchor (eyes|feet)")),
+        }
+    }
+
+    /// The wire/keyword name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Eyes => "eyes",
+            Self::Feet => "feet",
+        }
+    }
 }
 
 /// Which axes `align` truncates.
@@ -182,9 +260,20 @@ impl ExecuteChain {
         self.modifiers.iter().any(|modifier| {
             matches!(
                 modifier,
-                Modifier::At(_) | Modifier::Positioned { .. } | Modifier::Align(_)
+                Modifier::At(_)
+                    | Modifier::Positioned { .. }
+                    | Modifier::Align(_)
+                    | Modifier::Facing(_)
             )
         })
+    }
+
+    /// Whether the chain changes the executing rotation or anchor.
+    #[must_use]
+    pub fn has_rotation_modifier(&self) -> bool {
+        self.modifiers
+            .iter()
+            .any(|modifier| matches!(modifier, Modifier::Rotated(_) | Modifier::Anchored(_)))
     }
 
     /// How many conditions the chain carries.
@@ -240,9 +329,7 @@ pub enum ExecuteError {
 ///
 /// Named rather than merely rejected, because the distinction matters to a player: "this
 /// server does not support `store`" is actionable, "invalid command" is not.
-pub const UNSUPPORTED_MODIFIERS: &[&str] = &[
-    "anchored", "facing", "in", "on", "rotated", "store", "summon",
-];
+pub const UNSUPPORTED_MODIFIERS: &[&str] = &["in", "on", "store", "summon"];
 
 /// Condition keywords this build recognises but does not implement.
 pub const UNSUPPORTED_CONDITIONS: &[&str] = &[
@@ -332,6 +419,19 @@ fn parse_modifier(keyword: &str, rest: &[String]) -> Result<(Modifier, usize), E
             let axes = Axes::parse(text).map_err(bad)?;
             Ok((Modifier::Align(axes), 2))
         }
+        "rotated" => {
+            let (source, consumed) = parse_rotated(keyword, rest)?;
+            Ok((Modifier::Rotated(source), consumed))
+        }
+        "facing" => {
+            let (target, consumed) = parse_facing(keyword, rest)?;
+            Ok((Modifier::Facing(target), consumed))
+        }
+        "anchored" => {
+            let text = rest.get(1).ok_or_else(missing)?;
+            let anchor = Anchor::parse(text).map_err(bad)?;
+            Ok((Modifier::Anchored(anchor), 2))
+        }
         "if" | "unless" => {
             let (condition, consumed) = parse_condition(keyword, rest)?;
             let modifier = if keyword == "if" {
@@ -343,6 +443,90 @@ fn parse_modifier(keyword: &str, rest: &[String]) -> Result<(Modifier, usize), E
         }
         other => Err(ExecuteError::UnsupportedModifier(other.to_owned())),
     }
+}
+
+/// Parse `rotated as <selector>` or `rotated <yaw> <pitch>`, returning the
+/// source and how many tokens it consumed.
+fn parse_rotated(keyword: &str, rest: &[String]) -> Result<(RotationSource, usize), ExecuteError> {
+    let missing = || ExecuteError::MissingArgument {
+        modifier: keyword.to_owned(),
+    };
+    let bad = |reason: String| ExecuteError::BadValue {
+        modifier: keyword.to_owned(),
+        reason,
+    };
+    let Some(first) = rest.get(1) else {
+        return Err(missing());
+    };
+    if first == "as" {
+        let text = rest.get(2).ok_or_else(missing)?;
+        let selector = selector::parse(text).map_err(|error| bad(error.to_string()))?;
+        return Ok((RotationSource::As(Box::new(selector)), 3));
+    }
+    let pitch_text = rest.get(2).ok_or_else(missing)?;
+    let yaw = angle(first, &bad)?;
+    let pitch = angle(pitch_text, &bad)?;
+    Ok((RotationSource::Fixed { yaw, pitch }, 3))
+}
+
+/// Parse one rotation angle: a number, `~`, or `~offset`.
+fn angle(text: &str, bad: &dyn Fn(String) -> ExecuteError) -> Result<Option<f64>, ExecuteError> {
+    let Some(value) = text.strip_prefix('~') else {
+        let parsed: f64 = text
+            .parse()
+            .map_err(|_| bad(format!("{text:?} is not an angle")))?;
+        if !parsed.is_finite() {
+            return Err(bad(format!("{text:?} is not a finite angle")));
+        }
+        return Ok(Some(parsed));
+    };
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let parsed: f64 = value
+        .parse()
+        .map_err(|_| bad(format!("{text:?} is not an offset")))?;
+    if !parsed.is_finite() {
+        return Err(bad(format!("{text:?} is not a finite offset")));
+    }
+    Ok(Some(parsed))
+}
+
+/// Parse `facing <x y z>` or `facing entity <selector> [eyes|feet]`.
+fn parse_facing(keyword: &str, rest: &[String]) -> Result<(FacingTarget, usize), ExecuteError> {
+    let missing = || ExecuteError::MissingArgument {
+        modifier: keyword.to_owned(),
+    };
+    let bad = |reason: String| ExecuteError::BadValue {
+        modifier: keyword.to_owned(),
+        reason,
+    };
+    let Some(first) = rest.get(1) else {
+        return Err(missing());
+    };
+    if first == "entity" {
+        let text = rest.get(2).ok_or_else(missing)?;
+        let selector = selector::parse(text).map_err(|error| bad(error.to_string()))?;
+        // An optional anchor word, defaulting to Vanilla's `eyes`.
+        let mut consumed = 3;
+        let mut anchor = Anchor::Eyes;
+        if let Some(word) = rest.get(3)
+            && (word == "eyes" || word == "feet")
+        {
+            anchor = Anchor::parse(word).map_err(bad)?;
+            consumed = 4;
+        }
+        return Ok((
+            FacingTarget::Entity {
+                selector: Box::new(selector),
+                anchor,
+            },
+            consumed,
+        ));
+    }
+    let ((x, y, z), coordinate_tokens) = parse_coordinates_at(keyword, rest, 1)?;
+    // `facing` itself is one token on top of the three coordinates.
+    Ok((FacingTarget::Position { x, y, z }, 1 + coordinate_tokens))
 }
 
 /// Parse one axis: a number, `~`, or `~offset`.

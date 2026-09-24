@@ -255,16 +255,20 @@ impl Game {
                             "id".to_owned(),
                             mc_nbt::NbtTag::String("minecraft:item".to_owned()),
                         ));
-                        fields.push((
-                            "Item".to_owned(),
-                            mc_nbt::NbtTag::Compound(vec![
-                                (
-                                    "id".to_owned(),
-                                    mc_nbt::NbtTag::String(item_name.to_owned()),
-                                ),
-                                ("Count".to_owned(), mc_nbt::NbtTag::Int(item.stack.count())),
-                            ]),
-                        ));
+                        let mut stack_fields = vec![
+                            (
+                                "id".to_owned(),
+                                mc_nbt::NbtTag::String(item_name.to_owned()),
+                            ),
+                            ("Count".to_owned(), mc_nbt::NbtTag::Int(item.stack.count())),
+                        ];
+                        // P18-01a: the data-component patch rides the item.
+                        if let Some(components) =
+                            mc_entity::components::to_nbt(item.stack.components())
+                        {
+                            stack_fields.push(("components".to_owned(), components));
+                        }
+                        fields.push(("Item".to_owned(), mc_nbt::NbtTag::Compound(stack_fields)));
                     }
                     EntityBody::Orb(orb) => {
                         // Vanilla orb persistence is the value (plus the
@@ -376,10 +380,28 @@ impl Game {
                 // back as N of item 1 -- and the argument order is the whole
                 // reason this line is called out (found by the P11-08
                 // persistence test).
-                let Ok(stack) = mc_entity::stack::ItemStack::new(item_id, *count) else {
+                let Ok(mut stack) = mc_entity::stack::ItemStack::new(item_id, *count) else {
                     warn!("a saved item's stack is not a legal stack; skipped");
                     continue;
                 };
+                // P18-01a: restore the data-component patch when present.
+                if let Some(components_tag) = item_fields
+                    .iter()
+                    .find(|(k, _)| k == "components")
+                    .map(|(_, v)| v)
+                {
+                    match mc_entity::components::from_nbt(components_tag) {
+                        Ok(components) => {
+                            stack = mc_entity::stack::ItemStack::with_components(
+                                item_id, *count, components,
+                            )
+                            .unwrap_or(stack);
+                        }
+                        Err(error) => {
+                            warn!(%error, "a saved item's components are malformed; kept without them");
+                        }
+                    }
+                }
                 if self.spawn_item(stack, position).is_err() {
                     warn!("a saved item could not be spawned");
                 }
@@ -404,6 +426,10 @@ impl Game {
     /// hopper `Cooldown` int. Vanilla reads `id`/`x`/`y`/`z`/`Items` and ignores
     /// the rest, so a vanilla boot sees chests with contents and furnaces with
     /// items but reset progress — the honest direction for the progress gap.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the block-entity NBT writer is a field table"
+    )]
     fn serialize_chunk_block_entities(&self, pos: ChunkPos) -> Vec<mc_nbt::NbtTag> {
         self.block_entities
             .iter()
@@ -472,11 +498,17 @@ impl Game {
                                 .item_id()
                                 .and_then(|item_id| self.registries.items.name(item_id).ok())?;
                             let byte_slot = i8::try_from(slot).ok()?;
-                            Some(mc_nbt::NbtTag::Compound(vec![
+                            let mut entry = vec![
                                 ("Slot".to_owned(), mc_nbt::NbtTag::Byte(byte_slot)),
                                 ("id".to_owned(), mc_nbt::NbtTag::String(name.to_owned())),
                                 ("Count".to_owned(), mc_nbt::NbtTag::Int(stack.count())),
-                            ]))
+                            ];
+                            // P18-01a: the data-component patch rides the slot.
+                            if let Some(components) = mc_entity::components::to_nbt(stack.components())
+                            {
+                                entry.push(("components".to_owned(), components));
+                            }
+                            Some(mc_nbt::NbtTag::Compound(entry))
                         })
                         .collect();
                     fields.push(("Items".to_owned(), mc_nbt::NbtTag::List(list)));
@@ -521,6 +553,10 @@ impl Game {
     /// Malformed entries are logged and skipped like entities: one bad chest
     /// must not stop the chunk. Signs are skipped (no payload this build
     /// persists for them).
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the block-entity NBT reader is a field table"
+    )]
     fn load_chunk_block_entities(&mut self, tags: &[mc_nbt::NbtTag]) {
         for tag in tags {
             let mc_nbt::NbtTag::Compound(fields) = tag else {
@@ -593,6 +629,21 @@ impl Game {
                     };
                     let Ok(stack) = mc_entity::stack::ItemStack::new(item_id, count) else {
                         continue;
+                    };
+                    // P18-01a: restore the data-component patch when present.
+                    let stack = if let Some(components_tag) = find("components") {
+                        match mc_entity::components::from_nbt(components_tag) {
+                            Ok(components) => mc_entity::stack::ItemStack::with_components(
+                                item_id, count, components,
+                            )
+                            .unwrap_or(stack),
+                            Err(error) => {
+                                warn!(%error, "a saved block item's components are malformed; kept without them");
+                                stack
+                            }
+                        }
+                    } else {
+                        stack
                     };
                     if slot < items.len() && !stack.is_empty() {
                         items[slot] = stack;

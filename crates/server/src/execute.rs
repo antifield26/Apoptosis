@@ -41,7 +41,10 @@
 //! exceeding it is a message naming the limit rather than a stack overflow — the one place in
 //! this crate where hostile input could otherwise take the process down.
 
-use mc_command::execute::{Condition, ExecuteChain, Modifier, align, resolve_coordinates};
+use mc_command::execute::{
+    Anchor, Condition, ExecuteChain, FacingTarget, Modifier, RotationSource, align,
+    resolve_coordinates,
+};
 use mc_command::selector::{EntityFacts, Selector};
 use mc_command::source::{CommandSource, SourcePosition};
 use mc_core::error::ServerResult;
@@ -56,6 +59,9 @@ use crate::game::{Game, TickReport};
 /// `mc_command::execute::MAX_MODIFIERS` bounds the chain length separately. 16 is far beyond any
 /// real command and shallow enough that the stack is never in question.
 pub const MAX_DEPTH: u32 = 16;
+
+/// The packet's eye height for a player (vanilla's standing eye height).
+const EYE_HEIGHT: f32 = 1.62;
 
 /// What resolving a chain produced.
 enum Resolution {
@@ -201,6 +207,56 @@ impl Game {
                     );
                     current.position = SourcePosition::new(px, py, pz);
                 }
+                Modifier::Rotated(source) => match source {
+                    RotationSource::As(selector) => {
+                        let matches = self.select(selector, centre);
+                        let Some(first) = matches.into_iter().next() else {
+                            return Err(format!("No entity matched {}", selector.kind.name()));
+                        };
+                        current.yaw = first.yaw;
+                        current.pitch = first.pitch;
+                    }
+                    RotationSource::Fixed { yaw, pitch } => {
+                        current.yaw = resolve_angle(*yaw, f64::from(current.yaw));
+                        current.pitch = resolve_angle(*pitch, f64::from(current.pitch));
+                    }
+                },
+                Modifier::Facing(target) => {
+                    let look_from = match current.anchor {
+                        Anchor::Eyes => (
+                            current.position.x,
+                            current.position.y + f64::from(EYE_HEIGHT),
+                            current.position.z,
+                        ),
+                        Anchor::Feet => {
+                            (current.position.x, current.position.y, current.position.z)
+                        }
+                    };
+                    let look_at = match target {
+                        FacingTarget::Position { x, y, z } => {
+                            let base = block_position(&current)?;
+                            let (bx, by, bz) = resolve_coordinates(*x, *y, *z, base);
+                            (f64::from(bx), f64::from(by), f64::from(bz))
+                        }
+                        FacingTarget::Entity { selector, anchor } => {
+                            let matches = self.select(selector, centre);
+                            let Some(first) = matches.into_iter().next() else {
+                                return Err(format!("No entity matched {}", selector.kind.name()));
+                            };
+                            let y = match anchor {
+                                Anchor::Eyes => first.position.y + f64::from(EYE_HEIGHT),
+                                Anchor::Feet => first.position.y,
+                            };
+                            (first.position.x, y, first.position.z)
+                        }
+                    };
+                    let (yaw, pitch) = look_at_angles(look_from, look_at);
+                    current.yaw = yaw;
+                    current.pitch = pitch;
+                }
+                Modifier::Anchored(anchor) => {
+                    current.anchor = *anchor;
+                }
                 Modifier::If(condition) => {
                     if let Some(which) = self.condition_fails(condition, &current, centre)? {
                         return Ok(Resolution::ConditionFailed { which });
@@ -251,13 +307,49 @@ impl Game {
                     SourcePosition::new(position.x, position.y, position.z),
                 )
                 .with_permission(session.permission)
+                .with_rotation(session.player.yaw, session.player.pitch)
             })
             .collect();
         matched.sort_by(|a, b| a.name.cmp(&b.name));
-        if let Some(limit) = selector.effective_limit() {
-            matched.truncate(limit as usize);
+        // `sort`/`limit` are the selector's meaning, so they go through the
+        // shared helper rather than a second copy of the ordering rules.
+        let distances: Vec<f64> = matched
+            .iter()
+            .map(|source| {
+                let dx = source.position.x - centre.0;
+                let dy = source.position.y - centre.1;
+                let dz = source.position.z - centre.2;
+                (dx * dx + dy * dy + dz * dz).sqrt()
+            })
+            .collect();
+        let mut rng = self.seeded_rng();
+        let order = mc_command::selector::sort_and_limit(
+            selector,
+            &distances,
+            &mut rng as &mut dyn FnMut() -> u32,
+        );
+        let mut sorted = Vec::with_capacity(order.len());
+        for index in order {
+            if let Some(source) = matched.get(index) {
+                sorted.push(source.clone());
+            }
         }
-        matched
+        sorted
+    }
+
+    /// A deterministic RNG stream for `sort=random`, seeded from the world seed
+    /// and tick so the same command on the same tick picks the same entities
+    /// (AGENTS.md §3.6).
+    fn seeded_rng(&self) -> impl FnMut() -> u32 {
+        let mut state = self.random_seed().cast_unsigned()
+            ^ (self.tick_count().wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        move || {
+            // xorshift64*, small and enough to shuffle a player list.
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 32) as u32
+        }
     }
 
     /// Whether a condition fails, and how to describe it. `None` means it holds.
@@ -339,6 +431,36 @@ fn block_position(source: &CommandSource) -> Result<(i32, i32, i32), String> {
     source
         .block_position()
         .ok_or_else(|| "The executing position is not finite.".to_owned())
+}
+
+/// Resolve a rotation angle against the current one (`None` is a bare `~`).
+///
+/// A `Some` is an absolute degree value, matching how `positioned` already
+/// treats its `Option<i32>` axes: the parser collapses `~10` and `10` to the
+/// same `Some(10)`, so a relative offset cannot be distinguished after parse.
+/// That gap is shared with `positioned` and named rather than papered over.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the wire carries f32 rotation; a degree value outside f32 is nonsense"
+)]
+fn resolve_angle(value: Option<f64>, current: f64) -> f32 {
+    value.unwrap_or(current) as f32
+}
+
+/// Yaw/pitch in degrees looking from one point to another (Minecraft's axes:
+/// yaw 0 faces +z, pitch −90 is straight up).
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the wire carries f32 rotation"
+)]
+fn look_at_angles(from: (f64, f64, f64), to: (f64, f64, f64)) -> (f32, f32) {
+    let dx = to.0 - from.0;
+    let dy = to.1 - from.1;
+    let dz = to.2 - from.2;
+    let horiz = (dx * dx + dz * dz).sqrt();
+    let yaw = (-dx.atan2(dz)).to_degrees();
+    let pitch = (-dy.atan2(horiz)).to_degrees();
+    (yaw as f32, pitch as f32)
 }
 
 /// A phrase naming a condition, for the "test failed" message.

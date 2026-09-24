@@ -51,7 +51,7 @@ pub use blocks::{BlockRegistry, BlockStateRef};
 pub use entities::EntityTypeRegistry;
 pub use items::{ItemEntry, ItemRegistry, ToolEntry, ToolRule};
 pub use light::LightTable;
-pub use mining::{DigRate, can_harvest, dig_rate, tool_match};
+pub use mining::{DigRate, can_harvest, dig_rate, efficiency_bonus, tool_match};
 
 use mc_core::error::{ServerError, ServerResult};
 use std::fmt::Write as _;

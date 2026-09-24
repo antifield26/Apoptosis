@@ -37,10 +37,11 @@
 //!
 //! ## What is not implemented
 //!
-//! Caves, ravines, ores, lakes, structures, aquifers, carvers, biome height
-//! modifiers, and Vanilla's density-function stack. [`crate::features`] lists the
-//! decorations that *are* implemented (oak trees, chunk-local) and is the single
-//! place that list lives.
+//! Caves, ravines and ores are **not this module's job** — they are separate
+//! passes ([`crate::carver`], [`crate::ore`], P18-03) applied after the fill.
+//! Still missing here: lakes, aquifers, biome height modifiers, and Vanilla's
+//! density-function stack. [`crate::features`] lists the decorations that *are*
+//! implemented (oak trees, chunk-local) and is the single place that list lives.
 
 use crate::biome::{Biome, BiomeSource};
 use crate::features::{self, TreeDensity};

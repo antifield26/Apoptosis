@@ -68,6 +68,74 @@ fn replacing_a_block_entity_reports_what_it_displaced() {
     assert_eq!(game.block_entities().len(), 1, "one entity per position");
 }
 
+/// A12-07 kind-drift: `set_block` from chest to furnace must replace the
+/// block-entity payload, not leave a 27-slot Container under a furnace.
+#[test]
+fn changing_a_chest_to_a_furnace_replaces_the_payload_kind() {
+    let (mut game, _storage, _dir) = game("a12-07-kind-drift");
+    let pos = BlockPos::new(4, 64, 4);
+    let chest = game
+        .registries()
+        .blocks
+        .default_state("minecraft:chest")
+        .expect("chest");
+    let furnace = game
+        .registries()
+        .blocks
+        .default_state("minecraft:furnace")
+        .expect("furnace");
+    let stone = game
+        .registries()
+        .items
+        .id("minecraft:stone")
+        .expect("stone");
+
+    game.world_mut()
+        .set_block(pos.x, pos.y, pos.z, chest)
+        .expect("place chest");
+    game.tick().expect("tick creates the chest entity");
+    let entity = game.block_entities().get(pos).expect("chest entity");
+    assert_eq!(entity.kind(), BlockEntityKind::Container);
+    if let Some(items) = game
+        .block_entities_mut()
+        .get_mut(pos)
+        .expect("chest entity")
+        .data
+        .items_mut()
+    {
+        items[0] = mc_entity::stack::ItemStack::new(stone, 5).expect("stack");
+    }
+
+    game.world_mut()
+        .set_block(pos.x, pos.y, pos.z, furnace)
+        .expect("replace with furnace");
+    game.tick().expect("tick applies the kind change");
+
+    let entity = game
+        .block_entities()
+        .get(pos)
+        .expect("furnace entity after the swap");
+    assert_eq!(
+        entity.kind(),
+        BlockEntityKind::Furnace,
+        "a chest→furnace swap must replace the payload kind, not leave a Container"
+    );
+    assert!(
+        matches!(entity.data, mc_container::BlockEntityData::Furnace { .. }),
+        "the payload must be furnace-shaped, not a leftover slot list"
+    );
+    let items = entity.data.items().expect("furnace slots");
+    assert_eq!(
+        items.len(),
+        3,
+        "a furnace holds 3 slots, not the chest's 27"
+    );
+    assert!(
+        items.iter().all(mc_entity::stack::ItemStack::is_empty),
+        "the replaced chest's contents are dropped, not silently kept in the wrong shape"
+    );
+}
+
 #[test]
 fn breaking_the_block_retires_its_entity() {
     let (mut game, _storage, _dir) = game("p06-be-break");
@@ -290,7 +358,7 @@ fn a_chest_survives_a_restart_with_its_contents() {
         .iter()
         .find(|e| e.kind() == BlockEntityKind::Container)
         .expect("a chest entity");
-    let first_stack = entity.data.items().expect("items")[0];
+    let first_stack = entity.data.items().expect("items")[0].clone();
     assert_eq!(first_stack.item_id(), Some(stone));
     assert_eq!(first_stack.count(), 17);
 }

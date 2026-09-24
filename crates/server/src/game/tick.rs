@@ -62,7 +62,7 @@ impl BlockView for WorldView<'_> {
 ///
 /// Drag multiplies toward zero without reaching it, so without this an orb
 /// (or anything else snapped here) keeps a nonzero velocity and drifts —
-/// and re-announces — forever, reading on-screen as motion that never
+/// and re-announces —forever, reading on-screen as motion that never
 /// ends. Same 1e-4 as the knockback snap in `Entity::fold_knockback`.
 fn snap_rest(velocity: &mut Vec3) {
     if velocity.x.abs() < 1e-4 {
@@ -76,26 +76,44 @@ fn snap_rest(velocity: &mut Vec3) {
     }
 }
 
-/// Hunger and status effects for one session per tick (P11-06, P16-03).
+/// Hunger and status effects for one session per tick (P11-06, P16-03, P18-06).
 ///
 /// Extracted from `tick_players` when the dig events pushed it over the
 /// line budget; behaviour byte-identical: food on the 4-second timer,
 /// poison/wither/regen beside it, death messages collected.
+///
+/// P18-06: the food tick drains the session's accumulated jar-table
+/// exhaustion (`food_exhaustion`) into `tick_food_ex`. Passing 0.0 here is
+/// the named-red neutralisation —the sprint table test goes red.
 fn tick_session_vitals(
     session: &mut super::session::Session,
     tick: u64,
+    difficulty: Difficulty,
     items: &mc_registry::ItemRegistry,
     messages: &mut Vec<(ConnectionId, String)>,
     effect_events: &mut Vec<(ConnectionId, i32, Vec<i32>)>,
+    eat_finishes: &mut Vec<ConnectionId>,
 ) {
+    // Eat/drink countdown (P18-06): `consume_seconds` of ticks, then apply.
+    if let Some(eat) = session.eating.as_mut() {
+        eat.ticks_left = eat.ticks_left.saturating_sub(1);
+        if eat.ticks_left == 0 {
+            eat_finishes.push(session.id);
+        }
+    }
     // Vanilla heals on a 4-second timer (`foodTickTimer`), not every tick.
-    // Calling this every tick made regeneration ~20x too fast and meant
-    // exhaustion never accrued, so food never depleted in play (Audit 03).
-    // The exhaustion cost of movement/actions is P05-14's table; until it
-    // exists this passes 0, which is why a player never gets hungry yet.
-    // An off-tick changed nothing, so the outcome is "no damage".
+    // Calling this every tick made regeneration ~20x too fast (Audit 03).
+    // Exhaustion accrues per action (jar `FoodConstants`) into
+    // `session.food_exhaustion` and is spent here —the P18-06 table.
     let outcome = if tick.is_multiple_of(FOOD_TICK_INTERVAL) {
-        session.player.tick_food(0.0)
+        let delta = std::mem::take(&mut session.food_exhaustion);
+        let floor = match difficulty {
+            Difficulty::Peaceful => mc_entity::player::starve_floor(None),
+            Difficulty::Easy => mc_entity::player::STARVE_FLOOR_EASY,
+            Difficulty::Normal => mc_entity::player::STARVE_FLOOR_NORMAL,
+            Difficulty::Hard => mc_entity::player::STARVE_FLOOR_HARD,
+        };
+        session.player.tick_food_ex(delta, floor)
     } else {
         mc_entity::player::DamageOutcome {
             applied: false,
@@ -183,12 +201,17 @@ fn tick_session_dig(
         .map(str::to_owned)
         .unwrap_or_default();
     let held_name = held.and_then(|held| registries.items.name(held).ok().map(str::to_owned));
+    let efficiency = mc_entity::enchant::level_of(
+        session.player.inventory.selected_item().enchantments(),
+        mc_entity::enchant::EFFICIENCY,
+    );
     match mc_registry::dig_rate(
         &registries.blocks,
         &registries.items,
         held_name.as_deref(),
         &name,
         session.player.on_ground,
+        efficiency,
     ) {
         mc_registry::DigRate::Unbreakable | mc_registry::DigRate::Instant => {
             // Unreachable for a tracked dig (START refuses/breaks those),
@@ -273,8 +296,8 @@ impl Game {
                 // The budget (P11-03): vanilla streams every moved entity every
                 // tick, and at this server's mob counts that is far below the
                 // cap; the cap exists so a pathological crowd degrades by
-                // *deferred* movement packets — the rotating cursor means a
-                // deferred entity is first in line next tick — rather than by
+                // *deferred* movement packets —the rotating cursor means a
+                // deferred entity is first in line next tick —rather than by
                 // unbounded queue growth.
                 let mut before: Vec<_> = before;
                 let population = before.len();
@@ -372,9 +395,9 @@ impl Game {
     /// Phase 2: drain due block ticks, then drive the redstone model (P13-01/03).
     ///
     /// The drain keeps P13-01's counting (fired/pending on the report). The
-    /// drive mirrors `run_block_tick`'s orchestration — prepare each due
+    /// drive mirrors `run_block_tick`'s orchestration —prepare each due
     /// position, run `propagate` under the nominal budget, reschedule live
-    /// wires — with the drain count retained for the report, which the library
+    /// wires —with the drain count retained for the report, which the library
     /// body does not return. `World::set_block` writes land in the world's
     /// change list, so the Broadcast phase sends them as `block_update`s with
     /// no redstone-specific packet path.
@@ -433,7 +456,7 @@ impl Game {
     /// The scheduling half of the queue the `ScheduledTicks` phase drains; the
     /// world feed of P13-02 calls this when a placed block needs one. Delays
     /// past [`mc_redstone::MAX_SCHEDULE_DELAY`] or overflowing the tick counter
-    /// are refused as hostile input, never clamped silently — use
+    /// are refused as hostile input, never clamped silently —use
     /// `schedule_clamped` on the queue for wire/file values.
     ///
     /// # Errors
@@ -567,7 +590,7 @@ impl Game {
     /// Run a due component tick: observers go dark, dispensers dispense.
     ///
     /// Due positions are drained by `tick_scheduled`, which recomputes them
-    /// right after — so this acts first, letting the recompute see the
+    /// right after —so this acts first, letting the recompute see the
     /// post-action state.
     fn fire_due_component_tick(&mut self, pos: mc_redstone::BlockPos) {
         let Some(id) = self.world.get_block_loaded(pos.x, pos.y, pos.z) else {
@@ -579,7 +602,7 @@ impl Game {
         if name == mc_redstone::OBSERVER {
             self.set_block_flag(pos.x, pos.y, pos.z, "powered", false);
         } else if name.ends_with("_button") {
-            // A2: the button's hold time is up — unpress the pulse.
+            // A2: the button's hold time is up —unpress the pulse.
             self.set_block_flag(pos.x, pos.y, pos.z, "powered", false);
         } else if name == mc_redstone::DISPENSER || name == mc_redstone::DROPPER {
             let triggered = self.registries.blocks.properties_of(id).is_ok_and(|props| {
@@ -598,7 +621,7 @@ impl Game {
     /// A random occupied slot (seeded game RNG, so replays agree), one item
     /// out the front face with a small forward velocity. Every item drops
     /// as an entity: arrows do not shoot, fluids do not place, tools do not
-    /// till — each special is a named gap, not a silent refusal (the item
+    /// till —each special is a named gap, not a silent refusal (the item
     /// still leaves, exactly one per pulse). An empty inventory fires
     /// silently (no click sound exists anywhere in this build).
     fn dispense_from(&mut self, x: i32, y: i32, z: i32) {
@@ -653,7 +676,7 @@ impl Game {
             f64::from(y + fy) + 0.5,
             f64::from(z + fz) + 0.5,
         );
-        match self.spawn_item(one, at) {
+        match self.spawn_item(one.clone(), at) {
             Ok(entity) => {
                 if let Some(entity) = self.entities.get_mut(entity) {
                     entity.velocity = mc_world::Vec3::new(
@@ -684,7 +707,7 @@ impl Game {
     /// Each furnace block entity advances one tick through `Furnace::tick` on the
     /// hand-written baseline (P12-08 retires it for pack data); when a player has
     /// that furnace open the changed `container_set_data` properties (0 burn
-    /// remaining, 1 burn total, 2 cook progress, 3 cook total — vanilla
+    /// remaining, 1 burn total, 2 cook progress, 3 cook total —vanilla
     /// `FurnaceMenu` data slots) are sent on its window. Hopper ticking lives
     /// here too (see `tick_hoppers`); the phase stays deterministic by walking
     /// block positions ascending.
@@ -729,7 +752,7 @@ impl Game {
                 continue;
             };
             for (index, stack) in items.iter().enumerate().take(3) {
-                let _ = container.set(index, *stack);
+                let _ = container.set(index, stack.clone());
             }
             let mut state = mc_container::FurnaceState {
                 burn_ticks_remaining: *burn_ticks,
@@ -756,7 +779,7 @@ impl Game {
             *burn_total = state.burn_ticks_total;
             *cook_progress = state.cook_progress;
             *cook_total = state.cook_total;
-            // Furnace flame (owner-session "熔炉无燃烧动画"): the client draws
+            // Furnace flame (owner-session "熔炉无燃烧动画): the client draws
             // the fire from the block's `lit` property, not the block entity.
             let lit_now = *burn_ticks > 0;
             let lit_was = before[0] > 0;
@@ -799,7 +822,7 @@ impl Game {
         //
         // P17-02: the push target follows the hopper's `facing` (pumpkin ejects
         // into `position.offset(facing)`), and furnaces take part with
-        // face-aware routing — pull takes the output slot only (input/fuel
+        // face-aware routing —pull takes the output slot only (input/fuel
         // refuse hopper extraction), a top entry feeds the input slot with
         // smeltables only, a side entry feeds the fuel slot with fuels only.
         // Furnace XP on extract and the `enabled` redstone lock stay named gaps.
@@ -814,12 +837,15 @@ impl Game {
             })
             .collect();
         for pos in hopper_positions {
-            // Cooldown gate.
+            // Cooldown gate. A tick-down is a payload mutation and must mark
+            // the chunk dirty (A12-10).
+            let mut ticked_cooldown = false;
             let cooled = match self.block_entities.get_mut(pos) {
                 Some(entity) => match &mut entity.data {
                     mc_container::BlockEntityData::Hopper { cooldown, .. } => {
                         if *cooldown > 0 {
                             *cooldown -= 1;
+                            ticked_cooldown = true;
                             false
                         } else {
                             true
@@ -829,6 +855,9 @@ impl Game {
                 },
                 None => continue,
             };
+            if ticked_cooldown {
+                mark_block_dirty(&mut self.world, pos.x, pos.z);
+            }
             if !cooled {
                 continue;
             }
@@ -900,10 +929,10 @@ impl Game {
                     continue;
                 };
                 for (index, stack) in source_items.iter().enumerate() {
-                    let _ = source.set(index, *stack);
+                    let _ = source.set(index, stack.clone());
                 }
                 for (index, stack) in dest_items.iter().enumerate() {
-                    let _ = dest.set(index, *stack);
+                    let _ = dest.set(index, stack.clone());
                 }
                 let source_roles = vec![mc_container::SlotRole::Storage; source.len()];
                 let dest_roles = vec![mc_container::SlotRole::Storage; dest.len()];
@@ -981,7 +1010,7 @@ impl Game {
         // data slots) changed. Deduped because one transfer touches two
         // positions that may share a viewer; each viewer gets one resync per
         // tick at most. The menu's block half is refreshed from the entity
-        // first — otherwise the resync would replay the pre-transfer contents
+        // first —otherwise the resync would replay the pre-transfer contents
         // the menu still holds.
         hopper_touched.sort();
         hopper_touched.dedup();
@@ -1025,7 +1054,7 @@ impl Game {
                             Some(session) => match session.menu.container_mut(0) {
                                 Some(container) => {
                                     for (index, stack) in entity_items.iter().enumerate() {
-                                        let _ = container.set(index, *stack);
+                                        let _ = container.set(index, stack.clone());
                                     }
                                     true
                                 }
@@ -1046,7 +1075,7 @@ impl Game {
                             .menu
                             .full_contents()
                             .iter()
-                            .copied()
+                            .cloned()
                             .map(wire_stack)
                             .collect::<Vec<_>>(),
                         session.menu.state_id(),
@@ -1074,7 +1103,7 @@ impl Game {
     ///
     /// Down pushes below, horizontal facings push sideways (pumpkin ejects
     /// into `position.offset(facing)`). Unreadable states fail safe to below
-    /// — the pre-P17-02 behaviour — rather than refusing the transfer.
+    /// —the pre-P17-02 behaviour —rather than refusing the transfer.
     fn hopper_push_offset(&self, pos: mc_container::BlockPos) -> (i32, i32, i32) {
         let facing = self
             .world
@@ -1098,7 +1127,7 @@ impl Game {
     /// Push one item from a hopper into a furnace, face-aware (P17-02).
     ///
     /// `from_top` (hopper directly above) feeds the input slot with smeltable
-    /// items only; a side entry feeds the fuel slot with fuels only — vanilla's
+    /// items only; a side entry feeds the fuel slot with fuels only —vanilla's
     /// sided rule, checked per item against the pack smelting table and the
     /// jar-verified fuel table, so coal from above stays put and food from the
     /// side stays put. Hopper slots are tried in order; the first valid stack
@@ -1153,7 +1182,7 @@ impl Game {
             if !valid {
                 continue;
             }
-            let dest = furnace_items[slot];
+            let dest = furnace_items[slot].clone();
             let room = if dest.is_empty() {
                 true
             } else if dest.item_id() == Some(item_id) {
@@ -1171,7 +1200,7 @@ impl Game {
             if !room {
                 return false;
             }
-            let mut taken = *stack;
+            let mut taken = stack.clone();
             let one = taken.split(1);
             if one.is_empty() {
                 continue;
@@ -1209,7 +1238,7 @@ impl Game {
                     && let Some(items) = entity.data.items_mut()
                     && let Some(slot_stack) = items.get_mut(index)
                 {
-                    *slot_stack = *stack;
+                    *slot_stack = stack.clone();
                 }
                 return false;
             }
@@ -1254,10 +1283,10 @@ impl Game {
             return false;
         };
         for (index, stack) in source_items.iter().enumerate() {
-            let _ = source.set(index, *stack);
+            let _ = source.set(index, stack.clone());
         }
         for (index, stack) in dest_items.iter().enumerate() {
-            let _ = dest.set(index, *stack);
+            let _ = dest.set(index, stack.clone());
         }
         let roles = [
             mc_container::SlotRole::FurnaceInput,
@@ -1301,7 +1330,7 @@ impl Game {
         // where vanilla's spawn cycle sits relative to entity ticking.
         self.run_spawn_cycle();
         // Orb magnetism steers before integration (vanilla folds the homing
-        // into each orb's own tick, ahead of its move — same ordering).
+        // into each orb's own tick, ahead of its move —same ordering).
         self.home_orbs_to_players();
         // Collected first: the loop mutates the store, so it cannot hold the
         // iterator. `ids()` is ascending because the store is a `BTreeMap`.
@@ -1377,7 +1406,7 @@ impl Game {
                     continue;
                 }
                 // Older survives (vanilla). The comparison used to keep the
-                // *smaller* age — i.e. the younger stack — so a fresh Q-drop
+                // *smaller* age —i.e. the younger stack —so a fresh Q-drop
                 // merging with an older same-item stack deleted the old one
                 // (owner-session "旧掉落物概率消失").
                 let (keep, drop) = if first.age >= second.age {
@@ -1414,7 +1443,7 @@ impl Game {
                 if drop_item.stack.is_empty() {
                     continue;
                 }
-                let mut incoming = drop_item.stack;
+                let mut incoming = drop_item.stack.clone();
                 let Some(keep_entity) = self.entities.get_mut(keep) else {
                     continue;
                 };
@@ -1440,7 +1469,7 @@ impl Game {
                 }
             }
         }
-        // Tell clients the survivor's new count — without this the merge looks
+        // Tell clients the survivor's new count —without this the merge looks
         // like the dropped stack simply vanished (owner-session Q-drop).
         for (id, item_id, count) in merged_keeps {
             if let Ok(packet) = (mc_protocol::packets::play::SetEntityData {
@@ -1513,7 +1542,7 @@ impl Game {
             let EntityBody::Item(ground_stack) = &mut entity.body else {
                 continue;
             };
-            let stack = ground_stack.stack;
+            let stack = ground_stack.stack.clone();
             let leftover = match self.sessions.get_mut(&connection) {
                 Some(session) => session.player.inventory.add_stack(stack),
                 None => continue,
@@ -1587,7 +1616,7 @@ impl Game {
     /// (1 - dist/8)^2 * 0.1` to its velocity, aimed at the player's eye
     /// midpoint. Past 8 blocks nothing tracks (vanilla drops the target
     /// past 64 squared). Without this, an orb that stops outside the
-    /// 1-block pickup reach sits forever — the owner "orbits at feet"
+    /// 1-block pickup reach sits forever —the owner "orbits at feet"
     /// stall, where drag-asymptote micro-creep never crosses the boundary.
     fn home_orbs_to_players(&mut self) {
         let players: Vec<mc_world::Vec3> = self
@@ -1774,7 +1803,7 @@ impl Game {
     /// the biome table's chosen kind, updating the live cap counts.
     ///
     /// The counts thread through as `&mut`, so a cap reached mid-cycle blocks
-    /// later attempts in the *same* tick — vanilla updates its spawn state
+    /// later attempts in the *same* tick —vanilla updates its spawn state
     /// after every pack, and a by-value copy would let one tick's 289
     /// positions each land a pack before the next count.
     fn try_spawn_pack(&mut self, x: i32, y: i32, z: i32, darken: i32, counts: &mut [i32; 2]) {
@@ -1950,7 +1979,7 @@ impl Game {
             .min_by(f64::total_cmp)
     }
 
-    /// Per-entity AI and behaviour — live as of P11-02.
+    /// Per-entity AI and behaviour —live as of P11-02.
     ///
     /// The AI itself is `mc_entity`'s [`MobAi`], a pure function of its own
     /// state and an observation; this hook builds the observation, calls
@@ -2101,7 +2130,7 @@ impl Game {
     /// Act on the goal `decide` returned.
     ///
     /// The idle counter climbs on an [`MobGoal::Idle`] and resets on any other
-    /// goal — the meaning P11-01's despawn pass documented for it once goal
+    /// goal —the meaning P11-01's despawn pass documented for it once goal
     /// activity existed. Movement is **direct steering**, except for
     /// [`MobGoal::Chase`], which follows an A* path when the search finds one
     /// (P16-04): the horizontal velocity points at the goal at the kind's walk
@@ -2110,8 +2139,8 @@ impl Game {
     ///
     /// ## The one-cell lookahead (M-4)
     ///
-    /// Steering is still direct for wander and flee — **that is not
-    /// pathfinding** — but it is no longer blind. Before a steer is applied, the cell the mob's centre would reach after
+    /// Steering is still direct for wander and flee —**that is not
+    /// pathfinding** —but it is no longer blind. Before a steer is applied, the cell the mob's centre would reach after
     /// [`MOB_LOOKAHEAD_BLOCKS`] at that heading is checked for passability
     /// ([`Self::mob_step_is_passable`]): a solid block at the mob's feet or head, or
     /// a fluid, refuses the step. The owner's acceptance round saw mobs walk into
@@ -2123,12 +2152,12 @@ impl Game {
     ///   pressing into the same wall until the walk's timer expires;
     /// * a **blocked flee just stops**: it has nothing to re-target
     ///   towards, and grinding at a wall while facing the player is worse than
-    ///   standing still (a blocked chase searches instead — see below).
+    ///   standing still (a blocked chase searches instead —see below).
     ///
     /// What it deliberately does **not** do, so that the gap does not read as
     /// solved:
     ///
-    /// * no path around an obstacle for wander/flee — a wall between a
+    /// * no path around an obstacle for wander/flee —a wall between a
     ///   wandering mob and its target stops it, it does not route it (chase
     ///   alone searches);
     /// * no ledge or fall handling. Refusing a step with no ground under it would
@@ -2200,7 +2229,7 @@ impl Game {
                 });
                 let speed = kind.movement_speed() * effect_speed;
                 // Vanilla's yaw convention: 0 faces +Z, increasing clockwise,
-                // so `yaw = degrees(atan2(-x, z))` — pinned by a unit test.
+                // so `yaw = degrees(atan2(-x, z))` —pinned by a unit test.
                 let yaw = (-dir_x).atan2(dir_z).to_degrees();
                 if self.mob_step_is_passable(position, dir_x, dir_z) {
                     if let Some(entity) = self.entities.get_mut(id) {
@@ -2273,7 +2302,7 @@ impl Game {
     /// Three deliberate properties:
     ///
     /// * **The mob's own cell is not a verdict.** When the lookahead lands in the
-    ///   cell the mob already occupies there is no information in it — and a mob
+    ///   cell the mob already occupies there is no information in it —and a mob
     ///   that has already waded into water would otherwise be frozen there for
     ///   ever. A same-cell probe returns `true` and the check simply applies once
     ///   the mob has moved far enough to look into the next cell.
@@ -2336,7 +2365,7 @@ impl Game {
         position: mc_world::Vec3,
     ) {
         // The eye the arrow leaves from (skeleton torso height, documented
-        // approximation — exact per-kind eyes are unmodelled).
+        // approximation —exact per-kind eyes are unmodelled).
         const SHOOTER_EYE: f64 = 1.5;
         // Bow range, one flat number (pumpkin `BowAttackGoal::new` range).
         const BOW_RANGE: f64 = 15.0;
@@ -2436,7 +2465,7 @@ impl Game {
     /// down and it despawns at zero; an arrow inside a solid block sticks
     /// and despawns without further hits (a one-tick simplification of the
     /// stuck-arrow state). Otherwise the first overlapping victim takes the
-    /// arrow's release-time damage through [`DamageSource::Arrow`] — players
+    /// arrow's release-time damage through [`DamageSource::Arrow`] —players
     /// through the authoritative `Player` plus vitals, mobs through
     /// [`Self::damage_entity`] with the shooter as the knockback attacker —
     /// and the arrow is consumed. Owner immunity holds: a shot never hits
@@ -2549,6 +2578,7 @@ impl Game {
         if let Some(outcome) = outcome {
             if outcome.applied {
                 debug!(arrow = %id, dealt = outcome.dealt, "arrow hit a player");
+                self.wear_armor_on_hit(session_id);
             }
             self.after_damage(session_id, outcome);
         }
@@ -2604,11 +2634,11 @@ impl Game {
     /// stands down one tick at a time past [`CREEPER_DEFUSE_RANGE`] (7
     /// blocks), mirroring vanilla's fuse-speed `-1`. At
     /// [`CREEPER_FUSE_TICKS`] (30) the creeper detonates: itself removed with
-    /// no loot (a suicide drops nothing — consistent with the no-credit XP
+    /// no loot (a suicide drops nothing —consistent with the no-credit XP
     /// rule), blast damage to players and mobs inside
     /// [`CREEPER_BLAST_RADIUS`] with linear falloff from the kind's
     /// point-blank figure, gated by line of sight (binary exposure: a wall
-    /// between blocks the blast entirely, where vanilla scales it — stated,
+    /// between blocks the blast entirely, where vanilla scales it —stated,
     /// not hidden). No blocks break and no crater forms (gap).
     fn tick_creeper_fuse(&mut self, id: EntityId, kind: MobKind, position: mc_world::Vec3) {
         use mc_entity::mob::{CREEPER_DEFUSE_RANGE, CREEPER_FUSE_TICKS, CREEPER_IGNITE_RANGE};
@@ -2713,6 +2743,9 @@ impl Game {
                     .apply_damage(amount, DamageSource::Explosion, &armor)
             });
             if let Some(outcome) = outcome {
+                if outcome.applied {
+                    self.wear_armor_on_hit(session_id);
+                }
                 self.after_damage(session_id, outcome);
             }
         }
@@ -2754,8 +2787,8 @@ impl Game {
     /// Only [`MobAttackStyle::Melee`] reaches here (the style dispatch in
     /// [`Self::tick_entity_ai`] routes ranged and explosive intents to their
     /// own arms). The swing re-checks
-    /// the range at resolution time — the target may have moved since the
-    /// decision — and the attack cooldown restarts through
+    /// the range at resolution time —the target may have moved since the
+    /// decision —and the attack cooldown restarts through
     /// [`MobAi::note_attack_landed`] whether or not the hit landed, because the
     /// swing itself was spent.
     ///
@@ -2811,7 +2844,7 @@ impl Game {
         let outcome = self.sessions.get_mut(&session_id).map(|session| {
             session.hurt_invuln_ticks = INVULNERABLE_TICKS;
             // Armour is the victim's worn set (P16-01); knockback does not
-            // apply — projections carry no velocity under client-driven
+            // apply —projections carry no velocity under client-driven
             // motion, so there is nowhere honest to put the shove.
             let armor = worn_stats(&session.player.inventory, &self.registries.items);
             session
@@ -2823,6 +2856,7 @@ impl Game {
         };
         if outcome.applied {
             debug!(attacker = %attacker, kind = kind.name(), dealt = outcome.dealt, "mob melee hit");
+            self.wear_armor_on_hit(session_id);
         }
         self.after_damage(session_id, outcome);
         // The swing is spent whether or not it landed.
@@ -2840,7 +2874,7 @@ impl Game {
     /// Collect one tick of mob effect damage over time (P16-03): poison and
     /// wither hits summed, whether any wither contributed (it wins the damage
     /// flags, mirroring the player path), and regeneration amplifiers.
-    /// Multiple simultaneous dots merge into one hit — the single-window
+    /// Multiple simultaneous dots merge into one hit —the single-window
     /// model would eat the second.
     fn mob_effect_ticks(&self, id: EntityId) -> (f32, bool, Vec<i32>) {
         let Some(entity) = self.entities.get(id) else {
@@ -3044,7 +3078,7 @@ impl Game {
     /// play 42) to every ready client, lethal hits included.
     ///
     /// Owner session: landed hits showed no red, because the server sent
-    /// `entity_event` 2 — which is not the flash on a modern client (jar
+    /// `entity_event` 2 —which is not the flash on a modern client (jar
     /// `LivingEntity` never broadcasts 2 on the hurt path; its constants
     /// there are 3 = death, 35 = totem, 46, 60, 67). The red comes from this
     /// packet (jar `ClientboundHurtAnimationPacket`: `VarInt` id + `f32`
@@ -3104,7 +3138,7 @@ impl Game {
             return false;
         }
         // Knockback past the window (vanilla order: the shove lands before
-        // armour and resistance are figured), mobs only — player projections
+        // armour and resistance are figured), mobs only —player projections
         // carry no velocity under client-driven motion, so shoving one would
         // be bytes into a field nothing reads.
         if source.applies_knockback()
@@ -3131,6 +3165,8 @@ impl Game {
         } else {
             armor_absorb(raw, stats.armor, stats.toughness)
         };
+        // P18-01b Protection, after armour (pumpkin `damage_with_context`).
+        let armored = mc_entity::enchant::damage_after_protection(armored, stats.protection);
         // Resistance and the other damage modifiers, which nothing applied before.
         let effects: Vec<mc_entity::effect::ActiveEffect> =
             entity.effects.values().copied().collect();
@@ -3148,7 +3184,23 @@ impl Game {
         }
         entity.health = (entity.health - amount).max(0.0);
         entity.invulnerable_ticks = INVULNERABLE_TICKS;
+        let is_player = matches!(&entity.body, EntityBody::Player);
         let died = entity.health <= 0.0;
+        // End the entity borrow before touching sessions (`wear_armor_on_hit`
+        // needs `&mut self`).
+        let _ = &*entity;
+        // P18-01b: a landed hit costs each worn armour piece one durability
+        // (vanilla `hurtArmor`). The player-body victim owns the inventory.
+        if !source.bypasses_armor() && is_player {
+            let session_id = self
+                .sessions
+                .iter()
+                .find(|(_, session)| session.entity == id)
+                .map(|(sid, _)| *sid);
+            if let Some(session_id) = session_id {
+                self.wear_armor_on_hit(session_id);
+            }
+        }
         self.broadcast_hurt_animation(id, attacker);
         if !died {
             return false;
@@ -3167,7 +3219,7 @@ impl Game {
         // kills. This function's player-driven caller is the swing path
         // (`attacker.is_some()`); falls and any future non-player caller
         // scatter nothing. A mob finished off by the environment after a
-        // player hit keeps its XP — no hurt-credit tracking exists to award
+        // player hit keeps its XP —no hurt-credit tracking exists to award
         // it, and that limitation is stated, not hidden.
         if let (Some(kind), Some(_)) = (kind, attacker) {
             let reward = kind.experience_reward();
@@ -3334,7 +3386,7 @@ impl Game {
     /// them.
     ///
     /// Bounded on purpose. Recomputing one chunk is three passes over 124 320 cells and the packet is
-    /// kilobytes, so the rate is fixed per tick and the queue absorbs whatever exceeds it — a burst is sent a
+    /// kilobytes, so the rate is fixed per tick and the queue absorbs whatever exceeds it —a burst is sent a
     /// little later rather than dropped.
     fn broadcast_light_updates(&mut self, report: &mut TickReport) -> ServerResult<()> {
         for _ in 0..LIGHT_UPDATES_PER_TICK {
@@ -3447,8 +3499,8 @@ impl Game {
                 data: 0,
                 // The throw impulse lives on the entity after `throw_held`;
                 // sending zeros made the client simulate from rest while the
-                // server flew the item forward — the two fought and the drop
-                // jittered (owner-session "丢出时异常抖动").
+                // server flew the item forward —the two fought and the drop
+                // jittered (owner-session "丢出时异常抖动).
                 movement: (entity.velocity.x, entity.velocity.y, entity.velocity.z),
             }
             .to_raw()?;
@@ -3516,35 +3568,56 @@ impl Game {
         for change in changes {
             let pos = mc_container::BlockPos::new(change.x, change.y, change.z);
             // A change *into* a container (placing a chest) must not retire the
-            // entity the open path just created in the same tick: the placement
-            // queues first, the open runs in the Network phase, and this
-            // broadcast runs last. Only a change *away* from containers retires.
-            let new_is_container = self
+            // entity the open path just created in the same tick. A change
+            // *between* container kinds replaces the payload (A12-07).
+            let new_name = self
                 .registries
                 .blocks
                 .block_name(change.new_id)
-                .is_ok_and(is_container_block);
-            if new_is_container
-                && self.block_entities.get(pos).is_none()
-                && let Some(kind) = self
-                    .registries
-                    .blocks
-                    .block_name(change.new_id)
-                    .ok()
-                    .and_then(open_kind_for)
-            {
-                let entity_kind = match kind {
+                .ok()
+                .map(str::to_owned);
+            let new_is_container = new_name.as_deref().is_some_and(is_container_block);
+            let expected_kind = new_name
+                .as_deref()
+                .and_then(open_kind_for)
+                .and_then(|kind| match kind {
                     OpenKind::Chest => Some(mc_container::BlockEntityKind::Container),
                     OpenKind::Furnace => Some(mc_container::BlockEntityKind::Furnace),
                     OpenKind::Hopper => Some(mc_container::BlockEntityKind::Hopper),
                     OpenKind::Dispenser => Some(mc_container::BlockEntityKind::Dispenser),
-                    // Crafting tables never reach this path (no block
-                    // entity); skipping keeps the mapping exhaustive.
                     OpenKind::Crafting => None,
-                };
-                if let Some(entity_kind) = entity_kind {
+                });
+            let existing_kind = self
+                .block_entities
+                .get(pos)
+                .map(mc_container::BlockEntity::kind);
+            let kind_drift =
+                expected_kind.is_some_and(|want| existing_kind.is_some_and(|have| have != want));
+            if new_is_container && self.block_entities.get(pos).is_none() {
+                if let Some(entity_kind) = expected_kind {
                     self.block_entities
                         .insert(mc_container::BlockEntity::new(pos, entity_kind));
+                }
+            } else if new_is_container && kind_drift {
+                if let Some(entity_kind) = expected_kind {
+                    let displaced = self
+                        .block_entities
+                        .insert(mc_container::BlockEntity::new(pos, entity_kind));
+                    if let Some(retired) = displaced {
+                        if let Some(items) = retired.data.items() {
+                            let centre = Vec3::new(
+                                f64::from(change.x) + 0.5,
+                                f64::from(change.y) + 0.5,
+                                f64::from(change.z) + 0.5,
+                            );
+                            for stack in items.iter().filter(|s| !s.is_empty()) {
+                                if let Err(error) = self.spawn_item(stack.clone(), centre) {
+                                    warn!(%pos, %error, "a replaced container's item could not be spawned");
+                                }
+                            }
+                        }
+                        report.block_entities_changed += 1;
+                    }
                 }
             } else if !new_is_container && let Some(retired) = self.block_entities.remove(pos) {
                 // P12-06: breaking a container drops its contents (closes the P06
@@ -3558,7 +3631,7 @@ impl Game {
                         f64::from(change.z) + 0.5,
                     );
                     for stack in items.iter().filter(|s| !s.is_empty()) {
-                        if let Err(error) = self.spawn_item(*stack, centre) {
+                        if let Err(error) = self.spawn_item(stack.clone(), centre) {
                             warn!(%pos, %error, "a broken container's item could not be spawned");
                         }
                     }
@@ -3624,7 +3697,7 @@ impl Game {
                             .menu
                             .full_contents()
                             .iter()
-                            .copied()
+                            .cloned()
                             .map(wire_stack)
                             .collect();
                         let state = session.menu.state_id();
@@ -3727,6 +3800,7 @@ impl Game {
         let spawn = self.world.spawn();
         let mut messages: Vec<(ConnectionId, String)> = Vec::new();
         let mut effect_events: Vec<(ConnectionId, i32, Vec<i32>)> = Vec::new();
+        let mut eat_finishes: Vec<ConnectionId> = Vec::new();
         // Dig outcomes, applied after the loop (breaks mutate the world;
         // stages broadcast). Breaks carry the connection plus the target
         // snapshot (the state is already cleared when the event is
@@ -3742,9 +3816,11 @@ impl Game {
             tick_session_vitals(
                 session,
                 self.tick,
+                self.difficulty,
                 &self.registries.items,
                 &mut messages,
                 &mut effect_events,
+                &mut eat_finishes,
             );
             // Nothing below the world is standable. Void damage is P05; until then
             // a player who ends up there is returned to spawn instead of falling
@@ -3773,6 +3849,11 @@ impl Game {
         for (id, message) in messages {
             self.send_message(id, &message);
         }
+        // Finish any eat that hit zero this tick (after the session loop so
+        // `finish_eat` can mutate inventory and sync the menu).
+        for id in eat_finishes {
+            self.finish_eat(id);
+        }
         let mut report = TickReport::default();
         for (id, entity_id, expired) in effect_events {
             for effect_id in expired {
@@ -3797,7 +3878,7 @@ impl Game {
     /// held item may have changed between collection and application, and
     /// the break must judge what is held now. (A swap mid-tick cancels the
     /// dig next tick via the held check, so this normally sees an unchanged
-    /// hand — defense in depth.)
+    /// hand —defense in depth.)
     fn apply_dig_events(
         &mut self,
         dig_breaks: Vec<(ConnectionId, i32, i32, i32, i32)>,
@@ -3871,6 +3952,10 @@ impl Game {
     pub(crate) fn after_damage(&mut self, id: ConnectionId, outcome: DamageOutcome) {
         let mut local = TickReport::default();
         if outcome.applied {
+            // jar `DamageSource.getFoodExhaustion()` = 0.1 for the modelled set.
+            if let Some(session) = self.sessions.get_mut(&id) {
+                session.food_exhaustion += mc_entity::player::EXHAUSTION_HURT;
+            }
             let _ = self.send_vitals(id, &mut local);
         }
         if outcome.died {
@@ -3910,7 +3995,7 @@ impl Game {
             }
             // Experience scatter (P16-02): vanilla drops min(7 * level, 100)
             // points as orbs. No keepInventory gamerule exists here, so the
-            // scatter is unconditional — and the later `respawn` still resets
+            // scatter is unconditional —and the later `respawn` still resets
             // the bar, which is now correct instead of lossy.
             let dropped = u32::try_from(level.max(0))
                 .unwrap_or(0)
@@ -4036,7 +4121,7 @@ impl Game {
             }
             report.chunks_sent += 1;
             // P11-08/P11-10: entities already in the streamed chunk are
-            // announced to **this** player — the pending-spawn path only
+            // announced to **this** player —the pending-spawn path only
             // reaches players who held the chunk at spawn time, so a joining
             // player would otherwise never learn what lives here.
             let residents: Vec<EntityId> = self
@@ -4064,7 +4149,7 @@ impl Game {
     }
 
     /// The packets that introduce one entity: `add_entity`, then the body
-    /// packet — the item stack for a drop, the spawn health for a mob.
+    /// packet —the item stack for a drop, the spawn health for a mob.
     ///
     /// Shared by the broadcast phase (to every player holding the chunk) and
     /// the chunk stream (to the player that just received the chunk).
@@ -4172,12 +4257,12 @@ impl Game {
     ///
     /// - keep anything within `view_distance + UNLOAD_MARGIN_CHUNKS` of any player
     ///   (each session's own radius, since P14-04);
-    /// - never unload a **dirty** chunk — it holds edits that are not on disk yet,
+    /// - never unload a **dirty** chunk —it holds edits that are not on disk yet,
     ///   and only [`Game::save_all`] persists those;
     /// - tell every player that had the chunk to forget it
     ///   (`forget_level_chunk`, P14-04), and drop it from their `sent_chunks`,
     ///   so walking back re-streams the chunk instead of leaving the client's
-    ///   stale copy — or a hole — in the view.
+    ///   stale copy —or a hole —in the view.
     ///
     /// Nothing else holds a chunk index, so unloading cannot dangle: block changes
     /// carry their own coordinates and are re-resolved when broadcast.
@@ -4261,7 +4346,7 @@ impl Game {
     /// than the server runs, never more. A change is confirmed with
     /// `set_chunk_cache_radius` (the client renders to the confirmed radius)
     /// and takes effect on the next stream/unload pass, which both read the
-    /// session radius. An unknown session is ignored — settings can arrive
+    /// session radius. An unknown session is ignored —settings can arrive
     /// before the join is applied.
     ///
     /// # Errors
@@ -4292,7 +4377,7 @@ impl Game {
     /// Light is computed by `mc_world::light` over the chunk plus a one-block margin, so it crosses chunk
     /// borders, and every light section is then accounted for in a mask (P10-05):
     ///
-    /// * a section that is uniformly the layer's default — 15 for sky, 0 for block — goes in the matching
+    /// * a section that is uniformly the layer's default —15 for sky, 0 for block —goes in the matching
     ///   `empty_*` mask, which is what a real server does and what keeps the packet small;
     /// * anything else gets a 2048-byte array and a bit in the matching mask.
     ///
@@ -4332,7 +4417,7 @@ impl Game {
             let block_states =
                 WireContainer::new(palette, values, mc_core::packing::BLOCK_MIN_BITS);
             // One plains biome fills every cell, and the id is the one the client's own registry gives
-            // plains — see [`PLAINS_BIOME_ID`]. Per-column biomes are not modelled yet, and the values array
+            // plains —see [`PLAINS_BIOME_ID`]. Per-column biomes are not modelled yet, and the values array
             // is still the full cell count because the encoder validates the container's geometry.
             let biomes = WireContainer::new(
                 vec![PLAINS_BIOME_ID],
@@ -4347,10 +4432,10 @@ impl Game {
             });
         }
         // Light, over the chunk plus a margin so it crosses borders. An unloaded neighbour reads as `None`,
-        // which `compute_chunk_light` treats as air — the same assumption the client makes about ungenerated
+        // which `compute_chunk_light` treats as air —the same assumption the client makes about ungenerated
         // space.
         //
-        // Read from the cache where it exists — `send_chunk` fills it before calling this — and compute
+        // Read from the cache where it exists —`send_chunk` fills it before calling this —and compute
         // without keeping the result otherwise. This takes `&self`, so it cannot fill the cache itself; a
         // caller that forgets to pre-warm gets a correct packet at the old cost rather than a wrong one.
         let computed;
@@ -4372,8 +4457,8 @@ impl Game {
 
         // Block entities ride the chunk packet (owner-session C: a chest with
         // collision but no texture after rejoin). Vanilla does **not** send
-        // `block_entity_data` for a chest placement — the fixture comments say
-        // so — so the type row here is what the client's chest model keys off.
+        // `block_entity_data` for a chest placement —the fixture comments say
+        // so —so the type row here is what the client's chest model keys off.
         // Type ids: sign 7 / spawner 9 / campfire 33 are jar-captured
         // (`block_entity_data_*.hex`); chest 1 / furnace 0 / dispenser 5 /
         // dropper 6 sit in the same registry order those three pin.

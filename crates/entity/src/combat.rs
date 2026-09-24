@@ -1,4 +1,5 @@
-//! Melee combat numbers: damage sources, armour, knockback, reach (P16-01).
+//! Melee combat numbers: damage sources, armour, knockback, reach (P16-01),
+//! plus the Sharpness/Protection halves of P18-01b.
 //!
 //! The values below are vanilla data, not tuning knobs. Weapon bonuses,
 //! armour points/toughness and the knockback base come from the 26.x item and
@@ -7,8 +8,9 @@
 //! `pumpkin/src/entity/combat.rs` mirroring `CombatRules`, and
 //! `living.rs:2961` for the hurt-path knockback); the damage-type armour
 //! rules come from the vanilla damage-type tags (`bypasses_armor` membership
-//! as listed in pumpkin-data's generated damage-type tag table). Where this
-//! build knowingly stops — enchantments, absorption, per-item attack reach,
+//! as listed in pumpkin-data's generated damage-type tag table). Sharpness
+//! and Protection formulas live in [`crate::enchant`]. Where this build
+//! knowingly stops — absorption, per-item attack reach,
 //! fire/drowning/void/magic sources — the item says so instead of guessing
 //! (AGENTS.md section 3.3). P16-04 added the Arrow/Explosion sources with
 //! the bow and the creeper fuse as production callers.
@@ -225,6 +227,9 @@ pub struct CombatStats {
     pub toughness: f32,
     /// Summed knockback resistance.
     pub knockback_resistance: f32,
+    /// Summed Protection enchantment points (P18-01b), applied after
+    /// [`armor_absorb`] via [`crate::enchant::damage_after_protection`].
+    pub protection: f32,
 }
 
 impl CombatStats {
@@ -233,6 +238,7 @@ impl CombatStats {
         armor: 0.0,
         toughness: 0.0,
         knockback_resistance: 0.0,
+        protection: 0.0,
     };
 }
 
@@ -240,15 +246,19 @@ impl CombatStats {
 ///
 /// The component schema is real 26.x data (pumpkin `AttackRangeImpl`:
 /// `min_reach` 0.0, `max_reach` 3.0, `min_creative_reach` 0.0,
-/// `max_creative_reach` 5.0, `hitbox_margin` 0.3, `mob_factor` 1.0) — but no
-/// stack in this build carries components, and no reachable reference states
-/// how vanilla combines the six fields with the eye-to-box distance, so every
-/// item reports the default zero and the gate below stays exactly today's.
-/// Per-item values and the combination formula land with components (P18);
-/// creative-mode attack reach is unmodelled for the same reason.
+/// `max_creative_reach` 5.0, `hitbox_margin` 0.3, `mob_factor` 1.0). This
+/// hook returns **`max_reach - 3.0`** — the additive half over vanilla's bare
+/// 3.0-block entity interaction base — so a stack without the component keeps
+/// today's gate and one that claims `max_reach = 5.0` adds 2.0. The other five
+/// fields are stored and shown but not combined: no reachable reference states
+/// the full eye-to-box formula (named gap). Creative-mode attack reach is
+/// unmodelled for the same reason.
 #[must_use]
-pub fn attack_range_bonus(_item_name: &str) -> f64 {
-    0.0
+pub fn attack_range_bonus(range: Option<&crate::components::AttackRange>) -> f64 {
+    let Some(range) = range else {
+        return 0.0;
+    };
+    f64::from(range.max_reach) - f64::from(crate::components::AttackRange::default().max_reach)
 }
 
 use crate::inventory::{ARMOR_SLOTS, ARMOR_START, PlayerInventory};
@@ -267,18 +277,22 @@ pub struct Attacker {
 }
 
 /// Total melee damage for a swing with what `inv` holds: [`FIST_DAMAGE`] plus
-/// the held weapon's bonus. An empty hand, a non-weapon, or an id the
-/// registry does not know all fall back to the fist — the safe default for
-/// hostile or corrupt inventory states, never a refusal mid-swing.
+/// the held weapon's bonus **and Sharpness** (P18-01b). An empty hand, a
+/// non-weapon, or an id the registry does not know all fall back to the fist —
+/// the safe default for hostile or corrupt inventory states, never a refusal
+/// mid-swing.
 #[must_use]
 pub fn held_damage(inv: &PlayerInventory, items: &ItemRegistry) -> f32 {
-    let Some(id) = inv.selected_item().item_id() else {
-        return FIST_DAMAGE;
+    let held = inv.selected_item();
+    let sharpness = crate::enchant::level_of(held.enchantments(), crate::enchant::SHARPNESS);
+    let sharpness_bonus = crate::enchant::sharpness_bonus(sharpness);
+    let Some(id) = held.item_id() else {
+        return FIST_DAMAGE + sharpness_bonus;
     };
     let Ok(name) = items.name(id) else {
-        return FIST_DAMAGE;
+        return FIST_DAMAGE + sharpness_bonus;
     };
-    FIST_DAMAGE + melee_damage_bonus(name)
+    FIST_DAMAGE + melee_damage_bonus(name) + sharpness_bonus
 }
 
 /// [`held_damage`] plus the Strength/Weakness flat bonus from `effects`,
@@ -294,12 +308,13 @@ pub fn held_damage_with_effects(
 
 /// Summed combat stats of what `inv` wears: the four armour slots starting
 /// at [`ARMOR_START`]. Unknown ids contribute nothing (same fallback rule as
-/// [`held_damage`]).
+/// [`held_damage`]). Protection points ride each piece's enchantments.
 #[must_use]
 pub fn worn_stats(inv: &PlayerInventory, items: &ItemRegistry) -> CombatStats {
     let mut stats = CombatStats::ZERO;
     for slot in ARMOR_START..ARMOR_START + ARMOR_SLOTS {
-        let Some(id) = inv.slot(slot).item_id() else {
+        let piece_stack = inv.slot(slot);
+        let Some(id) = piece_stack.item_id() else {
             continue;
         };
         let Ok(name) = items.name(id) else {
@@ -310,6 +325,10 @@ pub fn worn_stats(inv: &PlayerInventory, items: &ItemRegistry) -> CombatStats {
             stats.toughness += piece.toughness;
             stats.knockback_resistance += piece.knockback_resistance;
         }
+        // P18-01b: Protection is per-piece `damage_protection` = level.
+        let level =
+            crate::enchant::level_of(piece_stack.enchantments(), crate::enchant::PROTECTION);
+        stats.protection += crate::enchant::protection_points(level);
     }
     stats
 }
@@ -408,17 +427,18 @@ mod tests {
     }
 
     #[test]
-    fn attack_range_hook_preserves_todays_gate() {
-        // Every item reports the default zero until components land: the
-        // reach gate below is byte-for-byte today's behavior.
-        for name in [
-            "minecraft:air",
-            "minecraft:diamond_sword",
-            "minecraft:stick",
-            "minecraft:netherite_spear",
-        ] {
-            assert_eq!(attack_range_bonus(name), 0.0);
-        }
+    fn attack_range_hook_reads_the_component_and_defaults_to_zero() {
+        use crate::components::AttackRange;
+        // No component: today's gate (bonus 0).
+        assert_eq!(attack_range_bonus(None), 0.0);
+        // Default schema: max_reach 3.0 is the bare base, so still 0.
+        assert_eq!(attack_range_bonus(Some(&AttackRange::default())), 0.0);
+        // A spear-like claim of 5.0 adds 2.0 over the base.
+        let long = AttackRange {
+            max_reach: 5.0,
+            ..AttackRange::default()
+        };
+        assert_eq!(attack_range_bonus(Some(&long)), 2.0);
     }
 
     /// The real item table: combat numbers must resolve against the names the
@@ -449,6 +469,57 @@ mod tests {
         inv.set_slot(0, ItemStack::new(stick, 1).expect("stick"))
             .expect("set");
         assert_eq!(held_damage(&inv, &items), 1.0);
+    }
+
+    /// Named behaviour pin (P18-01b): Sharpness raises held damage.
+    /// Neutralising `sharpness_bonus` to 0.0 turns this red.
+    #[test]
+    fn sharpness_adds_the_linear_bonus_to_held_damage() {
+        use crate::components::{DataComponent, ItemComponents};
+        use crate::stack::ItemStack;
+        let items = registry();
+        let mut inv = stocked_inventory();
+        let sword = items.id("minecraft:diamond_sword").expect("sword");
+        let mut components = ItemComponents::new();
+        components.set(DataComponent::Enchantments(vec![(
+            crate::enchant::SHARPNESS,
+            1,
+        )]));
+        inv.set_slot(
+            0,
+            ItemStack::with_components(sword, 1, components).expect("sword"),
+        )
+        .expect("set");
+        // Fist 1.0 + diamond sword 6.0 + Sharpness I 1.0 = 8.0.
+        assert_eq!(held_damage(&inv, &items), 8.0);
+    }
+
+    /// Named behaviour pin (P18-01b): Protection rides worn armour.
+    /// Neutralising `protection_points` to 0.0 turns this red.
+    #[test]
+    fn protection_points_ride_the_worn_enchanted_piece() {
+        use crate::components::{DataComponent, ItemComponents};
+        use crate::inventory::ARMOR_START;
+        use crate::stack::ItemStack;
+        let items = registry();
+        let mut inv = stocked_inventory();
+        let plate = items.id("minecraft:iron_chestplate").expect("plate");
+        let mut components = ItemComponents::new();
+        components.set(DataComponent::Enchantments(vec![(
+            crate::enchant::PROTECTION,
+            4,
+        )]));
+        inv.set_slot(
+            ARMOR_START + 1,
+            ItemStack::with_components(plate, 1, components).expect("plate"),
+        )
+        .expect("set");
+        let stats = worn_stats(&inv, &items);
+        assert_eq!(stats.armor, 6.0);
+        assert_eq!(stats.protection, 4.0, "Protection IV = 4 points");
+        // And the reduction those points buy after armour.
+        let cut = crate::enchant::damage_after_protection(10.0, stats.protection);
+        assert!((cut - 8.4).abs() < 1e-5, "got {cut}");
     }
 
     #[test]
@@ -489,8 +560,13 @@ mod tests {
             .expect("set");
         let stats = worn_stats(&inv, &items);
         assert_eq!(
-            (stats.armor, stats.toughness, stats.knockback_resistance),
-            (6.0, 0.0, 0.0)
+            (
+                stats.armor,
+                stats.toughness,
+                stats.knockback_resistance,
+                stats.protection
+            ),
+            (6.0, 0.0, 0.0, 0.0)
         );
         // A sword in an armour slot is not armour.
         let sword = items.id("minecraft:diamond_sword").expect("sword");

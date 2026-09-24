@@ -443,7 +443,7 @@ fn a_stack_limit_is_enforced_on_the_cursor_and_in_slots() {
     // A bucket stacks to 16. Assert the premise first: if the resolved limit were
     // 64 this test would pass while proving nothing.
     assert_eq!(
-        menu.item_limit(stack(bucket(), 1)),
+        menu.item_limit(&stack(bucket(), 1)),
         16,
         "minecraft:bucket must resolve to a 16-stack for this test to mean anything"
     );
@@ -651,14 +651,14 @@ fn hostile_flood(menu: &mut Menu, rounds: usize) -> Flood {
         }
         // Boundedness, checked after every single click.
         assert!(
-            menu.cursor().is_empty() || menu.cursor().count() <= menu.item_limit(menu.cursor()),
+            menu.cursor().is_empty() || menu.cursor().count() <= menu.item_limit(&menu.cursor()),
             "the cursor exceeded its limit: {:?}",
             menu.cursor()
         );
         for index in 0..menu.slot_count() {
             let stack = menu.display_stack(index);
             assert!(
-                stack.is_empty() || stack.count() <= menu.item_limit(stack),
+                stack.is_empty() || stack.count() <= menu.item_limit(&stack),
                 "slot {index} exceeded its item limit: {stack:?}"
             );
             assert!(stack.count() >= 0, "slot {index} went negative");

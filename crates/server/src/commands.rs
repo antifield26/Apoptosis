@@ -1,7 +1,6 @@
-//! The server's command set (P07-05, P14-01).
+//! The server's command set (P07-05, P14-01, P18-02).
 //!
-//! Sixteen commands, chosen because each exercises a different part of the framework and
-//! each is *usefully* implementable today:
+//! The P18-02 **closed list** — anything outside it stays refused by name:
 //!
 //! | Command | Argument shape it exercises | What it does |
 //! |---|---|---|
@@ -9,7 +8,7 @@
 //! | `list` | none | names the online players |
 //! | `say` | greedy string | broadcasts a message |
 //! | `time` | optional ranged integer | queries or sets the world time |
-//! | `tp` | word + block position | moves the source (or reports where it would) |
+//! | `tp` / `teleport` | word + block position + optional rotation | moves the source |
 //! | `op` | player name, administrator-only | grants operator status at level 4 and persists `ops.json` |
 //! | `deop` | player name, administrator-only | revokes operator status and persists `ops.json` |
 //! | `stop` | none, console-only | asks the server to shut down |
@@ -18,6 +17,15 @@
 //! | `kill` | optional player name, operator-only | kills the invoking player through the damage path, even in creative |
 //! | `seed` | none, operator-only | reports the world seed |
 //! | `difficulty` | optional word, operator-only | queries or sets the world difficulty |
+//! | `clear` | optional target/item/count, operator-only | removes matching items from the invoking player |
+//! | `xp` / `experience` | action + amount + optional unit, operator-only | adds, sets or queries experience |
+//! | `enchant` | enchantment + optional level, operator-only | stores an enchantment component on the held item; Efficiency/Sharpness/Protection/Unbreaking apply (P18-01b), the rest stay inert |
+//! | `setblock` | block position + block + optional mode, operator-only | sets one block (`replace`/`destroy`/`keep`) |
+//! | `fill` | two positions + block + optional mode, operator-only | fills a volume, capped at [`MAX_FILL_VOLUME`] |
+//! | `summon` | entity kind + optional position, operator-only | spawns one modelled mob |
+//! | `setworldspawn` | optional position, operator-only | sets the world spawn |
+//! | `msg` / `tell` / `w` | target + greedy message | whispers to one player |
+//! | `me` | greedy action | broadcasts a narrative line |
 //!
 //! ## What each command deliberately does *not* do
 //!
@@ -32,9 +40,11 @@
 //!   (`day`/`noon`/`night`/`midnight`); a bare integer still sets for
 //!   back-compat. Anything else prints usage — it never answers the time,
 //!   because a silent query once hid failed sets (P14-09 walk).
-//! - **`tp`** moves the *invoking* player, not a named target, because the server has no
-//!   cross-player teleport authority model yet; the `target` argument is validated and
-//!   must name the source itself. That is a real limitation, not a stub.
+//! - **`tp`/`teleport`** move the *invoking* player, not a named target, because
+//!   the server has no cross-player teleport authority model yet; the `target`
+//!   argument is validated and must name the source itself. Optional `yaw`/`pitch`
+//!   are stored on the source but not yet applied to the player's rotation
+//!   (the client owns its camera). That is a real limitation, not a stub.
 //! - **`op`** grants level 4 (Vanilla's default `op-permission-level`) to an
 //!   *online* player and writes `ops.json` beside the world, taking effect
 //!   immediately and surviving restarts; only online players can be named
@@ -61,6 +71,24 @@
 //!   storage is present) and gates hostile monster spawns on peaceful; mob damage
 //!   numbers stay the hardcoded Normal values, and a locked `level.dat` refuses
 //!   the set. Words are Vanilla's four full names, case-sensitive like Vanilla.
+//! - **`clear`** targets the invoking player only. `maxCount` of `0` is Vanilla's
+//!   "count only" form and reports without removing.
+//! - **`xp`/`experience`** accept `add|set|query` with `levels` (default) or `points`.
+//!   Only the invoking player is affected.
+//! - **`enchant`** stores a `minecraft:enchantments` component on the held stack.
+//!   Efficiency, Sharpness, Protection and Unbreaking **apply** (P18-01b);
+//!   every other name is stored and inert, and each is a named gap in the
+//!   parity matrix.
+//! - **`setblock`/`fill`** write the world's block store and rely on the next tick's
+//!   `broadcast_block_changes`. `fill` refuses a volume above [`MAX_FILL_VOLUME`]
+//!   (named red: `fill_volume_over_the_named_cap_is_refused`). Modes are
+//!   `replace`/`keep`/`destroy` only; `hollow`/`outline`/`filtered` are refused by name.
+//! - **`summon`** accepts only the eight [`mc_entity::mob::MobKind`] names (with or
+//!   without the `minecraft:` prefix). Everything else is refused by name.
+//! - **`setworldspawn`** writes the in-memory spawn and `level.dat` when storage is
+//!   present. It does not move players who are already online.
+//! - **`msg`/`tell`/`w`** deliver to one online player. Offline targets are refused.
+//! - **`me`** broadcasts `* name action` to every player, like Vanilla's emote.
 //!
 //! Every one of these is a line in the parity matrix (the Phase 07 report is in git history, tag `phase-09-final`).
 
@@ -71,6 +99,64 @@ use mc_protocol::text::TextComponent;
 use tracing::{debug, info, warn};
 
 use crate::game::{Game, TickReport};
+
+/// Vanilla's `/fill` region ceiling (`maxBlockModifications`, also the figure
+/// `clone` and `fillbiome` hard-code). A named constant rather than a literal
+/// so the handler, the parity matrix and
+/// `fill_volume_over_the_named_cap_is_refused` all cite the same number.
+pub const MAX_FILL_VOLUME: i64 = 32_768;
+
+/// Enchantment names this build stores on a held stack (P18-02 store + P18-01b
+/// effects for four of them).
+///
+/// Ids are the 26.1 registry order (pumpkin-data `Enchantment::from_id`).
+/// Efficiency/Sharpness/Protection/Unbreaking change behaviour (P18-01b); the
+/// rest stay stored and inert, and each is a named gap in the parity matrix.
+pub const MODELLED_ENCHANTMENTS: &[(&str, i32, i32)] = &[
+    ("aqua_affinity", 0, 1),
+    ("bane_of_arthropods", 1, 5),
+    ("binding_curse", 2, 1),
+    ("blast_protection", 3, 4),
+    ("breach", 4, 4),
+    ("channeling", 5, 1),
+    ("density", 6, 5),
+    ("depth_strider", 7, 3),
+    ("efficiency", 8, 5),
+    ("feather_falling", 9, 4),
+    ("fire_aspect", 10, 2),
+    ("fire_protection", 11, 4),
+    ("flame", 12, 1),
+    ("fortune", 13, 3),
+    ("frost_walker", 14, 2),
+    ("impaling", 15, 5),
+    ("infinity", 16, 1),
+    ("knockback", 17, 2),
+    ("looting", 18, 3),
+    ("loyalty", 19, 3),
+    ("luck_of_the_sea", 20, 3),
+    ("lunge", 21, 5),
+    ("lure", 22, 3),
+    ("mending", 23, 1),
+    ("multishot", 24, 1),
+    ("piercing", 25, 4),
+    ("power", 26, 5),
+    ("projectile_protection", 27, 4),
+    ("protection", 28, 4),
+    ("punch", 29, 2),
+    ("quick_charge", 30, 3),
+    ("respiration", 31, 3),
+    ("riptide", 32, 3),
+    ("sharpness", 33, 5),
+    ("silk_touch", 34, 1),
+    ("smite", 35, 5),
+    ("soul_speed", 36, 3),
+    ("sweeping_edge", 37, 3),
+    ("swift_sneak", 38, 3),
+    ("thorns", 39, 3),
+    ("unbreaking", 40, 3),
+    ("vanishing_curse", 41, 1),
+    ("wind_burst", 42, 3),
+];
 
 /// The result of running a command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -121,6 +207,10 @@ impl Game {
     /// Never in practice: every command below is valid by construction, and
     /// `command_tree_is_valid` asserts it. Building it at startup rather than lazily
     /// means a malformed tree would stop the server instead of a player's command.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the tree is a data table; splitting it would hide the closed list"
+    )]
     #[must_use]
     pub fn build_command_tree() -> mc_command::CommandTree {
         use mc_command::{Argument, ArgumentKind, Command, PermissionLevel, ValueRange};
@@ -142,7 +232,39 @@ impl Game {
             .with_argument(Argument::optional("value", ArgumentKind::Word)));
         add(Command::new("tp", "Teleport to coordinates")
             .with_argument(Argument::word("target"))
-            .with_argument(Argument::required("pos", ArgumentKind::BlockPos)));
+            .with_argument(Argument::required("pos", ArgumentKind::BlockPos))
+            .with_argument(Argument::optional(
+                "yaw",
+                ArgumentKind::Double {
+                    min: -360.0,
+                    max: 360.0,
+                },
+            ))
+            .with_argument(Argument::optional(
+                "pitch",
+                ArgumentKind::Double {
+                    min: -90.0,
+                    max: 90.0,
+                },
+            )));
+        // P18-02: `teleport` is Vanilla's alias of `tp` with the same full argument form.
+        add(Command::new("teleport", "Teleport to coordinates")
+            .with_argument(Argument::word("target"))
+            .with_argument(Argument::required("pos", ArgumentKind::BlockPos))
+            .with_argument(Argument::optional(
+                "yaw",
+                ArgumentKind::Double {
+                    min: -360.0,
+                    max: 360.0,
+                },
+            ))
+            .with_argument(Argument::optional(
+                "pitch",
+                ArgumentKind::Double {
+                    min: -90.0,
+                    max: 90.0,
+                },
+            )));
         // The whole chain is one greedy argument: `execute` is parsed by its own regular
         // grammar (see `mc_command::execute`), not by the tree, because its modifiers may
         // appear in any order and any number of times.
@@ -194,6 +316,57 @@ impl Game {
         add(Command::new("difficulty", "Query or set the difficulty")
             .with_argument(Argument::optional("difficulty", ArgumentKind::Word))
             .requiring(PermissionLevel::Operator));
+        // P18-02 closed list. Operator-only like Vanilla's level 2.
+        add(Command::new("clear", "Clear your inventory")
+            .with_argument(Argument::optional("target", ArgumentKind::PlayerName))
+            .with_argument(Argument::optional("item", ArgumentKind::Resource))
+            .with_argument(Argument::optional(
+                "maxCount",
+                ArgumentKind::Integer(ValueRange::new(0, 99 * 64)),
+            ))
+            .requiring(PermissionLevel::Operator));
+        add(Command::new("experience", "Add, set or query experience")
+            .with_argument(Argument::word("action"))
+            .with_argument(Argument::optional("value", ArgumentKind::Word))
+            .with_argument(Argument::optional("unit", ArgumentKind::Word))
+            .requiring(PermissionLevel::Operator));
+        add(Command::new("xp", "Add, set or query experience")
+            .with_argument(Argument::word("action"))
+            .with_argument(Argument::optional("value", ArgumentKind::Word))
+            .with_argument(Argument::optional("unit", ArgumentKind::Word))
+            .requiring(PermissionLevel::Operator));
+        add(Command::new("enchant", "Enchant the held item")
+            .with_argument(Argument::word("enchantment"))
+            .with_argument(Argument::optional(
+                "level",
+                ArgumentKind::Integer(ValueRange::new(1, 5)),
+            ))
+            .requiring(PermissionLevel::Operator));
+        add(Command::new("setblock", "Set a block")
+            .with_argument(Argument::required("pos", ArgumentKind::BlockPos))
+            .with_argument(Argument::required("block", ArgumentKind::Resource))
+            .with_argument(Argument::optional("mode", ArgumentKind::Word))
+            .requiring(PermissionLevel::Operator));
+        add(Command::new("fill", "Fill a region with blocks")
+            .with_argument(Argument::required("from", ArgumentKind::BlockPos))
+            .with_argument(Argument::required("to", ArgumentKind::BlockPos))
+            .with_argument(Argument::required("block", ArgumentKind::Resource))
+            .with_argument(Argument::optional("mode", ArgumentKind::Word))
+            .requiring(PermissionLevel::Operator));
+        add(Command::new("summon", "Summon an entity")
+            .with_argument(Argument::word("type"))
+            .with_argument(Argument::optional("pos", ArgumentKind::BlockPos))
+            .requiring(PermissionLevel::Operator));
+        add(Command::new("setworldspawn", "Set the world spawn")
+            .with_argument(Argument::optional("pos", ArgumentKind::BlockPos))
+            .requiring(PermissionLevel::Operator));
+        for name in ["msg", "tell", "w"] {
+            add(Command::new(name, "Send a private message")
+                .with_argument(Argument::required("target", ArgumentKind::PlayerName))
+                .with_argument(Argument::greedy("message")));
+        }
+        add(Command::new("me", "Broadcast a narrative action")
+            .with_argument(Argument::greedy("action")));
         tree
     }
 
@@ -317,7 +490,7 @@ impl Game {
             "list" => Ok(self.command_list()),
             "say" => Ok(self.command_say(parsed, report)?),
             "time" => Ok(self.command_time(parsed, report)?),
-            "tp" => Ok(self.command_tp(id, parsed)),
+            "tp" | "teleport" => Ok(self.command_tp(id, parsed)),
             "execute" => {
                 // The chain parser owns the grammar; the token list is the raw argument text so
                 // `run` can hand the inner command its original words.
@@ -338,6 +511,15 @@ impl Game {
             "kill" => Ok(self.command_kill(id, parsed)),
             "seed" => Ok(self.command_seed()),
             "difficulty" => Ok(self.command_difficulty(parsed)),
+            "clear" => Ok(self.command_clear(id, parsed, report)),
+            "xp" | "experience" => Ok(self.command_xp(id, parsed, report)),
+            "enchant" => Ok(self.command_enchant(id, parsed, report)),
+            "setblock" => Ok(self.command_setblock(parsed)),
+            "fill" => Ok(self.command_fill(parsed)),
+            "summon" => Ok(self.command_summon(parsed)),
+            "setworldspawn" => Ok(self.command_setworldspawn(parsed)),
+            "msg" | "tell" | "w" => Ok(self.command_msg(id, parsed, report)),
+            "me" => Ok(self.command_me(parsed, report)),
             "stop" => Ok(CommandResult::Stop),
             // Unreachable: the tree only contains the names above, and `parse` resolved
             // this one through it. Returning a refusal rather than panicking keeps a
@@ -499,18 +681,20 @@ impl Game {
         }
     }
 
-    /// `/tp <target> <pos>`
+    /// `/tp` / `/teleport <target> <pos> [yaw] [pitch]`
     ///
     /// The target must name the invoking player: there is no cross-player teleport
     /// authority model yet, so teleporting someone else is refused with that reason
-    /// rather than silently doing nothing.
+    /// rather than silently doing nothing. Optional `yaw`/`pitch` are recorded on the
+    /// command source; the client owns its camera, so they are not written back to
+    /// the player entity (named gap).
     fn command_tp(
         &mut self,
         _id: mc_network::bridge::ConnectionId,
         parsed: &mc_command::dispatch::ParsedCommand,
     ) -> CommandResult {
         let Some(target) = parsed.string(0) else {
-            return CommandResult::message("Usage: /tp <target> <pos>");
+            return CommandResult::message("Usage: /tp <target> <pos> [yaw] [pitch]");
         };
         if !Self::targets_self(target, &parsed.source.name) {
             return CommandResult::message(format!(
@@ -520,7 +704,7 @@ impl Game {
             ));
         }
         let Some(mc_command::ArgumentValue::BlockPos { x, y, z }) = parsed.argument(1) else {
-            return CommandResult::message("Usage: /tp <target> <pos>");
+            return CommandResult::message("Usage: /tp <target> <pos> [yaw] [pitch]");
         };
         let base = parsed.source.block_position().unwrap_or((0, 0, 0));
         // `~` takes the source's own coordinate; a bare number is absolute. The two are carried separately by
@@ -862,6 +1046,561 @@ impl Game {
             return CommandResult::message(format!("Could not save level.dat: {error}"));
         }
         CommandResult::message(format!("Set the difficulty to {}", display(difficulty)))
+    }
+
+    /// `/clear [<target> [<item> [<maxCount>]]]` (P18-02).
+    ///
+    /// Targets the invoking player only (same authority reason as `/give`).
+    /// `maxCount == 0` is Vanilla's count-only form: it reports how many match
+    /// and removes nothing.
+    fn command_clear(
+        &mut self,
+        id: mc_network::bridge::ConnectionId,
+        parsed: &mc_command::dispatch::ParsedCommand,
+        report: &mut TickReport,
+    ) -> CommandResult {
+        let target = parsed.string(0).unwrap_or(&parsed.source.name);
+        if !Self::targets_self(target, &parsed.source.name) {
+            return CommandResult::message(format!(
+                "Cannot clear {target:?}: this build only clears the invoking player"
+            ));
+        }
+        let item_filter = parsed
+            .argument(1)
+            .and_then(|value| value.as_resource())
+            .map(|id| format!("{id}"));
+        let max_count = parsed.integer(2).and_then(|n| i32::try_from(n).ok());
+        let count_only = max_count == Some(0);
+        // Resolve names before the mutable session borrow: the registry borrow
+        // and the inventory write cannot overlap.
+        let mut matching: Vec<(usize, i32)> = Vec::new();
+        {
+            let Some(session) = self.sessions.get(&id) else {
+                return CommandResult::message("You are not online.");
+            };
+            for slot in 0..session.player.inventory.stored_slots() {
+                let stack = session.player.inventory.slot(slot);
+                let Some(item_id) = stack.item_id() else {
+                    continue;
+                };
+                let name = self
+                    .registries()
+                    .items
+                    .name(item_id)
+                    .map(str::to_owned)
+                    .unwrap_or_default();
+                if let Some(want) = &item_filter {
+                    let want_bare = want.strip_prefix("minecraft:").unwrap_or(want);
+                    let name_bare = name.strip_prefix("minecraft:").unwrap_or(&name);
+                    if name_bare != want_bare && name != *want {
+                        continue;
+                    }
+                }
+                matching.push((slot, stack.count()));
+            }
+        }
+        let mut removed = 0i32;
+        // `maxCount == 0` is Vanilla's count-only form: it reports the total
+        // match and removes nothing, so the budget is unlimited for counting.
+        let mut budget = if count_only {
+            i32::MAX
+        } else {
+            max_count.unwrap_or(i32::MAX)
+        };
+        for (slot, available) in matching {
+            if budget <= 0 {
+                break;
+            }
+            let take = available.min(budget);
+            if count_only {
+                removed += take;
+                budget -= take;
+                continue;
+            }
+            let Some(session) = self.sessions.get_mut(&id) else {
+                break;
+            };
+            if let Ok(taken) = session.player.inventory.remove_from_slot(slot, take) {
+                removed += taken.count();
+                budget -= taken.count();
+            }
+        }
+        if !count_only {
+            self.sync_menu_from_inventory(id, report);
+        }
+        if removed == 0 {
+            CommandResult::message(format!("No items were found on {}", parsed.source.name))
+        } else if count_only {
+            CommandResult::message(format!(
+                "Found {removed} matching item(s) on {}",
+                parsed.source.name
+            ))
+        } else {
+            CommandResult::message(format!(
+                "Removed {removed} item(s) from {}",
+                parsed.source.name
+            ))
+        }
+    }
+
+    /// `/xp` / `/experience <action> <amount> [levels|points]` (P18-02).
+    ///
+    /// Actions: `add`, `set`, `query`. Unit defaults to `levels`. Only the
+    /// invoking player is affected (same authority reason as `/give`).
+    fn command_xp(
+        &mut self,
+        id: mc_network::bridge::ConnectionId,
+        parsed: &mc_command::dispatch::ParsedCommand,
+        report: &mut TickReport,
+    ) -> CommandResult {
+        let Some(action) = parsed.string(0) else {
+            return CommandResult::message("Usage: /xp <add|set|query> [<amount>] [levels|points]");
+        };
+        let value = parsed.string(1);
+        let unit_word = match action {
+            // `query` takes the unit in the value slot: `/xp query levels`.
+            "query" => value.or_else(|| parsed.string(2)),
+            _ => parsed.string(2).or(Some("levels")),
+        };
+        let as_levels = match unit_word.unwrap_or("levels") {
+            "levels" | "level" | "l" => true,
+            "points" | "point" | "p" => false,
+            other => {
+                return CommandResult::message(format!(
+                    "Unknown experience unit {other:?}: this build accepts levels or points"
+                ));
+            }
+        };
+        let Some(session) = self.sessions.get_mut(&id) else {
+            return CommandResult::message("You are not online.");
+        };
+        match action {
+            "query" => {
+                let (value, label) = if as_levels {
+                    (session.player.level, "levels")
+                } else {
+                    (session.player.total_experience, "points")
+                };
+                CommandResult::message(format!("{} has {value} {label}", parsed.source.name))
+            }
+            "add" | "set" => {
+                let Some(amount_text) = value else {
+                    return CommandResult::message("Usage: /xp <add|set> <amount> [levels|points]");
+                };
+                let Ok(amount) = amount_text.parse::<i32>() else {
+                    return CommandResult::message(format!(
+                        "{amount_text:?} is not an experience amount"
+                    ));
+                };
+                if action == "add" {
+                    if as_levels {
+                        for _ in 0..amount.max(0) {
+                            let needed = mc_entity::Player::experience_needed_for_level(
+                                session.player.level,
+                            );
+                            session.player.add_experience(needed.max(1));
+                        }
+                        if amount < 0 {
+                            session.player.level = (session.player.level + amount).max(0);
+                        }
+                    } else {
+                        session.player.add_experience(amount);
+                    }
+                } else if as_levels {
+                    session.player.level = amount.max(0);
+                    session.player.experience = 0.0;
+                } else {
+                    session.player.reset_experience();
+                    session.player.add_experience(amount.max(0));
+                }
+                let (level, total, progress) = (
+                    session.player.level,
+                    session.player.total_experience,
+                    session.player.experience_progress(),
+                );
+                let packet = mc_protocol::packets::play::SetExperience {
+                    progress,
+                    level,
+                    total,
+                };
+                let _ = self.send(id, &packet, report);
+                CommandResult::message(format!(
+                    "Set {}'s experience to {level} levels / {total} points",
+                    parsed.source.name
+                ))
+            }
+            other => CommandResult::message(format!(
+                "Unknown experience action {other:?}: this build accepts add, set or query"
+            )),
+        }
+    }
+
+    /// `/enchant <enchantment> [<level>]` (P18-02 + P18-01b effects).
+    ///
+    /// Writes a `minecraft:enchantments` component onto the held stack.
+    /// Efficiency/Sharpness/Protection/Unbreaking change behaviour; every
+    /// other modelled name is stored and inert (named gap). Unmodelled names
+    /// are refused with the modelled list.
+    fn command_enchant(
+        &mut self,
+        id: mc_network::bridge::ConnectionId,
+        parsed: &mc_command::dispatch::ParsedCommand,
+        report: &mut TickReport,
+    ) -> CommandResult {
+        let Some(name) = parsed.string(0) else {
+            return CommandResult::message("Usage: /enchant <enchantment> [level]");
+        };
+        let bare = name.strip_prefix("minecraft:").unwrap_or(name);
+        let Some((_, registry_id, max_level)) =
+            MODELLED_ENCHANTMENTS.iter().find(|(n, _, _)| *n == bare)
+        else {
+            return CommandResult::message(format!(
+                "Unknown enchantment {name:?}: this build stores the vanilla set \
+                 (sharpness, efficiency, unbreaking, protection, …); the four \
+                 named effects apply and the rest are inert"
+            ));
+        };
+        let level = parsed.integer(1).unwrap_or(1);
+        let level = i32::try_from(level).unwrap_or(1);
+        if level < 1 || level > *max_level {
+            return CommandResult::message(format!(
+                "Level {level} is out of range for {bare} (1..={max_level})"
+            ));
+        }
+        let Some(session) = self.sessions.get_mut(&id) else {
+            return CommandResult::message("You are not online.");
+        };
+        let slot = usize::from(session.player.inventory.selected_hotbar());
+        let mut stack = session.player.inventory.slot(slot);
+        if stack.is_empty() {
+            return CommandResult::message("You must hold an item to enchant it.");
+        }
+        let mut entries: Vec<(i32, i32)> = stack
+            .enchantments()
+            .unwrap_or(&[])
+            .iter()
+            .copied()
+            .filter(|(id, _)| *id != *registry_id)
+            .collect();
+        entries.push((*registry_id, level));
+        entries.sort_unstable();
+        stack.set_component(mc_entity::DataComponent::Enchantments(entries));
+        if session
+            .player
+            .inventory
+            .set_slot(slot, stack.clone())
+            .is_err()
+        {
+            return CommandResult::message("Could not write the enchantment onto the held item.");
+        }
+        self.sync_menu_from_inventory(id, report);
+        let active = matches!(
+            bare,
+            "efficiency" | "sharpness" | "protection" | "unbreaking"
+        );
+        let note = if active {
+            "applied"
+        } else {
+            "stored and inert — named gap in the parity matrix"
+        };
+        CommandResult::message(format!(
+            "Enchanted the held item with {bare} {level} ({note})"
+        ))
+    }
+
+    /// `/setblock <pos> <block> [replace|destroy|keep]` (P18-02).
+    fn command_setblock(&mut self, parsed: &mc_command::dispatch::ParsedCommand) -> CommandResult {
+        let Some(mc_command::ArgumentValue::BlockPos { x, y, z }) = parsed.argument(0) else {
+            return CommandResult::message("Usage: /setblock <pos> <block> [mode]");
+        };
+        let Some(block) = parsed.argument(1).and_then(|value| value.as_resource()) else {
+            return CommandResult::message("Usage: /setblock <pos> <block> [mode]");
+        };
+        let mode = parsed.string(2).unwrap_or("replace");
+        let Some(mode) = BlockWriteMode::parse(mode) else {
+            return CommandResult::message(
+                "Unknown setblock mode: this build accepts replace, destroy or keep \
+                 (hollow/outline/filtered are refused)",
+            );
+        };
+        let base = parsed.source.block_position().unwrap_or((0, 0, 0));
+        let (bx, by, bz) = (x.resolve(base.0), y.resolve(base.1), z.resolve(base.2));
+        let name = format!("{block}");
+        let Ok(state) = self.registries().blocks.default_state(&name) else {
+            return CommandResult::message(format!("Unknown block {name}"));
+        };
+        if !self.in_build_range(by) {
+            return CommandResult::message(format!(
+                "Cannot set a block at y={by}: outside the world's build range."
+            ));
+        }
+        match mode.apply(self, bx, by, bz, state) {
+            Ok(true) => CommandResult::message(format!("Set the block at {bx} {by} {bz}")),
+            Ok(false) => {
+                CommandResult::message(format!("No change at {bx} {by} {bz} (mode {mode})"))
+            }
+            Err(reason) => CommandResult::message(reason),
+        }
+    }
+
+    /// `/fill <from> <to> <block> [replace|destroy|keep]` (P18-02).
+    ///
+    /// Volume is capped at [`MAX_FILL_VOLUME`] — the named red
+    /// `fill_volume_over_the_named_cap_is_refused` goes red if that cap is
+    /// zeroed or removed.
+    fn command_fill(&mut self, parsed: &mc_command::dispatch::ParsedCommand) -> CommandResult {
+        let Some(mc_command::ArgumentValue::BlockPos {
+            x: x0,
+            y: y0,
+            z: z0,
+        }) = parsed.argument(0)
+        else {
+            return CommandResult::message("Usage: /fill <from> <to> <block> [mode]");
+        };
+        let Some(mc_command::ArgumentValue::BlockPos {
+            x: x1,
+            y: y1,
+            z: z1,
+        }) = parsed.argument(1)
+        else {
+            return CommandResult::message("Usage: /fill <from> <to> <block> [mode]");
+        };
+        let Some(block) = parsed.argument(2).and_then(|value| value.as_resource()) else {
+            return CommandResult::message("Usage: /fill <from> <to> <block> [mode]");
+        };
+        let mode = parsed.string(3).unwrap_or("replace");
+        let Some(mode) = BlockWriteMode::parse(mode) else {
+            return CommandResult::message(
+                "Unknown fill mode: this build accepts replace, destroy or keep \
+                 (hollow/outline/filtered are refused)",
+            );
+        };
+        let base = parsed.source.block_position().unwrap_or((0, 0, 0));
+        let (ax, ay, az) = (x0.resolve(base.0), y0.resolve(base.1), z0.resolve(base.2));
+        let (bx, by, bz) = (x1.resolve(base.0), y1.resolve(base.1), z1.resolve(base.2));
+        let (min_x, max_x) = if ax <= bx { (ax, bx) } else { (bx, ax) };
+        let (min_y, max_y) = if ay <= by { (ay, by) } else { (by, ay) };
+        let (min_z, max_z) = if az <= bz { (az, bz) } else { (bz, az) };
+        let volume = i64::from(max_x - min_x + 1)
+            * i64::from(max_y - min_y + 1)
+            * i64::from(max_z - min_z + 1);
+        if volume > MAX_FILL_VOLUME {
+            return CommandResult::message(format!(
+                "The region is {volume} blocks, above the {MAX_FILL_VOLUME}-block limit"
+            ));
+        }
+        let name = format!("{block}");
+        let Ok(state) = self.registries().blocks.default_state(&name) else {
+            return CommandResult::message(format!("Unknown block {name}"));
+        };
+        if !self.in_build_range(min_y) || !self.in_build_range(max_y) {
+            return CommandResult::message(
+                "Cannot fill outside the world's build range.".to_owned(),
+            );
+        }
+        let mut changed = 0i32;
+        for y in min_y..=max_y {
+            for z in min_z..=max_z {
+                for x in min_x..=max_x {
+                    match mode.apply(self, x, y, z, state) {
+                        Ok(true) => changed += 1,
+                        Ok(false) => {}
+                        Err(reason) => return CommandResult::message(reason),
+                    }
+                }
+            }
+        }
+        CommandResult::message(format!(
+            "Filled {changed} block(s) out of {volume} in the region"
+        ))
+    }
+
+    /// `/summon <type> [pos]` (P18-02).
+    ///
+    /// Only the eight modelled [`mc_entity::mob::MobKind`] names. Anything else
+    /// is refused **by name** rather than spawned as a generic mob.
+    fn command_summon(&mut self, parsed: &mc_command::dispatch::ParsedCommand) -> CommandResult {
+        let Some(kind_text) = parsed.string(0) else {
+            return CommandResult::message("Usage: /summon <type> [pos]");
+        };
+        let bare = kind_text.strip_prefix("minecraft:").unwrap_or(kind_text);
+        let Some(kind) = mc_entity::mob::MobKind::from_name(bare) else {
+            let modelled: Vec<&str> = mc_entity::mob::MobKind::ALL
+                .iter()
+                .map(|kind| kind.name())
+                .collect();
+            return CommandResult::message(format!(
+                "Unknown entity {kind_text:?}: this build summons only {}",
+                modelled.join(", ")
+            ));
+        };
+        let origin = parsed.source.block_position().unwrap_or((0, 64, 0));
+        let position =
+            if let Some(mc_command::ArgumentValue::BlockPos { x, y, z }) = parsed.argument(1) {
+                let (px, py, pz) = (
+                    x.resolve(origin.0),
+                    y.resolve(origin.1),
+                    z.resolve(origin.2),
+                );
+                if !self.in_build_range(py) {
+                    return CommandResult::message(format!(
+                        "Cannot summon at y={py}: outside the world's build range."
+                    ));
+                }
+                mc_world::Vec3::new(f64::from(px) + 0.5, f64::from(py), f64::from(pz) + 0.5)
+            } else {
+                let (px, py, pz) = origin;
+                mc_world::Vec3::new(f64::from(px) + 0.5, f64::from(py), f64::from(pz) + 0.5)
+            };
+        match self.spawn_mob(kind, position) {
+            Ok(_) => CommandResult::message(format!(
+                "Summoned {} at {} {} {}",
+                kind.name(),
+                position.x.floor(),
+                position.y.floor(),
+                position.z.floor()
+            )),
+            Err(error) => CommandResult::message(format!("Could not summon: {error}")),
+        }
+    }
+
+    /// `/setworldspawn [pos]` (P18-02).
+    fn command_setworldspawn(
+        &mut self,
+        parsed: &mc_command::dispatch::ParsedCommand,
+    ) -> CommandResult {
+        let base = parsed.source.block_position().unwrap_or((0, 64, 0));
+        let (spawn_x, spawn_y, spawn_z) =
+            if let Some(mc_command::ArgumentValue::BlockPos { x, y, z }) = parsed.argument(0) {
+                (x.resolve(base.0), y.resolve(base.1), z.resolve(base.2))
+            } else {
+                base
+            };
+        if !self.in_build_range(spawn_y) {
+            return CommandResult::message(format!(
+                "Cannot set the world spawn at y={spawn_y}: outside the world's build range."
+            ));
+        }
+        self.world_mut().set_spawn(spawn_x, spawn_y, spawn_z);
+        CommandResult::message(format!(
+            "Set the world spawn to {spawn_x} {spawn_y} {spawn_z}"
+        ))
+    }
+
+    /// `/msg` / `/tell` / `/w <target> <message>` (P18-02).
+    fn command_msg(
+        &mut self,
+        id: mc_network::bridge::ConnectionId,
+        parsed: &mc_command::dispatch::ParsedCommand,
+        report: &mut TickReport,
+    ) -> CommandResult {
+        let Some(target) = parsed.string(0) else {
+            return CommandResult::message("Usage: /msg <target> <message>");
+        };
+        let Some(message) = parsed.string(1) else {
+            return CommandResult::message("Usage: /msg <target> <message>");
+        };
+        let Some(target_id) = self.session_id_by_name(target) else {
+            return CommandResult::message(format!("No player was found matching {target:?}"));
+        };
+        let line = format!("{} whispers to you: {message}", parsed.source.name);
+        if self
+            .send(
+                target_id,
+                &mc_protocol::packets::play::DisguisedChat {
+                    message: TextComponent::literal(line),
+                    chat_type: crate::game::CHAT_TYPE_CHAT,
+                    sender_name: TextComponent::literal("Server"),
+                    target_name: None,
+                },
+                report,
+            )
+            .is_err()
+        {
+            return CommandResult::message("The whisper could not be delivered.");
+        }
+        let _ = id;
+        CommandResult::message(format!("You whisper to {target}: {message}"))
+    }
+
+    /// `/me <action>` (P18-02).
+    fn command_me(
+        &mut self,
+        parsed: &mc_command::dispatch::ParsedCommand,
+        report: &mut TickReport,
+    ) -> CommandResult {
+        let Some(action) = parsed.string(0) else {
+            return CommandResult::message("Usage: /me <action>");
+        };
+        let line = format!("* {} {action}", parsed.source.name);
+        let ids: Vec<mc_network::bridge::ConnectionId> = self.sessions.keys().copied().collect();
+        for target in ids {
+            let _ = self.send(
+                target,
+                &mc_protocol::packets::play::DisguisedChat {
+                    message: TextComponent::literal(line.clone()),
+                    chat_type: crate::game::CHAT_TYPE_CHAT,
+                    sender_name: TextComponent::literal("Server"),
+                    target_name: None,
+                },
+                report,
+            );
+        }
+        info!(from = %parsed.source.name, %action, "me");
+        CommandResult::silent()
+    }
+}
+
+/// How `setblock`/`fill` write a cell (P18-02).
+///
+/// Only the three Vanilla modes the closed list names. `hollow`, `outline` and
+/// `filtered` are refused **by name** at parse time rather than mapped onto
+/// one of these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BlockWriteMode {
+    /// Always write.
+    Replace,
+    /// Write only when the cell is air.
+    Keep,
+    /// Always write (drops are not modelled here; the tick's break path owns them).
+    Destroy,
+}
+
+impl BlockWriteMode {
+    fn parse(word: &str) -> Option<Self> {
+        match word {
+            "replace" => Some(Self::Replace),
+            "keep" => Some(Self::Keep),
+            "destroy" => Some(Self::Destroy),
+            _ => None,
+        }
+    }
+
+    /// Apply one cell. Returns whether the world changed.
+    fn apply(self, game: &mut Game, x: i32, y: i32, z: i32, state: i32) -> Result<bool, String> {
+        let current = game.world().get_block_loaded(x, y, z);
+        match self {
+            Self::Keep => {
+                if current.is_some_and(|id| id != 0) {
+                    return Ok(false);
+                }
+            }
+            Self::Replace | Self::Destroy => {}
+        }
+        game.world_mut()
+            .set_block(x, y, z, state)
+            .map(|change| change.is_some())
+            .map_err(|error| format!("Could not set the block: {error}"))
+    }
+}
+
+impl std::fmt::Display for BlockWriteMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Replace => "replace",
+            Self::Keep => "keep",
+            Self::Destroy => "destroy",
+        })
     }
 }
 

@@ -3,6 +3,7 @@
 
 use super::{
     Bound, EntityFacts, GameMode, SelectorError, SelectorKind, Sort, UNSUPPORTED_OPTIONS, parse,
+    sort_and_limit,
 };
 
 fn player(name: &str, position: (f64, f64, f64)) -> EntityFacts<'_> {
@@ -510,7 +511,7 @@ fn a_very_long_option_list_is_bounded_by_the_caller_not_by_this_parser() {
 fn a_selector_with_every_modelled_option_parses_together() {
     let selector = parse(
         "@e[type=minecraft:zombie,name=Bob,distance=1..10,level=..5,gamemode=!creative,\
-         limit=3,sort=random,x=1,y=2,z=3]",
+         limit=3,sort=random,x=1,y=2,z=3,dx=4,dy=5,dz=6]",
     )
     .expect("parses");
     assert_eq!(selector.kind, SelectorKind::AllEntities);
@@ -525,13 +526,114 @@ fn a_selector_with_every_modelled_option_parses_together() {
     assert_eq!(selector.limit, Some(3));
     assert_eq!(selector.sort, Sort::Random);
     assert_eq!(selector.position, Some((1.0, 2.0, 3.0)));
-    assert_eq!(selector.filter_count(), 5, "one per filter kind present");
+    assert_eq!(selector.dx, Some(4.0));
+    assert_eq!(selector.dy, Some(5.0));
+    assert_eq!(selector.dz, Some(6.0));
+    assert!(selector.has_box());
+    assert_eq!(
+        selector.filter_count(),
+        8,
+        "type, name, distance, level, gamemode, dx, dy, dz"
+    );
 
     // And it matches only what all the filters agree on.
     assert!(
         !selector.matches(&zombie((5.0, 2.0, 3.0)), (1.0, 2.0, 3.0)),
         "name=Bob excludes a nameless zombie"
     );
+}
+
+#[test]
+fn box_spans_select_a_cuboid_and_normalise_negative_spans() {
+    // A box from (0,64,0) spanning +2 on each axis.
+    let selector = parse("@e[x=0,y=64,z=0,dx=2,dy=2,dz=2]").expect("parses");
+    let inside = zombie((1.0, 65.0, 1.0));
+    let outside = zombie((3.0, 65.0, 1.0));
+    assert!(selector.matches(&inside, (0.0, 64.0, 0.0)));
+    assert!(!selector.matches(&outside, (0.0, 64.0, 0.0)));
+
+    // A negative span extends the other way and is normalised.
+    let flipped = parse("@e[x=0,y=64,z=0,dx=-2,dy=0,dz=0]").expect("parses");
+    assert!(flipped.matches(&zombie((-1.0, 64.0, 0.0)), (0.0, 64.0, 0.0)));
+    assert!(!flipped.matches(&zombie((1.0, 64.0, 0.0)), (0.0, 64.0, 0.0)));
+
+    // `dx=0` is a one-block slab at the origin, not "ignore x".
+    let slab = parse("@e[x=5,y=64,z=5,dx=0,dy=0,dz=0]").expect("parses");
+    assert!(slab.matches(&zombie((5.0, 64.0, 5.0)), (5.0, 64.0, 5.0)));
+    assert!(!slab.matches(&zombie((6.0, 64.0, 5.0)), (5.0, 64.0, 5.0)));
+
+    // A written `dx` is a duplicate when repeated, like every other single-valued option.
+    assert!(matches!(
+        parse("@e[dx=1,dx=2]"),
+        Err(SelectorError::DuplicateOption(_))
+    ));
+}
+
+#[test]
+fn sort_and_limit_orders_by_distance_and_truncates() {
+    let distances = [3.0, 1.0, 2.0, 0.5];
+    let mut no_random = || 0u32;
+
+    let nearest = parse("@e[sort=nearest,limit=2]").expect("parses");
+    assert_eq!(
+        sort_and_limit(&nearest, &distances, &mut no_random),
+        vec![3, 1],
+        "nearest keeps the two closest, stable on ties"
+    );
+
+    let furthest = parse("@e[sort=furthest,limit=2]").expect("parses");
+    assert_eq!(
+        sort_and_limit(&furthest, &distances, &mut no_random),
+        vec![0, 2]
+    );
+
+    // No limit: every index survives, in sort order.
+    let all = parse("@e[sort=nearest]").expect("parses");
+    assert_eq!(
+        sort_and_limit(&all, &distances, &mut no_random),
+        vec![3, 1, 2, 0]
+    );
+
+    // `arbitrary` keeps input order (this build's deterministic stand-in).
+    let arbitrary = parse("@e[sort=arbitrary]").expect("parses");
+    assert_eq!(
+        sort_and_limit(&arbitrary, &distances, &mut no_random),
+        vec![0, 1, 2, 3]
+    );
+
+    // `random` is a permutation of the indices; a fixed stream makes it reproducible.
+    let random = parse("@e[sort=random]").expect("parses");
+    let mut seed = 0u32;
+    let mut rng = move || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        seed
+    };
+    let first = sort_and_limit(&random, &distances, &mut rng);
+    let mut seed = 0u32;
+    let mut rng = move || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        seed
+    };
+    let second = sort_and_limit(&random, &distances, &mut rng);
+    assert_eq!(first, second, "the same seed produces the same order");
+    assert_eq!(first.len(), 4);
+    let mut sorted = first.clone();
+    sorted.sort_unstable();
+    assert_eq!(sorted, vec![0, 1, 2, 3], "random is a permutation");
+}
+
+// NOT RUN: a vanilla-server differential of `sort`/`limit` via `execute` output.
+// The self tests above pin this build's semantics with a fixed seed. The
+// differential needs `MC_VANILLA` (jar + world + a bootable server) and is
+// written as an ignored test so it is visible rather than absent.
+#[test]
+#[ignore = "differential: needs MC_VANILLA (vanilla server for execute-output comparison)"]
+fn selector_sort_limit_matches_vanilla_via_execute_output() {
+    // NOT RUN on this host: `MC_VANILLA` is unset. When run, this compares the
+    // ordered names `/execute as @e[sort=…,limit=…] run …` produces here with
+    // the same command on a vanilla 26.1.2 server under a fixed seed, after
+    // normalising to name order where the sort is `arbitrary`.
+    panic!("NOT RUN: selector sort/limit vanilla differential (needs MC_VANILLA)");
 }
 
 #[test]

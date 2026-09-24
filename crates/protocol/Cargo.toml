@@ -12,6 +12,10 @@ workspace = true
 [dependencies]
 mc-core = { path = "../core" }
 mc-nbt = { path = "../nbt" }
+# Item data components (P18-01a): one typed model + codecs shared with the
+# simulation so wire and disk cannot drift. Acyclic: entity does not depend on
+# protocol.
+mc-entity = { path = "../entity" }
 flate2.workspace = true
 serde_json.workspace = true
 uuid.workspace = true

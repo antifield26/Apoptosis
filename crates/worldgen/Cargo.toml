@@ -26,4 +26,9 @@ mc-registry = { path = "../registry" }
 # and keeps one random-draw implementation in the workspace.
 # `mc-world` owns the runtime `Chunk`/`Section` this crate generates into.
 mc-world = { path = "../world" }
+# Worldgen pack JSON (`configured_feature` / `placed_feature` / `configured_carver`).
+# Already a workspace dependency (`mc-data`, `mc-network`); licence row in
+# `docs/legal/third-party.md`. Used via `serde_json::Value` so a hostile pack
+# field is a reported skip, not a derive panic (AGENTS.md §9/§10).
+serde_json.workspace = true
 tracing.workspace = true

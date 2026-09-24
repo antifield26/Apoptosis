@@ -1104,7 +1104,9 @@ fn crafted_items_are_consumed_from_a_container_backed_grid() {
         .expect("the stick column matches");
     assert_eq!(result, stack(stick(), 4));
     for (index, value) in grid.iter().enumerate() {
-        grid_container.set(index, *value).expect("write back");
+        grid_container
+            .set(index, value.clone())
+            .expect("write back");
     }
     assert_eq!(grid_container.get(0), stack(oak_planks(), 2));
     assert_eq!(grid_container.get(2), stack(oak_planks(), 2));

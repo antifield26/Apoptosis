@@ -347,7 +347,7 @@ fn a_barrel_survives_a_restart_with_its_contents() {
         .iter()
         .find(|e| e.kind() == mc_container::BlockEntityKind::Container)
         .expect("a barrel entity");
-    let first_stack = entity.data.items().expect("items")[0];
+    let first_stack = entity.data.items().expect("items")[0].clone();
     assert_eq!(first_stack.item_id(), Some(stone_item));
     assert_eq!(first_stack.count(), 17);
 }

@@ -680,7 +680,7 @@ impl Furnace {
         // Does the input smelt, and can the output take the result?
         let input = container.get(slots.input);
         let output = container.get(slots.output);
-        let plan = plan_smelt(input, output, recipes, stack_sizes);
+        let plan = plan_smelt(&input, &output, recipes, stack_sizes);
 
         let Some(plan) = plan else {
             // Nothing to cook: an empty input, an item with no recipe, or an output
@@ -796,8 +796,8 @@ impl Furnace {
             )));
         }
         Ok(plan_smelt(
-            container.get(slots.input),
-            container.get(slots.output),
+            &container.get(slots.input),
+            &container.get(slots.output),
             recipes,
             stack_sizes,
         )
@@ -822,8 +822,8 @@ struct SmeltPlan {
 /// checks live in [`take_fuel`] (a fuel *is* resolved through the registry) and in
 /// [`SmeltingRegistry::baseline`], which refuses a missing name at load time.
 fn plan_smelt(
-    input: ItemStack,
-    output: ItemStack,
+    input: &ItemStack,
+    output: &ItemStack,
     recipes: &SmeltingRegistry,
     stack_sizes: &StackSizeTable,
 ) -> Option<SmeltPlan> {

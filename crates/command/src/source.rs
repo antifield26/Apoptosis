@@ -171,6 +171,12 @@ pub struct CommandSource {
     pub position: SourcePosition,
     /// Which dimension it is in, as a namespaced id.
     pub dimension: String,
+    /// Yaw in degrees (`execute rotated` / `facing` write this).
+    pub yaw: f32,
+    /// Pitch in degrees.
+    pub pitch: f32,
+    /// Whether `facing`/local coordinates measure from the eyes or the feet.
+    pub anchor: crate::execute::Anchor,
 }
 
 impl CommandSource {
@@ -183,6 +189,9 @@ impl CommandSource {
             permission: PermissionLevel::Console,
             position: SourcePosition::origin(),
             dimension: "minecraft:overworld".to_owned(),
+            yaw: 0.0,
+            pitch: 0.0,
+            anchor: crate::execute::Anchor::default(),
         }
     }
 
@@ -197,6 +206,9 @@ impl CommandSource {
             permission: PermissionLevel::All,
             position,
             dimension: "minecraft:overworld".to_owned(),
+            yaw: 0.0,
+            pitch: 0.0,
+            anchor: crate::execute::Anchor::default(),
         }
     }
 
@@ -204,6 +216,14 @@ impl CommandSource {
     #[must_use]
     pub fn with_permission(mut self, permission: PermissionLevel) -> Self {
         self.permission = permission;
+        self
+    }
+
+    /// The same source with a rotation.
+    #[must_use]
+    pub const fn with_rotation(mut self, yaw: f32, pitch: f32) -> Self {
+        self.yaw = yaw;
+        self.pitch = pitch;
         self
     }
 

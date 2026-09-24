@@ -163,7 +163,7 @@ impl Harness {
             .get(mc_container::BlockPos::new(x, y, z))
             .and_then(|e| e.data.items())
             .expect("furnace inventory");
-        let stack = items[slot];
+        let stack = items[slot].clone();
         (stack.item_id(), stack.count())
     }
 

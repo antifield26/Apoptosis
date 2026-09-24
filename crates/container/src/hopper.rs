@@ -121,7 +121,7 @@ impl HopperTransfer {
 }
 
 /// One source slot the hopper may pull from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct PullCandidate {
     index: usize,
     stack: ItemStack,
@@ -170,7 +170,7 @@ impl Hopper {
         }
         for candidate in candidates {
             let Some((destination_slot, room)) =
-                push_target(destination, destination_roles, candidate.stack)
+                push_target(destination, destination_roles, &candidate.stack)
             else {
                 continue;
             };
@@ -178,7 +178,7 @@ impl Hopper {
             if moved <= 0 {
                 continue;
             }
-            let mut from = candidate.stack;
+            let mut from = candidate.stack.clone();
             let mut taken = from.split(moved);
             let moved = taken.count();
             if moved <= 0 {
@@ -287,7 +287,7 @@ fn pull_candidates(
 fn push_target(
     destination: &Container,
     destination_roles: &[SlotRole],
-    stack: ItemStack,
+    stack: &ItemStack,
 ) -> Option<(usize, i32)> {
     for (index, existing) in destination.slots().iter().enumerate() {
         if !role_at(destination_roles, index).may_place() {
@@ -295,7 +295,7 @@ fn push_target(
         }
         let room = if existing.is_empty() {
             MAX_ITEMS_PER_TRANSFER
-        } else if existing.same_item(&stack) {
+        } else if existing.same_item(stack) {
             MAX_ITEMS_PER_TRANSFER - existing.count()
         } else {
             0

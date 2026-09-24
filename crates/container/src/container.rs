@@ -220,7 +220,7 @@ impl Container {
     /// answer. Mutation is the fallible direction.
     #[must_use]
     pub fn get(&self, index: usize) -> ItemStack {
-        self.slots.get(index).copied().unwrap_or(ItemStack::EMPTY)
+        self.slots.get(index).cloned().unwrap_or(ItemStack::EMPTY)
     }
 
     /// Overwrite `index`.
@@ -290,7 +290,7 @@ impl Container {
             .iter()
             .enumerate()
             .filter(|(_, stack)| !stack.is_empty())
-            .map(|(index, stack)| (index, *stack))
+            .map(|(index, stack)| (index, stack.clone()))
     }
 
     /// Swap two of this container's slots.

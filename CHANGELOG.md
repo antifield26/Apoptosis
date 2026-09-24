@@ -12,6 +12,55 @@ entry is the release candidate matching the workspace version at the time
 with built artifacts. The current workspace version is `0.2.0`, published as
 tag `v0.2.0` (see below); no later version has been released.
 
+## Unreleased — Phase 18 (Items, Food, Commands & Terrain) + v0.3.0 prep
+
+### P18-07 — Gate health + AUDIT-17 residuals
+Quick gate completes in **585 s** on the dev host (target ≤ 10 min),
+`1597/0/35` across 128 suites. Named closed set counted (92 files / 519
+tests; Δ3 labelled). A12-06 dual-viewer now merges per dirty slot
+(`write_back_block_slots` + `block_dirty`); A12-07 kind-drift replaces the
+payload on `set_block` kind change; A12-03 refuses hostile item counts and
+out-of-range `open_screen` VarInts; A12-10 marks hopper cooldown ticks dirty.
+P15-03 zero-delta pinned by `p15_zero_delta`. B-02 naming verified closed.
+c2s capture 43 present; **56/19 NOT RUN** (named). Evidence:
+`docs/testing/P18-07-GATE-HEALTH.md`.
+
+### P18-01a/01b — Item components, wear, four enchantment effects
+`damage`/`max_damage`, enchantments, custom_name, repair_cost, attack_range,
+food/consumable round-trip on wire and disk; unknown components preserved
+byte-identical. Wear on dig/attack/hit with break-at-max; Efficiency,
+Sharpness, Protection and Unbreaking wired (other enchantments named inert
+in PARITY). Evidence: `components.rs`, `wear.rs`, `enchant.rs`,
+`p18_wear_enchant` (6), golden component tests.
+
+### P18-06 — Food and hunger
+Jar exhaustion table (sprint/jump/attack/hurt/mine/swim), `UseItem` eat
+cycle with `consume_seconds` and early-release cancel, saturation fast-regen,
+difficulty starvation floors (10/1/0). Evidence: `p18_hunger` (8), unit pins
+in `player.rs`.
+
+### P18-02 — Commands and selectors (closed list)
+`clear`, `xp`/`experience`, `enchant`, `setblock`, `fill` (volume cap
+32 768, named red), `summon`, `setworldspawn`, `msg`/`tell`/`w`, `me`,
+`teleport`; selectors `@a/@p/@s/@e/@r` with the eight argument families and
+sort/limit; `execute rotated/facing/anchored`. Everything else refused by
+name. Evidence: `p18_commands` (16).
+
+### P18-03 — Ores and carvers
+25 pack-driven overworld ore veins + dry cave/canyon carvers
+(terrain → carvers → ores). 32×32 stats pins with pre-written tolerances;
+33.8 ms/chunk generation hook. Evidence: `ore.rs`, `carver.rs`,
+`ore_carver_stats`.
+
+### P18-04 — Soak stand-in
+Dev-host workload covers wear/eat/combat/observer/hopper/terrain. **Pi soak
+NOT RUN** (named). Evidence: `docs/testing/P18-04-SOAK.md`.
+
+### P18-05 — v0.3.0 verdict materials
+TASK-INDEX snapshotted to `docs/planning/`. Tag withheld until the owner
+walk screens and the named NOT RUN list are accepted or closed (P14-07
+rules). Evidence: `docs/testing/P18-05-VERDICT.md`.
+
 ## Unreleased — Phase 16 (Combat & the Survival Loop)
 
 ### P16-01 — Damage model: held weapons, armour, types, knockback, reach hook
