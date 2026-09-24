@@ -25,7 +25,7 @@ Date: 2026-09-23 · pre-tag closeout.
 ## Named NOT RUN (blocks an unconditional verdict)
 
 1. Real-client walk screens (wear/break, enchant glint+tooltip, hunger, ore in cave).
-2. P18-04 Pi soak (§13).
+2. ~~P18-04 Pi soak~~ — **DONE 2026-09-24** on Pi 5 (`P18-04-SOAK.md`).
 3. c2s capture corpus 56/19.
 4. Selector sort/limit vanilla differential.
 

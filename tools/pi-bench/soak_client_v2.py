@@ -177,8 +177,23 @@ class Client:
         raise IOError("no login success")
 
     def complete_configuration(self):
-        info = (pack_str("en_us") + varint(VIEW_DISTANCE) + varint(0)
-                + varint(1) + varint(0x7F) + varint(1) + varint(0) + varint(0))
+        # Matches `ClientInformation` (config.rs): locale, view_distance,
+        # chat_mode, chat_colors (bool byte), skin_parts, main_hand,
+        # text_filtering (bool byte), server_listing (bool byte),
+        # particle_status (VarInt). The v2 body missed particle_status and
+        # encoded the bools as VarInts — the server answered with
+        # "truncated VarInt" after login accepted (P18-04 soak finding).
+        info = (
+            pack_str("en_us")
+            + struct.pack("b", VIEW_DISTANCE)
+            + varint(0)
+            + b"\x01"
+            + bytes([0x7F])
+            + varint(1)
+            + b"\x00"
+            + b"\x01"
+            + varint(0)
+        )
         self.send(SB["cfg_client_info"], info)
         deadline = time.time() + 60
         while time.time() < deadline:

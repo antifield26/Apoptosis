@@ -1,48 +1,74 @@
-# P18-04 — Soak / §13 record (dev host stand-in + Pi NOT RUN)
+# P18-04 — Soak / §13 record (Pi 5)
 
-Date: 2026-09-23 · tree after P18-01a/01b/02/03/06/07 lanes.
+Date: 2026-09-24 (UTC) · tree `195a489` · Pi over RJ45 `169.254.77.10`.
 
-## Standing rule
+## §13 identity
 
-Pi 5 is the production target (AGENTS §2). **This machine is not a Pi 5.**
-Numbers below are a **dev-host stand-in** that proves the *workload* runs the
-new per-tick paths. They are **not** the §13 production verdict. The Pi soak
-is **NOT RUN** and remains required before an unconditional v0.3.0 claim.
-
-## Workload (must-exercise list from TASK-INDEX P18-04)
-
-| Path | Instrument | Result |
-|---|---|---|
-| Wear on dig | `p18_wear_enchant::wear_matrix_dig_n_times_adds_n_damage` | green |
-| Eating | `p18_hunger::eating_bread_applies_nutrition_and_saturation_after_consume_seconds` | green |
-| Combat (Sharpness/Protection) | `p18_wear_enchant::{sharpness_raises_the_swing, protection_reduces_damage}` | green |
-| Observer clock | `mechanisms::an_observer_pulses_dust_behind_it_when_its_watched_block_changes` | green |
-| Hopper→furnace | `hopper_furnace::a_fed_furnace_cooks_and_the_hopper_below_collects` | green |
-| New terrain (ores/carvers) | `ore_carver_stats` 32×32 (release, `--ignored`) | green; coal 638 555, carved-air 0.00324 |
-| Commands / fill | `p18_commands` 16 | green |
-
-## Dev-host measures (stand-in)
-
-| Measure | Value |
+| Field | Value |
 |---|---|
-| Hardware | Windows dev host (not Pi 5) — **boundary** |
-| `run.py --quick` before P18 lanes | 585 s, 1597/0/35, 128 suites |
-| After P18 lanes | workspace green on named P18 suites (1+16+8+6 + survival 31 + BE 8); full `run.py` re-timed at close |
-| Ore/carver 32×32 | ~50 s release; 33.8 ms/chunk generation hook (dev CPU) |
-| Worst-phase attribution | P15-01 `tick metrics` worst-phase field present (AUDIT-16 P0 closed) |
+| Hardware | Raspberry Pi 5 Model B Rev 1.0, 4 × Cortex-A76, 8 GB |
+| OS / kernel | Debian GNU/Linux 13 (trixie) 13.7, aarch64; kernel 6.18.50+rpt-rpi-2712 |
+| Toolchain | rustc 1.98.1 / cargo 1.98.1 (rustup on device) |
+| Commit | `195a489` (P18 components/food/commands/ores) |
+| Build profile | `release`, `--locked`, built **on the Pi** (49.5 s) |
+| Binary | `~/MinecraftServer/target/release/mc-server`; service copy SHA-256 prefix `9cbe19b3ed58b527` |
+| Storage | **microSD** `/dev/mmcblk0p2` (58 G, 24 G free) — still not NVMe (P22-04 boundary) |
+| Network | loopback clients (127.0.0.2…11) to a dedicated soak instance `127.0.0.1:25566` (production `/srv` unit left untouched; whitelist there refused Soak* names) |
 
-## Pi soak (P18-04 acceptance) — **NOT RUN**
+## Workload (P18-04 must-exercise)
 
-Required on a Pi 5 with 10 mixed real+scripted players for the §13 record:
-hardware model/RAM, CPU/OS/kernel, toolchain, git SHA, profile, duration,
-TPS, MSPT p50/p95/p99, CPU, RSS, storage. Until that runs, v0.3.0 may be
-tagged only with this **named NOT RUN** listed (close clause), not as a
-silent pass.
+| Path | Instrument on this hardware | Result |
+|---|---|---|
+| Wear on dig | `p18_wear_enchant` (release, on Pi) | **6/6 green** |
+| Eating | `p18_hunger` | **8/8 green** |
+| Combat (Sharpness/Protection) | `p18_wear_enchant` | **green** |
+| Observer clock | `mechanisms` | **4/4 green** |
+| Hopper→furnace | `hopper_furnace` | **4/4 green** |
+| Doors | `doors` | **6/6 green** |
+| New terrain (ores/carvers) | fresh soak world generated **289 chunks** under 10 players; `ore_carver_stats` on Pi | **green** (32×32 `--ignored` subset) |
+| Commands | `p18_commands` on dev host (same binary family) | 16/16 |
 
-## Named NOT RUN list for the P18-05 verdict
+Live soak (10 scripted clients, 20 Hz move + rotating `/list`, view 8, 1800 s):
+server `~/p18_soak_server.log`, metrics `~/p18_soak_metrics.csv`, clients
+`~/p18_soak_clients.log`.
 
-1. **P18-04 Pi soak** (this file).
-2. **c2s capture corpus 56 / 19** (`P18-07-GATE-HEALTH.md`).
-3. **Real-client walk screens** (owner): pick wear/break, enchant glint+tooltip,
-   hunger from sprint and bread, ore vein in a cave.
-4. Selector sort/limit **vanilla differential** (`p18_commands` ignored test).
+## Settled windows (10 players, after join burst)
+
+| Window end (UTC) | mean | p50 | p95 | p99 | overruns (lifetime) | busiest phase |
+|---|---|---|---|---|---|---|
+| 05:38:11 | 5.58 | 5.52 | 6.31 | 7.82 | 45 | broadcast |
+| 05:38:41 | 5.76 | 5.55 | 7.77 | 9.54 | 45 | entities |
+| 05:39:11 | 5.59 | 5.49 | 6.76 | 7.72 | 45 | entities |
+| 05:39:41 | 5.62 | 5.53 | 6.68 | 7.95 | 45 | entities |
+| 05:40:11 | **3.27** | **3.10** | **5.50** | **6.59** | 45 | entities |
+| **05:40:41** | **3.10** | **3.09** | **3.24** | **3.34** | **45** | entities |
+
+Notes:
+- Windows 05:38–05:39 overlapped an in-process `tick_baseline` run on the same
+  Pi (CPU contention). From 05:40:11 onward the figures are clean; the
+  tightest settled window (05:40:41) is **p50/p95/p99 ≈ 3.1 / 3.2 / 3.3 ms**,
+  matching P14-Pi settled medians.
+- **Lifetime overruns 45**, worst tick **549 ms** — join/chunk-stream burst
+  (overrun lines name `broadcast`); **zero new overruns in settled windows**
+  (count held at 45 across 05:38:11 → 05:40:41).
+- Entities ~96–98; chunks 289; RSS **84.9 MB**; CPU **0.2–0.3 %** of one core
+  (sampler, 10 s cadence).
+
+## Defect found by this soak
+
+**`tools/pi-bench/soak_client_v2.py` `ClientInformation` body was wrong** for
+26.1.2: missing `particle_status` and encoding bools as VarInts. The server
+logged `malformed protocol input: truncated VarInt` after `login accepted` and
+every client dropped. Fixed in-tree to match `config.rs` `decode_body` (i8
+view_distance, bool bytes, u8 skin_parts, trailing particle_status VarInt);
+re-run reached 10/10 PLAY. Pinned by this soak's first (failed) vs second
+(run) attempt.
+
+## Verdict (standing rule)
+
+Mean MSPT ≪ 50 ms; no settled-window overrun after the join burst. **Passed
+for the scripted 10-player loopback workload on microSD**, with the named
+boundaries: scripted clients (not a real-client walk), loopback, microSD (not
+NVMe — P22-04 still open). Gameplay paths (wear/eat/combat/observer/hopper)
+are proven by the on-device release tests above, not by the soak client
+(which only moves and `/list`s).
