@@ -287,11 +287,13 @@ async fn an_unsupported_modifier_is_named_in_the_reply() {
     // The property that matters most: a silently-dropped `store` would send output to chat
     // instead of a block, and a silently-dropped `if` would run a command that should not run.
     let mut harness = Harness::start("exec-unsupported").await;
+    // P18-02 moved `rotated`, `facing` and `anchored` into the supported set (KD-32: 12 of
+    // ~20), so they left this table. The property is unchanged and every remaining row still
+    // names a modifier the dispatcher refuses; their acceptance is pinned by
+    // `the_p18_modifiers_run_instead_of_being_refused` below, so removing a row here cannot
+    // be satisfied by a modifier that quietly does nothing.
     for (command, expected) in [
         ("execute store result score x run say hi", "store"),
-        ("execute rotated 0 0 run say hi", "rotated"),
-        ("execute facing 0 0 0 run say hi", "facing"),
-        ("execute anchored eyes run say hi", "anchored"),
         ("execute in minecraft:overworld run say hi", "in"),
         ("execute if score x run say hi", "score"),
         ("execute if data entity @s run say hi", "data"),
@@ -301,6 +303,34 @@ async fn an_unsupported_modifier_is_named_in_the_reply() {
         assert!(
             lines.iter().any(|line| line.contains(expected)),
             "{command:?} must name {expected:?} in its reply: {lines:?}"
+        );
+    }
+    harness.service.shutdown().await;
+}
+
+/// The three modifiers P18-02 added are **accepted and run**, which the refusal table above can
+/// no longer say.
+///
+/// This exists because deleting a row from that table is otherwise pinned only by an absence: a
+/// modifier that silently dropped its tail argument would also stop appearing there. Each probe
+/// carries a distinct marker, so a chain that runs the *wrong* inner command fails.
+#[tokio::test]
+async fn the_p18_modifiers_run_instead_of_being_refused() {
+    let mut harness = Harness::start("exec-p18-modifiers").await;
+    for (command, marker) in [
+        ("execute rotated 0 0 run say ROTATED", "ROTATED"),
+        ("execute rotated 90 45 run say ROTATED2", "ROTATED2"),
+        ("execute facing 0 0 0 run say FACING", "FACING"),
+        ("execute anchored eyes run say ANCHORED", "ANCHORED"),
+    ] {
+        let lines = harness.run(command).await;
+        assert!(
+            lines.iter().any(|line| line.contains(marker)),
+            "{command:?} must run its inner command rather than refuse the modifier: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|line| line.contains("unsupported")),
+            "{command:?} is supported since P18-02: {lines:?}"
         );
     }
     harness.service.shutdown().await;
