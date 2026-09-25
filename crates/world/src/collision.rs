@@ -479,7 +479,8 @@ mod tests {
         assert!(solid("minecraft:stone"));
         assert!(solid("minecraft:dirt"));
         assert!(solid("minecraft:oak_log"));
-        // Not modelled as partial: a slab collides as a full cube in P04.
+        // A slab is solid: its collision box is a half cube from the shape table
+        // (P16-06), not a full cube and not an absence of one.
         assert!(solid("minecraft:stone_slab"));
         assert!(
             is_solid_or_unknown(&registries.blocks, 999_999),

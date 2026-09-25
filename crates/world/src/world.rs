@@ -8,8 +8,10 @@
 //!
 //! [`World::ensure_chunk`] creates an **all-air** chunk when one is missing. That
 //! is a placeholder so a player has somewhere to stand; it is not terrain. The
-//! method name says so, and P07 replaces the body with the generation pipeline.
-//! Nothing in this crate claims generated terrain.
+//! method name says so. Generation landed in `mc-worldgen` and is driven by
+//! `mc-server`, which fills a chunk before it becomes visible; the placeholder
+//! remains for the paths that need a chunk to write into. Nothing in this crate
+//! claims generated terrain.
 
 use crate::chunk::{Chunk, ChunkPos, SECTION_HEIGHT, SECTION_WIDTH};
 use crate::collision::{Aabb, Vec3, is_solid_or_unknown};

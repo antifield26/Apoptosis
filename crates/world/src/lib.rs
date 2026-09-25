@@ -14,18 +14,22 @@
 //! `block_update`. The ids come from the official jar's own registry, via
 //! [`mc_registry::BlockRegistry`].
 //!
-//! ## Deliberate simplifications (P04 scope)
+//! ## Scope: what this crate does and does not model
 //!
-//! - **No world generation.** A chunk that is loaded but absent becomes all air
-//!   with `minecraft:full` status. That is a placeholder so the player can stand
-//!   somewhere, not generation; P07 owns terrain. It is marked in the API name
-//!   ([`World::ensure_chunk`]) so no caller mistakes it for content.
-//! - **Collision is full-cube.** A block is solid unless it is air-like or in the
-//!   explicit [`collision::NON_SOLID`] list. Slabs, stairs and fences therefore
-//!   collide as full cubes — recorded in the parity matrix as a known gap.
-//! - **No lighting engine.** Light arrays are carried through from disk and (once
-//!   sent) left zero; see `docs/protocol/chunk-wire-format.md` section 6.
-//! - **No fluid, redstone or scheduled-tick simulation.** Those are P05/P06.
+//! - **No generation.** [`World::ensure_chunk`] creates an all-air chunk when one
+//!   is missing, so a caller always has something to write into. It is a
+//!   placeholder, not terrain: generation lives in `mc-worldgen` and is driven by
+//!   `mc-server`, which fills a chunk before it can be seen. Nothing in this
+//!   crate claims generated terrain.
+//! - **Collision is a per-state lookup, not a cube model.** A solid cell collides
+//!   as the boxes the registry's shape table gives it, with the full cube as the
+//!   default for a state with no entry (P16-06); see [`collision`].
+//! - **Light is computed, not merely carried.** [`light`] implements the sky
+//!   flood, the block-light BFS and the jar-derived emission/dampening tables;
+//!   the per-chunk cache and its invalidation live in [`World`].
+//! - **No fluid, redstone or scheduled-tick simulation.** The power model is
+//!   `mc-redstone`, the tick phases are `mc-simulation`/`mc-server`, and fluids
+//!   are out of scope (water and lava are non-solid here).
 
 #![forbid(unsafe_code)]
 // Runtime block code narrows and widens constantly (section indices, y ranges,
