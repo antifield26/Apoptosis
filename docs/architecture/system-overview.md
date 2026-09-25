@@ -92,9 +92,9 @@ divergence live in [PARITY-MATRIX.md](../vanilla-parity/PARITY-MATRIX.md), which
 | Protocol & networking | handshake → status → login → config → play over Tokio TCP; packet ids verified against the jar's registration bytecode; hostile-input hardening (non-terminating varints, oversized frames, decompression bombs, slow drips, floods); per-IP and global admission limits |
 | Survival slice | join/stream, server-authoritative movement with swept collision, break/place validation, inventory transactions (player + chest/furnace/hopper windows), player crafting from the pack table, health/hunger/XP, death and respawn, save/reload |
 | Persistence | NBT + Anvil read/write with atomic saves, carrying live entities and block entities (P11-08/P12-05); verified end to end — a world this code rewrote was **booted on a real vanilla 26.1.2 server**, which preserved the edits and re-saved every dimension |
-| Commands & data | 15 commands (help/list/say/time/tp/execute/function/op/deop/stop/gamemode/give/kill/seed/difficulty), permission levels from `ops.json` (read at boot, written by `/op`/`/deop`); real data-pack loading from the configured vanilla pack and from world packs; the deployed vanilla pack resolves 758 tags and loads 1 421 recipes; loot tables fire as the drop authority and furnace/crafting tables convert from the pack (fuel stays the jar-verified baseline) |
+| Commands & data | 29 of ~90 Vanilla root literals (help/list/say/time/tp/teleport/execute/function/op/deop/stop/gamemode/give/kill/seed/difficulty/effect plus the P18-02 set clear/xp/experience/enchant/setblock/fill/summon/setworldspawn/msg/tell/w/me), permission levels from `ops.json` (read at boot, written by `/op`/`/deop`); real data-pack loading from the configured vanilla pack and from world packs; the deployed vanilla pack resolves 758 tags and loads 1 454 recipes; loot tables fire as the drop authority and furnace/crafting tables convert from the pack (fuel stays the jar-verified baseline) |
 | World generation | seeded terrain with six biomes, trees, and a single-chunk subset of the jar's 1 202 structure templates |
-| Performance | the documented 20 TPS acceptance procedure ran twice on a Raspberry Pi 5: the scripted 10-client soak held p50/p95/p99 medians of 0.21/0.27/0.29 ms with zero settled overruns, and the later mixed real+scripted soak on the current tree held ~3.0/3.2/3.3 ms medians with 58 lifetime overruns and one noted idle spike ([record](../performance/BENCHMARK-BASELINE.md), §§P09-Pi, P14-Pi) |
+| Performance | the documented 20 TPS acceptance procedure ran twice on a Raspberry Pi 5: the scripted 10-client soak held p50/p95/p99 medians of 0.21/0.27/0.29 ms with zero settled overruns, and the later mixed real+scripted soak on the P14 tree held ~3.0/3.2/3.3 ms medians with 58 lifetime overruns and one noted idle spike ([record](../performance/BENCHMARK-BASELINE.md), §§P09-Pi, P14-Pi; the P18 re-soak repeated the settled figures with 45 — [P18-04](../testing/P18-04-SOAK.md)) |
 
 ## What is deliberately absent
 
@@ -103,14 +103,17 @@ Recorded rather than papered over; the full catalogue with per-row evidence is t
 - **Static lighting only.** Sky/block light is computed from jar-measured tables and owner-confirmed on a
   real client; there is no day/night dimming and no incremental relight beyond block changes.
 - **Entities sync and persist, within limits.** Mobs spawn, walk, hit back, drop loot, and ride the chunk
-  save with drops (P11); viewers see moves, hurt and death. Gaps: per-kind follow ranges, XP orbs,
-  pathfinding, and entities in otherwise-clean chunks.
+  save with drops (P11); viewers see moves, hurt and death; per-kind follow ranges, an A* chase arm
+  (P16-04) and XP orbs (P16-02) landed. Gaps: wander and flee still steer directly, and entities in
+  otherwise-clean chunks are not persisted.
 - **Redstone is a measured model, wired into the tick loop.** Directional conductivity (P13-06), the 15-block wire (P13-05) and the vanilla differential (P13-07) pin it; player edits feed the queue (P13-02) and the `ScheduledTicks` phase propagates and broadcasts.
-- **15 of roughly 90 Vanilla commands.** Chests, furnaces and hoppers open as windows a client can
-  transact with; double chests open single, tag recipes never convert, hopper↔furnace routing is skipped.
+- **29 of roughly 90 Vanilla root literals.** Chests, furnaces and hoppers open as windows a client can
+  transact with, double chests open the 54-slot window (P17-02), tag ingredients expand in crafting
+  (P17-03) and hopper→furnace routing works; the remaining root literals are unimplemented.
 - **Partial real-client acceptance.** A Java 26.1.2 client has joined, entered play, rendered night/mobs/
-  drops and chatted (P10-11/P11), and played a 30-minute mixed 10-client soak (P14-06, pass with one noted
-  idle spike); container, pickup-render, death→respawn and restart screens are still unverified.
+  drops and chatted (P10-11/P11), run the P17 container session (P17-05), and played a 30-minute mixed
+  10-client soak (P14-06, pass with one noted idle spike); pickup-render, death→respawn and the
+  post-restart chest screen are still unverified.
 - **Offline mode only.** `online_mode = true` refuses to start rather than degrading silently.
 
 ## Invariants a change must not break

@@ -9,8 +9,8 @@ must agree, and this fails (exit 1) when one does not.
 
 Two kinds of document are exempt as *history*, and the distinction is the point: a **cumulative record**
 states what past rounds measured, so an older figure in it is correct and rewriting it would falsify the
-record. Those are `docs/audits/**` (audit reports), `CHANGELOG.md` and `docs/GOVERNANCE-REPORT.md`
-(per-round records). Everything else must agree with the owner.
+record. Those are `docs/audits/**` (audit reports), `CHANGELOG.md`, `docs/GOVERNANCE-REPORT.md` and
+`docs/testing/P18-07-GATE-HEALTH.md` (per-round records). Everything else must agree with the owner.
 
 **Limitation, stated rather than left as a trap:** this compares documents **to each other**, not to the
 tree. Nothing here can run `cargo test`, so a canonical figure that is stale while every other document
@@ -52,8 +52,17 @@ PLACEHOLDER = re.compile(r'\{[a-z_]{3,}\}')
 
 #: Documents that record what *past* rounds measured. An older figure in these is correct, and rewriting it
 #: would falsify the record; current-state documents must agree with the owner instead.
+#:
+#: `P18-07-GATE-HEALTH.md` belongs here for the same reason the audit reports do: it is a per-round record
+#: with its own date and baseline commit (`081d98f` + P18-07 work), and its gate figure is what *that*
+#: round measured. The P18 landing then added five suites on top of it without re-measuring, so the file
+#: and the owner legitimately disagree; the owner's figure is the current one.
 HISTORY = ('docs/audits/',)
-HISTORY_FILES = ('CHANGELOG.md', 'docs/GOVERNANCE-REPORT.md')
+HISTORY_FILES = (
+    'CHANGELOG.md',
+    'docs/GOVERNANCE-REPORT.md',
+    'docs/testing/P18-07-GATE-HEALTH.md',
+)
 
 
 def is_history(rel: str) -> bool:

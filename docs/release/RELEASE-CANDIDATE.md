@@ -1,27 +1,30 @@
 # Release Candidate Documentation (P09-10)
 
-Status: **release candidate, published as source under MIT** (ADR-0006, owner
-decision 2026-09-12 — closes ADR-0001 R-09). The full history is on
-`github.com/antifield26/Apoptosis` (public) as of 2026-09-12; the binary below
-is a local build and no tagged binary release exists yet. This document is what
-a builder or operator needs to produce and run the server from source today.
+Status: **published as source under MIT** (ADR-0006, owner decision
+2026-09-12 — closes ADR-0001 R-09). The full history is on
+`github.com/antifield26/Apoptosis` (public) as of 2026-09-12. Tagged releases
+exist since then — `v0.1.0-rc.1`, the candidate this document records, and
+`v0.2.0`, the current release. This document is what a builder or operator
+needs to produce and run the server from source today.
 
 ## 1. What ships
 
 A from-scratch, pure-Rust dedicated server for Minecraft: Java Edition
 **26.1.2** (protocol **775**, wire display string "26.1"), offline mode,
 Vanilla-Survival slice: login → config → play, movement/collision, break/place,
-inventory transactions, containers transactable, death/respawn, commands (15 —
-help/list/say/time/tp/execute/function/op/deop/stop plus the P14 admin set
-gamemode/give/kill/seed/difficulty), data
+inventory transactions, containers transactable, death/respawn, commands (29
+root literals — help/list/say/time/tp/teleport/execute/function/op/deop/stop/
+effect plus the admin set gamemode/give/kill/seed/difficulty and the P18-02 set
+clear/xp/experience/enchant/setblock/fill/summon/setworldspawn/msg/tell/w/me),
+data
 packs (tags/recipes/functions), seeded terrain with a single-chunk structure
 subset, Anvil-compatible persistence verified against real vanilla worlds.
 Scope boundaries and every known divergence:
-[docs/vanilla-parity/PARITY-MATRIX.md](../vanilla-parity/PARITY-MATRIX.md) (KD-01…KD-39; the
+[docs/vanilla-parity/PARITY-MATRIX.md](../vanilla-parity/PARITY-MATRIX.md) (KD-01…KD-87; the
 release-affecting highlights: static lighting only (no day/night dimming, no
-incremental relight); mobs lack per-kind follow ranges, XP orbs and paths;
-redstone is measured and tick-driven but has no pistons/observers and no exact
-update order; 15 of ~90 commands).
+incremental relight); mobs have per-kind follow ranges, an A* chase arm and XP
+orbs, but wander and flee steer directly; redstone is measured and tick-driven
+but has no pistons and no exact update order; 29 of ~90 commands).
 
 ## 2. Building from source
 

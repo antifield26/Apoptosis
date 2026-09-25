@@ -72,7 +72,7 @@ old behavior goes through current-phase tasks only.
 | P15-07 | B-02 write-sequence assertion + D-07 hetero-list refusal + A-03 capture-sweep harness + E-02 fixture-env subprocess test | P15-05 | DONE |
 | P15-08 | Hardening review: per-step gates, probe re-runs, zero-observable-delta sign-off | P15-04, P15-06, P15-07 | DONE |
 
-Evidence: CHANGELOG P15-01..P15-08 (`11c4f2e` hardening sign-off). Exit gate `gates/EXIT-GATES.md` §P15.
+Evidence: CHANGELOG P15-01..P15-08 (`11c4f2e` hardening sign-off). Exit gate prompt-pack EXIT-GATES §P15.
 
 ## Phase 16 — Combat & the Survival Loop (v0.3.0 gameplay I) — **DONE**
 | ID | Task | Depends | Status |
@@ -176,7 +176,7 @@ upgrade it without a developer. Scope/rationale per phase in
 | P22-01 | `backup/restore/verify/--check-config` CLI; online backup; release format stamp + upgrade rule | P19-03 | Round-trip backup→restore→boot test; restoring onto a running world refused; a world from v0.3.0 opens under the documented rule (closes KD-37) |
 | P22-02 | CPU/RSS telemetry, tick watchdog, optional metrics endpoint (ADR) | P18-05 | A synthetic stall trips the watchdog with the phase named; CPU/RSS fields match `/proc` in a Linux test |
 | P22-03 | Fuzz/property harness for every hostile parser, CI budget | P19-01, P19-02, P19-04, P19-05 | All targets listed in PHASE-22 exist, run in CI within budget; every crash found becomes a regression test |
-| P22-04 | 24-hour NVMe Pi soak + `kill -9` crash tests | P20-07, P21-07 | §13 record with RSS slope and save latency; world + playerdata verified after each crash point; NVMe boundary in AGENTS.md §2 closed; **no NVMe Pi → NOT RUN and P22-08 cannot sign unconditionally** |
+| P22-04 | 24-hour NVMe Pi soak + `kill -9` crash tests | P20-07, P21-07 | §13 record with RSS slope and save latency; world + playerdata verified after each crash point; NVMe boundary in the prompt-pack AGENTS §2 closed; **no NVMe Pi → NOT RUN and P22-08 cannot sign unconditionally** |
 | P22-05 | Threat-model update, `cargo deny advisories`, SECURITY process check | P19-07 | Threat model covers online mode/RCON/whitelist; advisories gate green in CI |
 | P22-06 | RUNBOOK for Internet deploy, vanilla-world migration, upgrade notes | P22-01, P22-05 | A second person follows the runbook on a clean Pi without developer help (recorded) |
 | P22-07 | AUDIT-22 (P18–P22), P0 queue fixed and pinned | P22-01..P22-06 | Audit published in AUDIT-17 format; every P0 closed with a pin before P22-08 |

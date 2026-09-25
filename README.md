@@ -13,7 +13,7 @@ Anvil format.
 | Toolchain | Rust **1.98.1**, pinned in [rust-toolchain.toml](rust-toolchain.toml) |
 | Platform | x86_64 (dev/CI) + aarch64 (production target) |
 | CI | GitHub Actions (`ci` workflow) — fmt, clippy, tests, aarch64 check, cargo-deny |
-| Status | **Release candidate `v0.1.0-rc.1`** — binaries on [GitHub Releases](https://github.com/antifield26/Apoptosis/releases); see [docs/release/RELEASE-CANDIDATE.md](docs/release/RELEASE-CANDIDATE.md) |
+| Status | **`v0.2.0`** (latest release) — binaries on [GitHub Releases](https://github.com/antifield26/Apoptosis/releases); `main` carries the unreleased v0.3.0 (P18) work. See [docs/release/RELEASE-CANDIDATE.md](docs/release/RELEASE-CANDIDATE.md) |
 
 ## What works today
 
@@ -32,19 +32,21 @@ in [docs/vanilla-parity/PARITY-MATRIX.md](docs/vanilla-parity/PARITY-MATRIX.md).
   end-to-end: 529 vanilla chunks decoded, rewritten by this server, then
   **booted on a real vanilla 26.1.2 server**, which preserved our edits and
   re-saved every dimension.
-- **Commands & data packs** — 15 commands with permission levels (`/op` and
-  `/deop` persist grants to `ops.json`, which is also read at boot;
-  `/gamemode`, `/give`, `/kill`, `/seed`, `/difficulty` are operator-only),
-  plus `/function` running under the invoker's permissions; real data-pack
-  loading: 758/758 vanilla tags resolve, 1 421 recipes load, functions run.
+- **Commands & data packs** — 29 of ~90 Vanilla root literals with permission
+  levels (`/op` and `/deop` persist grants to `ops.json`, which is also read
+  at boot; `/gamemode`, `/give`, `/kill`, `/seed`, `/difficulty` are
+  operator-only), plus `/function` running under the invoker's permissions;
+  real data-pack loading: 758/758 vanilla tags resolve, 1 454 recipes load,
+  functions run.
 - **World generation** — seeded Perlin terrain with six biomes, trees, and a
   single-chunk subset of the jar's 1 202 structure templates.
 - **Performance** — the documented 20 TPS acceptance procedure was executed on
   a Raspberry Pi 5: a 30-minute soak with 10 players held settled tick
   p50/p95/p99 medians of **0.21/0.27/0.29 ms** with zero overruns outside the
-  join burst ([record](docs/performance/BENCHMARK-BASELINE.md)); a later mixed
-  real+scripted soak on the current tree held ~3.0/3.2/3.3 ms medians with 58
-  lifetime overruns (§P14-Pi in the same record).
+  join burst ([record](docs/performance/BENCHMARK-BASELINE.md)); later mixed
+  real+scripted soaks on the P14 and P18 trees held ~3.0/3.2/3.3 ms medians
+  with 58 and 45 lifetime overruns respectively (§P14-Pi in the same record;
+  [P18-04](docs/testing/P18-04-SOAK.md)).
 
 ## What is explicitly not here
 
@@ -57,19 +59,23 @@ This project records gaps instead of papering over them. The headline items
   block change. Open: no day/night dimming (client-side) and no incremental
   relight (a torch costs a full recompute).
 - **Entities persist and sync as drops/mobs** (P11-08, P12-05 for block
-  entities); mobs still lack per-kind follow ranges, XP orbs, and paths.
+  entities); mobs gained per-kind follow ranges and an A* chase arm in P16-04
+  and XP orbs in P16-02, but wander and flee still steer directly, with no
+  path smoothing or jump arc.
 - **Redstone is a measured model, wired into the tick loop** — directional
   conductivity, the 15-block wire and the vanilla differential pin it (P13);
-  scheduled ticks propagate and broadcast. Open: pistons/observers/doors,
-  exact update order, delay constants.
-- **15 of ~90 commands**; chests, furnaces and hoppers open as windows a real
-  client can transact with (P12), but no real-client container session has
-  been run yet.
+  scheduled ticks propagate and broadcast, and P17-01 added doors, trapdoors,
+  gates, observers and dispensers. Open: pistons and rails, exact update
+  order, delay constants.
+- **29 of ~90 commands**; chests, furnaces and hoppers open as windows a real
+  client can transact with (P12-07/08), and the P17-02/P17-05 owner session
+  transacted a double chest and a hopper→furnace chain on a live client.
+  Open: the remaining root literals, and `execute` covers 12 of ~20 modifiers.
 - **No full real-client acceptance yet** — a Java 26.1.2 client has joined,
-  rendered night, mobs and drops (P10-11/P11 acceptance), and played a
-  30-minute mixed 10-client soak (P14-06, pass with one noted idle spike),
-  but container, pickup-render, death→respawn and restart screens are still
-  unverified on a live client.
+  rendered night, mobs and drops (P10-11/P11 acceptance), run the P17
+  container session (P17-05), and played a 30-minute mixed 10-client soak
+  (P14-06, pass with one noted idle spike), but pickup-render, death→respawn
+  and the post-restart chest screen are still unverified on a live client.
 - Offline mode only: enabling `online_mode` refuses to start (no Mojang
   session flow is implemented).
 
@@ -95,16 +101,16 @@ restore.
 ## Testing
 
 ```sh
-cargo test --workspace --no-fail-fast            # 1 587 passed / 0 failed / 35 ignored (126 suites)
+cargo test --workspace --no-fail-fast            # 1 677 passed / 0 failed / 41 ignored (133 suites)
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo check --target aarch64-unknown-linux-gnu --workspace --all-targets
 cargo deny check licenses bans sources
 ```
 
-The 35 ignored tests are on-demand suites: jar-gated differentials, light
-suites and terrain distribution (three environment variables — see
-[CONTRIBUTING.md](CONTRIBUTING.md)) and the benchmark harness. Full breakdown:
+The 41 ignored tests are on-demand suites: jar-gated differentials, light
+suites, terrain distribution and the ore/carver distribution (three environment
+variables — see [CONTRIBUTING.md](CONTRIBUTING.md)) and the benchmark harness. Full breakdown:
 [docs/testing/TEST-MATRIX.md](docs/testing/TEST-MATRIX.md). Details and the
 documentation-audit scripts: [CONTRIBUTING.md](CONTRIBUTING.md).
 

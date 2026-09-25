@@ -5,14 +5,23 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 597 passed, 0 failed, 35 ignored** across **128 suites**, re-derived from
-`python tools/gates/run.py --quick` on the current tree (wall **585 s** on the
-dev host; every gate passed). **Named closed set (P18-07 census):** 92
+Totals: **1 677 passed, 0 failed, 41 ignored** across **133 suites**, re-derived from
+`python tools/gates/run.py --quick` on the current tree (every gate passed).
+The figure before this one (**1 597 / 35 / 128**) was measured before the P18
+landing finished: its five suite files (`p15_zero_delta`, `p18_commands`,
+`p18_hunger`, `p18_wear_enchant`, `ore_carver_stats`) add 5 suites and 38 tests,
+`survival_e2e` and `block_entity_e2e` add 4 more, the lib-level unit tests inside
+the P18 source files account for the remaining 37, and 6 tests are newly ignored (5 in
+`ore_carver_stats`, 1 the `mc-command` selector sort/limit differential). The landing
+also left a pin behind it — `execute_e2e`'s refusal table still listed `rotated` as
+unsupported after P18-02 implemented it — and the one test added when that table was
+corrected is the 80th. **Named closed set (P18-07 census):** 92
 integration files / **519** `#[test]`+`#[tokio::test]` counted by
 `target/p18_07_census.py`; 1 105 lib + 5 doc + 519 named = 1 629 vs 1 632
-measured (Δ3 labelled, not absorbed). The count has
+measured (Δ3 labelled, not absorbed) — **that census predates the same landing and
+is not restated as current**; re-run the script to refresh it. The count has
 moved 1 194 -> 1 196 -> 1 206 -> 1 207 -> 1 212 -> 1 325 -> 1 344 -> 1 346 -> 1 358 ->
-1 365 -> 1 380 -> 1 384 -> 1 386 -> 1 388 -> 1 389 -> 1 392 -> 1 399 -> 1 412 -> 1 426 -> 1 428 -> 1 431 -> 1 433 -> 1 437 -> 1 440 -> 1 441 -> 1 445 -> 1 451 -> 1 452 -> 1 468 -> 1 475 -> 1 477 -> 1 491 -> 1 500 -> 1 513 -> 1 520 -> 1 519 -> 1 524 -> 1 529 -> **1 537** -> **1 550** -> **1 558** -> **1 565** -> **1 570** -> **1 575** -> **1 577** -> **1 580** -> **1 581** -> **1 582** -> **1 583** -> **1 587** -> **1 597**: three from the Audit 07 remediation, two Audit 08 coverage tests, ten from the
+1 365 -> 1 380 -> 1 384 -> 1 386 -> 1 388 -> 1 389 -> 1 392 -> 1 399 -> 1 412 -> 1 426 -> 1 428 -> 1 431 -> 1 433 -> 1 437 -> 1 440 -> 1 441 -> 1 445 -> 1 451 -> 1 452 -> 1 468 -> 1 475 -> 1 477 -> 1 491 -> 1 500 -> 1 513 -> 1 520 -> 1 519 -> 1 524 -> 1 529 -> **1 537** -> **1 550** -> **1 558** -> **1 565** -> **1 570** -> **1 575** -> **1 577** -> **1 580** -> **1 581** -> **1 582** -> **1 583** -> **1 587** -> **1 597** -> **1 677**: three from the Audit 07 remediation, two Audit 08 coverage tests, ten from the
 `mc-capture-rig` crate (P10-01), one regression test for the
 compression-transition defect (P10-02), the synced-registry work (P10-03), then
 P10-04..11 and P11-01..03, nineteen from the P11-04..09 landing, two from
@@ -167,11 +176,13 @@ as slot 2 with the index echoed raw) brings it to **1 582**. Dropping
 the non-click revision bump from the inventory sync (the next click
 after any server-side change arrived "stale" and was eaten) plus its
 client-counter regression case brings it to **1 587** (AUDIT-16 remediation: effect-modifier units + strength/weakness swing + death-drop conservation).
-The 35 ignored = the 8 differential
-suites in the last section (16 tests) + `vanilla_loot` 3 + `vanilla_chunk_light` 2
-+ `vanilla_light_differential` 1 + `light_update_trigger` 1 + `sky_light_surface` 2
-+ `terrain_distribution` 3 + `pi_profile` 4 + `tick_baseline` 2 + `capture_sweep` 1
-(16+3+2+1+1+2+3+4+2+1 = 35) — all run on demand.
+The 41 ignored = the 35 this list had
+before the P18 landing — the 8 differential suites in the last section (16 tests)
++ `vanilla_loot` 3 + `vanilla_chunk_light` 2 + `vanilla_light_differential` 1
++ `light_update_trigger` 1 + `sky_light_surface` 2 + `terrain_distribution` 3
++ `pi_profile` 4 + `tick_baseline` 2 + `capture_sweep` 1 (16+3+2+1+1+2+3+4+2+1 = 35)
+— plus `ore_carver_stats` 5 and the `mc-command` selector sort/limit differential 1
+(**35 + 5 + 1 = 41**), all run on demand.
 
 **Every per-crate count below was re-measured with `cargo test -p <crate> --lib`**
 while updating this total. The 17 lib counts sum to **1 105** (`mc-command` 93,
@@ -184,7 +195,7 @@ Several of these differ from the figures this sentence used to carry
 `mc-world` 44, `mc-persistence` 74, `mc-worldgen` 81, `mc-registry` 21,
 `mc-network` 18, `mc-nbt` 16) — they had gone stale unnoticed across
 landings, which is Audit 07's lesson re-applied rather than a new
-method. The 5 doc-tests and the named suites complete the 1 587; the
+method. The 5 doc-tests and the named suites complete the total; the
 named-suite arithmetic below is still derived rather than counted, and a
 full per-suite re-measure is still outstanding as noted next. Both Audit
 07's method and its lesson still apply: the figures must be re-measured
@@ -216,7 +227,7 @@ each suite proves, and the deduplicated defect history.
 
 Counts are from the P11-04..09 run, except the named-suite figures noted above as
 from the P10-03 round. Named integration suites are counted explicitly; the
-remaining per-crate lib binaries are itemised above and complete the 1 587 total.
+remaining per-crate lib binaries are itemised above and complete the total above.
 
 | Area | Named suites (lib count) | What they prove |
 |---|---|---|
