@@ -49,8 +49,12 @@ name. Evidence: `p18_commands` (16).
 ### P18-03 — Ores and carvers
 25 pack-driven overworld ore veins + dry cave/canyon carvers
 (terrain → carvers → ores). 32×32 stats pins with pre-written tolerances;
-33.8 ms/chunk generation hook. Evidence: `ore.rs`, `carver.rs`,
-`ore_carver_stats`.
+33.8 ms/chunk generation hook. Wired into the live chunk pipeline
+(`ensure_chunk`: terrain → carvers → ores → structures → trees) from the
+pack-loaded sets; empty sets are no-op passes, so a packless server still
+generates P07 terrain. Evidence: `ore.rs`, `carver.rs`,
+`ore_carver_stats`, `underground_wiring` (2, perturbation-pinned: unwiring
+the call turns the live test red).
 
 ### P18-04 — Pi soak on the gameplay-heavy tree
 Pi 5 soak **DONE 2026-09-24** on `195a489` (10 scripted clients, 1800 s, view 8): settled window p50/p95/p99 **3.09/3.24/3.34 ms**, lifetime overruns 45 (join/chunk-stream burst, `broadcast`-attributed; zero new overruns in settled windows), entities ~96–98, 289 fresh chunks generated, RSS 84.9 MB. Workload proves the new per-tick paths via on-device release suites (wear/eat/combat/observer/hopper/doors) plus `ore_carver_stats` green on the Pi; the soak client itself only moves and `/list`s. Boundaries: scripted clients (not a real-client walk), loopback, microSD (not NVMe — P22-04 still open). Full §13 record: `docs/testing/P18-04-SOAK.md`.

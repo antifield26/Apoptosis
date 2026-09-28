@@ -91,6 +91,14 @@ pub struct PackLoadOutcome {
     pub smelting_rows: usize,
     /// How many item tags resolved for recipe expansion (P17-03).
     pub item_tags_resolved: usize,
+    /// How many overworld ore features loaded for live generation (P18-03 wiring).
+    pub ores_loaded: usize,
+    /// How many overworld carvers loaded for live generation (P18-03 wiring).
+    pub carvers_loaded: usize,
+    /// Ore features that were skipped, with the reason (P18-03 wiring).
+    pub ores_skipped: Vec<String>,
+    /// Carvers that were skipped, with the reason (P18-03 wiring).
+    pub carvers_skipped: Vec<String>,
 }
 
 impl PackLoadOutcome {
@@ -140,6 +148,16 @@ impl PackLoadOutcome {
                 self.crafting_skipped,
                 self.smelting_rows,
                 self.item_tags_resolved
+            );
+        }
+        if self.ores_loaded > 0 || self.carvers_loaded > 0 {
+            let _ = write!(
+                text,
+                "; {} ore feature(s) ({} skipped), {} carver(s) ({} skipped)",
+                self.ores_loaded,
+                self.ores_skipped.len(),
+                self.carvers_loaded,
+                self.carvers_skipped.len()
             );
         }
         text
@@ -282,6 +300,35 @@ pub fn load_packs(
         }
     }
     game.set_structures(structures);
+
+    // Ores and carvers, from the vanilla `minecraft` namespace (P18-03
+    // wiring). World packs are deliberately not consulted: the loaders
+    // assemble the hardcoded overworld lists, and merging pack overrides is
+    // a named later task, not a half-done one here. No vanilla data means
+    // empty sets, and the chunk passes treat those as no-ops — the same
+    // degrade rule structures already follow.
+    if let Some(namespace_root) = roots
+        .vanilla_data
+        .as_ref()
+        .map(|root| root.join("data").join("minecraft"))
+        .filter(|path| path.is_dir())
+    {
+        let blocks = game.registries().blocks.clone();
+        let tags = mc_worldgen::TagTable::load_block_tags(&namespace_root, &blocks);
+        let (ores, ore_skipped) =
+            mc_worldgen::OreSet::load_overworld(&namespace_root, &blocks, &tags);
+        let (carvers, carver_skipped) =
+            mc_worldgen::CarverSet::load_overworld(&namespace_root, &tags);
+        outcome.ores_loaded = ores.len();
+        outcome.carvers_loaded = carvers.len();
+        for (name, reason) in &ore_skipped {
+            outcome.ores_skipped.push(format!("{name}: {reason}"));
+        }
+        for (name, reason) in &carver_skipped {
+            outcome.carvers_skipped.push(format!("{name}: {reason}"));
+        }
+        game.set_ores_and_carvers(ores, carvers);
+    }
 
     // Loot, from every pack's `loot_table/` directory in load order (P11-04).
     // The registries are read once here; `load_directory` only consults them

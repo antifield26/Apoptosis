@@ -142,6 +142,35 @@ impl Game {
                         .map_err(|error| error.to_string())
                 }) {
                 Some(Ok(mut chunk)) => {
+                    // Ores and carvers (P18-03 wiring): terrain → carvers →
+                    // ores, then structures and trees below. Both passes are
+                    // pure functions of (seed, chunk position), so a generated
+                    // chunk stays reproducible byte for byte and the
+                    // clean-marking below still holds. Empty sets are no-op
+                    // passes: a packless server generates P07 terrain.
+                    if !self.carvers.is_empty() || !self.ores.is_empty() {
+                        // Rebuilt from the seed for the same reason the tree
+                        // pass rebuilds its context below: one source of truth
+                        // for the seed, and no borrow of `self` held across the
+                        // mutable use of `chunk`.
+                        let context = mc_worldgen::WorldgenContext::overworld(
+                            mc_worldgen::WorldSeed::from_raw(self.random_seed),
+                        );
+                        let _carved = mc_worldgen::carve_chunk(
+                            &mut chunk,
+                            pos,
+                            &context,
+                            &self.carvers,
+                            &self.registries.blocks,
+                        );
+                        let _placed = mc_worldgen::populate_ores(
+                            &mut chunk,
+                            pos,
+                            &context,
+                            &self.ores,
+                            &self.registries.blocks,
+                        );
+                    }
                     // Left **clean**, which is the non-obvious part: this generator is
                     // deterministic, so a generated chunk is reproducible byte for byte
                     // from `(seed, pos)` at any later time. Persisting it buys nothing, and

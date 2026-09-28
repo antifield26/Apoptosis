@@ -872,6 +872,20 @@ pub struct Game {
     /// over the pack. Deriving it per chunk would make a chunk's cost depend on the installed pack
     /// size, which is exactly what the cap exists to prevent — so it is derived here instead.
     structure_set: mc_worldgen::structures::StructureSet,
+    /// Pack-driven ore veins (P18-03 wiring).
+    ///
+    /// Empty until the pack loader installs the overworld set; an empty set is
+    /// a no-op pass, so a server without vanilla data generates the P07
+    /// terrain unchanged. Boxed: two inline `Vec`s would push the
+    /// `server.run()` future over clippy's `large_futures` ceiling (found by
+    /// the gate on landing, not by inspection).
+    ores: Box<mc_worldgen::ore::OreSet>,
+    /// Pack-driven cave/canyon carvers (P18-03 wiring).
+    ///
+    /// Same empty-until-loaded contract as [`Game::ores`]: dry carvers only,
+    /// water and lava wait for P20 fluids. Boxed for the same future-size
+    /// reason.
+    carvers: Box<mc_worldgen::carver::CarverSet>,
     /// Who may run operator commands, loaded from `ops.json` at construction.
     ///
     /// Loaded once rather than per login, matching Vanilla's startup read. A change to the
@@ -1151,6 +1165,10 @@ impl Game {
             structure_set: mc_worldgen::structures::StructureSet::from_registry(
                 &mc_worldgen::structures::StructureRegistry::new(),
             ),
+            // Empty sets: no-op passes until the pack loader installs the
+            // overworld ore and carver sets.
+            ores: Box::new(mc_worldgen::ore::OreSet::empty()),
+            carvers: Box::new(mc_worldgen::carver::CarverSet::empty()),
             operators,
             ops_directory: None,
             difficulty,
@@ -1704,6 +1722,32 @@ impl Game {
     #[must_use]
     pub const fn structures(&self) -> &mc_worldgen::structures::StructureRegistry {
         &self.structures
+    }
+
+    /// Install the pack-driven ore and carver sets (P18-03 wiring).
+    ///
+    /// Called once from the pack loader; a game that never loads packs keeps
+    /// the empty sets, whose passes are no-ops. The two travel together
+    /// because they come from the same namespace root in one load.
+    pub fn set_ores_and_carvers(
+        &mut self,
+        ores: mc_worldgen::ore::OreSet,
+        carvers: mc_worldgen::carver::CarverSet,
+    ) {
+        *self.ores = ores;
+        *self.carvers = carvers;
+    }
+
+    /// The installed ore set (empty when no pack loaded).
+    #[must_use]
+    pub fn ores(&self) -> &mc_worldgen::ore::OreSet {
+        &self.ores
+    }
+
+    /// The installed carver set (empty when no pack loaded).
+    #[must_use]
+    pub fn carvers(&self) -> &mc_worldgen::carver::CarverSet {
+        &self.carvers
     }
 
     /// Install the loaded loot tables (P11-04).
