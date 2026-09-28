@@ -11,7 +11,7 @@ Date: 2026-09-23 · pre-tag closeout.
 | Hunger drops while sprinting, refills from bread | `p18_hunger::{sprint…, eating_bread…}` | **scripted green** |
 | Ore vein inside a cave | `ore_carver_stats` (ores + carvers together) | **scripted green** |
 | Gate + residuals | `P18-07-GATE-HEALTH.md` | **green with named NOT RUN** |
-| Soak | `P18-04-SOAK.md` | **Pi NOT RUN** |
+| Soak | `P18-04-SOAK.md` | **Pi DONE 2026-09-24** (`195a489`: settled 3.09/3.24/3.34 ms, 45 lifetime overruns all join-burst, zero new settled; scripted/loopback/microSD boundaries) |
 
 ## P14-07 publication rules — checklist
 

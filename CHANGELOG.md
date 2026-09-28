@@ -52,9 +52,8 @@ name. Evidence: `p18_commands` (16).
 33.8 ms/chunk generation hook. Evidence: `ore.rs`, `carver.rs`,
 `ore_carver_stats`.
 
-### P18-04 — Soak stand-in
-Dev-host workload covers wear/eat/combat/observer/hopper/terrain. **Pi soak
-NOT RUN** (named). Evidence: `docs/testing/P18-04-SOAK.md`.
+### P18-04 — Pi soak on the gameplay-heavy tree
+Pi 5 soak **DONE 2026-09-24** on `195a489` (10 scripted clients, 1800 s, view 8): settled window p50/p95/p99 **3.09/3.24/3.34 ms**, lifetime overruns 45 (join/chunk-stream burst, `broadcast`-attributed; zero new overruns in settled windows), entities ~96–98, 289 fresh chunks generated, RSS 84.9 MB. Workload proves the new per-tick paths via on-device release suites (wear/eat/combat/observer/hopper/doors) plus `ore_carver_stats` green on the Pi; the soak client itself only moves and `/list`s. Boundaries: scripted clients (not a real-client walk), loopback, microSD (not NVMe — P22-04 still open). Full §13 record: `docs/testing/P18-04-SOAK.md`.
 
 ### P18-05 — v0.3.0 verdict materials
 TASK-INDEX snapshotted to `docs/planning/`. Tag withheld until the owner
