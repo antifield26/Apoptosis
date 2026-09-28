@@ -64,6 +64,28 @@ TASK-INDEX snapshotted to `docs/planning/`. Tag withheld until the owner
 walk screens and the named NOT RUN list are accepted or closed (P14-07
 rules). Evidence: `docs/testing/P18-05-VERDICT.md`.
 
+### P18-05 walk finding — component patch order (fix)
+The walk's first dig disconnected the 26.1.2 client on a patch decode
+failure, and the rejoin died the same way in the join burst: the persisted
+shovel carried `damage` 1 + `max_damage` 59, the first component-carrying
+stack a real client ever received from this server. Root cause: the patch
+wrote the removed count *after* the entries (`added, entries, removed`),
+but vanilla reads both counts up front (`added, removed, entries…` —
+`DataComponentPatch$3` reads the two VarInts back to back, confirmed by
+`javap -c`). Empty patches (`00 00`) coincide under both orders, which is
+why every earlier sync looked fine and every self-round-trip stayed green:
+the encoder and decoder shared the same wrong order. Fixed in
+`mc-protocol` encode + decode with the docs corrected; proven by
+`tools/vanilla-probe/DecodeProbe.java` against the 26.1.2 client jar's own
+decoder (fixed order decodes to `{damage=1, max_damage=59}` with zero
+trailing; old order throws the client's exact `DecoderException`). Pins:
+`item_stack_decodes_the_walk_shovel_patch` (exact live bytes) +
+`item_stack_rejects_a_non_empty_removed_list`; the unknown-component tests
+moved to vanilla-order bytes. Reference search: Pumpkin 26.2 component ids
+match ours (2/3/6/13/19/23/24/30/42 — version-caveated corroboration, not
+the oracle); the jar's `DATA_COMPONENT_TYPE` order (new
+`DataComponentProbe.java`) is the id oracle.
+
 ## Unreleased — Phase 16 (Combat & the Survival Loop)
 
 ### P16-01 — Damage model: held weapons, armour, types, knockback, reach hook

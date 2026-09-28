@@ -4140,11 +4140,12 @@ mod tests {
         let mut writer = PacketWriter::new();
         with_component.encode(&mut writer).expect("encodes");
         let body = writer.finish();
-        // count 1, id 5, one added (type 7, payload AA BB), zero removed.
-        assert_eq!(body, [0x01, 0x05, 0x01, 0x07, 0xAA, 0xBB, 0x00]);
+        // Vanilla order: count 1, id 5, one added, zero removed, then the
+        // entry (type 7, payload AA BB).
+        assert_eq!(body, [0x01, 0x05, 0x01, 0x00, 0x07, 0xAA, 0xBB]);
 
         // Type 7 is unmodelled but the last added component with an empty
-        // removed list, so the payload is framed as `remaining - 0x00`.
+        // removed list, so the payload is everything after it.
         let mut reader = crate::wire::PacketReader::new(&body);
         let decoded = ItemStack::decode(&mut reader).expect("decodes");
         assert!(reader.is_empty());
@@ -4153,11 +4154,44 @@ mod tests {
         decoded.encode(&mut writer).expect("re-encodes");
         assert_eq!(writer.finish(), body, "wire bytes round-trip");
 
-        // A mid-list unknown is refused rather than guessed.
-        let mid_list = [0x01, 0x05, 0x02, 0x07, 0xAA, 0x03, 0x01, 0x00];
+        // A mid-list unknown is refused rather than guessed: added 2,
+        // removed 0, then type 7 mid-list before type 3.
+        let mid_list = [0x01, 0x05, 0x02, 0x00, 0x07, 0xAA, 0x03, 0x01];
         assert!(ItemStack::decode(&mut crate::wire::PacketReader::new(&mid_list)).is_err());
 
         assert!(ItemStack::decode(&mut crate::wire::PacketReader::new(&[0x05])).is_err());
+    }
+
+    #[test]
+    fn item_stack_rejects_a_non_empty_removed_list() {
+        // added 1, removed 1: the removed section is unmodelled, so this is
+        // refused up front even though the added entry is well-formed.
+        let body = [0x01, 0x05, 0x01, 0x01, 0x03, 0x01, 0x02];
+        assert!(ItemStack::decode(&mut crate::wire::PacketReader::new(&body)).is_err());
+    }
+
+    #[test]
+    fn item_stack_decodes_the_walk_shovel_patch() {
+        // P18-05 walk regression: the exact bytes of Antifield's persisted
+        // wooden shovel (damage 1 + max_damage 59) that the 26.1.2 client
+        // refused when the patch wrote the removed count after the entries.
+        // Vanilla order: count, id 913, added 2, removed 0, (3, 01), (2, 3B).
+        let body = [0x01, 0x91, 0x07, 0x02, 0x00, 0x03, 0x01, 0x02, 0x3B];
+        let mut reader = crate::wire::PacketReader::new(&body);
+        let decoded = ItemStack::decode(&mut reader).expect("decodes");
+        assert!(reader.is_empty());
+        assert_eq!(decoded.item_id, 913);
+        assert_eq!(decoded.count, 1);
+        assert_eq!(
+            decoded.components,
+            vec![
+                (mc_entity::components::TYPE_DAMAGE, vec![0x01]),
+                (mc_entity::components::TYPE_MAX_DAMAGE, vec![0x3B]),
+            ]
+        );
+        let mut writer = PacketWriter::new();
+        decoded.encode(&mut writer).expect("re-encodes");
+        assert_eq!(writer.finish(), body, "wire bytes round-trip");
     }
 
     #[test]

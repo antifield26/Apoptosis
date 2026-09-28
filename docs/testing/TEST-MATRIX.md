@@ -5,11 +5,13 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 679 passed, 0 failed, 41 ignored** across **134 suites**, re-derived from
+Totals: **1 681 passed, 0 failed, 41 ignored** across **134 suites**, re-derived from
 `python tools/gates/run.py --quick` on the current tree (every gate passed).
-The +2 over the previous figure (**1 677 / 133**) is the P18-03 wiring suite
+The +4 over the **1 677 / 133** figure: +2 the P18-03 wiring suite
 `underground_wiring` (live ore + carved air with the unwiring red, and the
-empty-sets control).
+empty-sets control), +2 the patch-order regression tests
+(`item_stack_decodes_the_walk_shovel_patch` with the exact live bytes,
+`item_stack_rejects_a_non_empty_removed_list`).
 The figure before this one (**1 597 / 35 / 128**) was measured before the P18
 landing finished: its five suite files (`p15_zero_delta`, `p18_commands`,
 `p18_hunger`, `p18_wear_enchant`, `ore_carver_stats`) add 5 suites and 38 tests,
@@ -24,7 +26,7 @@ integration files / **519** `#[test]`+`#[tokio::test]` counted by
 measured (Δ3 labelled, not absorbed) — **that census predates the same landing and
 is not restated as current**; re-run the script to refresh it. The count has
 moved 1 194 -> 1 196 -> 1 206 -> 1 207 -> 1 212 -> 1 325 -> 1 344 -> 1 346 -> 1 358 ->
-1 365 -> 1 380 -> 1 384 -> 1 386 -> 1 388 -> 1 389 -> 1 392 -> 1 399 -> 1 412 -> 1 426 -> 1 428 -> 1 431 -> 1 433 -> 1 437 -> 1 440 -> 1 441 -> 1 445 -> 1 451 -> 1 452 -> 1 468 -> 1 475 -> 1 477 -> 1 491 -> 1 500 -> 1 513 -> 1 520 -> 1 519 -> 1 524 -> 1 529 -> **1 537** -> **1 550** -> **1 558** -> **1 565** -> **1 570** -> **1 575** -> **1 577** -> **1 580** -> **1 581** -> **1 582** -> **1 583** -> **1 587** -> **1 597** -> **1 677** -> **1 679**: three from the Audit 07 remediation, two Audit 08 coverage tests, ten from the
+1 365 -> 1 380 -> 1 384 -> 1 386 -> 1 388 -> 1 389 -> 1 392 -> 1 399 -> 1 412 -> 1 426 -> 1 428 -> 1 431 -> 1 433 -> 1 437 -> 1 440 -> 1 441 -> 1 445 -> 1 451 -> 1 452 -> 1 468 -> 1 475 -> 1 477 -> 1 491 -> 1 500 -> 1 513 -> 1 520 -> 1 519 -> 1 524 -> 1 529 -> **1 537** -> **1 550** -> **1 558** -> **1 565** -> **1 570** -> **1 575** -> **1 577** -> **1 580** -> **1 581** -> **1 582** -> **1 583** -> **1 587** -> **1 597** -> **1 677** -> **1 679** -> **1 681**: three from the Audit 07 remediation, two Audit 08 coverage tests, ten from the
 `mc-capture-rig` crate (P10-01), one regression test for the
 compression-transition defect (P10-02), the synced-registry work (P10-03), then
 P10-04..11 and P11-01..03, nineteen from the P11-04..09 landing, two from
@@ -188,11 +190,15 @@ before the P18 landing — the 8 differential suites in the last section (16 tes
 (**35 + 5 + 1 = 41**), all run on demand.
 
 **Every per-crate count below was re-measured with `cargo test -p <crate> --lib`**
-while updating this total. The 17 lib counts sum to **1 105** (`mc-command` 93,
-`mc-core` 28, `mc-test-support` 4, `mc-protocol` 123, `mc-nbt` 17,
+while updating this total. The 17 lib counts sum to **1 111** (`mc-command` 93,
+`mc-core` 28, `mc-test-support` 4, `mc-protocol` 129, `mc-nbt` 17,
 `mc-container` **135**, `mc-data` 135, `mc-registry` 26, `mc-entity` 158,
 `mc-world` 49, `mc-persistence` 67, `mc-network` 19, `mc-redstone` 69,
 `mc-server` 67, `mc-simulation` 18, `mc-worldgen` 86, `mc-capture-rig` 11).
+`mc-protocol` printed 123 here until the patch fix re-measured it at 129:
++2 are the new patch-order tests, the other +4 predate this fix (no lib
+test landed between the 1 677 census and it, so the 123 was never current
+— corrected here and flagged, not absorbed silently).
 Several of these differ from the figures this sentence used to carry
 (`mc-protocol` 118, `mc-entity` 136, `mc-simulation` 28, `mc-data` 129,
 `mc-world` 44, `mc-persistence` 74, `mc-worldgen` 81, `mc-registry` 21,

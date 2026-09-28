@@ -33,7 +33,23 @@ Date: 2026-09-23 · pre-tag closeout.
 
 `docs/planning/TASK-INDEX-v0.3.0-pre.md` (R8 interim rule).
 
-## Owner checklist (one sitting)
+## Walk round 1 (2026-09-28, Antifield, 26.1.2 client, `47eb8f7` + walk config)
+
+1. Join — **PASS** (spawn on land, no disconnect).
+2. Dig with a wooden shovel — **FAIL**: first block break disconnected the
+   client on a `container_set_content` patch decode failure; the rejoin died
+   the same way in the join burst (server log: outbound queue flood, then
+   `player left`). Root cause: the patch wrote the removed count after the
+   entries; vanilla reads both counts up front (fixed, proven against the
+   26.1.2 client jar's own decoder — see CHANGELOG P18-05 walk finding).
+   **Re-walk pending on the fixed binary.**
+3. Enchant glint + tooltip — NOT RUN (blocked behind item 2).
+4. Hunger + bread — NOT RUN (blocked behind item 2).
+5. Cave ore vein — NOT RUN (blocked behind item 2; scouted targets on seed 0:
+   iron `/tp Antifield 8 -22 -70`, gold `/tp Antifield -51 -58 -53`, coal
+   `/tp Antifield -4 11 -45`, copper `/tp Antifield -8 59 -23`).
+
+## Owner checklist (one sitting, round 2 = re-walk after the patch fix)
 
 1. Join 26.1.2 client to the dev server.
 2. Dig with a pick until it breaks — wear and break visible.

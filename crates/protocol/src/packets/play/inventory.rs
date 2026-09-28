@@ -261,17 +261,29 @@ pub const MAX_METADATA_ENTRIES: usize = 256;
 ///
 /// `count VarInt`; a count `<= 0` is the whole stack (bare `0x00`, the only
 /// bytes an empty slot ever occupies). Otherwise `item id VarInt`, then the
-/// component patch: `added-count VarInt`, that many `(type, value)` entries,
-/// `removed-count VarInt`, that many bare type ids. Protocol 775 does **not**
-/// carry the pre-1.20.5 `slot` / `change count` bytes after the count.
+/// component patch: `added-count VarInt`, **`removed-count VarInt`**, that
+/// many `(type, value)` entries, then that many bare removed type ids.
+/// Protocol 775 does **not** carry the pre-1.20.5 `slot` / `change count`
+/// bytes after the count.
+///
+/// The two counts ride **up front**, before any entry: `DataComponentPatch$3`
+/// reads both `VarInts` back to back and only then loops over the entries
+/// (added pairs first, removed bare ids after). The P18-01a build wrote the
+/// removed count *after* the entries instead — a real 26.1.2 client throws on
+/// the first component-carrying stack it receives (P18-05 walk: a damaged
+/// wooden shovel disconnects with a patch decode failure), while empty
+/// patches (`00 00`) coincide under both orders, which is why every sync
+/// before that walk looked fine and every self-round-trip stayed green.
+/// Proven by `tools/vanilla-probe/DecodeProbe.java` against the 26.1.2
+/// client jar's own decoder, plus `javap -c` on `DataComponentPatch$3`.
 ///
 /// Component values are framed by each type's stream codec (P18-01a):
 /// `damage`/`max_damage`/`repair_cost` are `VarInt`s, `enchantments` a counted
 /// `(id, level)` list, `custom_name` a network-NBT string, `attack_range` six
 /// `f32`s, `food`/`consumable` the pumpkin shapes. An unmodelled type is kept
 /// as raw bytes only when it is the **last** added component and the removed
-/// list is empty (then `payload = remaining` minus the trailing `0x00`);
-/// mid-list unknowns are refused rather than guessed (AGENTS.md section 3.3).
+/// list is empty (then `payload = remaining`, since nothing follows the added
+/// section); mid-list unknowns are refused rather than guessed (AGENTS.md section 3.3).
 ///
 /// Two consequences this crate got wrong before the P14-09 walk (a picked-up
 /// cobblestone was the first non-empty stack a real client ever had to
@@ -381,30 +393,35 @@ impl ItemStack {
         }
         writer.write_varint(self.count);
         writer.write_varint(self.item_id);
+        // Vanilla order: both counts up front, then the added entries, then
+        // the removed ids. This build never sends removals, so the second
+        // count is always zero (see the struct docs for how this was
+        // mis-ordered before the P18-05 walk).
         writer.write_varint(packed_len(self.components.len())?);
+        writer.write_varint(0);
         for (type_id, data) in &self.components {
             writer.write_varint(*type_id);
             writer.write_bytes(data);
         }
-        // Removed components: always empty on send (unmodelled).
-        writer.write_varint(0);
         Ok(writer.len() - before)
     }
 
     /// Decode one stack.
     ///
-    /// Component values are framed by each modelled type's codec (P18-01a).
-    /// An unmodelled type is kept as raw bytes only when it is the **last**
-    /// added component and the removed list is empty (`payload = remaining`
-    /// minus the trailing zero count); mid-list unknowns are refused rather
-    /// than guessed (AGENTS.md section 3.3).
+    /// Both counts come first on the wire (see the struct docs): the removed
+    /// count is read before any entry. Component values are framed by each
+    /// modelled type's codec (P18-01a). An unmodelled type is kept as raw
+    /// bytes only when it is the **last** added component and the removed
+    /// list is empty (`payload = remaining`, since nothing follows the added
+    /// section then); mid-list unknowns are refused rather than guessed
+    /// (AGENTS.md section 3.3).
     ///
     /// # Errors
     ///
     /// [`ServerError::Protocol`] for a negative item id, a count outside
     /// `0..=`[`MAX_ITEM_COUNT`] (A12-03 hostile width), an absurd component
-    /// count, a removed-component list (unmodelled — refused, never dropped),
-    /// a mid-list unmodelled component, or a truncated payload.
+    /// count, a removed-component list (unmodelled — refused up front, never
+    /// dropped), a mid-list unmodelled component, or a truncated payload.
     pub fn decode(reader: &mut PacketReader<'_>) -> ServerResult<Self> {
         let count = reader.read_varint()?;
         if count < 0 {
@@ -431,6 +448,13 @@ impl ItemStack {
             return Ok(Self::empty());
         }
         let added = read_count(reader, "item component", MAX_ITEM_COMPONENTS)?;
+        let removed = read_count(reader, "removed item component", MAX_ITEM_COMPONENTS)?;
+        if removed > 0 {
+            return Err(ServerError::Protocol(format!(
+                "{removed} removed item components present but removed \
+                 components are unmodelled"
+            )));
+        }
         let mut components = Vec::with_capacity(added.min(64));
         for index in 0..added {
             let type_id = reader.read_varint()?;
@@ -442,23 +466,16 @@ impl ItemStack {
                 mc_entity::components::decode_payload(type_id, &bytes)?;
                 bytes
             } else if index + 1 == added {
-                // Last added component: the rest of the body is `payload` plus
-                // the removed-count VarInt. An empty removed list is a single
-                // trailing `0x00`, which is the only shape this build can
-                // frame without guessing. Leave that byte for `read_count`.
+                // Last added component, and the removed list is empty (refused
+                // above otherwise): nothing follows the added section, so the
+                // rest of the body is the payload. Leave nothing behind.
                 let rest = reader.remaining_slice();
                 if rest.is_empty() {
                     return Err(ServerError::Protocol(
                         "unmodelled item component with no payload".to_owned(),
                     ));
                 }
-                if *rest.last().unwrap_or(&0xFF) != 0 {
-                    return Err(ServerError::Protocol(format!(
-                        "unmodelled item component type {type_id} cannot be framed when the \
-                         removed-component list is non-empty"
-                    )));
-                }
-                let payload_len = rest.len() - 1;
+                let payload_len = rest.len();
                 reader.advance(payload_len)?;
                 rest[..payload_len].to_vec()
             } else {
@@ -468,13 +485,6 @@ impl ItemStack {
                 )));
             };
             components.push((type_id, payload));
-        }
-        let removed = read_count(reader, "removed item component", MAX_ITEM_COMPONENTS)?;
-        if removed > 0 {
-            return Err(ServerError::Protocol(format!(
-                "{removed} removed item components present but removed \
-                 components are unmodelled"
-            )));
         }
         Ok(Self {
             item_id,
