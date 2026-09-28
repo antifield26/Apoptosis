@@ -33,7 +33,35 @@ Date: 2026-09-23 · pre-tag closeout.
 
 `docs/planning/TASK-INDEX-v0.3.0-pre.md` (R8 interim rule).
 
-## Walk round 1 (2026-09-28, Antifield, 26.1.2 client, `47eb8f7` + walk config)
+## Walk round 2 (2026-09-28, Antifield, fixed binary `b3a871c`)
+
+1. Rejoin — **PASS** (patch fix verified: the damaged shovel syncs, no disconnect).
+2. Wear/break — **PASS** (wooden shovel → grass, broke after 59 digs = max_damage).
+3. Enchant — **PASS** (diamond sword → Sharpness I, glint + tooltip).
+4. Hunger — **FAIL, fixed pending re-walk**: three defects, not one. (a) The
+   food spend never sent vitals, so the bar sat frozen until a damage sync
+   surfaced the banked spend at once ("9 on attack"). (b) `/give` bread had
+   no food components, so eating silently never started. Fixed: vitals-dirty
+   `SetHealth` after the session loop + in `finish_eat`; derived
+   `food_defaults_of` (39 Eat foods) attached in `give_player_item`. (c) Not
+   a defect: saturation absorbs first and spends in 4 s batches — short
+   sprints correctly move no visible bar. See CHANGELOG round-2 entry.
+5. Cave ore — **PARTIAL**: veins generate as scouted, but cave lighting looks
+   wrong (details + screenshot pending from owner).
+6. Extra owner findings (carried with IDs, not fixed in this pass):
+   - P18-05-C1 cave lighting looks wrong (veins generate correctly).
+     Needed: screenshot + too-dark vs light-leak + which cave. Candidates:
+     static-model limits (KD-23) vs carve-time staleness from the new live
+     wiring. Not reproduced locally yet.
+   - P18-05-C2 block breaking probabilistically fails (shovel → grass).
+     Needed: exact symptom (block reappears? no drops? how often?) + a
+     minimal repro. Untouched P16-05 path so far.
+   - P18-05-C3 spider behavior + post-kill model persists (XP orb drops).
+     Read-only triage: mob death sets `removed = true` and scatters XP
+     (`damage_entity`), so the kill path runs — the remove broadcast is
+     suspect, unverified. `CaveSpider` is not a modeled kind (only
+     `Spider`); if the sighted spider never moved at all, that needs its
+     own repro. Both carried.
 
 1. Join — **PASS** (spawn on land, no disconnect).
 2. Dig with a wooden shovel — **FAIL**: first block break disconnected the

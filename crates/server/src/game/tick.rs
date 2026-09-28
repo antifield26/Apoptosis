@@ -3809,10 +3809,22 @@ impl Game {
         let mut dig_breaks: Vec<(ConnectionId, i32, i32, i32, i32)> = Vec::new();
         let mut dig_stages: Vec<(i32, i32, i32, i32, i8)> = Vec::new();
         let mut dig_clears: Vec<(i32, i32, i32, i32)> = Vec::new();
+        // Sessions whose food/saturation/health moved this tick. The food
+        // spend, regen and starvation run inside `tick_session_vitals`
+        // without send access, so the HUD sync is collected here and pushed
+        // after the loop. Without this the client bar never moves on hunger
+        // alone (P18-05 walk: sprinting drained nothing on screen, and a
+        // banked spend surfaced all at once with the next damage sync).
+        let mut vitals_dirty: Vec<ConnectionId> = Vec::new();
         for session in self.sessions.values_mut() {
             session.tick_start_y = session.player.position.y;
             session.hurt_invuln_ticks = session.hurt_invuln_ticks.saturating_sub(1);
             session.xp_pickup_cooldown = session.xp_pickup_cooldown.saturating_sub(1);
+            let vitals_before = (
+                session.player.food,
+                session.player.saturation.to_bits(),
+                session.player.health.to_bits(),
+            );
             tick_session_vitals(
                 session,
                 self.tick,
@@ -3822,6 +3834,14 @@ impl Game {
                 &mut effect_events,
                 &mut eat_finishes,
             );
+            let vitals_after = (
+                session.player.food,
+                session.player.saturation.to_bits(),
+                session.player.health.to_bits(),
+            );
+            if vitals_after != vitals_before {
+                vitals_dirty.push(session.id);
+            }
             // Nothing below the world is standable. Void damage is P05; until then
             // a player who ends up there is returned to spawn instead of falling
             // forever.
@@ -3848,6 +3868,13 @@ impl Game {
         }
         for (id, message) in messages {
             self.send_message(id, &message);
+        }
+        // HUD sync for the hunger spend collected above (before the eat
+        // finishes below, so a spend and a finish on the same tick order
+        // spend-first like the session loop ran them).
+        let mut vitals_report = TickReport::default();
+        for id in vitals_dirty {
+            let _ = self.send_vitals(id, &mut vitals_report);
         }
         // Finish any eat that hit zero this tick (after the session loop so
         // `finish_eat` can mutate inventory and sync the menu).

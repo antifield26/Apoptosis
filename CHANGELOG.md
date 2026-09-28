@@ -86,6 +86,29 @@ match ours (2/3/6/13/19/23/24/30/42 — version-caveated corroboration, not
 the oracle); the jar's `DATA_COMPONENT_TYPE` order (new
 `DataComponentProbe.java`) is the id oracle.
 
+### P18-05 walk round 2 — hunger fixes (vitals sync + `/give` food defaults)
+Three defects behind one report ("moving drains nothing, attacking drains
+9, eating restores nothing"):
+1. The food spend/regen/starvation path never sent vitals — `SetHealth`
+   only went out at join, after damage, on XP pickup and at respawn. The
+   server drained correctly while the bar sat frozen; the next damage sync
+   then surfaced the whole banked spend at once (the "9 on attack").
+   Fixed: `tick_players` collects food/saturation/health movement into
+   `vitals_dirty` and pushes `SetHealth` after the session loop;
+   `finish_eat` syncs vitals too.
+2. `/give` built plain stacks with no components, so given bread failed
+   `start_eat`'s food+consumable requirement silently. Fixed: derived
+   `food_defaults_of` table (39 Eat foods, jar values as mirrored by
+   Pumpkin's generated item table — bread 5/6.0/1.6 s; honey excluded as
+   Drink; eat-effects left empty, named gap) attached in
+   `give_player_item`, mirroring `wear::ensure_durability`.
+3. Perception (not a defect): saturation absorbs first and spends in 4 s
+   batches, so short sprints move no visible bar — vanilla-correct totals,
+   burstier display; recorded in the KD-24 row.
+Pins: `hunger_spend_reaches_the_client_as_set_health`,
+`given_bread_is_edible_and_the_finish_syncs_vitals` (both fail with
+their mechanism neutralised), `food_defaults_mirror_the_jar_table`.
+
 ## Unreleased — Phase 16 (Combat & the Survival Loop)
 
 ### P16-01 — Damage model: held weapons, armour, types, knockback, reach hook

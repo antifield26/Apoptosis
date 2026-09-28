@@ -1521,7 +1521,22 @@ impl Game {
         count: i32,
         report: &mut TickReport,
     ) -> Option<(i32, i32)> {
-        let stack = mc_entity::stack::ItemStack::new(item, count).ok()?;
+        let mut stack = mc_entity::stack::ItemStack::new(item, count).ok()?;
+        // A fresh stack carries no components, but vanilla items have
+        // defaults — without them a given bread is inedible (P18-05 walk:
+        // `start_eat` requires `food` + `consumable` on the stack). Attach
+        // the derived food defaults by registry name, mirroring
+        // `wear::ensure_durability` for tools.
+        if let Ok(name) = self.registries.items.name(item)
+            && let Some((food, consumable)) = mc_entity::components::food_defaults_of(name)
+        {
+            stack
+                .components_mut()
+                .set(mc_entity::components::DataComponent::Food(food));
+            stack
+                .components_mut()
+                .set(mc_entity::components::DataComponent::Consumable(consumable));
+        }
         let leftover = {
             let session = self.sessions.get_mut(&id)?;
             session.player.inventory.add_stack(stack)
@@ -3039,6 +3054,10 @@ impl Game {
         stack.shrink(1);
         let _ = session.player.inventory.replace_held(eat.hand, stack);
         self.sync_menu_from_inventory(id, &mut TickReport::default());
+        // The eat moved food/saturation without damage, so no other sync
+        // carries it: without this the bar never refills on screen (P18-05
+        // walk).
+        let _ = self.send_vitals(id, &mut TickReport::default());
     }
 
     /// Break a block right now: air, redstone wake, drops, menu sync.

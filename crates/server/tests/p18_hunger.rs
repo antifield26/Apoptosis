@@ -21,10 +21,14 @@ use mc_entity::stack::ItemStack;
 use mc_network::bridge::{
     ClientEvent, ClientEventKind, ConnectionId, InboundReceiver, OutboundSender, game_channel,
 };
+use mc_protocol::ids::clientbound;
 use mc_protocol::packets::play::{PlayIntent, block_position};
-use mc_server::game::Game;
+use mc_protocol::wire::PacketReader;
+use mc_server::game::{Game, TickReport};
+use mc_server::ops::OperatorList;
 use mc_server::storage::WorldService;
 use mc_test_support::fixtures::TempDir;
+use std::path::Path;
 
 const ACTION_RELEASE_USE_ITEM: i32 = 5;
 const BREAD: i32 = 954;
@@ -133,6 +137,38 @@ impl Harness {
         player.inventory.set_slot(0, bread()).expect("hotbar 0");
         player.inventory.select(0).expect("select 0");
     }
+
+    /// A game with operators, for the `/give` path (mirrors `p18_commands`).
+    fn new_with_operators(tag: &str, operators: OperatorList) -> Self {
+        let dir = TempDir::new(tag);
+        let config = mc_server::config::StorageConfig {
+            world_dir: dir.path().join("world"),
+            autosave_ticks: 0,
+        };
+        let storage = WorldService::open(&config).expect("world opens");
+        let (tx, rx) = game_channel(256);
+        let game = Game::build_with_operators(
+            None,
+            Some(storage),
+            4,
+            rx,
+            mc_server::game::DEFAULT_RANDOM_SEED,
+            operators,
+        )
+        .expect("game builds");
+        Self {
+            game,
+            events: tx,
+            id: ConnectionId(1),
+            _dir: dir,
+        }
+    }
+}
+
+fn ops_for(name: &str, level: u8) -> OperatorList {
+    let uuid = mc_network::auth::offline_profile(name).id;
+    let text = format!(r#"[{{"uuid": "{uuid}", "name": "{name}", "level": {level}}}]"#);
+    OperatorList::parse(&text, Path::new("ops.json")).expect("the fixture parses")
 }
 
 /// Sprinting N horizontal blocks charges `EXHAUSTION_SPRINT` per block
@@ -408,4 +444,137 @@ fn a_full_player_cannot_eat_bread() {
     let player = harness.game.player(harness.id).expect("player");
     assert_eq!(player.food, 20);
     assert_eq!(player.inventory.selected_item().count(), 3, "nothing eaten");
+}
+
+/// A hunger spend reaches the client as `SetHealth` (P18-05 walk: the bar
+/// never moved on hunger alone because nothing sent vitals after the food
+/// spend — the drain only surfaced with the next damage sync).
+///
+/// Named red: removing the vitals-dirty send leaves the server values
+/// drained but no `SetHealth` in flight, and this fails on the missing packet.
+#[test]
+fn hunger_spend_reaches_the_client_as_set_health() {
+    let mut harness = Harness::new("p18-06-vitals");
+    let (sx, sy, sz) = harness.build_floor();
+    let mut out = harness.join("Hungerer");
+    while out.try_recv().is_some() {}
+    {
+        let player = harness.game.player_mut(harness.id).expect("player");
+        player.set_food(20);
+        player.set_saturation(5.0);
+        player.set_health(20.0);
+    }
+
+    // 44 sprint blocks = 4.4 exhaustion: safely past one 4.0 spend point
+    // (40 would sit on the float edge) and short of two.
+    harness.intent(PlayIntent::PlayerInput { input: 64 });
+    let start_x = f64::from(sx) + 0.5;
+    let z = f64::from(sz) + 0.5;
+    for step in 1..=44 {
+        harness.intent(PlayIntent::MovePlayerPos {
+            x: start_x + f64::from(step),
+            y: f64::from(sy),
+            z,
+            on_ground: true,
+        });
+    }
+    harness.run(80);
+
+    let player = harness.game.player(harness.id).expect("player");
+    assert!(
+        (player.saturation - 4.0).abs() < 1e-4,
+        "one spend point must come off saturation, got {}",
+        player.saturation
+    );
+    let mut seen = None;
+    while let Some(raw) = out.try_recv() {
+        if raw.id == clientbound::play::SET_HEALTH {
+            let mut reader = PacketReader::new(&raw.payload);
+            let _health = reader.read_f32().expect("health");
+            let food = reader.read_varint().expect("food");
+            let saturation = reader.read_f32().expect("saturation");
+            assert!(reader.is_empty(), "SetHealth has no trailing bytes");
+            seen = Some((food, saturation));
+        }
+    }
+    let (food, saturation) = seen.expect("the spend must sync vitals to the client");
+    assert_eq!(food, 20);
+    assert!(
+        (saturation - 4.0).abs() < 1e-4,
+        "the client must see the drained saturation, got {saturation}"
+    );
+}
+
+/// `/give` bread carries the derived food defaults, so it is edible, and the
+/// eat finish syncs vitals (P18-05 walk: given bread had no components, so
+/// `UseItem` silently did nothing, and even a hand-built eat never moved the
+/// bar because `finish_eat` sent no vitals).
+///
+/// Named reds: dropping the defaults attach leaves the held stack without
+/// food (first assertion); dropping the finish sync leaves the values
+/// restored with no `SetHealth` in flight (last assertion).
+#[test]
+fn given_bread_is_edible_and_the_finish_syncs_vitals() {
+    let mut harness = Harness::new_with_operators("p18-06-give-eat", ops_for("Giver", 4));
+    harness.build_floor();
+    let mut out = harness.join("Giver");
+    while out.try_recv().is_some() {}
+    {
+        let player = harness.game.player_mut(harness.id).expect("player");
+        player.set_food(10);
+        player.set_saturation(0.0);
+        player.set_health(20.0);
+    }
+    let mut report = TickReport::default();
+    harness
+        .game
+        .dispatch_command(harness.id, "give Giver minecraft:bread", &mut report)
+        .expect("give is answered");
+    {
+        let player = harness.game.player(harness.id).expect("player");
+        let held = player.inventory.selected_item();
+        assert_eq!(held.count(), 1);
+        let food = held.food().expect("given bread carries food defaults");
+        assert_eq!(food.nutrition, 5);
+        assert!(
+            held.consumable().is_some(),
+            "given bread carries consumable defaults"
+        );
+    }
+    harness.intent(PlayIntent::UseItem {
+        hand: 0,
+        sequence: 1,
+        yaw: 0.0,
+        pitch: 0.0,
+    });
+    harness.run(CONSUME_TICKS as usize + 4);
+    let player = harness.game.player(harness.id).expect("player");
+    assert_eq!(player.food, 15, "bread restores 5");
+    assert!(
+        (player.saturation - 6.0).abs() < 1e-4,
+        "bread restores 6.0 saturation, got {}",
+        player.saturation
+    );
+    assert_eq!(
+        player.inventory.selected_item().count(),
+        0,
+        "one bread consumed"
+    );
+    let mut seen = None;
+    while let Some(raw) = out.try_recv() {
+        if raw.id == clientbound::play::SET_HEALTH {
+            let mut reader = PacketReader::new(&raw.payload);
+            let _health = reader.read_f32().expect("health");
+            let food = reader.read_varint().expect("food");
+            let saturation = reader.read_f32().expect("saturation");
+            assert!(reader.is_empty(), "SetHealth has no trailing bytes");
+            seen = Some((food, saturation));
+        }
+    }
+    let (food, saturation) = seen.expect("the eat finish must sync vitals to the client");
+    assert_eq!(food, 15);
+    assert!(
+        (saturation - 6.0).abs() < 1e-4,
+        "the client must see the restored bar, got {saturation}"
+    );
 }

@@ -374,6 +374,89 @@ impl std::hash::Hash for Consumable {
     }
 }
 
+/// Vanilla food defaults by registry name (derived).
+///
+/// Vanilla items carry `minecraft:food` + `minecraft:consumable` as default
+/// components. This crate has no item-component defaults yet (same gap
+/// `mc-entity::wear::max_damage_of` documents for durability), so this table
+/// stands in for them: `(nutrition, saturation, can_always_eat,
+/// consume_seconds)`. Values are the jar's, as mirrored by Pumpkin's
+/// generated per-item table (`generated/item.rs` `Food` + `Consumable`
+/// rows, extracted mechanically — 40 foods found, 39 kept).
+///
+/// Every carried food uses the eat animation, `generic.eat` sound and
+/// consume particles (mirrored), so those fields are fixed here rather than
+/// tabulated. Two deliberate exclusions, named not hidden:
+/// - `minecraft:honey_bottle` (Drink animation, 2.0 s, different sound):
+///   the drink path is unmodelled.
+/// - `on_consume_effects` (golden apples, spider eye, pufferfish, …): left
+///   empty, so eat-effects from food do not apply. P18-06's effect mechanism
+///   exists; wiring per-food effects is a later task.
+#[must_use]
+#[allow(clippy::match_same_arms, reason = "a data table, not logic")]
+pub fn food_defaults_of(item_name: &str) -> Option<(Food, Consumable)> {
+    let (nutrition, saturation, can_always_eat, consume_seconds): (i32, f32, bool, f32) =
+        match item_name {
+            "minecraft:apple" => (4, 2.4, false, 1.6),
+            "minecraft:baked_potato" => (5, 6.0, false, 1.6),
+            "minecraft:beef" => (3, 1.8, false, 1.6),
+            "minecraft:beetroot" => (1, 1.2, false, 1.6),
+            "minecraft:beetroot_soup" => (6, 7.2, false, 1.6),
+            "minecraft:bread" => (5, 6.0, false, 1.6),
+            "minecraft:carrot" => (3, 3.6, false, 1.6),
+            "minecraft:chicken" => (2, 1.2, false, 1.6),
+            "minecraft:chorus_fruit" => (4, 2.4, true, 1.6),
+            "minecraft:cod" => (2, 0.4, false, 1.6),
+            "minecraft:cooked_beef" => (8, 12.8, false, 1.6),
+            "minecraft:cooked_chicken" => (6, 7.2, false, 1.6),
+            "minecraft:cooked_cod" => (5, 6.0, false, 1.6),
+            "minecraft:cooked_mutton" => (6, 9.6, false, 1.6),
+            "minecraft:cooked_porkchop" => (8, 12.8, false, 1.6),
+            "minecraft:cooked_rabbit" => (5, 6.0, false, 1.6),
+            "minecraft:cooked_salmon" => (6, 9.6, false, 1.6),
+            "minecraft:cookie" => (2, 0.4, false, 1.6),
+            "minecraft:dried_kelp" => (1, 0.6, false, 0.8),
+            "minecraft:enchanted_golden_apple" => (4, 9.6, true, 1.6),
+            "minecraft:glow_berries" => (2, 0.4, false, 1.6),
+            "minecraft:golden_apple" => (4, 9.6, true, 1.6),
+            "minecraft:golden_carrot" => (6, 14.4, false, 1.6),
+            "minecraft:melon_slice" => (2, 1.2, false, 1.6),
+            "minecraft:mushroom_stew" => (6, 7.2, false, 1.6),
+            "minecraft:mutton" => (2, 1.2, false, 1.6),
+            "minecraft:poisonous_potato" => (2, 1.2, false, 1.6),
+            "minecraft:porkchop" => (3, 1.8, false, 1.6),
+            "minecraft:potato" => (1, 0.6, false, 1.6),
+            "minecraft:pufferfish" => (1, 0.2, false, 1.6),
+            "minecraft:pumpkin_pie" => (8, 4.8, false, 1.6),
+            "minecraft:rabbit" => (3, 1.8, false, 1.6),
+            "minecraft:rabbit_stew" => (10, 12.0, false, 1.6),
+            "minecraft:rotten_flesh" => (4, 0.8, false, 1.6),
+            "minecraft:salmon" => (2, 0.4, false, 1.6),
+            "minecraft:spider_eye" => (2, 3.2, false, 1.6),
+            "minecraft:suspicious_stew" => (6, 7.2, true, 1.6),
+            "minecraft:sweet_berries" => (2, 0.4, false, 1.6),
+            "minecraft:tropical_fish" => (1, 0.2, false, 1.6),
+            _ => return None,
+        };
+    Some((
+        Food {
+            nutrition,
+            saturation,
+            can_always_eat,
+        },
+        Consumable {
+            consume_seconds,
+            animation: ConsumeAnimation::Eat,
+            sound: SoundRef::Named {
+                name: "minecraft:entity.generic.eat".to_owned(),
+                range: None,
+            },
+            consume_particles: true,
+            on_consume_effects: Vec::new(),
+        },
+    ))
+}
+
 /// One `(enchantment registry id, level)` pair.
 pub type EnchantEntry = (i32, i32);
 
@@ -1435,6 +1518,36 @@ mod tests {
             decode_payload(TYPE_DAMAGE, &payload).expect("decodes"),
             component
         );
+    }
+
+    #[test]
+    fn food_defaults_mirror_the_jar_table() {
+        // Bread is the walk food: 5 nutrition, 6.0 saturation, 1.6 s eat.
+        let (food, consumable) = food_defaults_of("minecraft:bread").expect("bread is food");
+        assert_eq!(food.nutrition, 5);
+        assert!((food.saturation - 6.0).abs() < 1e-6);
+        assert!(!food.can_always_eat);
+        assert!((consumable.consume_seconds - 1.6).abs() < 1e-6);
+        assert_eq!(consumable.animation, ConsumeAnimation::Eat);
+        // Spot rows across the table shape: always-eat, fast eat, roast.
+        assert!(
+            food_defaults_of("minecraft:chorus_fruit").is_some_and(|(food, _)| food.can_always_eat)
+        );
+        assert!(
+            food_defaults_of("minecraft:dried_kelp").is_some_and(|(_, consumable)| (consumable
+                .consume_seconds
+                - 0.8)
+                .abs()
+                < 1e-6)
+        );
+        assert_eq!(
+            food_defaults_of("minecraft:cooked_beef").map(|(food, _)| food.nutrition),
+            Some(8)
+        );
+        // Not food, and the deliberately excluded drink.
+        assert!(food_defaults_of("minecraft:stone").is_none());
+        assert!(food_defaults_of("minecraft:wooden_shovel").is_none());
+        assert!(food_defaults_of("minecraft:honey_bottle").is_none());
     }
 
     #[test]
