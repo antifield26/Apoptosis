@@ -13,7 +13,7 @@ Anvil format.
 | Toolchain | Rust **1.98.1**, pinned in [rust-toolchain.toml](rust-toolchain.toml) |
 | Platform | x86_64 (dev/CI) + aarch64 (production target) |
 | CI | GitHub Actions (`ci` workflow) — fmt, clippy, tests, aarch64 check, cargo-deny |
-| Status | **`v0.2.0`** (latest release) — binaries on [GitHub Releases](https://github.com/antifield26/Apoptosis/releases); `main` carries the unreleased v0.3.0 (P18) work. See [docs/release/RELEASE-CANDIDATE.md](docs/release/RELEASE-CANDIDATE.md) |
+| Status | **`v0.3.0`** (latest release) — binaries on [GitHub Releases](https://github.com/antifield26/Apoptosis/releases); `main` carries the unreleased v0.4.0 (P19–P22) work. See [docs/release/RELEASE-CANDIDATE.md](docs/release/RELEASE-CANDIDATE.md) |
 
 ## What works today
 

@@ -58,10 +58,8 @@ Date: 2026-09-23 · pre-tag closeout.
    `food_defaults_of` (39 Eat foods) attached in `give_player_item`. (c) Not
    a defect: saturation absorbs first and spends in 4 s batches — short
    sprints correctly move no visible bar. See CHANGELOG round-2 entry.
-5. Cave ore — **PARTIAL**: veins generate as scouted. C1 lighting —
-   **fixed pending re-walk** (generation now invalidates the 3×3 light
-   cache + queues updates; pin
-   `generation_invalidates_neighbour_light_and_queues_updates`).
+5. Cave ore — **PASS** (veins generate as scouted). C1 lighting —
+   **PASS on re-walk** (previously lit patches now dark after the fix).
 6. Extra owner findings (carried with IDs, not fixed in this pass):
    - P18-05-C1 cave lighting (sharp lit/dark patches, screenshots
      (14,-29,-56) and (2,-25,-83)) — **fixed pending re-walk**: generation

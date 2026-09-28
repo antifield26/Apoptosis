@@ -9,8 +9,30 @@ is the tag **`phase-09-final`** (`git show phase-09-final:docs/phases/…`).
 Format follows [Keep a Changelog](https://keepachangelog.com/) in spirit. The first
 entry is the release candidate matching the workspace version at the time
 (`0.1.0` in [Cargo.toml](Cargo.toml)); it is **published** as tag `v0.1.0-rc.1`
-with built artifacts. The current workspace version is `0.2.0`, published as
-tag `v0.2.0` (see below); no later version has been released.
+with built artifacts. The current workspace version is `0.3.0`, published as
+tag `v0.3.0` (see below).
+
+## [0.3.0] — 2026-09-28 (tag `v0.3.0`)
+
+Gameplay round release (P15 observability/hardening, P16 combat, P17 world
+interaction, P18 items/food/commands/terrain), verified on a dev host with
+a real Java 26.1.2 client plus the Pi 5 soak record: components round-trip
+wire and disk with unknown preservation, tools/armour wear with breakage,
+four enchantment effects, jar-table hunger with the eat cycle, the closed
+command/selector/`execute` list, pack-driven ores with dry cave/canyon
+carvers wired into live generation, and a Pi 5 gameplay soak
+(`P18-04-SOAK.md`: settled 3.09/3.24/3.34 ms, 45 join-burst overruns, zero
+new settled). The owner walk passes all four exit screens (wear/break,
+enchant glint+tooltip, sprint hunger + bread refill, ore vein in a cave).
+Seven walk findings fixed in this release (component patch order, live
+ores/carvers wiring, hunger vitals sync, `/give` food defaults, neighbour
+light invalidation, plus the P18-07 gate/residual closeout and the
+TEST-MATRIX re-measure). Known gaps carried forward, not hidden: c2s
+capture corpus 56/19 and the selector sort/limit differential (both NOT
+RUN); P18-05-C2 probabilistic break failure and P18-05-C3 spider
+behavior/post-kill model (both need repro); dry carvers leave air where
+vanilla floods (P20-01b owns water); the v0.4.0+ queue (pistons, End,
+villagers, brewing, signed chat, plugin API).
 
 ## Unreleased — Phase 18 (Items, Food, Commands & Terrain) + v0.3.0 prep
 
