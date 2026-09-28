@@ -1718,6 +1718,16 @@ impl Game {
         self.tree_stats
     }
 
+    /// How many light updates are queued, for tests and diagnostics.
+    ///
+    /// Diagnostic like [`mc_world::World::light_cache_len`]: the queue is an
+    /// internal scheduling detail, and its length is what distinguishes "the
+    /// invalidation ran" from "holders were told" in a test.
+    #[must_use]
+    pub fn pending_light_len(&self) -> usize {
+        self.pending_light.len()
+    }
+
     /// The structure templates this game has loaded.
     #[must_use]
     pub const fn structures(&self) -> &mc_worldgen::structures::StructureRegistry {

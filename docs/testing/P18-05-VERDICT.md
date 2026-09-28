@@ -33,6 +33,18 @@ Date: 2026-09-23 · pre-tag closeout.
 
 `docs/planning/TASK-INDEX-v0.3.0-pre.md` (R8 interim rule).
 
+## Walk round 3 (2026-09-28, Antifield, fixed binary `bfc05fc`)
+
+4. Hunger — **PASS** (sprint drains over time; eating restores hunger +
+   health). P18-06 walk items now all pass on the client.
+3. Enchant — **PASS** (re-confirmed). 5. Ores — **PASS** (generate as
+   scouted). Cave lighting — **PARTIAL** (C1 refined): unexplained light in
+   some chunks, source unknown. Needed: F3 coords + screenshot of one spot.
+7. Water holes — **explained, not a new bug**: dry carvers punch air where
+   vanilla would flood (P20-01b owns water; KD-30 already names it).
+   Measured on seed 0: 522 water-adjacent carve-air cells at/below sea
+   level across 144 chunks. Tag proceeds with this named.
+
 ## Walk round 2 (2026-09-28, Antifield, fixed binary `b3a871c`)
 
 1. Rejoin — **PASS** (patch fix verified: the damaged shovel syncs, no disconnect).
@@ -46,13 +58,15 @@ Date: 2026-09-23 · pre-tag closeout.
    `food_defaults_of` (39 Eat foods) attached in `give_player_item`. (c) Not
    a defect: saturation absorbs first and spends in 4 s batches — short
    sprints correctly move no visible bar. See CHANGELOG round-2 entry.
-5. Cave ore — **PARTIAL**: veins generate as scouted, but cave lighting looks
-   wrong (details + screenshot pending from owner).
+5. Cave ore — **PARTIAL**: veins generate as scouted. C1 lighting —
+   **fixed pending re-walk** (generation now invalidates the 3×3 light
+   cache + queues updates; pin
+   `generation_invalidates_neighbour_light_and_queues_updates`).
 6. Extra owner findings (carried with IDs, not fixed in this pass):
-   - P18-05-C1 cave lighting looks wrong (veins generate correctly).
-     Needed: screenshot + too-dark vs light-leak + which cave. Candidates:
-     static-model limits (KD-23) vs carve-time staleness from the new live
-     wiring. Not reproduced locally yet.
+   - P18-05-C1 cave lighting (sharp lit/dark patches, screenshots
+     (14,-29,-56) and (2,-25,-83)) — **fixed pending re-walk**: generation
+     drops the 3×3 light cache + queues updates (see CHANGELOG round-3
+     entry). Was: frontier-bright cache never invalidated.
    - P18-05-C2 block breaking probabilistically fails (shovel → grass).
      Needed: exact symptom (block reappears? no drops? how often?) + a
      minimal repro. Untouched P16-05 path so far.

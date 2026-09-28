@@ -75,6 +75,27 @@ impl Game {
     /// worst case per tick is [`CHUNKS_PER_TICK`] chunk decodes. Moving them to a
     /// worker is P08-11 and would change the determinism story, not just the
     /// threading, so it is deliberately left on the tick thread here.
+    /// A chunk's blocks became available (stored load or fresh generation):
+    /// drop the 3×3 light cache and queue updates.
+    ///
+    /// Light computes with a one-block margin that reads across these
+    /// borders, so any of the nine computed earlier assumed air where blocks
+    /// now stand — neighbours most of all, since they computed while this
+    /// chunk was missing entirely. Without this a frontier-bright chunk
+    /// stays bright after its neighbours arrive (P18-05-C1). The queue half
+    /// matters as much as the drop: holders converge through the budgeted
+    /// `broadcast_light_updates`, mirroring the edit path's invalidate+queue
+    /// contract rather than inventing a second one.
+    fn refresh_light_for_new_chunk(&mut self, pos: ChunkPos) {
+        self.world.invalidate_light_3x3(pos);
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.pending_light
+                    .insert(ChunkPos::new(pos.x + dx, pos.z + dz));
+            }
+        }
+    }
+
     pub(crate) fn load_or_create_chunk(&mut self, pos: ChunkPos) {
         if self.world.is_loaded(pos) {
             return;
@@ -89,6 +110,7 @@ impl Game {
                     Ok(chunk) => {
                         self.world.load_chunk(chunk);
                         loaded = true;
+                        self.refresh_light_for_new_chunk(pos);
                         // P11-08: the chunk's saved entities come back as live
                         // entities; the Broadcast phase announces them like any
                         // other spawn. P12-05: block entities ride the same path.
@@ -214,6 +236,7 @@ impl Game {
                         }
                     }
                     self.world.load_chunk(chunk);
+                    self.refresh_light_for_new_chunk(pos);
                 }
                 Some(Err(error)) => {
                     warn!(?pos, %error, "chunk generation failed; using a placeholder");

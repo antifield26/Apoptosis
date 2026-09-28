@@ -353,6 +353,24 @@ impl World {
         }
     }
 
+    /// Drop cached light for `pos` and its eight neighbours.
+    ///
+    /// Called when a chunk's blocks become available (stored load or fresh
+    /// generation): every one of the nine reads a one-block margin across
+    /// these borders when it computes, so any of them computed earlier
+    /// assumed air where blocks now stand. The edit path invalidates by the
+    /// same margin rule at block scale ([`chunks_a_block_can_light`]); this
+    /// is its chunk-scale twin. Without it a chunk lit against a missing
+    /// neighbour stays bright after the neighbour arrives (P18-05-C1 walk
+    /// finding: sharp lit/dark cave patches with no opening).
+    pub fn invalidate_light_3x3(&mut self, pos: ChunkPos) {
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                self.light.remove(&ChunkPos::new(pos.x + dx, pos.z + dz));
+            }
+        }
+    }
+
     /// Compute and cache a chunk's light, unless it is already cached.
     ///
     /// Reads the chunk plus a one-block margin, so light crosses chunk borders; an unloaded neighbour reads as

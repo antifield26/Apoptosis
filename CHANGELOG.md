@@ -109,6 +109,24 @@ Pins: `hunger_spend_reaches_the_client_as_set_health`,
 `given_bread_is_edible_and_the_finish_syncs_vitals` (both fail with
 their mechanism neutralised), `food_defaults_mirror_the_jar_table`.
 
+### P18-05 walk round 3 — generation invalidates neighbour light (C1 fix)
+The walk screenshots show sharp lit/dark cave patches with no opening:
+a chunk whose light computed while its neighbour was still ungenerated
+reads that neighbour as air through the one-block margin, sky floods in,
+and the result sat in the cache — which nothing invalidated on
+generation, so holders kept the bright light after the neighbours
+arrived. The engine docs (`light.rs`) described the frontier brightness
+as transient ("than it would be once the neighbour exists"), but the
+implementation never re-observed the neighbour: doc model vs code
+disagree, a real bug rather than a static-model bound. Fixed: chunk
+availability (stored load or fresh generation) drops the 3×3 light cache
+(`World::invalidate_light_3x3`) and queues updates through the budgeted
+`broadcast_light_updates` path, mirroring the edit path's
+invalidate+queue contract. Pin:
+`generation_invalidates_neighbour_light_and_queues_updates` (frontier
+bright → cache dropped → queue grown → recompute dark; gutting the hook
+turns it red).
+
 ## Unreleased — Phase 16 (Combat & the Survival Loop)
 
 ### P16-01 — Damage model: held weapons, armour, types, knockback, reach hook
