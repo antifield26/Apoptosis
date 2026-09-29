@@ -1,4 +1,11 @@
 //! Configuration-state packets.
+//!
+//! Trailing-byte rule (C M-5): unlike serverbound-play decoders, these
+//! decoders do not refuse trailing bytes. That is deliberate, not an
+//! oversight — they run in tests and capture tools, never on hostile socket
+//! bytes — and the capture sweep holds byte-equality from the encode side
+//! instead. Do not "fix" one decoder into strictness without checking the
+//! captures still parse: real bodies may carry tails this code tolerates.
 
 use super::Packet;
 use crate::ids::{clientbound, serverbound};

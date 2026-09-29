@@ -359,6 +359,13 @@ impl ItemStack {
     ) -> ServerResult<Self> {
         let mut wire = Vec::new();
         for component in components.entries() {
+            // A file-supplied unknown carries no wire id (`type_id == 0`):
+            // emitting `(0, [])` would corrupt the patch for every decoder,
+            // so it is skipped here (B-M3). The disk copy keeps it; the wire
+            // only carries what it can frame.
+            if component.type_id() == 0 {
+                continue;
+            }
             wire.push((
                 component.type_id(),
                 mc_entity::components::encode_payload(component)?,

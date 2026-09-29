@@ -69,6 +69,26 @@ fn a_stack_with_components_is_refused_rather_than_sent_as_though_it_had_none() {
 }
 
 #[test]
+fn metadata_announces_stacks_without_their_patches() {
+    // B-M5, downgrade documented (not fixed): `MetadataValue::ItemStack`
+    // carries no patch field, so a damaged drop announces as a fresh item
+    // until pickup re-syncs it through the inventory path. Extending the
+    // variant is a product decision; this test pins the current strip so a
+    // future extension turns it red instead of slipping by.
+    let mut writer = PacketWriter::new();
+    MetadataValue::ItemStack {
+        count: 1,
+        item_id: 913,
+    }
+    .encode(&mut writer);
+    assert_eq!(
+        writer.finish(),
+        vec![0x01, 0x91, 0x07, 0x00, 0x00],
+        "count, id, then an empty patch — no component bytes ride metadata"
+    );
+}
+
+#[test]
 fn a_truncated_stack_value_is_refused() {
     for cut in 0..4 {
         let mut reader = PacketReader::new(&[0x03, 0x01, 0x00, 0x00][..cut]);

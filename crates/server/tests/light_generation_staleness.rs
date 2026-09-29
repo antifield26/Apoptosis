@@ -10,13 +10,21 @@
 //! without the drop the cache survives (first assertion), without the queue
 //! nobody is told (second assertion).
 
-use mc_network::bridge::game_channel;
+use mc_network::bridge::{
+    ClientEvent, ClientEventKind, ConnectionId, InboundReceiver, OutboundSender, game_channel,
+};
 use mc_server::game::{DEFAULT_RANDOM_SEED, Game};
 use mc_server::storage::WorldService;
 use mc_test_support::fixtures::TempDir;
-use mc_world::ChunkPos;
+use mc_world::{ChunkPos, Vec3};
 
-fn open_world(tag: &str) -> (Game, TempDir) {
+fn open_world(
+    tag: &str,
+) -> (
+    Game,
+    tokio::sync::mpsc::Sender<ClientEvent>,
+    TempDir,
+) {
     let dir = TempDir::new(tag);
     let config = mc_server::config::StorageConfig {
         world_dir: dir.path().join("world"),
@@ -24,10 +32,30 @@ fn open_world(tag: &str) -> (Game, TempDir) {
         seed: None,
     };
     let storage = WorldService::open(&config).expect("world opens");
-    let (_tx, rx) = game_channel(256);
+    let (tx, rx) = game_channel(256);
     let game =
         Game::with_seed_and_storage(storage, 4, rx, DEFAULT_RANDOM_SEED).expect("game builds");
-    (game, dir)
+    (game, tx, dir)
+}
+
+fn join(
+    game: &mut Game,
+    events: &tokio::sync::mpsc::Sender<ClientEvent>,
+    id: ConnectionId,
+    name: &str,
+) -> InboundReceiver {
+    let (outbound, out) = OutboundSender::pair(id, 8192);
+    events
+        .try_send(ClientEvent {
+            id,
+            kind: ClientEventKind::Joined {
+                profile: mc_network::auth::offline_profile(name),
+                outbound,
+            },
+        })
+        .expect("join event queued");
+    game.tick().expect("tick applies the join");
+    out
 }
 
 /// Sky light at one cell of a cached chunk.
@@ -43,7 +71,7 @@ fn sky_at(game: &Game, pos: ChunkPos, x: i32, y: i32, z: i32) -> u8 {
 
 #[test]
 fn generation_invalidates_neighbour_light_and_queues_updates() {
-    let (mut game, _dir) = open_world("light_generation_staleness");
+    let (mut game, _events, _dir) = open_world("light_generation_staleness");
     let center = ChunkPos::new(0, 0);
     assert!(game.load_chunk(center));
     assert_eq!(
@@ -112,5 +140,72 @@ fn generation_invalidates_neighbour_light_and_queues_updates() {
         sky_at(&game, center, x, y0 + 1, z),
         0,
         "an enclosed pocket is dark once the neighbour exists"
+    );
+}
+
+/// F-M4 end to end: unloading a chunk recomputes its surviving neighbours
+/// and the holders actually receive the `LightUpdate`.
+///
+/// Setup settles first (60 ticks drain every setup queue, then the outbound
+/// is drained), so a post-teleport update for the survivor can only come
+/// from the unload path: no arrivals happen near it anymore and nothing is
+/// edited. The exact queued set is pinned at unit level
+/// (`unload_queues_loaded_neighbours_only` in `light_cache.rs`); this pins
+/// the queue → broadcast → send chain.
+#[test]
+fn unloading_a_chunk_sends_light_updates_to_holders() {
+    let (mut game, events, _dir) = open_world("light_unload_e2e");
+    let id = ConnectionId(1);
+    let mut out = join(&mut game, &events, id, "Watcher");
+    // Light the origin 3x3 the player stands in.
+    for dx in -1..=1 {
+        for dz in -1..=1 {
+            assert!(game.load_chunk(ChunkPos::new(dx, dz)));
+        }
+    }
+    let light_table = game.registries().light.clone();
+    for dx in -1..=1 {
+        for dz in -1..=1 {
+            game.world_mut()
+                .compute_light(ChunkPos::new(dx, dz), &light_table)
+                .expect("light computes");
+        }
+    }
+    // Settle: drain every setup queue and every setup packet.
+    for _ in 0..60 {
+        game.tick().expect("tick settles");
+    }
+    while out.try_recv().is_some() {}
+    assert_eq!(
+        game.pending_light_len(),
+        0,
+        "setup queues must drain before the teleport"
+    );
+
+    // Walk away: chunk (0, 0) unloads (view 4 + margin 2 = 6 < 7) while
+    // (1, 0) stays held.
+    game.player_mut(id).expect("player").position = Vec3::new(120.0, 70.0, 8.0);
+    for _ in 0..40 {
+        game.tick().expect("tick unloads and redrains");
+    }
+    assert!(
+        game.world().chunk(ChunkPos::new(0, 0)).is_none(),
+        "the origin chunk must unload once far away"
+    );
+    // Scan the outbound for the survivor's recompute.
+    let mut seen = false;
+    while let Some(raw) = out.try_recv() {
+        if raw.id == mc_protocol::ids::clientbound::play::LIGHT_UPDATE {
+            let mut reader = mc_protocol::wire::PacketReader::new(&raw.payload);
+            let x = reader.read_varint().expect("chunk x");
+            let z = reader.read_varint().expect("chunk z");
+            if x == 1 && z == 0 {
+                seen = true;
+            }
+        }
+    }
+    assert!(
+        seen,
+        "a holder of surviving (1, 0) must receive its LightUpdate after (0, 0) unloads"
     );
 }

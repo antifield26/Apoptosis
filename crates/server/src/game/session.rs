@@ -555,6 +555,18 @@ impl Game {
                 // server-side timers (fresh player has none — wrong either
                 // way) while the join sync below found nothing to announce.
                 player.effects = former.effects;
+                // F-M5: the run's own budget rides along as well. Restoring
+                // only food/health while resetting saturation, exhaustion
+                // and experience handed every rejog a free hunger refund and
+                // wiped earned XP. Entity id, profile and position stay fresh
+                // (position already rode `at` above).
+                player.saturation = former.saturation;
+                player.exhaustion = former.exhaustion;
+                player.experience = former.experience;
+                player.level = former.level;
+                player.total_experience = former.total_experience;
+                player.on_ground = former.on_ground;
+                player.dimension = former.dimension;
             }
         }
 
@@ -757,6 +769,9 @@ impl Game {
         if let Some(session) = self.sessions.get(&id) {
             for (effect_id, effect) in &session.player.effects {
                 let Some(wire_id) = mc_entity::effect::wire_id_of(*effect_id) else {
+                    // L-5: skipping is correct (never mislabel), but a silent
+                    // skip is indistinguishable from a send in logs.
+                    debug!(id = %id, effect_id, "join sync skips an effect with no wire id");
                     continue;
                 };
                 self.send(
@@ -1248,6 +1263,11 @@ impl Game {
             | PlayIntent::KeepAlive { .. }
             | PlayIntent::ChunkBatchReceived { .. }
             | PlayIntent::PlayerLoaded => {}
+            // C M-6: button clicks and crafter toggles decode so they are
+            // visible in traces, but no menu this build opens uses either —
+            // unacted until beacon/enchant/crafter menus ship.
+            PlayIntent::ContainerButtonClick { .. }
+            | PlayIntent::ContainerSlotStateChanged { .. } => {}
         }
         Ok(())
     }

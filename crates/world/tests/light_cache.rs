@@ -260,6 +260,53 @@ fn unloading_a_chunk_drops_its_light() {
     );
 }
 
+/// F-M4: neighbours read across the unloaded border when they lit, so the
+/// unload must drop their caches too — not just its own.
+#[test]
+fn unloading_a_chunk_drops_neighbour_light() {
+    let center = ChunkPos::new(0, 0);
+    let (mut world, registries) = world_with_chunk(center);
+    for dx in -1..=1 {
+        for dz in -1..=1 {
+            let neighbour = ChunkPos::new(center.x + dx, center.z + dz);
+            world.ensure_chunk(neighbour);
+            world
+                .compute_light(neighbour, &registries.light)
+                .expect("computes");
+        }
+    }
+    assert_eq!(world.light_cache_len(), 9);
+    world.unload_chunk(center);
+    assert_eq!(
+        world.light_cache_len(),
+        0,
+        "unloading the centre must drop the whole 3x3 neighbourhood"
+    );
+}
+
+/// F-M4: the unload queue is exactly the loaded neighbours, never the
+/// departed chunk itself.
+#[test]
+fn unload_queues_loaded_neighbours_only() {
+    use mc_world::world::light_updates_for_unload;
+
+    let all_loaded = |_: ChunkPos| true;
+    let got = light_updates_for_unload(ChunkPos::new(0, 0), all_loaded);
+    assert_eq!(got.len(), 8, "eight neighbours, never self");
+    assert!(
+        !got.contains(&ChunkPos::new(0, 0)),
+        "the departed chunk needs no recompute"
+    );
+    // A missing neighbour is skipped, not queued.
+    let partial =
+        light_updates_for_unload(ChunkPos::new(0, 0), |pos| pos.x >= 0 && all_loaded(pos));
+    assert_eq!(partial.len(), 5);
+    assert!(
+        !partial.contains(&ChunkPos::new(-1, 0)),
+        "an unloaded neighbour is not queued"
+    );
+}
+
 #[test]
 fn clearing_drops_everything() {
     let (mut world, registries) = world_with_chunk(ChunkPos::new(0, 0));

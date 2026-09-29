@@ -206,6 +206,12 @@ fn rejoin_restores_where_the_player_left() {
             .inventory
             .set_slot(3, mc_entity::stack::ItemStack::new(dirt, 5).expect("stack"))
             .expect("slot 3");
+        // F-M5: the run's own budget rides the in-memory restore too.
+        player.experience = 0.5;
+        player.level = 7;
+        player.total_experience = 100;
+        player.saturation = 3.0;
+        player.exhaustion = 1.5;
     }
     harness.leave(id);
 
@@ -226,6 +232,21 @@ fn rejoin_restores_where_the_player_left() {
         player.inventory.slot(3).count(),
         5,
         "rejoin restores the inventory"
+    );
+    assert_eq!(player.level, 7, "rejoin keeps earned levels, not a reset");
+    assert_eq!(
+        player.total_experience, 100,
+        "rejoin keeps total experience"
+    );
+    assert!(
+        (player.saturation - 3.0).abs() < f32::EPSILON,
+        "rejoin keeps saturation, got {}",
+        player.saturation
+    );
+    assert!(
+        (player.exhaustion - 1.5).abs() < f32::EPSILON,
+        "rejoin keeps exhaustion (no free hunger refund), got {}",
+        player.exhaustion
     );
 }
 

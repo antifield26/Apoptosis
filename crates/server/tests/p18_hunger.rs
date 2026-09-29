@@ -507,41 +507,52 @@ fn hunger_spend_reaches_the_client_as_set_health() {
     );
 }
 
-/// `/give` bread carries the derived food defaults, so it is edible, and the
-/// eat finish syncs vitals (P18-05 walk: given bread had no components, so
-/// `UseItem` silently did nothing, and even a hand-built eat never moved the
-/// bar because `finish_eat` sent no vitals).
+/// `/give` bread carries the derived food defaults, so it is edible
+/// (P18-05 walk: given bread had no components, so `UseItem` silently did
+/// nothing).
 ///
-/// Named reds: dropping the defaults attach leaves the held stack without
-/// food (first assertion); dropping the finish sync leaves the values
-/// restored with no `SetHealth` in flight (last assertion).
+/// Named red: dropping the defaults attach leaves the held stack without
+/// food.
 #[test]
-fn given_bread_is_edible_and_the_finish_syncs_vitals() {
-    let mut harness = Harness::new_with_operators("p18-06-give-eat", ops_for("Giver", 4));
+fn given_bread_carries_food_defaults() {
+    let mut harness = Harness::new_with_operators("p18-06-give-defaults", ops_for("Giver", 4));
     harness.build_floor();
     let mut out = harness.join("Giver");
     while out.try_recv().is_some() {}
-    {
-        let player = harness.game.player_mut(harness.id).expect("player");
-        player.set_food(10);
-        player.set_saturation(0.0);
-        player.set_health(20.0);
-    }
     let mut report = TickReport::default();
     harness
         .game
         .dispatch_command(harness.id, "give Giver minecraft:bread", &mut report)
         .expect("give is answered");
+    let player = harness.game.player(harness.id).expect("player");
+    let held = player.inventory.selected_item();
+    assert_eq!(held.count(), 1);
+    let food = held.food().expect("given bread carries food defaults");
+    assert_eq!(food.nutrition, 5);
+    assert!(
+        held.consumable().is_some(),
+        "given bread carries consumable defaults"
+    );
+}
+
+/// The eat finish syncs vitals (P18-05 walk: even a hand-built eat never
+/// moved the bar because `finish_eat` sent no vitals).
+///
+/// Named red: dropping the finish sync leaves the values restored with no
+/// `SetHealth` in flight. Uses a hand-built stack so this pins the sync
+/// alone, not the give defaults above.
+#[test]
+fn eat_finish_syncs_vitals_to_the_client() {
+    let mut harness = Harness::new("p18-06-eat-sync");
+    harness.build_floor();
+    let mut out = harness.join("Eater");
+    while out.try_recv().is_some() {}
+    harness.give_bread();
     {
-        let player = harness.game.player(harness.id).expect("player");
-        let held = player.inventory.selected_item();
-        assert_eq!(held.count(), 1);
-        let food = held.food().expect("given bread carries food defaults");
-        assert_eq!(food.nutrition, 5);
-        assert!(
-            held.consumable().is_some(),
-            "given bread carries consumable defaults"
-        );
+        let player = harness.game.player_mut(harness.id).expect("player");
+        player.set_food(10);
+        player.set_saturation(0.0);
+        player.set_health(20.0);
     }
     harness.intent(PlayIntent::UseItem {
         hand: 0,
@@ -559,8 +570,8 @@ fn given_bread_is_edible_and_the_finish_syncs_vitals() {
     );
     assert_eq!(
         player.inventory.selected_item().count(),
-        0,
-        "one bread consumed"
+        2,
+        "one of three bread consumed"
     );
     let mut seen = None;
     while let Some(raw) = out.try_recv() {

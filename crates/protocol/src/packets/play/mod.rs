@@ -17,14 +17,20 @@
 //!
 //! Two caveats are recorded rather than implied away (AGENTS.md section 3.3):
 //!
-//! - there is no real 26.1.2 client in this environment
-//!   (`docs/protocol/26.1.2-wire-notes.md` section 7), so "the client accepts
-//!   it" is *not* what these tests establish — only that our encoder and
-//!   decoder agree and that malformed input is refused;
-//! - item **data component** payloads and entity metadata values beyond
-//!   [`MetadataValue`] are unmodelled. Both are carried as opaque
-//!   pre-encoded bytes/types and are rejected with an explicit error instead of
-//!   being guessed at.
+//! - "the client accepts it" is *not* what these tests establish — only that
+//!   our encoder and decoder agree and that malformed input is refused.
+//!   Real-client acceptance lives in the walk records (`docs/testing/`),
+//!   most recently the P18-05 owner walk on a live 26.1.2 client;
+//! - item **data component** payloads for inventory stacks are modelled since
+//!   P18-01a (9 codecs); entity-metadata stacks and `ContainerClick` trailing
+//!   hashes remain carried-opaque/refused as each type's docs describe.
+//!
+//! Trailing-byte rule (C M-5): the strict refusal above holds for
+//! serverbound-play decoders. The clientbound decoders in this module
+//! (`JoinGame`, `KeepAlive`, ping/pong shapes) deliberately do not enforce
+//! exhaustion — they run in tests and capture tools, never on hostile
+//! socket bytes — and the capture sweep holds byte-equality from the encode
+//! side instead.
 
 use super::Packet;
 use crate::ids::{clientbound, serverbound};
@@ -1981,6 +1987,28 @@ pub enum PlayIntent {
     /// The client finished loading (serverbound play 44, empty). Decoded and
     /// deliberately unacted.
     PlayerLoaded,
+    /// A beacon/enchanting-table button click (serverbound play 17):
+    /// window id + button id, both `VarInt` (Pumpkin
+    /// `server/play/container_button_click.rs`). Decoded so the click is
+    /// visible in traces instead of vanishing into `unmodelled`; unacted —
+    /// no menu this build opens uses button clicks.
+    ContainerButtonClick {
+        /// Window the click belongs to.
+        window_id: i32,
+        /// Button that was pressed.
+        button_id: i32,
+    },
+    /// A crafter slot toggle (serverbound play 20): slot + window as
+    /// `VarInt`, then the new state as a bool (Minestom
+    /// `ClientWindowSlotStatePacket`). Decoded and deliberately unacted.
+    ContainerSlotStateChanged {
+        /// Slot toggled.
+        slot: i32,
+        /// Window the slot belongs to.
+        window_id: i32,
+        /// New toggle state.
+        new_state: bool,
+    },
 }
 
 impl PlayIntent {
@@ -2145,6 +2173,19 @@ impl PlayIntent {
             serverbound::play::CONTAINER_CLOSE => Some(Self::ContainerClose {
                 window_id: reader.read_varint()?,
             }),
+            serverbound::play::CONTAINER_BUTTON_CLICK => {
+                Some(Self::ContainerButtonClick {
+                    window_id: reader.read_varint()?,
+                    button_id: reader.read_varint()?,
+                })
+            }
+            serverbound::play::CONTAINER_SLOT_STATE_CHANGED => {
+                Some(Self::ContainerSlotStateChanged {
+                    slot: reader.read_varint()?,
+                    window_id: reader.read_varint()?,
+                    new_state: reader.read_bool()?,
+                })
+            }
             // Field order verified from the jar (see the variant's doc comment).
             // The two trailing `HashedStack` fields are intentionally left unread.
             serverbound::play::CONTAINER_CLICK => Some(Self::ContainerClick {
@@ -2701,6 +2742,115 @@ mod tests {
     }
 
     #[test]
+    // C M-1: `player_input` (c2s 43) is one signed byte; the sneak bit rides
+    // bit 5. Before this pin the arm executed zero times outside the ignored
+    // capture sweep — a `read_u8` cleanup or a field reorder passed CI.
+    fn player_input_decodes_one_signed_byte() {
+        let intent = PlayIntent::decode(crate::ids::serverbound::play::PLAYER_INPUT, &[0x40])
+            .expect("decodes")
+            .expect("recognized");
+        assert!(
+            matches!(intent, PlayIntent::PlayerInput { input: 64 }),
+            "sprint bit decodes, saw {intent:?}"
+        );
+        let intent = PlayIntent::decode(crate::ids::serverbound::play::PLAYER_INPUT, &[0xFF])
+            .expect("decodes")
+            .expect("recognized");
+        assert!(
+            matches!(intent, PlayIntent::PlayerInput { input: -1 }),
+            "the field is signed (i8), saw {intent:?}"
+        );
+        assert!(
+            PlayIntent::decode(
+                crate::ids::serverbound::play::PLAYER_INPUT,
+                &[0x40, 0x00]
+            )
+            .is_err(),
+            "trailing bytes are refused"
+        );
+        assert!(
+            PlayIntent::decode(crate::ids::serverbound::play::PLAYER_INPUT, &[]).is_err(),
+            "truncation is refused"
+        );
+    }
+
+    #[test]
+    // C M-1: `set_creative_mode_slot` (c2s 56) is an i16 slot plus a stack.
+    // Same coverage hole as player_input: id asserted, arm never fed bytes.
+    fn creative_slot_decodes_short_plus_stack() {
+        // Slot 36, one stone (count 1, id 5, empty patch).
+        let body = [0x00, 0x24, 0x01, 0x05, 0x00, 0x00];
+        let intent = PlayIntent::decode(
+            crate::ids::serverbound::play::SET_CREATIVE_MODE_SLOT,
+            &body,
+        )
+        .expect("decodes")
+        .expect("recognized");
+        assert!(
+            matches!(
+                intent,
+                PlayIntent::SetCreativeModeSlot { slot: 36, .. }
+            ),
+            "slot is i16, saw {intent:?}"
+        );
+        assert!(
+            PlayIntent::decode(crate::ids::serverbound::play::SET_CREATIVE_MODE_SLOT, &[0x00])
+                .is_err(),
+            "truncation is refused"
+        );
+    }
+
+    #[test]
+    // C M-6: `container_button_click` (c2s 17) is window + button VarInts
+    // (Pumpkin `server/play/container_button_click.rs`); `container_slot_
+    // state_changed` (c2s 20) is slot + window VarInts plus a bool (Minestom
+    // `ClientWindowSlotStatePacket`). Both decode so the clicks are visible
+    // in traces instead of vanishing into `unmodelled`.
+    fn button_click_and_slot_toggle_decode() {
+        let intent = PlayIntent::decode(
+            crate::ids::serverbound::play::CONTAINER_BUTTON_CLICK,
+            &[0x02, 0x01],
+        )
+        .expect("decodes")
+        .expect("recognized");
+        assert!(
+            matches!(
+                intent,
+                PlayIntent::ContainerButtonClick {
+                    window_id: 2,
+                    button_id: 1
+                }
+            ),
+            "button click shape, saw {intent:?}"
+        );
+        let intent = PlayIntent::decode(
+            crate::ids::serverbound::play::CONTAINER_SLOT_STATE_CHANGED,
+            &[0x05, 0x02, 0x01],
+        )
+        .expect("decodes")
+        .expect("recognized");
+        assert!(
+            matches!(
+                intent,
+                PlayIntent::ContainerSlotStateChanged {
+                    slot: 5,
+                    window_id: 2,
+                    new_state: true
+                }
+            ),
+            "slot toggle shape, saw {intent:?}"
+        );
+        assert!(
+            PlayIntent::decode(
+                crate::ids::serverbound::play::CONTAINER_BUTTON_CLICK,
+                &[0x02]
+            )
+            .is_err(),
+            "truncation is refused"
+        );
+    }
+
+    #[test]
     // The real shape, from 911 captured bodies of a real 26.1.2 client (the
     // chat-capture and vanilla-capture sessions): every one was empty.
     fn a_real_clients_tick_end_is_empty_and_recognized() {
@@ -3108,7 +3258,9 @@ mod tests {
         );
         assert_eq!(container.bits, 0);
         let mut writer = PacketWriter::new();
-        container.encode(&mut writer).expect("encodes");
+        container
+            .encode(&mut writer, packing::BLOCK_MIN_BITS)
+            .expect("encodes");
         assert_eq!(writer.finish(), [0x00, 0x00]);
 
         let mut reader = crate::wire::PacketReader::new(&[0x00, 0x00]);
@@ -3132,7 +3284,9 @@ mod tests {
             PalettedContainer::new(palette.clone(), vec![0; 40], packing::BLOCK_MIN_BITS);
         assert_eq!(container.bits, 4);
         let mut writer = PacketWriter::new();
-        container.encode(&mut writer).expect("encodes");
+        container
+            .encode(&mut writer, packing::BLOCK_MIN_BITS)
+            .expect("encodes");
         let body = writer.finish();
         assert_eq!(
             &body[..4],
@@ -3161,6 +3315,25 @@ mod tests {
     }
 
     #[test]
+    fn encode_refuses_a_widened_container() {
+        // L-4: a hand-built 4-bit container on a 2-entry palette encodes
+        // bytes our own decoder rejects. `new` derives canonical widths, so
+        // only a literal can reach this state — and it must fail loudly.
+        let widened = PalettedContainer {
+            palette: vec![0, 5],
+            values: vec![0; 40],
+            bits: 8,
+        };
+        let mut writer = PacketWriter::new();
+        assert!(
+            widened
+                .encode(&mut writer, packing::BLOCK_MIN_BITS)
+                .is_err(),
+            "a widened container must not encode"
+        );
+    }
+
+    #[test]
     fn paletted_container_round_trips_a_multi_entry_palette() {
         let palette = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
         let values: Vec<u32> = (0..BLOCKS_PER_SECTION)
@@ -3169,7 +3342,9 @@ mod tests {
         let container = PalettedContainer::new(palette, values, packing::BLOCK_MIN_BITS);
         assert_eq!(container.bits, 5, "17 palette entries need 5 bits");
         let mut writer = PacketWriter::new();
-        container.encode(&mut writer).expect("encodes");
+        container
+            .encode(&mut writer, packing::BLOCK_MIN_BITS)
+            .expect("encodes");
         let body = writer.finish();
 
         let mut reader = crate::wire::PacketReader::new(&body);
@@ -3193,7 +3368,9 @@ mod tests {
         );
         assert_eq!(container.bits, 2);
         let mut writer = PacketWriter::new();
-        container.encode(&mut writer).expect("encodes");
+        container
+            .encode(&mut writer, NETWORK_BIOME_MIN_BITS)
+            .expect("encodes");
         let body = writer.finish();
         assert_eq!(&body[..4], &[0x02, 0x02, 0x01, 0x02]);
         assert_eq!(body.len(), 4 + 2 * 8);
@@ -4192,6 +4369,56 @@ mod tests {
         let mut writer = PacketWriter::new();
         decoded.encode(&mut writer).expect("re-encodes");
         assert_eq!(writer.finish(), body, "wire bytes round-trip");
+    }
+
+    #[test]
+    fn file_style_unknowns_without_wire_ids_never_reach_the_wire() {
+        // B-M3: a disk-origin unknown (`type_id == 0`) has no framable wire
+        // form. Emitting `(0, [])` corrupts the patch for every decoder, so
+        // `from_typed_components` skips it; the disk copy keeps it.
+        use mc_entity::components::{DataComponent, ItemComponents};
+        let components = ItemComponents::from_entries(vec![
+            DataComponent::Damage(5),
+            DataComponent::Unknown {
+                key: "minecraft:foo".to_owned(),
+                type_id: 0,
+                wire: Vec::new(),
+                nbt: None,
+            },
+        ]);
+        let stack =
+            ItemStack::from_typed_components(913, 1, &components).expect("builds");
+        assert_eq!(
+            stack.components,
+            vec![(mc_entity::components::TYPE_DAMAGE, vec![0x05])],
+            "the id-less unknown is skipped, not emitted as (0, [])"
+        );
+    }
+
+    #[test]
+    fn consumable_effects_refuse_wire_framing() {
+        // B-M2 trigger: `wire_stack` falls back to a component-free form
+        // exactly when the patch will not encode — today only a `Consumable`
+        // with non-empty `on_consume_effects`. The fallback downgrades what
+        // the client renders, so the refusal (and its debug log at the call
+        // site) is pinned here.
+        use mc_entity::components::{Consumable, ConsumeAnimation, DataComponent, ItemComponents};
+        use mc_nbt::NbtTag;
+        let mut components = ItemComponents::new();
+        components.set(DataComponent::Consumable(Consumable {
+            consume_seconds: 1.6,
+            animation: ConsumeAnimation::Eat,
+            sound: mc_entity::components::SoundRef::Named {
+                name: "minecraft:entity.generic.eat".to_owned(),
+                range: None,
+            },
+            consume_particles: true,
+            on_consume_effects: vec![NbtTag::Int(1)],
+        }));
+        assert!(
+            ItemStack::from_typed_components(954, 1, &components).is_err(),
+            "effect-carrying consumables have no wire framing"
+        );
     }
 
     #[test]

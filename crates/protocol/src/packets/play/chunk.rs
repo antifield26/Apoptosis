@@ -139,11 +139,17 @@ impl PalettedContainer {
 
     /// Encode the container, returning the number of bytes written.
     ///
+    /// `min_bits` is the same floor `decode` enforces
+    /// ([`packing::BLOCK_MIN_BITS`] for block states,
+    /// [`NETWORK_BIOME_MIN_BITS`] for biomes): a hand-built container whose
+    /// width is wider than canonical is refused as `Invariant` rather than
+    /// written into bytes our own decoder rejects (L-4).
+    ///
     /// # Errors
     ///
     /// [`ServerError::Invariant`] when the palette or width is not encodable
     /// (server-authored data, so this is a bug rather than bad input).
-    pub fn encode(&self, writer: &mut PacketWriter) -> ServerResult<usize> {
+    pub fn encode(&self, writer: &mut PacketWriter, min_bits: u32) -> ServerResult<usize> {
         if self.palette.len() > MAX_PALETTE_LEN {
             return Err(ServerError::Invariant(format!(
                 "palette of {} entries exceeds the {MAX_PALETTE_LEN}-entry limit",
@@ -153,6 +159,14 @@ impl PalettedContainer {
         if self.bits == 0 && self.palette.len() > 1 {
             return Err(ServerError::Invariant(format!(
                 "single-value container with a {}-entry palette",
+                self.palette.len()
+            )));
+        }
+        let derived = Self::canonical_bits(&self.palette, min_bits);
+        if self.bits != derived {
+            return Err(ServerError::Invariant(format!(
+                "paletted container declares {} bits for a {}-entry palette (expected {derived})",
+                self.bits,
                 self.palette.len()
             )));
         }
@@ -469,8 +483,8 @@ impl LevelChunkWithLight {
                 .map_err(|error| ServerError::Invariant(error.to_string()))?;
             writer.write_i16(section.block_count);
             writer.write_i16(section.fluid_count);
-            section.block_states.encode(&mut writer)?;
-            section.biomes.encode(&mut writer)?;
+            section.block_states.encode(&mut writer, packing::BLOCK_MIN_BITS)?;
+            section.biomes.encode(&mut writer, NETWORK_BIOME_MIN_BITS)?;
         }
         Ok(writer.finish())
     }

@@ -106,6 +106,17 @@ use crate::game::{Game, TickReport};
 /// `fill_volume_over_the_named_cap_is_refused` all cite the same number.
 pub const MAX_FILL_VOLUME: i64 = 32_768;
 
+/// Inclusive volume of a `/fill` region from its sorted bounds.
+fn fill_volume(min_x: i32, max_x: i32, min_y: i32, max_y: i32, min_z: i32, max_z: i32) -> i64 {
+    i64::from(max_x - min_x + 1) * i64::from(max_y - min_y + 1) * i64::from(max_z - min_z + 1)
+}
+
+/// Whether a `/fill` volume is within the cap (E-15: the boundary itself is
+/// pinned here so the at-cap case does not need a 32 768-block debug fill).
+fn fill_volume_accepted(volume: i64) -> bool {
+    volume <= MAX_FILL_VOLUME
+}
+
 /// Enchantment names this build stores on a held stack (P18-02 store + P18-01b
 /// effects for four of them).
 ///
@@ -985,9 +996,18 @@ impl Game {
             }
             // Stored ids ride the legacy table; only modelled kinds have a
             // known wire id, and an unmodelled icon is skipped rather than
-            // mislabelled (see `wire_id_of`).
+            // mislabelled (see `wire_id_of`). Logged so the skip is visible
+            // instead of silent (L-5).
             ids.into_iter()
-                .filter_map(mc_entity::effect::wire_id_of)
+                .filter_map(|effect_id| {
+                    mc_entity::effect::wire_id_of(effect_id).or_else(|| {
+                        debug!(
+                            name = %parsed.source.name,
+                            effect_id, "clear skips an effect with no wire id"
+                        );
+                        None
+                    })
+                })
                 .collect()
         };
         for effect_id in &removed {
@@ -1381,10 +1401,8 @@ impl Game {
         let (min_x, max_x) = if ax <= bx { (ax, bx) } else { (bx, ax) };
         let (min_y, max_y) = if ay <= by { (ay, by) } else { (by, ay) };
         let (min_z, max_z) = if az <= bz { (az, bz) } else { (bz, az) };
-        let volume = i64::from(max_x - min_x + 1)
-            * i64::from(max_y - min_y + 1)
-            * i64::from(max_z - min_z + 1);
-        if volume > MAX_FILL_VOLUME {
+        let volume = fill_volume(min_x, max_x, min_y, max_y, min_z, max_z);
+        if !fill_volume_accepted(volume) {
             return CommandResult::message(format!(
                 "The region is {volume} blocks, above the {MAX_FILL_VOLUME}-block limit"
             ));
@@ -1615,5 +1633,21 @@ pub const fn may_run_commands(kind: SourceKind) -> bool {
         // Recorded as false rather than true: a command block needs the block-entity
         // machinery that P06-07 does not yet run on a schedule.
         SourceKind::CommandBlock => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_FILL_VOLUME, fill_volume, fill_volume_accepted};
+
+    #[test]
+    fn fill_boundary_accepts_at_cap_and_refuses_above() {
+        // E-15: the boundary the `>` comparison draws, without executing a
+        // 32 768-block fill. Zeroing the cap fails the at-cap arm; flipping
+        // to `>=` fails it too; removing the check fails the over-cap arm.
+        assert_eq!(fill_volume(0, 31, 0, 31, 0, 31), MAX_FILL_VOLUME);
+        assert!(fill_volume_accepted(MAX_FILL_VOLUME));
+        assert!(fill_volume_accepted(0));
+        assert!(!fill_volume_accepted(MAX_FILL_VOLUME + 1));
     }
 }

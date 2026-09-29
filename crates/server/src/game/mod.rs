@@ -2317,7 +2317,17 @@ fn wire_stack(stack: mc_entity::stack::ItemStack) -> mc_protocol::packets::play:
                 stack.count(),
                 stack.components(),
             )
-            .unwrap_or_else(|_| mc_protocol::packets::play::ItemStack::simple(id, stack.count()))
+            .unwrap_or_else(|_| {
+                // Loud downgrade (B-M2): the client renders a different item
+                // than the server holds (today only a `Consumable` with
+                // non-empty `on_consume_effects` fails here). Silent would
+                // leave no trace of the divergence.
+                debug!(
+                    item_id = id,
+                    "a stack fell back to a component-free wire form"
+                );
+                mc_protocol::packets::play::ItemStack::simple(id, stack.count())
+            })
         }
         _ => mc_protocol::packets::play::ItemStack::empty(),
     }

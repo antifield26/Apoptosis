@@ -950,15 +950,20 @@ impl Game {
                 }
                 // Write back through the same views (doubles split 27/27).
                 // Both views validated at read and nothing runs between, so
-                // a refused write here is unreachable single-threaded; it
-                // still counts as no-move rather than a half-applied one.
+                // a refused write here is unreachable single-threaded. If it
+                // ever fires, the source half is restored first: a committed
+                // source with a refused dest would be a half-applied move,
+                // not the no-move the old comment claimed.
                 let back_source: Vec<mc_entity::stack::ItemStack> =
                     (0..source.len()).map(|i| source.get(i)).collect();
                 let back_dest: Vec<mc_entity::stack::ItemStack> =
                     (0..dest.len()).map(|i| dest.get(i)).collect();
-                if !self.store_hopper_inventory(source_pos, source_halves, &back_source)
-                    || !self.store_hopper_inventory(dest_pos, dest_halves, &back_dest)
-                {
+                if !self.store_hopper_inventory(source_pos, source_halves, &back_source) {
+                    continue;
+                }
+                if !self.store_hopper_inventory(dest_pos, dest_halves, &back_dest) {
+                    let _ =
+                        self.store_hopper_inventory(source_pos, source_halves, &source_items);
                     continue;
                 }
                 moved = true;
@@ -1302,21 +1307,52 @@ impl Game {
         if transfer.moved == 0 {
             return false;
         }
-        if let Some(entity) = self.block_entities.get_mut(furnace)
-            && let Some(items) = entity.data.items_mut()
-        {
-            for (index, slot) in items.iter_mut().enumerate() {
-                *slot = source.get(index);
-            }
+        // Commit hopper-first with a furnace rollback arm, mirroring the
+        // feed path (B-M1): a mid-write failure must strand nothing. The
+        // pre-transfer hopper contents (`dest_items`) are the rollback
+        // source; both halves mark dirty (the take path previously marked
+        // only the furnace, so a hopper pull could vanish from disk).
+        let hopper_ok = match self.block_entities.get_mut(hopper) {
+            Some(entity) => match entity.data.items_mut() {
+                Some(items) => {
+                    for (index, slot) in items.iter_mut().enumerate() {
+                        *slot = dest.get(index);
+                    }
+                    true
+                }
+                None => false,
+            },
+            None => false,
+        };
+        if !hopper_ok {
+            return false;
         }
-        if let Some(entity) = self.block_entities.get_mut(hopper)
-            && let Some(items) = entity.data.items_mut()
-        {
-            for (index, slot) in items.iter_mut().enumerate() {
-                *slot = dest.get(index);
+        let furnace_ok = match self.block_entities.get_mut(furnace) {
+            Some(entity) => match entity.data.items_mut() {
+                Some(items) => {
+                    for (index, slot) in items.iter_mut().enumerate() {
+                        *slot = source.get(index);
+                    }
+                    true
+                }
+                None => false,
+            },
+            None => false,
+        };
+        if !furnace_ok {
+            if let Some(entity) = self.block_entities.get_mut(hopper)
+                && let Some(items) = entity.data.items_mut()
+            {
+                for (index, slot) in items.iter_mut().enumerate() {
+                    if let Some(original) = dest_items.get(index) {
+                        *slot = original.clone();
+                    }
+                }
             }
+            return false;
         }
         mark_block_dirty(&mut self.world, furnace.x, furnace.z);
+        mark_block_dirty(&mut self.world, hopper.x, hopper.z);
         true
     }
 
@@ -3427,8 +3463,11 @@ impl Game {
                 .collect();
             for id in holders {
                 self.send(id, &update, report)?;
+                // Counted per send, not per recompute: the field documents
+                // packets, and a recompute with no holders sends nothing
+                // (F-L2).
+                report.light_updates += 1;
             }
-            report.light_updates += 1;
         }
         Ok(())
     }
@@ -3885,6 +3924,7 @@ impl Game {
         for (id, entity_id, expired) in effect_events {
             for effect_id in expired {
                 let Some(wire_id) = mc_entity::effect::wire_id_of(effect_id) else {
+                    debug!(id = %id, effect_id, "expiry skips an effect with no wire id");
                     continue;
                 };
                 let packet = mc_protocol::packets::play::RemoveMobEffect {
@@ -4331,6 +4371,16 @@ impl Game {
             }
             if self.world.unload_chunk(pos).is_some() {
                 removed += 1;
+                // F-M4: neighbours read across this border when they lit, so
+                // their caches are stale now. Queue the survivors for
+                // recompute so holders converge (the unload leg of the C1
+                // contract; arrival already mirrors it). The departed chunk
+                // itself needs no queue entry.
+                for neighbour in mc_world::world::light_updates_for_unload(pos, |p| {
+                    self.world.is_loaded(p)
+                }) {
+                    self.pending_light.insert(neighbour);
+                }
                 // AUDIT-09 B-06: the do-not-persist mark belongs to a *loaded*
                 // placeholder. Holding it after the chunk is gone leaked one entry
                 // per chunk a player ever visited (the set was only ever inserted

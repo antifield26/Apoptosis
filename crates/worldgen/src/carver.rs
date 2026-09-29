@@ -645,6 +645,27 @@ mod tests {
         assert_eq!(chunk, before);
     }
 
+    /// F-M3: far-from-spawn coordinates saturate rather than wrap or panic.
+    /// Asserts termination + determinism, not geometry (the saturated source
+    /// collapses distinct chunks by design, documented at the call site).
+    #[test]
+    fn extreme_coords_terminate_and_repeat() {
+        let blocks = registry();
+        let ctx = context();
+        let set = CarverSet::from_carvers(vec![cave(&blocks, 1.0)]);
+        let far = ChunkPos::new(i32::MAX - 8, i32::MIN + 8);
+        // The stone helper builds at (0, 0); rebuild the fill at the far
+        // position by translating reads below (carve only touches this
+        // chunk's cells, so position elsewhere is fine for a termination +
+        // determinism pin).
+        let mut a = stone_chunk(&blocks);
+        let mut b = stone_chunk(&blocks);
+        let sa = carve_chunk(&mut a, far, &ctx, &set, &blocks);
+        let sb = carve_chunk(&mut b, far, &ctx, &set, &blocks);
+        assert_eq!(sa, sb, "same far inputs repeat exactly");
+        assert_eq!(a, b, "same far chunks carve identically");
+    }
+
     #[test]
     fn empty_carver_set_is_a_no_op() {
         let blocks = registry();

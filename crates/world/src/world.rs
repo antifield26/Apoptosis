@@ -239,8 +239,15 @@ impl World {
     }
 
     /// Remove a chunk from memory (it is not deleted from disk).
+    ///
+    /// Drops the 3×3 light neighbourhood with it: every neighbour computed
+    /// its light reading across this border (the one-block margin rule), so
+    /// with these blocks gone their caches are stale (F-M4, the unload leg
+    /// of the C1 staleness class). Callers that can notify holders queue the
+    /// surviving neighbours (see [`light_updates_for_unload`]); this only
+    /// drops.
     pub fn unload_chunk(&mut self, pos: ChunkPos) -> Option<Chunk> {
-        self.light.remove(&pos);
+        self.invalidate_light_3x3(pos);
         self.chunks.remove(&pos)
     }
 
@@ -750,6 +757,31 @@ impl World {
     pub const fn blocks_per_section() -> i32 {
         SECTION_WIDTH * SECTION_HEIGHT * SECTION_WIDTH
     }
+}
+
+/// Loaded neighbours to re-light after `unloaded` departs (F-M4).
+///
+/// The departed chunk itself is excluded: there is nothing to recompute
+/// for it, and a reload re-queues through the arrival path. `is_loaded`
+/// decides survivorship so the rule unit-tests without a `World`.
+#[must_use]
+pub fn light_updates_for_unload(
+    unloaded: ChunkPos,
+    is_loaded: impl Fn(ChunkPos) -> bool,
+) -> Vec<ChunkPos> {
+    let mut out = Vec::new();
+    for dx in -1..=1 {
+        for dz in -1..=1 {
+            if dx == 0 && dz == 0 {
+                continue;
+            }
+            let neighbour = ChunkPos::new(unloaded.x + dx, unloaded.z + dz);
+            if is_loaded(neighbour) {
+                out.push(neighbour);
+            }
+        }
+    }
+    out
 }
 
 impl BlockSampler for World {

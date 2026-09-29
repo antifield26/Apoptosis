@@ -134,10 +134,14 @@ pub mod serverbound {
         pub const COMMAND_SUGGESTION: i32 = 15;
         /// `minecraft:configuration_acknowledged` (play → configuration)
         pub const CONFIGURATION_ACKNOWLEDGED: i32 = 16;
+        /// `minecraft:container_button_click` (beacon/enchant buttons)
+        pub const CONTAINER_BUTTON_CLICK: i32 = 17;
         /// `minecraft:container_click`
         pub const CONTAINER_CLICK: i32 = 18;
         /// `minecraft:container_close`
         pub const CONTAINER_CLOSE: i32 = 19;
+        /// `minecraft:container_slot_state_changed` (crafter slot toggles)
+        pub const CONTAINER_SLOT_STATE_CHANGED: i32 = 20;
         /// `minecraft:interact`
         pub const INTERACT: i32 = 26;
         /// `minecraft:keep_alive`

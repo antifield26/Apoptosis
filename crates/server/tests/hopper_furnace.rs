@@ -401,3 +401,44 @@ fn a_fed_furnace_cooks_and_the_hopper_below_collects() {
         "exactly one smelted stone collected below"
     );
 }
+
+/// B-M1: the take path commits hopper-first with a furnace rollback arm and
+/// marks both halves dirty. Setup: furnace with one stone pre-loaded in the
+/// output slot, empty hopper below (same scaffold as the chain test, minus
+/// the feed hoppers). The rollback arms cover write refusals that are
+/// unreachable single-threaded (sizes validated at read); the movement
+/// assert pins the restructured commit path end to end.
+#[test]
+fn take_moves_output_to_the_hopper_below() {
+    let mut harness = Harness::new("p17-take-dirty");
+    harness.join("Stoker");
+    let (sx, sy, sz) = harness.game.spawn();
+    floor(&mut harness, sx, sy, sz);
+    let (fx, fy, fz) = (sx + 3, sy, sz);
+    harness.place("minecraft:furnace", fx, fy - 1, fz, 1);
+    let air = harness.game.registries().blocks.air_id();
+    harness
+        .game
+        .world_mut()
+        .set_block(fx, fy - 1, fz, air)
+        .expect("dig the hole");
+    harness.place("minecraft:hopper", fx, fy - 1, fz + 1, 2);
+    assert_eq!(harness.name_at(fx, fy - 1, fz), "minecraft:hopper");
+    harness.fill(fx, fy, fz, 2, "minecraft:stone", 1);
+    // Placements above dirtied their chunks; clear so the asserts below
+    // are about the take. (The hopper cooldown tick marks dirty on its own
+    // cadence, so dirty-marking is not what this test pins — movement is.
+    // The take's own hopper mark mirrors the feed path for symmetry.)
+    harness.game.world_mut().clear_dirty();
+    harness.run(24);
+    assert_eq!(
+        harness.entity_total(fx, fy - 1, fz),
+        1,
+        "the hopper below pulled the output stone"
+    );
+    assert_eq!(
+        harness.entity_total(fx, fy, fz),
+        0,
+        "the furnace output slot is empty after the take"
+    );
+}

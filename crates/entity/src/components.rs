@@ -1272,15 +1272,29 @@ fn attack_range_to_nbt(range: &AttackRange) -> NbtTag {
     ])
 }
 
-fn attack_range_from_nbt(tag: &NbtTag) -> AttackRange {
-    let mut range = AttackRange::default();
-    range.min_reach = nbt_f32(tag.get("min_reach"), range.min_reach);
-    range.max_reach = nbt_f32(tag.get("max_reach"), range.max_reach);
-    range.min_creative_reach = nbt_f32(tag.get("min_creative_reach"), range.min_creative_reach);
-    range.max_creative_reach = nbt_f32(tag.get("max_creative_reach"), range.max_creative_reach);
-    range.hitbox_margin = nbt_f32(tag.get("hitbox_margin"), range.hitbox_margin);
-    range.mob_factor = nbt_f32(tag.get("mob_factor"), range.mob_factor);
-    range
+fn attack_range_from_nbt(tag: &NbtTag) -> Option<AttackRange> {
+    // B-M4: every field required, like `food.nutrition`. Healing a partial
+    // compound with defaults loads a plausible range no file describes.
+    Some(AttackRange {
+        min_reach: tag.get("min_reach").and_then(NbtTag::as_f64).map(|v| v as f32)?,
+        max_reach: tag.get("max_reach").and_then(NbtTag::as_f64).map(|v| v as f32)?,
+        min_creative_reach: tag
+            .get("min_creative_reach")
+            .and_then(NbtTag::as_f64)
+            .map(|v| v as f32)?,
+        max_creative_reach: tag
+            .get("max_creative_reach")
+            .and_then(NbtTag::as_f64)
+            .map(|v| v as f32)?,
+        hitbox_margin: tag
+            .get("hitbox_margin")
+            .and_then(NbtTag::as_f64)
+            .map(|v| v as f32)?,
+        mob_factor: tag
+            .get("mob_factor")
+            .and_then(NbtTag::as_f64)
+            .map(|v| v as f32)?,
+    })
 }
 
 fn nbt_f32(tag: Option<&NbtTag>, default: f32) -> f32 {
@@ -1301,7 +1315,9 @@ fn food_to_nbt(food: &Food) -> NbtTag {
 fn food_from_nbt(tag: &NbtTag) -> Option<Food> {
     Some(Food {
         nutrition: tag.get_i32("nutrition")?,
-        saturation: nbt_f32(tag.get("saturation"), 0.0),
+        // B-M4: required like nutrition — a food without saturation is
+        // corrupt, not zero-saturation food.
+        saturation: tag.get("saturation").and_then(NbtTag::as_f64).map(|v| v as f32)?,
         can_always_eat: tag.get_bool("can_always_eat").unwrap_or(false),
     })
 }
@@ -1358,7 +1374,9 @@ fn consumable_from_nbt(tag: &NbtTag) -> Option<Consumable> {
         consume_seconds: nbt_f32(tag.get("consume_seconds"), 1.6),
         animation,
         sound,
-        consume_particles: tag.get_bool("consume_particles").unwrap_or(false),
+        // B-M4: absent means vanilla-default true (what every encoder
+        // writes), not false.
+        consume_particles: tag.get_bool("consume_particles").unwrap_or(true),
         on_consume_effects: tag.get_list("on_consume_effects").unwrap_or(&[]).to_vec(),
     })
 }
@@ -1411,15 +1429,43 @@ pub fn from_nbt(tag: &NbtTag) -> ServerResult<ItemComponents> {
                 out.push(DataComponent::CustomName(name.clone()));
             }
             "minecraft:enchantments" => {
-                out.push(DataComponent::Enchantments(enchantments_from_nbt(value)));
+                match value {
+                    NbtTag::List(_) => {
+                        out.push(DataComponent::Enchantments(enchantments_from_nbt(value)));
+                    }
+                    // B-M4: vanilla's name-keyed map shape is preserved as an
+                    // unknown, not flattened into an empty (and wrong)
+                    // "no enchantments".
+                    other => out.push(DataComponent::Unknown {
+                        key: "minecraft:enchantments".to_owned(),
+                        type_id: 0,
+                        wire: Vec::new(),
+                        nbt: Some(other.clone()),
+                    }),
+                }
             }
             "minecraft:stored_enchantments" => {
-                out.push(DataComponent::StoredEnchantments(enchantments_from_nbt(
-                    value,
-                )));
+                match value {
+                    NbtTag::List(_) => {
+                        out.push(DataComponent::StoredEnchantments(enchantments_from_nbt(
+                            value,
+                        )));
+                    }
+                    other => out.push(DataComponent::Unknown {
+                        key: "minecraft:stored_enchantments".to_owned(),
+                        type_id: 0,
+                        wire: Vec::new(),
+                        nbt: Some(other.clone()),
+                    }),
+                }
             }
             "minecraft:attack_range" => {
-                out.push(DataComponent::AttackRange(attack_range_from_nbt(value)));
+                let range = attack_range_from_nbt(value).ok_or_else(|| {
+                    ServerError::CorruptData(
+                        "minecraft:attack_range is not a complete compound".to_owned(),
+                    )
+                })?;
+                out.push(DataComponent::AttackRange(range));
             }
             "minecraft:food" => {
                 let food = food_from_nbt(value).ok_or_else(|| {
@@ -1465,6 +1511,27 @@ pub fn from_nbt(tag: &NbtTag) -> ServerResult<ItemComponents> {
         }) {
             *slot = wire;
             *id = type_id;
+        } else if let [only] = out
+            .iter_mut()
+            .filter(|c| {
+                matches!(c, DataComponent::Unknown { type_id: 0, .. })
+            })
+            .collect::<Vec<_>>()
+            .as_mut_slice()
+        {
+            // Exactly one nameless-id unknown: the wire payload must be its
+            // other half (a named file entry plus its `_wire/<id>`), so attach
+            // rather than pushing a second component (B-M3). Ambiguous
+            // (several) stays separate — no guessing.
+            if let DataComponent::Unknown {
+                wire: slot,
+                type_id: id,
+                ..
+            } = only
+            {
+                *slot = wire;
+                *id = type_id;
+            }
         } else {
             out.push(unknown_from_wire(type_id, &wire));
         }
@@ -1584,6 +1651,102 @@ mod tests {
         let food = components.food().expect("food still readable");
         assert_eq!(food.nutrition, 4);
         assert!(food.can_always_eat);
+    }
+
+    #[test]
+    fn named_unknown_plus_wire_merges_into_one_component() {
+        // B-M3: a file entry with a real name plus its `_wire/<id>` payload
+        // is one logical component. Splitting it into a named half and a
+        // `#id` half (the old behaviour) fails this test.
+        let tag = NbtTag::Compound(vec![
+            (
+                "minecraft:foo".to_owned(),
+                NbtTag::Int(1),
+            ),
+            ("_wire/99".to_owned(), NbtTag::ByteArray(vec![0xAA])),
+        ]);
+        let components = from_nbt(&tag).expect("decodes");
+        let unknowns: Vec<_> = components.unknowns().collect();
+        assert_eq!(unknowns.len(), 1, "one logical component, not two");
+        match unknowns[0] {
+            DataComponent::Unknown {
+                key,
+                type_id,
+                wire,
+                ..
+            } => {
+                assert_eq!(key, "minecraft:foo");
+                assert_eq!(*type_id, 99);
+                assert_eq!(wire, &[0xAA]);
+            }
+            other => panic!("expected Unknown, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn disk_reads_are_strict_or_unknown_preserving() {
+        // B-M4: malformed modelled components neither heal silently nor
+        // flatten into wrong empties.
+        //
+        // 1. A vanilla name-keyed enchant map is preserved as an unknown,
+        //    not converted to an empty (and wrong) "no enchantments".
+        let map = NbtTag::Compound(vec![(
+            "minecraft:enchantments".to_owned(),
+            NbtTag::Compound(vec![("minecraft:sharpness".to_owned(), NbtTag::Int(2))]),
+        )]);
+        let components = from_nbt(&map).expect("decodes");
+        assert!(
+            components.enchantments().is_none(),
+            "no typed enchantments may be invented from names"
+        );
+        assert_eq!(
+            components.unknowns().count(),
+            1,
+            "the map survives as one unknown"
+        );
+        //
+        // 2. A partial attack_range is corrupt, not healed with defaults.
+        let partial = NbtTag::Compound(vec![(
+            "minecraft:attack_range".to_owned(),
+            NbtTag::Compound(vec![("max_reach".to_owned(), NbtTag::Float(5.0))]),
+        )]);
+        assert!(
+            from_nbt(&partial).is_err(),
+            "a partial attack_range must be refused"
+        );
+        //
+        // 3. A consumable without `consume_particles` reads the
+        // vanilla-default true that every encoder writes.
+        let bare = NbtTag::Compound(vec![(
+            "minecraft:consumable".to_owned(),
+            NbtTag::Compound(vec![
+                ("consume_seconds".to_owned(), NbtTag::Float(1.6)),
+                ("animation".to_owned(), NbtTag::String("eat".to_owned())),
+                (
+                    "sound_name".to_owned(),
+                    NbtTag::String("minecraft:entity.generic.eat".to_owned()),
+                ),
+            ]),
+        )]);
+        let components = from_nbt(&bare).expect("decodes");
+        assert!(
+            components
+                .consumable()
+                .expect("consumable")
+                .consume_particles,
+            "absent particles flag reads true"
+        );
+        //
+        // 4. Food without saturation is corrupt, like food without
+        // nutrition — not zero-saturation food.
+        let thin = NbtTag::Compound(vec![(
+            "minecraft:food".to_owned(),
+            NbtTag::Compound(vec![("nutrition".to_owned(), NbtTag::Int(5))]),
+        )]);
+        assert!(
+            from_nbt(&thin).is_err(),
+            "food without saturation must be refused"
+        );
     }
 
     #[test]

@@ -31,9 +31,13 @@
 //! resolves to the players among the entities, and a selector matching only mobs selects nothing
 //! — reported as "no entity matched" rather than silently running as the invoker.
 //!
-//! **3. `store` is not supported**, and neither are `rotated`, `facing`, `anchored`, `in` nor the
-//! `data`/`score`/`predicate`/`biome`/`loaded`/`blocks`/`function` conditions. Each is **refused
-//! by name** by the parser.
+//! **3. `store`, `in` and the `data`/`score`/`predicate`/`biome`/`loaded`/
+//! `blocks`/`function` conditions are not supported.** Each is **refused
+//! by name** by the parser. `rotated`, `facing` and `anchored` parse and
+//! apply to the execution context (position/yaw/pitch/anchor), but no inner
+//! command currently consumes the resulting rotation, so their effect is
+//! unobservable end to end (E-16) — parsed and applied, not parsed and
+//! discarded, and not yet player-visible.
 //!
 //! ## Recursion
 //!
