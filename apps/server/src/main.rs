@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 mod console;
+mod rcon;
 
 use mc_core::error::ServerError;
 use mc_server::config::ServerConfig;
@@ -36,6 +37,11 @@ async fn run() -> i32 {
         eprintln!("logging error: {e}");
         return 1;
     }
+    // RCON settings ride along separately (P19-04): `Server::new` takes
+    // the config by value, and the listener below needs them after.
+    // Validated already (empty password refuses), so `enabled` below means
+    // authorised.
+    let rcon_config = config.rcon.clone();
     let mut server = Server::new(config);
     server.install_signal_handlers();
     // Console stdin (P19-03): lines run at console level through the tick
@@ -54,9 +60,30 @@ async fn run() -> i32 {
             return 1;
         }
     }
+    // RCON (P19-04): off unless configured; a missing password refuses at
+    // config validation, so reaching here with `enabled` means authorised.
+    let rcon_task = if rcon_config.enabled {
+        let bind: std::net::SocketAddr = match rcon_config.bind.parse() {
+            Ok(addr) => addr,
+            Err(e) => {
+                tracing::error!(error = %e, "cannot parse rcon.bind");
+                return 1;
+            }
+        };
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        server.set_rcon_commands(rx);
+        let password = rcon_config.password.into_bytes();
+        Some(tokio::spawn(async move {
+            if let Err(e) = rcon::serve(bind, password, tx).await {
+                tracing::error!(error = %e, "RCON failed");
+            }
+        }))
+    } else {
+        None
+    };
     // `run()`'s future tops 16 KiB (game + world state machine): heap it
     // rather than holding it on the task stack (clippy `large_future`).
-    match Box::pin(server.run()).await {
+    let code = match Box::pin(server.run()).await {
         Err(ServerError::Shutdown) => {
             tracing::info!("shutdown complete");
             0
@@ -66,7 +93,13 @@ async fn run() -> i32 {
             1
         }
         Ok(()) => 0,
+    };
+    // The RCON listener dies with the process path: abort it now that the
+    // loop is gone, so no admin command runs without a game to answer.
+    if let Some(task) = rcon_task {
+        task.abort();
     }
+    code
 }
 
 /// First CLI arg is an optional TOML config path; no arg means defaults.

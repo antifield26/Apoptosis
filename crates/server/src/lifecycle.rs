@@ -147,6 +147,11 @@ pub struct Server<H: TickHook = NoopHook> {
     /// touch stdin. The run loop drains at most one line per sleep window,
     /// so a pasted flood waits its turn instead of stalling ticks.
     console_rx: Option<tokio::sync::mpsc::Receiver<String>>,
+    /// RCON command requests, when the binary serves RCON (P19-04).
+    ///
+    /// `None` unless `set_rcon_commands` ran. Drained every tick (bounded),
+    /// so admin commands answer promptly without stalling the simulation.
+    rcon_rx: Option<tokio::sync::mpsc::Receiver<crate::rcon::RconRequest>>,
 }
 
 impl Server<NoopHook> {
@@ -273,6 +278,7 @@ impl<H: TickHook> Server<H> {
             game: None,
             game_link: None,
             console_rx: None,
+            rcon_rx: None,
         }
     }
 
@@ -284,6 +290,66 @@ impl<H: TickHook> Server<H> {
     /// nothing else — the server keeps running.
     pub fn set_console_commands(&mut self, rx: tokio::sync::mpsc::Receiver<String>) {
         self.console_rx = Some(rx);
+    }
+
+    /// Feed RCON command requests into the run loop (P19-04).
+    ///
+    /// The binary's RCON listener hands over the receiver; each request
+    /// runs through `dispatch_console` (RCON is console-level by
+    /// definition) and the joined reply lines go back over the request's
+    /// one-shot. A closed channel only ends RCON input.
+    pub fn set_rcon_commands(&mut self, rx: tokio::sync::mpsc::Receiver<crate::rcon::RconRequest>) {
+        self.rcon_rx = Some(rx);
+    }
+
+    /// Run the queued RCON requests against the live game (P19-04).
+    ///
+    /// Bounded per call (16) so a flooding admin connection waits rather
+    /// than stalling the tick that serves players. Requests arriving with
+    /// no game yet are answered with an error, never held: holding them
+    /// would replay stale intent into a fresh boot.
+    fn drain_rcon_requests(&mut self) {
+        use tokio::sync::mpsc::error::TryRecvError;
+        let mut pending = Vec::new();
+        let mut dead = false;
+        if let Some(rx) = self.rcon_rx.as_mut() {
+            loop {
+                if pending.len() >= 16 {
+                    break;
+                }
+                match rx.try_recv() {
+                    Ok(request) => pending.push(request),
+                    Err(TryRecvError::Empty) => break,
+                    // The listener is gone: stop polling a dead channel.
+                    Err(TryRecvError::Disconnected) => {
+                        dead = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if dead {
+            self.rcon_rx = None;
+        }
+        for request in pending {
+            let line = match self.game.as_mut() {
+                None => "no world is open yet".to_owned(),
+                Some(game) => {
+                    let mut report = crate::game::TickReport::default();
+                    match game.dispatch_console(&request.command, &mut report) {
+                        Err(error) => format!("command failed: {error}"),
+                        Ok(lines) => {
+                            if lines.is_empty() {
+                                String::new()
+                            } else {
+                                lines.join("\n")
+                            }
+                        }
+                    }
+                }
+            };
+            let _ = request.reply.send(line);
+        }
     }
 
     /// Run one console line against the live game, logging the replies.
@@ -661,6 +727,9 @@ impl<H: TickHook> Server<H> {
                 {
                     crate::metrics::OperationalSnapshot::of(game).log(tick);
                 }
+                // RCON requests drain here, after the world work: admin input
+                // waits for players, never ahead of them (P19-04).
+                self.drain_rcon_requests();
             }
             if self.shutdown.is_requested() {
                 break;
@@ -793,8 +862,7 @@ mod tests {
 
     /// P19-03: stdin EOF ends console input, not the server. A channel
     /// whose sender is already dropped reads as closed on the first wait;
-    /// the run must still tick until an external shutdown arrives.
-    #[tokio::test]
+    /// the run must still tick until an external shutdown arrives.    #[tokio::test]
     async fn console_eof_does_not_stop_the_server() {
         let mut server = Server::new(crate::config::ServerConfig::default());
         let (tx, rx) = tokio::sync::mpsc::channel(64);
@@ -811,6 +879,42 @@ mod tests {
         assert!(matches!(err, ServerError::Shutdown), "wrong error: {err:?}");
         assert!(server.tick() > 0, "ticks ran despite the closed console");
         assert_eq!(server.state(), LifecycleState::Stopped);
+    }
+
+    /// P19-04: an RCON request round-trips through the tick loop — the
+    /// request channel is drained per tick, `dispatch_console` runs it, and
+    /// the joined reply arrives on the one-shot.
+    #[tokio::test]
+    async fn rcon_request_round_trips_through_the_tick_loop() {
+        let dir = mc_test_support::fixtures::TempDir::new("rcon-round-trip");
+        let mut config = crate::config::ServerConfig::default();
+        config.storage.world_dir = dir.path().join("world");
+        config.storage.autosave_ticks = 0;
+        let mut server = Server::new(config);
+        server.open_world().expect("world opens");
+        let (tx, rx) = tokio::sync::mpsc::channel(16);
+        server.set_rcon_commands(rx);
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<String>();
+        tx.send(crate::rcon::RconRequest {
+            command: "seed".to_owned(),
+            reply: reply_tx,
+        })
+        .await
+        .expect("the loop is listening");
+        let handle: ShutdownHandle = server.shutdown_handle();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            handle.request();
+        });
+        let _ = Box::pin(server.run()).await;
+        let reply = tokio::time::timeout(Duration::from_millis(500), reply_rx)
+            .await
+            .expect("the reply arrives promptly")
+            .expect("the loop answers");
+        assert!(
+            reply.starts_with("Seed: "),
+            "the tick loop ran the command, saw {reply:?}"
+        );
     }
 
     #[tokio::test]

@@ -5,8 +5,11 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 753 passed, 0 failed, 41 ignored** across **140 suites**, re-derived from
+Totals: **1 762 passed, 0 failed, 41 ignored** across **140 suites**, re-derived from
 `python tools/gates/run.py --quick` on the current tree (every gate passed).
+The +9 over the **1 753** figure is P19-04 (RCON): +7 lib
+(codec pins, auth backoff, tick-loop round trip) +2 the binary's listener
+pins; no new suite files.
 The +8 over the **1 745** figure is P19-03 (console/saves): +1 lib
 (console EOF), +2 the binary's stdin-reader pins, +5 the `console_save_e2e`
 suite; suites +1 new file.
@@ -218,11 +221,11 @@ before the P18 landing — the 8 differential suites in the last section (16 tes
 (**35 + 5 + 1 = 41**), all run on demand.
 
 **Every per-crate count below was re-measured with `cargo test -p <crate> --lib`**
-crate by crate on the current tree. The 17 lib counts sum to **1 185**
+crate by crate on the current tree. The 17 lib counts sum to **1 192**
 (`mc-command` 96, `mc-core` 28, `mc-test-support` 4, `mc-protocol` 135,
 `mc-nbt` 17, `mc-container` **136**, `mc-data` 135, `mc-registry` 27,
 `mc-entity` 187, `mc-world` 49, `mc-persistence` 69, `mc-network` 19,
-`mc-redstone` 69, `mc-server` 85, `mc-simulation` 18, `mc-worldgen` 100,
+`mc-redstone` 69, `mc-server` 92, `mc-simulation` 18, `mc-worldgen` 100,
 `mc-capture-rig` 11). Four entries drifted unnoticed across the P16–P18
 landings and are corrected here with the drift flagged, not absorbed:
 `mc-command` 93 → 96, `mc-registry` 26 → 27, `mc-entity` 158 → 185,
@@ -287,7 +290,7 @@ soak an eight-table loot baseline covers common breaks with no pack loaded
 | Redstone | `propagation` (23), `budget_exhaustion` (7), `determinism` (6), `golden_circuits` (6), `power_model` (8), `world_integration` (4), `vanilla_conductivity` (13) | budgeted propagation reaches unbounded-run state, full change-vector determinism, golden circuits (lever—wire—lamp on a dust-powered pedestal; comparator faces east at its wire), power bounds; P13-01 wires the scheduled-tick queue into the tick (see Server foundations); P13-03 drives the lamp; P13-04 reads torch attachments and comparator back/sides by facing; P13-05 measures 15 live blocks on a real 26.1.2 server (world + scripts under `target/p13-wire/`); P13-06 measures the conductivity matrix on the same rig (torch-below/lever-mount strong, dust above/beside weak and solid-blind, block never; lamp reads above/below) |
 | Commands & data | `mc-command` lib (**96**), `command_e2e` (13), `execute_e2e` (**10**), `function_e2e` (14), `mc-data` lib (135), `pack_discovery` (10), `pack_loading_e2e` (**10**: 9 + P14-09 baseline-survives-load) | permission-before-grammar, every declared command reachable, malformed commands never disconnect, execute modifier chains, function recursion/privilege bounds, pack discovery and world-pack loading (P12-07/08 recipe load + conversions) |
 | World generation | `mc-worldgen` lib (**100**), `worldgen_e2e` (7), `structure_golden` (9), `seed_derivation` (8), `golden` (6), `determinism` (7) | seed determinism, terrain invariants, structure placement goldens, existing-world-first generation |
-| Server foundations | `mc-server` lib (**85**), `scheduled_ticks` (**2**), `mc-core` (28), `mc-nbt` (17), `mc-registry` (**27**), `mc-simulation` (18), `mc-redstone` (**69**), `mc-test-support` (4), `mc-capture-rig` (11) | config guardrails, backup/verify/restore, shutdown barrier, operational metrics snapshot, error taxonomy, NBT vectors, the registry table itself (including the `MC_FIXTURE_DIR` precedence half), fixture helpers, the tick scheduler, the redstone model's own invariants, the client-capture rig; P13-01 scheduled-tick drain timing + budget (perturbation-verified) |
+| Server foundations | `mc-server` lib (**92**), `scheduled_ticks` (**2**), `mc-core` (28), `mc-nbt` (17), `mc-registry` (**27**), `mc-simulation` (18), `mc-redstone` (**69**), `mc-test-support` (4), `mc-capture-rig` (11) | config guardrails, backup/verify/restore, shutdown barrier, operational metrics snapshot, error taxonomy, NBT vectors, the registry table itself (including the `MC_FIXTURE_DIR` precedence half), fixture helpers, the tick scheduler, the redstone model's own invariants, the client-capture rig; P13-01 scheduled-tick drain timing + budget (perturbation-verified) |
 | Security (cross-cutting) | classes live inside the suites above | hostile VarInt/frames + random-byte connections (protocol/network libs), slow-drip bound, registry reservation cap, 300-command flood (`command_e2e`), hostile op paths (`ops_e2e`, 7), 2 000-click conservation (`inventory_duplication`), hostile disk state (`corruption`, 16), config bounds (`mc-server` lib), **a decoded packet body with trailing bytes is accepted** (AUDIT-09 A-03, open — serverbound silent-accept is deliberate; AUDIT-14 A14-01 found P14's new clientbound `forget_level_chunk` decoder skipping the hard-refusal convention and fixed it with a padded-input test) |
 
 ## Differential suites (jar-gated, `--ignored`)

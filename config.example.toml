@@ -35,6 +35,18 @@ autosave_ticks = 6000
 # message. `/whitelist on|off` toggles it live; a restart restores this value.
 whitelist_enforced = false
 
+[rcon]
+# Serve the RCON admin protocol. Default off: an admin protocol that answers
+# commands must be opted into, never on by accident. Enabling with an empty
+# password is refused at validation.
+enabled = false
+# Socket to bind. Default loopback (Vanilla's 127.0.0.1:25575): the password
+# crosses the wire in the clear, so think twice before moving it off loopback
+# (the server warns when bound elsewhere).
+bind = "127.0.0.1:25575"
+# RCON password. Empty by default; set one to enable RCON.
+password = ""
+
 [datapacks]
 # Optional: the **vanilla** data pack — the 26.1.2 server jar's own
 # `data/minecraft`. That data is Mojang's, so it is deliberately not committed

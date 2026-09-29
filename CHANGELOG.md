@@ -12,6 +12,18 @@ entry is the release candidate matching the workspace version at the time
 with built artifacts. The current workspace version is `0.3.0`, published as
 tag `v0.3.0` (see below).
 
+## [Unreleased] — P19-04 RCON (v0.4.0 "operable survival" fourth slice)
+
+Vanilla's RCON on its own port (default `127.0.0.1:25575`, off unless
+`[rcon] enabled` with a non-empty password — enabling passwordless is
+refused at validation): little-endian framing with a 4 KiB cap enforced
+before allocation, fixed-time password compare, id `-1` on bad logins with
+backoff and close after 5, chunked replies, commands through
+`dispatch_console` with replies over a one-shot drained per tick (bounded
+16). Pins: codec/auth/Chap unit tests + stock-client login/command +
+throttle-budget + hostile-prefix listener tests + the tick-loop round trip
+(each proven red), KD counts untouched (RCON is not a chat command).
+
 ## [Unreleased] — P19-03 console and saves (v0.4.0 "operable survival" third slice)
 
 Stdin lines dispatch at console level (`dispatch_console`, no connection —

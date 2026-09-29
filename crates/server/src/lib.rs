@@ -24,6 +24,7 @@ pub mod metrics;
 pub mod ops;
 pub mod packs;
 pub mod playerdata;
+pub mod rcon;
 pub mod spawn;
 pub mod storage;
 pub mod whitelist;

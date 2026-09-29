@@ -50,6 +50,8 @@ pub struct ServerConfig {
     pub datapacks: DataPackConfig,
     /// Who may join (P19-01; P19-06 owns the rest of the properties).
     pub access: AccessConfig,
+    /// RCON admin protocol (P19-04; off unless configured).
+    pub rcon: RconConfig,
 }
 
 /// Networking configuration.
@@ -104,6 +106,7 @@ impl Default for ServerConfig {
             storage: StorageConfig::default(),
             datapacks: DataPackConfig::default(),
             access: AccessConfig::default(),
+            rcon: RconConfig::default(),
         }
     }
 }
@@ -177,6 +180,33 @@ impl Default for AccessConfig {
     }
 }
 
+/// RCON admin protocol configuration (P19-04).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct RconConfig {
+    /// Serve RCON. Default off: an admin protocol that answers commands
+    /// must be opted into, never on by accident.
+    pub enabled: bool,
+    /// Socket to bind. Default loopback (Vanilla's `127.0.0.1:25575`):
+    /// RCON authenticates with a bare password, so it stays off the
+    /// network unless the operator moves it deliberately.
+    pub bind: String,
+    /// RCON password. Empty by default, and enabling RCON with an empty
+    /// password is refused at validation — an unauthenticated admin
+    /// protocol must not boot.
+    pub password: String,
+}
+
+impl Default for RconConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bind: "127.0.0.1:25575".to_owned(),
+            password: String::new(),
+        }
+    }
+}
+
 impl ServerConfig {
     /// Parse TOML text into a validated config.
     ///
@@ -243,6 +273,19 @@ impl ServerConfig {
                 "network.motd must be at most 128 characters".to_owned(),
             ));
         }
+        // RCON answers commands with a bare password: enabling it without
+        // one must fail here, not boot an open admin port.
+        if self.rcon.enabled && self.rcon.password.is_empty() {
+            return Err(ServerError::Operational(
+                "rcon.enabled refuses an empty rcon.password: set one or disable RCON".to_owned(),
+            ));
+        }
+        if self.rcon.enabled && self.rcon.bind.parse::<std::net::SocketAddr>().is_err() {
+            return Err(ServerError::Operational(format!(
+                "rcon.bind is not a socket address: {:?}",
+                self.rcon.bind
+            )));
+        }
         if self.storage.world_dir.as_os_str().is_empty() {
             return Err(ServerError::Operational(
                 "storage.world_dir must not be empty".to_owned(),
@@ -295,6 +338,27 @@ mod tests {
         let config = ServerConfig::from_toml("[access]\nwhitelist_enforced = true\n")
             .expect("the access section must parse");
         assert!(config.access.whitelist_enforced);
+    }
+
+    #[test]
+    fn rcon_refuses_to_enable_without_a_password() {
+        let bare = ServerConfig::default();
+        assert!(!bare.rcon.enabled, "RCON is off unless configured");
+        assert_eq!(bare.rcon.bind, "127.0.0.1:25575");
+        let enabled = ServerConfig::from_toml("[rcon]\nenabled = true\npassword = \"s3cret\"\n")
+            .expect("a passworded RCON parses");
+        assert!(enabled.rcon.enabled);
+        assert!(
+            ServerConfig::from_toml("[rcon]\nenabled = true\n").is_err(),
+            "enabling RCON with no password must fail validation"
+        );
+        assert!(
+            ServerConfig::from_toml(
+                "[rcon]\nenabled = true\npassword = \"s3cret\"\nbind = \"nope\"\n"
+            )
+            .is_err(),
+            "an unparsable RCON bind must fail validation"
+        );
     }
 
     #[test]
