@@ -65,6 +65,11 @@ pub struct RconPacket {
 /// # Errors
 ///
 /// [`ServerError::Protocol`] naming the violation.
+///
+/// # Panics
+///
+/// Never in practice: the fixed-width reads sit behind the 10-byte length
+/// guard above, and the crate's own tests fail the build if that changes.
 pub fn decode_body(body: &[u8]) -> ServerResult<RconPacket> {
     if body.len() < 10 {
         return Err(ServerError::Protocol(format!(
@@ -180,7 +185,9 @@ mod tests {
         assert_eq!(packet.kind, TYPE_LOGIN);
         assert_eq!(packet.payload, b"s3cret");
         assert_eq!(AUTH_FAILURE_ID, -1);
-        assert!(MAX_PACKET_LEN >= 4096);
+        const {
+            assert!(MAX_PACKET_LEN >= 4096);
+        }
     }
 
     #[test]

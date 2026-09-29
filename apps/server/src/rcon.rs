@@ -179,7 +179,7 @@ mod tests {
     async fn read_packet(reader: &mut (impl AsyncReadExt + Unpin)) -> (i32, i32, Vec<u8>) {
         let mut len = [0u8; 4];
         reader.read_exact(&mut len).await.expect("length");
-        let len = i32::from_le_bytes(len) as usize;
+        let len = usize::try_from(i32::from_le_bytes(len)).expect("test lengths are small");
         let mut body = vec![0u8; len];
         reader.read_exact(&mut body).await.expect("body");
         let packet = decode_body(&body).expect("decodes");
@@ -251,7 +251,7 @@ mod tests {
         .await
         .expect("the close arrives promptly");
         assert!(closed.is_err(), "the connection closes after the budget");
-        let _ = server_task.abort();
+        server_task.abort();
     }
 
     #[tokio::test]
