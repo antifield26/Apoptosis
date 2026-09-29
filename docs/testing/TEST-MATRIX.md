@@ -5,15 +5,16 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 714 passed, 0 failed, 41 ignored** across **136 suites**, re-derived from
+Totals: **1 717 passed, 0 failed, 41 ignored** across **137 suites**, re-derived from
 `python tools/gates/run.py --quick` on the current tree (every gate passed).
-The +29 over the **1 685** figure: +17 lib (`mc-protocol` +6 decoder/boundary
+The +32 over the **1 685** figure: +17 lib (`mc-protocol` +6 decoder/boundary
 pins, `mc-server` +5 fill-boundary/seed/execute-angle/fingerprint, `mc-entity`
 +2 unknown strictness, `mc-persistence` +2 seed, `mc-container` +1 clone patch,
-`mc-worldgen` +1 extreme carve) +12 integration (double-chest mid-open,
+`mc-worldgen` +1 extreme carve) +15 integration (double-chest mid-open,
 creative patch, `seed_resolution`, `underground_wiring` order + bit-stability
 + pack install, light unload e2e, hopper take, zombie shove, chase waypoints,
-hunger split net +1, `worldgen_fingerprint`); suites +1 with two new files
+hunger split net +1, `worldgen_fingerprint`, `light_cache` neighbour-drop +
+queue-rule, metadata patch-strip pin); suites +2 new files
 (`seed_resolution`, `worldgen_fingerprint`).
 The +1 over the **1 684** figure:
 `generation_invalidates_neighbour_light_and_queues_updates` (fails with the

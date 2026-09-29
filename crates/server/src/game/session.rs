@@ -46,6 +46,17 @@ use super::{
 /// pub(crate) because the command handlers are a sibling module: they read a player's
 /// name, position and permission to build a command source. The individual fields are
 /// crate-visible for the same reason, and nothing outside the crate sees any of it.
+///
+/// A co-viewer slot push: the viewer, its window/state ids, and the
+/// `(menu slot, stack)` deltas to send (B-H3). Named so the collecting site
+/// stays under clippy's `type_complexity` bar.
+type CoViewerPush = (
+    ConnectionId,
+    i32,
+    i32,
+    Vec<(i16, mc_protocol::packets::play::ItemStack)>,
+);
+
 pub(crate) struct Session {
     /// The connection this session belongs to.
     pub(crate) id: ConnectionId,
@@ -2705,12 +2716,7 @@ impl Game {
                             });
                         // (viewer, window, state, [(menu slot, stack)]), collected
                         // before any send (which needs `&mut self`).
-                        let mut pushes: Vec<(
-                            ConnectionId,
-                            i32,
-                            i32,
-                            Vec<(i16, mc_protocol::packets::play::ItemStack)>,
-                        )> = Vec::new();
+                        let mut pushes: Vec<CoViewerPush> = Vec::new();
                         for other in viewers {
                             let Some(session) = self.sessions.get_mut(&other) else {
                                 continue;

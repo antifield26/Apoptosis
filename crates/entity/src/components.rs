@@ -1398,6 +1398,10 @@ fn consumable_from_nbt(tag: &NbtTag) -> Option<Consumable> {
 /// # Errors
 ///
 /// [`ServerError::CorruptData`] when a modelled key carries the wrong shape.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one match arm per component key; splitting it would scatter the key dispatch the strictness review (B-M4) reads as one table"
+)]
 pub fn from_nbt(tag: &NbtTag) -> ServerResult<ItemComponents> {
     let Some(entries) = tag.entries() else {
         return Err(ServerError::CorruptData(
