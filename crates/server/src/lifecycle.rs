@@ -141,6 +141,12 @@ pub struct Server<H: TickHook = NoopHook> {
     /// Sending end of the network → game channel, kept so `start_network` can
     /// hand a [`mc_network::listener::GameLink`] to the listener.
     game_link: Option<mc_network::listener::GameLink>,
+    /// Console command lines, when the binary feeds stdin (P19-03).
+    ///
+    /// `None` unless `set_console_commands` ran: tests and embeddings never
+    /// touch stdin. The run loop drains at most one line per sleep window,
+    /// so a pasted flood waits its turn instead of stalling ticks.
+    console_rx: Option<tokio::sync::mpsc::Receiver<String>>,
 }
 
 impl Server<NoopHook> {
@@ -266,6 +272,39 @@ impl<H: TickHook> Server<H> {
             network: None,
             game: None,
             game_link: None,
+            console_rx: None,
+        }
+    }
+
+    /// Feed server-console lines into the run loop (P19-03).
+    ///
+    /// The binary spawns the stdin reader and hands over the receiver;
+    /// each line runs through [`crate::game::Game::dispatch_console`] at
+    /// console level. A closed channel (stdin EOF) ends console input and
+    /// nothing else — the server keeps running.
+    pub fn set_console_commands(&mut self, rx: tokio::sync::mpsc::Receiver<String>) {
+        self.console_rx = Some(rx);
+    }
+
+    /// Run one console line against the live game, logging the replies.
+    ///
+    /// No game yet (starting up) means the line is dropped with a warning
+    /// rather than queued: console input before a world exists has nothing
+    /// to act on, and holding it would replay stale intent into a fresh
+    /// boot.
+    fn run_console_line(&mut self, text: String) {
+        let Some(game) = self.game.as_mut() else {
+            tracing::warn!("console input before a world exists; dropping the line");
+            return;
+        };
+        let mut report = crate::game::TickReport::default();
+        match game.dispatch_console(&text, &mut report) {
+            Err(error) => tracing::error!(%error, "console command failed"),
+            Ok(lines) => {
+                for line in lines {
+                    tracing::info!(target: "console", "{line}");
+                }
+            }
         }
     }
 
@@ -607,11 +646,9 @@ impl<H: TickHook> Server<H> {
                 // flushes, which is exactly what a shutdown save does, so a periodic
                 // save and a final save persist the same data.
                 if let Some(game) = self.game.as_mut() {
-                    let due = match game.storage_mut() {
-                        Some(storage) => storage.storage_mut().autosave_mut().on_tick(tick),
-                        None => false,
-                    };
-                    if due {
+                    // P19-03: the due-and-allowed check lives on `Game`
+                    // (`autosave_due`), shared with the save-hold test.
+                    if game.autosave_due(tick) {
                         game.save_all_owned()?;
                     }
                 }
@@ -632,9 +669,37 @@ impl<H: TickHook> Server<H> {
             if sleep_nanos > 0 {
                 let sleep = tokio::time::sleep(std::time::Duration::from_nanos(sleep_nanos));
                 tokio::pin!(sleep);
-                tokio::select! {
-                    () = &mut sleep => {},
-                    () = self.shutdown.notified() => {},
+                // Console input joins the same wait (P19-03): at most one
+                // line per window, so pasting into stdin cannot stall ticks.
+                // A closed channel is stdin EOF — console ends, the server
+                // does not. The wait runs in a scope on field borrows (not
+                // whole-`self`) so the arms can coexist; acting on the line
+                // happens after, on a free `self`.
+                let (line, eof) = {
+                    let shutdown = &self.shutdown;
+                    let console_rx = &mut self.console_rx;
+                    let console = async {
+                        match console_rx {
+                            Some(rx) => rx.recv().await,
+                            None => std::future::pending().await,
+                        }
+                    };
+                    tokio::pin!(console);
+                    let mut eof = false;
+                    let line = tokio::select! {
+                        () = &mut sleep => None,
+                        () = shutdown.notified() => None,
+                        line = &mut console => {
+                            eof = line.is_none();
+                            line
+                        }
+                    };
+                    (line, eof)
+                };
+                if let Some(text) = line {
+                    self.run_console_line(text);
+                } else if eof {
+                    self.console_rx = None;
                 }
             } else {
                 // Overdue: yield so signal/notify tasks get a chance to run
@@ -724,6 +789,28 @@ mod tests {
         // historical seed-0 default, stated not hidden.
         assert_eq!(resolve_seed(Some(42), None), 42);
         assert_eq!(resolve_seed(None, None), crate::game::DEFAULT_RANDOM_SEED);
+    }
+
+    /// P19-03: stdin EOF ends console input, not the server. A channel
+    /// whose sender is already dropped reads as closed on the first wait;
+    /// the run must still tick until an external shutdown arrives.
+    #[tokio::test]
+    async fn console_eof_does_not_stop_the_server() {
+        let mut server = Server::new(crate::config::ServerConfig::default());
+        let (tx, rx) = tokio::sync::mpsc::channel(64);
+        drop(tx);
+        server.set_console_commands(rx);
+        let handle: ShutdownHandle = server.shutdown_handle();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(120)).await;
+            handle.request();
+        });
+        let err = Box::pin(server.run())
+            .await
+            .expect_err("run returns Shutdown, not Ok");
+        assert!(matches!(err, ServerError::Shutdown), "wrong error: {err:?}");
+        assert!(server.tick() > 0, "ticks ran despite the closed console");
+        assert_eq!(server.state(), LifecycleState::Stopped);
     }
 
     #[tokio::test]

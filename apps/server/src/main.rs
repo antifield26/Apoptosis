@@ -8,6 +8,8 @@
 
 #![forbid(unsafe_code)]
 
+mod console;
+
 use mc_core::error::ServerError;
 use mc_server::config::ServerConfig;
 use mc_server::lifecycle::Server;
@@ -36,6 +38,11 @@ async fn run() -> i32 {
     }
     let mut server = Server::new(config);
     server.install_signal_handlers();
+    // Console stdin (P19-03): lines run at console level through the tick
+    // loop. EOF drops the sender and ends console input only.
+    let (console_tx, console_rx) = tokio::sync::mpsc::channel(64);
+    server.set_console_commands(console_rx);
+    let _console_reader = console::spawn_console_reader(console_tx);
     if let Err(e) = server.open_world() {
         tracing::error!(error = %e, "cannot open the world");
         return 1;

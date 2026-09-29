@@ -12,6 +12,17 @@ entry is the release candidate matching the workspace version at the time
 with built artifacts. The current workspace version is `0.3.0`, published as
 tag `v0.3.0` (see below).
 
+## [Unreleased] — P19-03 console and saves (v0.4.0 "operable survival" third slice)
+
+Stdin lines dispatch at console level (`dispatch_console`, no connection —
+session commands report "not online" instead of acting); the run loop
+drains at most one line per sleep window and a closed channel (EOF) ends
+console input only, never the server. `/save-all [flush]` saves now even
+when held (`flush` is the only mode); `/save-off` holds the autosave timer
+(dirty flags kept; explicit and shutdown saves still write); `/save-on`
+resumes. Pins: stdin-reader units, console-level/EOF/mode/save-hold
+`console_save_e2e` tests (each proven red), KD-31 moves 36 → 39 roots.
+
 ## [Unreleased] — P19-02 bans (v0.4.0 "operable survival" second slice)
 
 `banned-players.json` + `banned-ips.json` (Vanilla's six keys, uuid/ip-keyed,

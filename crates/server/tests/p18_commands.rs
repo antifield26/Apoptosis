@@ -128,6 +128,9 @@ fn every_operator_command_denies_a_level_zero_player() {
         ("summon", "summon zombie"),
         ("setworldspawn", "setworldspawn"),
         ("whitelist", "whitelist list"),
+        ("save-all", "save-all"),
+        ("save-off", "save-off"),
+        ("save-on", "save-on"),
     ];
     for (name, text) in cases {
         let lines = harness.command(id, &mut out, text);
@@ -606,8 +609,8 @@ fn dispatcher_counts_pin_the_kd_31_and_kd_32_rows() {
         "P19-01 adds the whitelist root; tree has {names:?}"
     );
     assert_eq!(
-        kd31, 36,
-        "KD-31 counts {kd31} roots (30 at P19-01 + 6 ban/kick roots); bump the tree \
+        kd31, 39,
+        "KD-31 counts {kd31} roots (36 at P19-02 + save-all/save-off/save-on); bump the tree \
          and this pin plus the parity row move together"
     );
 

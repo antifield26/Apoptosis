@@ -963,6 +963,12 @@ pub struct Game {
     /// `Game` records the request and the *lifecycle* acts on it, which keeps the
     /// ownership direction one-way: the server drives the game, never the reverse.
     shutdown_requested: bool,
+    /// Whether the autosave timer may write (P19-03).
+    ///
+    /// Default true. `/save-off` holds automatic writes (dirty flags are
+    /// kept, so nothing is lost); explicit `save-all` and the shutdown save
+    /// still write. `/save-on` resumes.
+    saving_enabled: bool,
     /// Every loaded block entity, keyed by position.
     ///
     /// Owned here rather than in `mc-world` because a block entity is *state*, not
@@ -1220,6 +1226,7 @@ impl Game {
             max_players: DEFAULT_MAX_PLAYERS,
             time_offset: 0,
             shutdown_requested: false,
+            saving_enabled: true,
             block_entities: mc_container::BlockEntityStore::new(),
             scheduled_ticks: mc_redstone::UpdateQueue::new(),
             placeholder_without_storage: BTreeSet::new(),
@@ -1738,6 +1745,31 @@ impl Game {
     /// Record a shutdown request from a command.
     pub fn request_shutdown(&mut self) {
         self.shutdown_requested = true;
+    }
+
+    /// Whether the autosave timer may write (P19-03).
+    #[must_use]
+    pub const fn saving_enabled(&self) -> bool {
+        self.saving_enabled
+    }
+
+    /// Hold (`false`) or resume (`true`) automatic writes (P19-03).
+    pub fn set_saving_enabled(&mut self, enabled: bool) {
+        self.saving_enabled = enabled;
+    }
+
+    /// Whether an autosave is due at `tick` and allowed to write (P19-03).
+    ///
+    /// Advances the scheduler either way: a held tick still re-arms, so
+    /// resuming does not replay a burst of missed saves. The lifecycle's
+    /// autosave block calls this (rather than inlining the two
+    /// conditions), so the block and the save-hold test cannot drift apart.
+    pub fn autosave_due(&mut self, tick: mc_core::tick::Tick) -> bool {
+        let due = match self.storage_mut() {
+            Some(storage) => storage.storage_mut().autosave_mut().on_tick(tick),
+            None => false,
+        };
+        due && self.saving_enabled()
     }
 
     /// Install the structure templates and derive the placement rule.

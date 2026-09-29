@@ -19,6 +19,9 @@
 //! | `banlist` | optional kind, administrator-only | names banned profiles or addresses |
 //! | `kick` | player + greedy reason, administrator-only | disconnects a live session with a reason; writes nothing |
 //! | `stop` | none, console-only | asks the server to shut down |
+//! | `save-all` | optional `flush`, operator-only | saves the world now, even with automatic saving held; `flush` is the only mode and names what the call does (push + sync before replying) |
+//! | `save-off` | none, operator-only | holds automatic (autosave-tick) writes; dirty flags are kept, explicit and shutdown saves still write |
+//! | `save-on` | none, operator-only | resumes automatic writes |
 //! | `gamemode` | word + optional player name, operator-only | sets the invoking player's game mode |
 //! | `give` | player name + resource + optional ranged integer, operator-only | gives items, dropping overflow at the player's feet |
 //! | `kill` | optional player name, operator-only | kills the invoking player through the damage path, even in creative |
@@ -330,6 +333,14 @@ impl Game {
             .with_argument(Argument::greedy("reason"))
             .requiring(PermissionLevel::Administrator));
         add(Command::new("stop", "Stop the server").requiring(PermissionLevel::Console));
+        // P19-03: saving controls, operator-only like the P18 admin set.
+        add(Command::new("save-all", "Save the world now")
+            .with_argument(Argument::optional("mode", ArgumentKind::Word))
+            .requiring(PermissionLevel::Operator));
+        add(Command::new("save-off", "Hold automatic world saves")
+            .requiring(PermissionLevel::Operator));
+        add(Command::new("save-on", "Resume automatic world saves")
+            .requiring(PermissionLevel::Operator));
         // P14-01: the admin set, all operator-only like Vanilla's level 2.
         add(Command::new("gamemode", "Set your game mode")
             .with_argument(Argument::word("mode"))
@@ -486,6 +497,71 @@ impl Game {
         Ok(())
     }
 
+    /// Dispatch a command string from the server console (P19-03).
+    ///
+    /// Same parse-then-run as [`Game::dispatch_command`], but the source is
+    /// the console (level 4: it may run everything, including
+    /// console-only `stop`) and feedback returns as lines instead of chat —
+    /// there is no connection to send to. Handlers that need a live session
+    /// run against a sentinel id no session holds
+    /// (`ConnectionId(0)`; allocation starts at 1), so session-targeted
+    /// commands report "not online" rather than acting on a stranger.
+    ///
+    /// # Errors
+    ///
+    /// As for [`Game::dispatch_command`]: only an unencodable reply is an
+    /// error; refusals come back as lines.
+    pub fn dispatch_console(
+        &mut self,
+        command: &str,
+        report: &mut TickReport,
+    ) -> ServerResult<Vec<String>> {
+        use mc_command::source::CommandSource;
+        let source = CommandSource::console();
+        let dispatcher = mc_command::Dispatcher::new(Self::build_command_tree());
+        let outcome = dispatcher.parse(command, &source);
+        let mut lines = Vec::new();
+        // `run_command`'s session lookups all miss on the sentinel, by
+        // construction above — but if a future handler ever *creates* state
+        // for an unknown id, this is where it would surface.
+        let id = mc_network::bridge::ConnectionId(0);
+        match outcome {
+            mc_command::CommandOutcome::Parsed(parsed) => {
+                match self.run_command(id, &parsed, report)? {
+                    CommandResult::Ok { feedback } => {
+                        if let Some(text) = feedback {
+                            lines.push(text);
+                        }
+                    }
+                    CommandResult::Stop => {
+                        info!("stop requested via console");
+                        self.request_shutdown();
+                        lines.push("Stopping the server…".to_owned());
+                    }
+                }
+            }
+            mc_command::CommandOutcome::UnknownCommand { name, suggestions } => {
+                if suggestions.is_empty() {
+                    lines.push(format!("Unknown command {name:?}. Try /help."));
+                } else {
+                    lines.push(format!(
+                        "Unknown command {name:?}. Did you mean {}?",
+                        suggestions.join(", ")
+                    ));
+                }
+            }
+            mc_command::CommandOutcome::PermissionDenied { name, .. } => {
+                // Unreachable: the console outranks every gate. A refusal
+                // here means a new gate above Console, and it must be loud.
+                lines.push(format!("The console cannot use /{name}."));
+            }
+            mc_command::CommandOutcome::BadArguments(error) => {
+                lines.push(error.to_string());
+            }
+        }
+        Ok(lines)
+    }
+
     /// The command source for a connection, or `None` when it has no session.
     ///
     /// The level comes from the session, which the join path set from
@@ -575,6 +651,9 @@ impl Game {
             "msg" | "tell" | "w" => Ok(self.command_msg(id, parsed, report)),
             "me" => Ok(self.command_me(parsed, report)),
             "stop" => Ok(CommandResult::Stop),
+            "save-all" => Ok(self.command_save_all(parsed)),
+            "save-off" => Ok(self.command_save_off()),
+            "save-on" => Ok(self.command_save_on()),
             // Unreachable: the tree only contains the names above, and `parse` resolved
             // this one through it. Returning a refusal rather than panicking keeps a
             // future tree/`match` divergence from taking the server down.
@@ -1415,6 +1494,42 @@ impl Game {
         CommandResult::message(format!("Seed: {}", self.random_seed()))
     }
 
+    /// `/save-all [flush]` (P19-03): save now, unconditionally.
+    ///
+    /// Runs even with automatic saving held: it is an explicit operator
+    /// action, and `flush` (the only accepted mode) names what the call
+    /// already does — `save_all_owned` pushes dirty chunks and syncs, so
+    /// the reply is sent only after data is on disk. Anything else as a
+    /// mode is refused by name.
+    fn command_save_all(&mut self, parsed: &mc_command::dispatch::ParsedCommand) -> CommandResult {
+        if let Some(mode) = parsed.string(0)
+            && mode != "flush"
+        {
+            return CommandResult::message(
+                "Usage: /save-all [flush]: `flush` is the only mode".to_owned(),
+            );
+        }
+        match self.save_all_owned() {
+            Err(error) => CommandResult::message(format!("Save failed: {error}")),
+            Ok(()) => CommandResult::message("Saved the world".to_owned()),
+        }
+    }
+
+    /// `/save-off` (P19-03): hold automatic (autosave-tick) writes.
+    ///
+    /// Dirty flags are kept, so nothing is lost — the next `save-all`,
+    /// `save-on` or shutdown save writes it all. Explicit saves and the
+    /// shutdown save still write; only the timer holds.
+    fn command_save_off(&mut self) -> CommandResult {
+        self.set_saving_enabled(false);
+        CommandResult::message("Automatic saving is now held".to_owned())
+    }
+
+    /// `/save-on` (P19-03): resume automatic writes.
+    fn command_save_on(&mut self) -> CommandResult {
+        self.set_saving_enabled(true);
+        CommandResult::message("Automatic saving is resumed".to_owned())
+    }
     /// `/difficulty [difficulty]`
     fn command_difficulty(
         &mut self,
