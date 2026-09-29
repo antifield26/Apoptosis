@@ -117,13 +117,17 @@ the in-section index is `x + z*16 + y*256` for blocks (x fastest) and
 `ClientboundLightUpdatePacketData` (also used by `light_update`):
 
 ```text
-VarInt sky light mask
-VarInt block light mask
-VarInt empty sky light mask
-VarInt empty block light mask
+BitSet sky light mask (VarInt long-count + that many i64s)
+BitSet block light mask
+BitSet empty sky light mask
+BitSet empty block light mask
 VarInt sky light array count,  then per array: VarInt 2048, byte[2048]
 VarInt block light array count, then per array: VarInt 2048, byte[2048]
 ```
+
+(Masks were read as `VarInt`s before the P10-03 KD-44 fix, which survives an
+empty mask — 0 == 0 in both encodings — and silently misreads any mask with
+content.)
 
 Bit `i` of a mask corresponds to section `i - 1` (section 0 maps to bit 1); the
 highest bit covers the layer above the world. Phase 04 sent **no** light arrays:

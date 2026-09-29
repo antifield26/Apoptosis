@@ -2,7 +2,8 @@
 //!
 //! ## The formats, surveyed from the 26.1.2 jar
 //!
-//! `data/minecraft/recipe/` holds **1 516 files** across **21 recipe types**. This
+//! `data/minecraft/recipe/` holds **1 515 files** across **21 recipe types** (the
+//! baseline's older "1 516" counted the `recipe/` directory entry itself). This
 //! module models the seven that are actual crafting/cooking recipes and that the
 //! container layer can execute:
 //!

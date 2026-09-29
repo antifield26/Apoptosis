@@ -1,4 +1,4 @@
-# Apoptosis — a pure-Rust Minecraft Java Edition 26.1.2 server
+﻿# Apoptosis — a pure-Rust Minecraft Java Edition 26.1.2 server
 
 A from-scratch, dependency-light dedicated server for **Minecraft: Java Edition
 26.1.2** (protocol **775**), written entirely in safe Rust. First-class target:
@@ -70,7 +70,7 @@ This project records gaps instead of papering over them. The headline items
 - **29 of ~90 commands**; chests, furnaces and hoppers open as windows a real
   client can transact with (P12-07/08), and the P17-02/P17-05 owner session
   transacted a double chest and a hopper→furnace chain on a live client.
-  Open: the remaining root literals, and `execute` covers 12 of ~20 modifiers.
+  Open: the remaining root literals, and `execute` covers 9 of ~20 modifiers.
 - **No full real-client acceptance yet** — a Java 26.1.2 client has joined,
   rendered night, mobs and drops (P10-11/P11 acceptance), run the P17
   container session (P17-05), and played a 30-minute mixed 10-client soak

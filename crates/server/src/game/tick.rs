@@ -962,8 +962,7 @@ impl Game {
                     continue;
                 }
                 if !self.store_hopper_inventory(dest_pos, dest_halves, &back_dest) {
-                    let _ =
-                        self.store_hopper_inventory(source_pos, source_halves, &source_items);
+                    let _ = self.store_hopper_inventory(source_pos, source_halves, &source_items);
                     continue;
                 }
                 moved = true;
@@ -3470,11 +3469,8 @@ impl Game {
     /// state its *block* owns, so a block that changed no longer owns it; leaving the
     /// entry behind would make it reappear if the same block were placed again.
     ///
-    /// **A retired entity's items are currently lost.** The count is logged and the
-    /// retirement is counted on the tick report, but nothing spawns them: an item drop
-    /// needs a per-item position, which is P06-08's caller. The previous comment here
-    /// claimed they were dropped, which the log a few lines below contradicts
-    /// (Audit 05).
+    /// A retired entity's non-empty stacks spawn as ground items at the block
+    /// centre (`survival_e2e::breaking_a_chest_drops_its_contents`).
     /// Spend the per-tick light budget: recompute the light of queued chunks and tell the clients that hold
     /// them.
     ///
@@ -4433,9 +4429,9 @@ impl Game {
                 // recompute so holders converge (the unload leg of the C1
                 // contract; arrival already mirrors it). The departed chunk
                 // itself needs no queue entry.
-                for neighbour in mc_world::world::light_updates_for_unload(pos, |p| {
-                    self.world.is_loaded(p)
-                }) {
+                for neighbour in
+                    mc_world::world::light_updates_for_unload(pos, |p| self.world.is_loaded(p))
+                {
                     self.pending_light.insert(neighbour);
                 }
                 // AUDIT-09 B-06: the do-not-persist mark belongs to a *loaded*

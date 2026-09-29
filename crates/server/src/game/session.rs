@@ -1349,9 +1349,7 @@ impl Game {
                     )
                     .ok()
                 })
-                .or_else(|| {
-                    mc_entity::stack::ItemStack::new(item.item_id, item.count).ok()
-                })
+                .or_else(|| mc_entity::stack::ItemStack::new(item.item_id, item.count).ok())
                 .ok_or_else(|| {
                     ServerError::Protocol(format!("creative stack refused: id {}", item.item_id))
                 })?
@@ -2665,14 +2663,10 @@ impl Game {
                             // A 54-menu spans two 27-slot entities; the
                             // single write-back no-ops on the size mismatch
                             // (B-H1), so each dirty slot rides its half here.
-                            if let Some(right) =
-                                self.block_entities.get_mut(right_pos)
-                            {
+                            if let Some(right) = self.block_entities.get_mut(right_pos) {
                                 write_back_double_half(menu, right, 0, &dirty);
                             }
-                            if let Some(left) =
-                                self.block_entities.get_mut(left_pos)
-                            {
+                            if let Some(left) = self.block_entities.get_mut(left_pos) {
                                 write_back_double_half(menu, left, 27, &dirty);
                             }
                             mark_block_dirty(&mut self.world, right_pos.x, right_pos.z);
@@ -2698,93 +2692,89 @@ impl Game {
                     let viewers: Vec<ConnectionId> = self
                         .sessions
                         .values()
-                        .filter(|session| {
-                            session.id != id && session.open_block == Some(pos)
-                        })
+                        .filter(|session| session.id != id && session.open_block == Some(pos))
                         .map(|session| session.id)
                         .collect();
-            if !viewers.is_empty() {
-                let snapshot: Vec<mc_entity::stack::ItemStack> = self
-                    .sessions
-                    .get(&id)
-                    .and_then(|session| session.menu.container(0))
-                    .map_or_else(Vec::new, |container| {
-                        (0..container.len()).map(|i| container.get(i)).collect()
-                    });
-                // (viewer, window, state, [(menu slot, stack)]), collected
-                // before any send (which needs `&mut self`).
-                let mut pushes: Vec<(
-                    ConnectionId,
-                    i32,
-                    i32,
-                    Vec<(i16, mc_protocol::packets::play::ItemStack)>,
-                )> = Vec::new();
-                for other in viewers {
-                    let Some(session) = self.sessions.get_mut(&other) else {
-                        continue;
-                    };
-                    let same_len = session
-                        .menu
-                        .container(0)
-                        .is_some_and(|container| container.len() == snapshot.len());
-                    if snapshot.is_empty() || !same_len {
-                        continue;
-                    }
-                    let mut deltas = Vec::new();
-                    // Menu slots addressing container 0, resolved before
-                    // the mutable borrow below.
-                    let block_menu_slots: Vec<(i16, usize)> = {
-                        let menu = &session.menu;
-                        (0..menu.slot_count())
-                            .filter_map(|menu_slot| {
-                                menu.mapping(menu_slot).and_then(|mapping| {
-                                    (mapping.container == 0).then_some((
-                                        menu_slot as i16,
-                                        usize::from(mapping.slot),
-                                    ))
-                                })
-                            })
-                            .collect()
-                    };
-                    if let Some(container) = session.menu.container_mut(0) {
-                        for (index, stack) in snapshot.iter().enumerate() {
-                            if container.get(index) != *stack {
-                                let _ = container.set(index, stack.clone());
-                                for (menu_slot, container_index) in &block_menu_slots {
-                                    if *container_index == index {
-                                        deltas.push((
-                                            *menu_slot,
-                                            wire_stack(stack.clone()),
-                                        ));
+                    if !viewers.is_empty() {
+                        let snapshot: Vec<mc_entity::stack::ItemStack> = self
+                            .sessions
+                            .get(&id)
+                            .and_then(|session| session.menu.container(0))
+                            .map_or_else(Vec::new, |container| {
+                                (0..container.len()).map(|i| container.get(i)).collect()
+                            });
+                        // (viewer, window, state, [(menu slot, stack)]), collected
+                        // before any send (which needs `&mut self`).
+                        let mut pushes: Vec<(
+                            ConnectionId,
+                            i32,
+                            i32,
+                            Vec<(i16, mc_protocol::packets::play::ItemStack)>,
+                        )> = Vec::new();
+                        for other in viewers {
+                            let Some(session) = self.sessions.get_mut(&other) else {
+                                continue;
+                            };
+                            let same_len = session
+                                .menu
+                                .container(0)
+                                .is_some_and(|container| container.len() == snapshot.len());
+                            if snapshot.is_empty() || !same_len {
+                                continue;
+                            }
+                            let mut deltas = Vec::new();
+                            // Menu slots addressing container 0, resolved before
+                            // the mutable borrow below.
+                            let block_menu_slots: Vec<(i16, usize)> = {
+                                let menu = &session.menu;
+                                (0..menu.slot_count())
+                                    .filter_map(|menu_slot| {
+                                        menu.mapping(menu_slot).and_then(|mapping| {
+                                            (mapping.container == 0).then_some((
+                                                menu_slot as i16,
+                                                usize::from(mapping.slot),
+                                            ))
+                                        })
+                                    })
+                                    .collect()
+                            };
+                            if let Some(container) = session.menu.container_mut(0) {
+                                for (index, stack) in snapshot.iter().enumerate() {
+                                    if container.get(index) != *stack {
+                                        let _ = container.set(index, stack.clone());
+                                        for (menu_slot, container_index) in &block_menu_slots {
+                                            if *container_index == index {
+                                                deltas
+                                                    .push((*menu_slot, wire_stack(stack.clone())));
+                                            }
+                                        }
                                     }
+                                }
+                            }
+                            if deltas.is_empty() {
+                                continue;
+                            }
+                            pushes.push((
+                                other,
+                                i32::from(session.menu.window_id()),
+                                session.menu.state_id(),
+                                deltas,
+                            ));
+                        }
+                        for (other, window, state, deltas) in pushes {
+                            for (menu_slot, item) in deltas {
+                                let packet = ContainerSetSlot {
+                                    window_id: window,
+                                    state_id: state,
+                                    slot: menu_slot,
+                                    item,
+                                };
+                                if let Err(error) = self.send(other, &packet, report) {
+                                    debug!(id = %other, %error, "could not push a co-viewer slot update");
                                 }
                             }
                         }
                     }
-                    if deltas.is_empty() {
-                        continue;
-                    }
-                    pushes.push((
-                        other,
-                        i32::from(session.menu.window_id()),
-                        session.menu.state_id(),
-                        deltas,
-                    ));
-                }
-                for (other, window, state, deltas) in pushes {
-                    for (menu_slot, item) in deltas {
-                        let packet = ContainerSetSlot {
-                            window_id: window,
-                            state_id: state,
-                            slot: menu_slot,
-                            item,
-                        };
-                        if let Err(error) = self.send(other, &packet, report) {
-                            debug!(id = %other, %error, "could not push a co-viewer slot update");
-                        }
-                    }
-                }
-            }
                 }
             }
         }

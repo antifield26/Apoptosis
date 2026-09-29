@@ -1,4 +1,4 @@
-# P18-05 — v0.3.0 verdict (materials; tag withheld)
+# P18-05 — v0.3.0 verdict (materials; pre-tag record, tag since cut)
 
 Date: 2026-09-23 · pre-tag closeout.
 
@@ -20,7 +20,7 @@ Date: 2026-09-23 · pre-tag closeout.
 | Real-client walk + screens | **NOT RUN** — owner session required |
 | Tag commit + artifacts + green CI | **tag `v0.3.0` on `9aa8c76`** (annotated); CI green on that commit (run `36438306811`: deny, docs-audit, x86_64, linux, aarch64 all success); release workflow run `36443106872` triggered by the tag (x86_64 artifact + checksums; aarch64 asset is the manual Pi step per release.yml) |
 | CHANGELOG / PARITY / TEST-MATRIX agree | updated in this closeout |
-| No tag without walk and screens | **honoured: tag withheld** |
+| No tag without walk and screens | **honoured at the time (tag cut only after the walk); this row is the pre-tag record, kept as history** |
 
 ## Named NOT RUN (blocks an unconditional verdict)
 

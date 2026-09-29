@@ -495,3 +495,72 @@ fn describe_outcome(outcome: &mc_command::CommandOutcome) -> String {
         mc_command::CommandOutcome::Parsed(_) => "Internal error.".to_owned(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Resolution;
+    use mc_network::bridge::{ClientEvent, ClientEventKind, ConnectionId, OutboundSender};
+
+    /// E-16: `rotated` applies yaw/pitch to the execution context — parsed
+    /// *and* applied, not parsed and discarded. Zeroing the `Rotated` arm
+    /// (or routing it to `Ok` without touching `current`) fails the yaw
+    /// assert; the e2e pin only proves run-vs-refused. No inner command
+    /// consumes rotation yet (documented gap), so the context is the
+    /// observable.
+    #[test]
+    fn rotated_applies_yaw_pitch_to_the_context() {
+        let dir = mc_test_support::fixtures::TempDir::new("exec-rotated-unit");
+        let config = crate::config::StorageConfig {
+            world_dir: dir.path().join("world"),
+            autosave_ticks: 0,
+            seed: None,
+        };
+        let storage = crate::storage::WorldService::open(&config).expect("world opens");
+        let (tx, rx) = mc_network::bridge::game_channel(256);
+        let mut game = crate::game::Game::with_seed_and_storage(
+            storage,
+            4,
+            rx,
+            crate::game::DEFAULT_RANDOM_SEED,
+        )
+        .expect("game builds");
+        let id = ConnectionId(1);
+        let (outbound, _out) = OutboundSender::pair(id, 8192);
+        tx.try_send(ClientEvent {
+            id,
+            kind: ClientEventKind::Joined {
+                profile: mc_network::auth::offline_profile("Tester"),
+                outbound,
+            },
+        })
+        .expect("join queued");
+        game.tick().expect("tick applies the join");
+        let source = game.command_source(id).expect("source");
+        let chain = mc_command::execute::parse(
+            &["rotated", "90", "45", "run", "say", "x"]
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+        )
+        .expect("parses");
+        let resolved = game.resolve_chain(&chain, &source).expect("resolves");
+        let Resolution::Run {
+            source: rotated,
+            command,
+        } = resolved
+        else {
+            panic!("a bare rotated chain runs");
+        };
+        assert_eq!(command, "say x");
+        assert!(
+            (rotated.yaw - 90.0).abs() < f32::EPSILON,
+            "yaw applied, saw {}",
+            rotated.yaw
+        );
+        assert!(
+            (rotated.pitch - 45.0).abs() < f32::EPSILON,
+            "pitch applied, saw {}",
+            rotated.pitch
+        );
+    }
+}

@@ -785,9 +785,8 @@ pub struct Game {
     ///
     /// `leave` stores the whole [`Player`] (position, health, inventory, mode);
     /// a rejoin restores it when it was alive. This survives disconnects, not
-    /// restarts: `playerdata/<uuid>.dat` files are the P16 item, and a fresh
-    /// process starts every player at spawn (declared, and the restart test
-    /// pins it).
+    /// restarts: `playerdata/<uuid>.dat` files restore players across restarts
+    /// since P14-10 (pinned by `reconnect.rs::restart_restores_the_player_from_the_playerdata_file`).
     remembered: BTreeMap<String, Player>,
     /// Every live entity in the dimension (P05-03).
     entities: EntityStore,
@@ -1272,12 +1271,9 @@ impl Game {
 
     /// The live random source for this simulation.
     ///
-    /// **Nothing draws from it yet.** The sequence matters as soon as mob spawning
-    /// (P05-11) and AI decisions exist; fixing the seeding policy now — a field
-    /// with a documented default plus [`Game::with_seed`] — means those systems
-    /// inherit reproducibility instead of having it retrofitted. Exposing the
-    /// source is also what lets a test assert two runs drew the same sequence once
-    /// there is a consumer.
+    /// Seeded once per boot (stored world seed wins, else configured, else
+    /// `DEFAULT_RANDOM_SEED`); the spawn cycle, loot rolls and XP scatter
+    /// draw from it, so a replay from the same seed takes the same draws.
     #[must_use]
     pub const fn random(&self) -> &RandomSource {
         &self.random

@@ -1,4 +1,4 @@
-# Test Matrix — current view
+﻿# Test Matrix — current view
 
 Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 `L3` integration · `L4` golden/fixture · `L5` end-to-end · `L6` differential vs
@@ -12,7 +12,8 @@ The +1 over the **1 684** figure:
 hook gutted).
 The +3 over the **1 681** figure: +2 the hunger sync pins
 (`hunger_spend_reaches_the_client_as_set_health`,
-`given_bread_is_edible_and_the_finish_syncs_vitals`, both fail with their
+`given_bread_carries_food_defaults` and `eat_finish_syncs_vitals_to_the_client`
+(split from one compound pin so each red attributes to one fix), both fail with their
 mechanism neutralised) +1 `food_defaults_mirror_the_jar_table`.
 The +4 over the **1 677 / 133** figure: +2 the P18-03 wiring suite
 `underground_wiring` (live ore + carved air with the unwiring red, and the
@@ -144,25 +145,25 @@ manual-state hold); Step B contributes four `mechanisms` end-to-end
 dropper drop plus the nine-slot window) plus one `mc-redstone` lib pin
 (back-face-only emission). Falsification: unwritten toggle, neutered
 mechanism arm, unpowered observer and spawnless dispense each fail their
-probe, and **eight from P17-02 Step A**: one `mc-container` lib pin
-(output-only furnace pull), four `hopper_furnace` end-to-end (output-only
+probe, and **nine from P17-02 Step A**: one `mc-container` lib pin
+(output-only furnace pull), five `hopper_furnace` end-to-end (output-only
 pull, top smeltable feed with fuel holdback, side fuel feed with smeltable
-holdback, the full feed-cook-collect chain) and three `barrel` end-to-end
+holdback, the full feed-cook-collect chain, take-moves-output below) and three `barrel` end-to-end
 ("Barrel" title, on-disk `minecraft:barrel` id, restart round-trip).
 Falsification: all-Storage pull roles and the chest-id save each fail
-their probe, and **seven from P17-02 Step B**: the `double_chest`
+their probe, and **eight from P17-02 Step B**: the `double_chest`
 end-to-end suite (left/right joining with no triples, the 54-slot
-right-first open, click-transact with split close, break-singles with
-drops, cross-half hopper pull, cover refusal with the barrel control,
+right-first open, click-transact with split close, mid-open half write-back,
+break-singles with drops, cross-half hopper pull, cover refusal with the barrel control,
 copper joins copper with its own titles). Falsification: never-join and
-flipped order each fail their probe, and **five from P17-02 Step C**: the
+flipped order each fail their probe, and **six from P17-02 Step C**: the
 `crafting_table` end-to-end suite (window open with type 12, click-craft
 sticks with take-consume, the width-3-only slab row, single-consume
-shift-take, close returns leftovers). Falsification: hardcoded width 2
-and unconsumed shift-take each fail their probe, and **four from the owner
+shift-take, close returns leftovers, 2x2 grid returns on inventory close). Falsification: hardcoded width 2
+and unconsumed shift-take each fail their probe, and **five from the owner
 session round 1**: the attack-decode case (swings ride packet id 1), the
 entity-event round trip, the orb-value golden with its type-2 refusal,
-and the knockback fold/hurt-flash pins. Falsification: arm removed,
+and the knockback fold/hurt-flash pins (orb golden + refusal are two tests). Falsification: arm removed,
 bytes perturbed, fixed-int shape refused, fold deleted — each red, and
 **two from the owner session round 2**: the `hurt_animation` byte golden
 (`mc-protocol` lib) and the rejoin-ids regression (`join_entity_id`
@@ -197,18 +198,22 @@ before the P18 landing — the 8 differential suites in the last section (16 tes
 (**35 + 5 + 1 = 41**), all run on demand.
 
 **Every per-crate count below was re-measured with `cargo test -p <crate> --lib`**
-crate by crate on the current tree. The 17 lib counts sum to **1 155**
-(`mc-command` 96, `mc-core` 28, `mc-test-support` 4, `mc-protocol` 129,
-`mc-nbt` 17, `mc-container` **135**, `mc-data` 135, `mc-registry` 27,
-`mc-entity` 185, `mc-world` 49, `mc-persistence` 67, `mc-network` 19,
-`mc-redstone` 69, `mc-server` 67, `mc-simulation` 18, `mc-worldgen` 99,
+crate by crate on the current tree. The 17 lib counts sum to **1 171**
+(`mc-command` 96, `mc-core` 28, `mc-test-support` 4, `mc-protocol` 135,
+`mc-nbt` 17, `mc-container` **136**, `mc-data` 135, `mc-registry` 27,
+`mc-entity` 187, `mc-world` 49, `mc-persistence` 69, `mc-network` 19,
+`mc-redstone` 69, `mc-server` 71, `mc-simulation` 18, `mc-worldgen` 100,
 `mc-capture-rig` 11). Four entries drifted unnoticed across the P16–P18
 landings and are corrected here with the drift flagged, not absorbed:
 `mc-command` 93 → 96, `mc-registry` 26 → 27, `mc-entity` 158 → 185,
 `mc-worldgen` 86 → 99. Of those deltas exactly +3 belong to this fix (+2
 `mc-protocol` patch-order tests, +1 `food_defaults_mirror_the_jar_table`);
 the rest predate it — the "re-measured" claim this sentence carried before
-was evidently not run for every crate.
+was evidently not run for every crate. The AUDIT-18 round adds +16 lib
+(`mc-protocol` +6 decoders/boundaries, `mc-entity` +2 unknown strictness,
+`mc-persistence` +2 seed, `mc-container` +1 clone patch, `mc-worldgen` +1
+extreme carve, `mc-server` +4 fill-boundary/seed/execute-angle) and the
+area cells below carry the matching figures.
 Several of these differ from the figures this sentence used to carry
 (`mc-protocol` 118, `mc-entity` 136, `mc-simulation` 28, `mc-data` 129,
 `mc-world` 44, `mc-persistence` 74, `mc-worldgen` 81, `mc-registry` 21,
@@ -224,7 +229,7 @@ crate's** count with the names rotated (`docs/audits/AUDIT-07-REMEDIATION.md`
 **Limitation, stated rather than left as a trap.** The per-*area* lib counts below
 are measured and current. The named-suite counts in the middle column were measured
 in the P10-03 round; the suites the later landings touched are updated
-(`packet_ids` 4 -> 6, `light_cache` 8, `loot_and_pickup` 8, `entity_persistence` 2,
+(`packet_ids` 4 -> 6, `light_cache` 10, `loot_and_pickup` 9, `entity_persistence` 2,
 `player_attack` 9, `entity_lifecycle` 9), and the P10/P11 suites the old table never
 listed (`natural_spawn` 4, `ai_wiring` 7, `block_change_ack` 4, `mob_pathing` 5,
 `reach_validation` 7, and
@@ -250,18 +255,18 @@ remaining per-crate lib binaries are itemised above and complete the total above
 
 | Area | Named suites (lib count) | What they prove |
 |---|---|---|
-| Protocol | `packet_ids` (6), `fixtures` (4), `mc-protocol` lib (**123**) | every packet id matches the jar's registration bytecode (incl. the `chat_command`=7 regression, L7); **every constant in `ids.rs` is compared against the jar-extracted table, in its own state and direction** (110 of them: 105 + P12 `open_screen`/`container_set_data`/`container_close`/`set_cursor_item` + P14 `forget_level_chunk`); **the protocol version is compared against the jar's own `version.json`** (AUDIT-09 E-03); golden wire bytes for frames/handshake/NBT; hostile VarInt/frame corpora; compression bomb rejection; **`respawn` is decoded the way the client decodes it** — a reader transcribed from `CommonPlayerSpawnInfo`'s bytecode, not a round trip through our own encoder, with the old truncated shape pinned as an out-of-bytes read (M-1); **P12 window packets round-trip with jar-verified shapes** (`open_screen` VarInt+MENU+Component, `container_set_data` VarInt+short+short, `container_close` VarInt, `set_cursor_item` single stack) |
+| Protocol | `packet_ids` (6), `fixtures` (4), `mc-protocol` lib (**135**) | every packet id matches the jar's registration bytecode (incl. the `chat_command`=7 regression, L7); **every constant in `ids.rs` is compared against the jar-extracted table, in its own state and direction** (110 of them: 105 + P12 `open_screen`/`container_set_data`/`container_close`/`set_cursor_item` + P14 `forget_level_chunk`); **the protocol version is compared against the jar's own `version.json`** (AUDIT-09 E-03); golden wire bytes for frames/handshake/NBT; hostile VarInt/frame corpora; compression bomb rejection; **`respawn` is decoded the way the client decodes it** — a reader transcribed from `CommonPlayerSpawnInfo`'s bytecode, not a round trip through our own encoder, with the old truncated shape pinned as an out-of-bytes read (M-1); **P12 window packets round-trip with jar-verified shapes** (`open_screen` VarInt+MENU+Component, `container_set_data` VarInt+short+short, `container_close` VarInt, `set_cursor_item` single stack) |
 | Network | `mc-network` lib (19), `keepalive` (1), `login_tolerance` (2), `e2e_login_play` (6) | connection lifecycle, admission limits, keepalive timeout kick, malformed input drops only that connection, login-phase tolerance, full offline login over a real socket |
-| Persistence | `mc-persistence` lib (67), `anvil_fixture` (9), `corruption` (16), `restart` (7) | region/NBT codec edges, byte-identical palette repack, bit-flip → typed error with no partial publish, save→close→reopen semantics, atomic tmp→rename pinned by `a_failed_commit_leaves_the_live_file_untouched` (Audit 07 finding H1), dirty-flag retry on failure. Commit order is journalled by `location_word_is_written_after_payload` (AUDIT-09 B-02 closed in P15-07; AUDIT-16 P-2: the pin asserts location **after payload**, not absolute last vs timestamp) |
-| Survival & world | `mc-world` lib (49), `light_cache` (8), `vanilla_chunk` (4), `survival_e2e` (**28** `#[test]` in source; the old 29 was a one-off overcount), `network_game_bridge` (4), **`block_change_ack` (4)**, **`reach_validation` (7)**, **`chunk_streaming` (3)**, **`admin_commands` (17)**, **`reconnect` (5)** | collision/ray/hostile movement guards; a real vanilla chunk walks and round-trips losslessly; join/stream budgets (unload forgets by name, per-session view distance, cache centre on every crossing), break/place validation, death/respawn, save-reload over real sockets, admin commands, reconnect sweep; **light-cache invalidation drops the diagonal chunk at a corner**, compared against an oracle derived independently from the margin interval (AUDIT-09 B-05); **a fluid is non-solid *and* liquid, and an unknown id is neither** — the predicate M-4's lookahead reads; **a dig is acknowledged with the client's own sequence, once per tick at the high-water mark, after the block update and even when the dig was refused** (M-2); **the reach rule is the jar's arithmetic** — the survival buffer case (4.5 < d < 5.5 accepted, which the pre-AUDIT-11 constant refused), the creative `+0.5`, the strict `<` boundary, the 3-D eye measurement, and the entity gate that stops a swing landing from anywhere (AUDIT-11 N-1) |
-| Entities & simulation | `mc-entity` lib (158 + 4 doc), `entity_lifecycle` (9), `entity_persistence` (2), `player_attack` (9), `natural_spawn` (4), `ai_wiring` (7), **`mob_pathing` (5)**, `join_entity_id` (1) | ids never reused, timers/effects/projectiles/pathfinding invariants, JDK-25-verified RNG, phase ordering, determinism replays, spawn/despawn/chunk-unload lifecycle; **a second `Game` on the same `world_dir` gets the saved mobs and drops back**, and a joining player is told about a resident entity on the join tick (P11-08); **one swing takes exactly the fist damage, a second inside the 10-tick window is refused** (P11-06); **a landed hit broadcasts `hurt_animation` (play 42) with the damage-direction yaw** (owner round 2 — `entity_event` 2 is not the flash on a modern client); **a rejoin's `JoinGame` names its own allocated entity id** (owner round 2); day/night spawn rules and the 24-block minimum (P11-01); **the walk-speed constant is the measured zombie ceiling, not the player extrapolation, and a zombie is pinned below 7.5 blocks/s** (M-3); **a mob walks up to water and stops at its edge, and a clear course still lets it reach the player** — the negative control that keeps the two refusal tests from being satisfied by a lookahead that refuses everything (M-4) |
-| Inventory & containers | `mc-container` lib (**135**), `container_e2e` (6), `block_entity_e2e` (**7**), `inventory_duplication` (8), `loot_and_pickup` (9), **`p17_owner_pins` (4)** | click/swap/drag conservation, stale-state resync, computed slots, retirement reporting; real-socket click round trips; 2 000-click floods cannot create or destroy items — the flood over a **capped slot** reaches the over-limit path the chest flood cannot, so a discarded overflow is caught (Audit 07 finding M1); **the loot table is the drop authority** — a survival break drops the table's item (the fixture names cobblestone for stone, so a block-echoing path fails), creative and table-less blocks drop nothing, a mob death rolls `entities/<kind>`, a ready stack is collected, nearby stacks merge into the older one, and a full inventory leaves the leftover on the ground (P11-04/05/09); P17-03 tag expansion + simple transmute (sticks from `#planks`, dye transmute, complex transmute counted); since the P14
+| Persistence | `mc-persistence` lib (**69**), `anvil_fixture` (9), `corruption` (16), `restart` (7) | region/NBT codec edges, byte-identical palette repack, bit-flip → typed error with no partial publish, save→close→reopen semantics, atomic tmp→rename pinned by `a_failed_commit_leaves_the_live_file_untouched` (Audit 07 finding H1), dirty-flag retry on failure. Commit order is journalled by `location_word_is_written_after_payload` (AUDIT-09 B-02 closed in P15-07; AUDIT-16 P-2: the pin asserts location **after payload**, not absolute last vs timestamp) |
+| Survival & world | `mc-world` lib (49), `light_cache` (**10**), `vanilla_chunk` (4), `survival_e2e` (**31** `#[test]` in source; the old 29 was a one-off overcount), `network_game_bridge` (4), **`block_change_ack` (4)**, **`reach_validation` (7)**, **`chunk_streaming` (3)**, **`admin_commands` (17)**, **`reconnect` (5)** | collision/ray/hostile movement guards; a real vanilla chunk walks and round-trips losslessly; join/stream budgets (unload forgets by name, per-session view distance, cache centre on every crossing), break/place validation, death/respawn, save-reload over real sockets, admin commands, reconnect sweep; **light-cache invalidation drops the diagonal chunk at a corner**, compared against an oracle derived independently from the margin interval (AUDIT-09 B-05); **a fluid is non-solid *and* liquid, and an unknown id is neither** — the predicate M-4's lookahead reads; **a dig is acknowledged with the client's own sequence, once per tick at the high-water mark, after the block update and even when the dig was refused** (M-2); **the reach rule is the jar's arithmetic** — the survival buffer case (4.5 < d < 5.5 accepted, which the pre-AUDIT-11 constant refused), the creative `+0.5`, the strict `<` boundary, the 3-D eye measurement, and the entity gate that stops a swing landing from anywhere (AUDIT-11 N-1) |
+| Entities & simulation | `mc-entity` lib (**187**), `entity_lifecycle` (9), `entity_persistence` (2), `player_attack` (9), `natural_spawn` (4), `ai_wiring` (**8**), **`mob_pathing` (5)**, `join_entity_id` (1) | ids never reused, timers/effects/projectiles/pathfinding invariants, JDK-25-verified RNG, phase ordering, determinism replays, spawn/despawn/chunk-unload lifecycle; **a second `Game` on the same `world_dir` gets the saved mobs and drops back**, and a joining player is told about a resident entity on the join tick (P11-08); **one swing takes exactly the fist damage, a second inside the 10-tick window is refused** (P11-06); **a landed hit broadcasts `hurt_animation` (play 42) with the damage-direction yaw** (owner round 2 — `entity_event` 2 is not the flash on a modern client); **a rejoin's `JoinGame` names its own allocated entity id** (owner round 2); day/night spawn rules and the 24-block minimum (P11-01); **the walk-speed constant is the measured zombie ceiling, not the player extrapolation, and a zombie is pinned below 7.5 blocks/s** (M-3); **a mob walks up to water and stops at its edge, and a clear course still lets it reach the player** — the negative control that keeps the two refusal tests from being satisfied by a lookahead that refuses everything (M-4) |
+| Inventory & containers | `mc-container` lib (**136**), `container_e2e` (6), `block_entity_e2e` (**8**), `inventory_duplication` (8), `loot_and_pickup` (9), **`p17_owner_pins` (5)** | click/swap/drag conservation, stale-state resync, computed slots, retirement reporting; real-socket click round trips; 2 000-click floods cannot create or destroy items — the flood over a **capped slot** reaches the over-limit path the chest flood cannot, so a discarded overflow is caught (Audit 07 finding M1); **the loot table is the drop authority** — a survival break drops the table's item (the fixture names cobblestone for stone, so a block-echoing path fails), creative and table-less blocks drop nothing, a mob death rolls `entities/<kind>`, a ready stack is collected, nearby stacks merge into the older one, and a full inventory leaves the leftover on the ground (P11-04/05/09); P17-03 tag expansion + simple transmute (sticks from `#planks`, dye transmute, complex transmute counted); since the P14
 soak an eight-table loot baseline covers common breaks with no pack loaded
 (stone drops cobblestone); **P12**: chest/furnace/hopper menus open on non-zero windows and transact with conservation (20-click flood), furnaces cook with `container_set_data` progress, hoppers transfer on the 8-tick cooldown, block entities persist across restart, breaks drop contents, crafting recomputes from the table, closes return the cursor |
 | Redstone | `propagation` (23), `budget_exhaustion` (7), `determinism` (6), `golden_circuits` (6), `power_model` (8), `world_integration` (4), `vanilla_conductivity` (13) | budgeted propagation reaches unbounded-run state, full change-vector determinism, golden circuits (lever—wire—lamp on a dust-powered pedestal; comparator faces east at its wire), power bounds; P13-01 wires the scheduled-tick queue into the tick (see Server foundations); P13-03 drives the lamp; P13-04 reads torch attachments and comparator back/sides by facing; P13-05 measures 15 live blocks on a real 26.1.2 server (world + scripts under `target/p13-wire/`); P13-06 measures the conductivity matrix on the same rig (torch-below/lever-mount strong, dust above/beside weak and solid-blind, block never; lamp reads above/below) |
-| Commands & data | `mc-command` lib (93), `command_e2e` (13), `execute_e2e` (9), `function_e2e` (14), `mc-data` lib (135), `pack_discovery` (10), `pack_loading_e2e` (**10**: 9 + P14-09 baseline-survives-load) | permission-before-grammar, every declared command reachable, malformed commands never disconnect, execute modifier chains, function recursion/privilege bounds, pack discovery and world-pack loading (P12-07/08 recipe load + conversions) |
-| World generation | `mc-worldgen` lib (86), `worldgen_e2e` (7), `structure_golden` (9), `seed_derivation` (8), `golden` (6), `determinism` (7) | seed determinism, terrain invariants, structure placement goldens, existing-world-first generation |
-| Server foundations | `mc-server` lib (67), `scheduled_ticks` (**2**), `mc-core` (28), `mc-nbt` (17), `mc-registry` (26), `mc-simulation` (18), `mc-redstone` (**69**), `mc-test-support` (4), `mc-capture-rig` (11) | config guardrails, backup/verify/restore, shutdown barrier, operational metrics snapshot, error taxonomy, NBT vectors, the registry table itself (including the `MC_FIXTURE_DIR` precedence half), fixture helpers, the tick scheduler, the redstone model's own invariants, the client-capture rig; P13-01 scheduled-tick drain timing + budget (perturbation-verified) |
+| Commands & data | `mc-command` lib (**96**), `command_e2e` (13), `execute_e2e` (**10**), `function_e2e` (14), `mc-data` lib (135), `pack_discovery` (10), `pack_loading_e2e` (**10**: 9 + P14-09 baseline-survives-load) | permission-before-grammar, every declared command reachable, malformed commands never disconnect, execute modifier chains, function recursion/privilege bounds, pack discovery and world-pack loading (P12-07/08 recipe load + conversions) |
+| World generation | `mc-worldgen` lib (**100**), `worldgen_e2e` (7), `structure_golden` (9), `seed_derivation` (8), `golden` (6), `determinism` (7) | seed determinism, terrain invariants, structure placement goldens, existing-world-first generation |
+| Server foundations | `mc-server` lib (**71**), `scheduled_ticks` (**2**), `mc-core` (28), `mc-nbt` (17), `mc-registry` (**27**), `mc-simulation` (18), `mc-redstone` (**69**), `mc-test-support` (4), `mc-capture-rig` (11) | config guardrails, backup/verify/restore, shutdown barrier, operational metrics snapshot, error taxonomy, NBT vectors, the registry table itself (including the `MC_FIXTURE_DIR` precedence half), fixture helpers, the tick scheduler, the redstone model's own invariants, the client-capture rig; P13-01 scheduled-tick drain timing + budget (perturbation-verified) |
 | Security (cross-cutting) | classes live inside the suites above | hostile VarInt/frames + random-byte connections (protocol/network libs), slow-drip bound, registry reservation cap, 300-command flood (`command_e2e`), hostile op paths (`ops_e2e`, 7), 2 000-click conservation (`inventory_duplication`), hostile disk state (`corruption`, 16), config bounds (`mc-server` lib), **a decoded packet body with trailing bytes is accepted** (AUDIT-09 A-03, open — serverbound silent-accept is deliberate; AUDIT-14 A14-01 found P14's new clientbound `forget_level_chunk` decoder skipping the hard-refusal convention and fixed it with a padded-input test) |
 
 ## Differential suites (jar-gated, `--ignored`)
@@ -281,7 +286,7 @@ export MC_VANILLA_WORLD="$PWD/target/vanilla-26.1.2/vanilla-world-26.1.2/world"
 
 | Suite | Tests | Proves |
 |---|---|---|
-| `vanilla_pack` (mc-data) | 1 | 758/758 vanilla tags resolve with zero problems; 1 421 recipes load, 94 counted as unmodelled |
+| `vanilla_pack` (mc-data) | 1 | 758/758 vanilla tags resolve with zero problems; 1 454 recipes load, 61 counted as unmodelled |
 | `vanilla_data` (mc-data) | 1 | the real data pack loads end to end |
 | `vanilla_smelting` (mc-container) | 1 | furnace table consistency against the jar's own values |
 | `vanilla_crafting` (mc-container) | 1 | crafting table conversion against the real pack (item-only converts, tags counted) |

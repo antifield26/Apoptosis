@@ -237,7 +237,8 @@ fn pack_installs_ore_and_carver_sets_into_the_game() {
     assert_eq!(game.carvers().len(), 3, "the game holds the carver set");
 }
 #[test]
-fn live_generation_matches_the_documented_pass_order() {    use mc_worldgen::seed::WorldgenContext;
+fn live_generation_matches_the_documented_pass_order() {
+    use mc_worldgen::seed::WorldgenContext;
     use mc_worldgen::terrain::ChunkGenerator;
     use mc_worldgen::{WorldSeed, carve_chunk, populate_ores};
 

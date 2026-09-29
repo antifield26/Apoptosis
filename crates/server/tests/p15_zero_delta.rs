@@ -4,6 +4,12 @@
 //! gap open: test-count movement is not equivalence. This suite runs a fixed
 //! observable scenario twice from a clean seed and asserts the normalized
 //! transcript matches — the independent comparison, not a re-count.
+//!
+//! Honesty note (AUDIT-18 E-12, still open): run-A == run-B proves
+//! determinism, not post-split == pre-split — a consistently-wrong behavior
+//! passes identically in both runs. A true split-equivalence pin needs a
+//! pre-split oracle, which no longer exists in-tree; this stays as the
+//! determinism half.
 
 #![allow(clippy::float_cmp)]
 #![allow(clippy::cast_possible_truncation)]

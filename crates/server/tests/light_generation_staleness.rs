@@ -18,13 +18,7 @@ use mc_server::storage::WorldService;
 use mc_test_support::fixtures::TempDir;
 use mc_world::{ChunkPos, Vec3};
 
-fn open_world(
-    tag: &str,
-) -> (
-    Game,
-    tokio::sync::mpsc::Sender<ClientEvent>,
-    TempDir,
-) {
+fn open_world(tag: &str) -> (Game, tokio::sync::mpsc::Sender<ClientEvent>, TempDir) {
     let dir = TempDir::new(tag);
     let config = mc_server::config::StorageConfig {
         world_dir: dir.path().join("world"),

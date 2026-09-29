@@ -250,8 +250,9 @@ mod tests {
 
     #[test]
     fn parses_an_explicit_world_seed() {
-        let config = ServerConfig::from_toml("[storage]\nworld_dir = \"world\"\nseed = 1361882806\n")
-            .expect("a seed must parse");
+        let config =
+            ServerConfig::from_toml("[storage]\nworld_dir = \"world\"\nseed = 1361882806\n")
+                .expect("a seed must parse");
         assert_eq!(config.storage.seed, Some(1_361_882_806));
         let bare = ServerConfig::from_toml("[storage]\nworld_dir = \"world\"\n")
             .expect("missing seed must parse");

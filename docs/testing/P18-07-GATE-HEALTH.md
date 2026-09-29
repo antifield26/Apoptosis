@@ -58,7 +58,7 @@ taken (owner or capture-rig).
 
 | ID | Status |
 |---|---|
-| A12-06 dual-viewer LWW | **closed** — `write_back_block_slots` + `two_viewers_interleaving_writes_to_different_slots_keep_both` |
+| A12-06 dual-viewer LWW | **closed for disjoint slots** — `write_back_block_slots` + `two_viewers_interleaving_writes_to_different_slots_keep_both`; same-slot concurrent writes are last-writer-wins by design with cross-viewer push (`write_back_block_slots` docs) |
 | A12-07 kind-drift | **closed** — `changing_a_chest_to_a_furnace_replaces_the_payload_kind` |
 | A12-03 width check | **closed** — `item_stack_decode_rejects_hostile_counts`, `open_screen_rejects_out_of_range_varints` |
 | A12-10 dirty gap | **closed** — `a_hopper_cooldown_tick_marks_its_chunk_dirty` |

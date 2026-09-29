@@ -743,6 +743,9 @@ fn placement_consumes_in_the_held_slot() {
 
 #[test]
 fn death_and_respawn_restore_the_player() {
+    // Perturbation record (AUDIT-18): swallowing `client_command` action 0
+    // instead of respawning turns this red (`respawn restores the player`) —
+    // verified 2026-09-29.
     let mut harness = Harness::new("p04-death");
     let (sx, sy, sz) = harness.build_floor();
     let mut out = harness.join("Mortal");
@@ -1310,6 +1313,10 @@ fn an_open_furnace_menu_shows_completed_output() {
 /// neighbour is an emitter. Note the phase order this relies on: each intent
 /// ticks `ScheduledTicks` (which drains) *before* `Players` (which feeds), so
 /// every assertion below reads a queue the drain has just emptied.
+///
+/// Perturbation record (AUDIT-18): skipping the feed for buttons/levers
+/// turns this red (`six neighbours + self, deduplicated`) — verified
+/// 2026-09-29.
 #[test]
 fn redstone_edits_feed_the_queue_and_dirt_does_not() {
     let mut harness = Harness::new("p13-feed");
@@ -2759,10 +2766,7 @@ fn two_viewers_interleaving_writes_to_different_slots_keep_both() {
 
     // B-H3: Bob sees Alice's click without clicking himself — neither his
     // menu nor his client may sit on the pre-click contents indefinitely.
-    let bob_slot = harness
-        .game
-        .menu_slot(id_b, 0)
-        .expect("Bob's menu slot 0");
+    let bob_slot = harness.game.menu_slot(id_b, 0).expect("Bob's menu slot 0");
     assert_eq!(
         bob_slot.item_id(),
         Some(stone),

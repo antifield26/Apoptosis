@@ -824,8 +824,8 @@ impl Game {
     ///
     /// Persists: **dirty** chunks (terrain plus their live entities and block
     /// entities, P11-08/P12-05) and `level.dat`. Does **not** persist per-player
-    /// data —`playerdata/<uuid>.dat` needs the player-file layout, which Phase 04
-    /// does not implement. Only chunks the world reports as dirty are written,
+    /// data on this path — `leave()` saves `playerdata/<uuid>.dat` through the
+    /// player-file layout at disconnect. Only chunks the world reports as dirty are written,
     /// so an entity in an otherwise-clean chunk still does not save (recorded
     /// divergence).
     ///

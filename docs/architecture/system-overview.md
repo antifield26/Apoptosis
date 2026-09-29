@@ -103,7 +103,8 @@ Recorded rather than papered over; the full catalogue with per-row evidence is t
 - **Static lighting only.** Sky/block light is computed from jar-measured tables and owner-confirmed on a
   real client; there is no day/night dimming and no incremental relight beyond block changes.
 - **Entities sync and persist, within limits.** Mobs spawn, walk, hit back, drop loot, and ride the chunk
-  save with drops (P11); viewers see moves, hurt and death; per-kind follow ranges, an A* chase arm
+  save with drops (P11); viewers see moves, hurt and death; zombie follow range
+is jar-measured at 35.0 with a 16.0 default for other kinds, an A* chase arm
   (P16-04) and XP orbs (P16-02) landed. Gaps: wander and flee still steer directly, and entities in
   otherwise-clean chunks are not persisted.
 - **Redstone is a measured model, wired into the tick loop.** Directional conductivity (P13-06), the 15-block wire (P13-05) and the vanilla differential (P13-07) pin it; player edits feed the queue (P13-02) and the `ScheduledTicks` phase propagates and broadcasts.

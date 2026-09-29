@@ -2204,12 +2204,10 @@ impl PlayIntent {
             serverbound::play::CONTAINER_CLOSE => Some(Self::ContainerClose {
                 window_id: reader.read_varint()?,
             }),
-            serverbound::play::CONTAINER_BUTTON_CLICK => {
-                Some(Self::ContainerButtonClick {
-                    window_id: reader.read_varint()?,
-                    button_id: reader.read_varint()?,
-                })
-            }
+            serverbound::play::CONTAINER_BUTTON_CLICK => Some(Self::ContainerButtonClick {
+                window_id: reader.read_varint()?,
+                button_id: reader.read_varint()?,
+            }),
             serverbound::play::CONTAINER_SLOT_STATE_CHANGED => {
                 Some(Self::ContainerSlotStateChanged {
                     slot: reader.read_varint()?,
@@ -2792,11 +2790,7 @@ mod tests {
             "the field is signed (i8), saw {intent:?}"
         );
         assert!(
-            PlayIntent::decode(
-                crate::ids::serverbound::play::PLAYER_INPUT,
-                &[0x40, 0x00]
-            )
-            .is_err(),
+            PlayIntent::decode(crate::ids::serverbound::play::PLAYER_INPUT, &[0x40, 0x00]).is_err(),
             "trailing bytes are refused"
         );
         assert!(
@@ -2811,22 +2805,20 @@ mod tests {
     fn creative_slot_decodes_short_plus_stack() {
         // Slot 36, one stone (count 1, id 5, empty patch).
         let body = [0x00, 0x24, 0x01, 0x05, 0x00, 0x00];
-        let intent = PlayIntent::decode(
-            crate::ids::serverbound::play::SET_CREATIVE_MODE_SLOT,
-            &body,
-        )
-        .expect("decodes")
-        .expect("recognized");
+        let intent =
+            PlayIntent::decode(crate::ids::serverbound::play::SET_CREATIVE_MODE_SLOT, &body)
+                .expect("decodes")
+                .expect("recognized");
         assert!(
-            matches!(
-                intent,
-                PlayIntent::SetCreativeModeSlot { slot: 36, .. }
-            ),
+            matches!(intent, PlayIntent::SetCreativeModeSlot { slot: 36, .. }),
             "slot is i16, saw {intent:?}"
         );
         assert!(
-            PlayIntent::decode(crate::ids::serverbound::play::SET_CREATIVE_MODE_SLOT, &[0x00])
-                .is_err(),
+            PlayIntent::decode(
+                crate::ids::serverbound::play::SET_CREATIVE_MODE_SLOT,
+                &[0x00]
+            )
+            .is_err(),
             "truncation is refused"
         );
     }
@@ -4417,8 +4409,7 @@ mod tests {
                 nbt: None,
             },
         ]);
-        let stack =
-            ItemStack::from_typed_components(913, 1, &components).expect("builds");
+        let stack = ItemStack::from_typed_components(913, 1, &components).expect("builds");
         assert_eq!(
             stack.components,
             vec![(mc_entity::components::TYPE_DAMAGE, vec![0x05])],

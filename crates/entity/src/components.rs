@@ -1276,8 +1276,14 @@ fn attack_range_from_nbt(tag: &NbtTag) -> Option<AttackRange> {
     // B-M4: every field required, like `food.nutrition`. Healing a partial
     // compound with defaults loads a plausible range no file describes.
     Some(AttackRange {
-        min_reach: tag.get("min_reach").and_then(NbtTag::as_f64).map(|v| v as f32)?,
-        max_reach: tag.get("max_reach").and_then(NbtTag::as_f64).map(|v| v as f32)?,
+        min_reach: tag
+            .get("min_reach")
+            .and_then(NbtTag::as_f64)
+            .map(|v| v as f32)?,
+        max_reach: tag
+            .get("max_reach")
+            .and_then(NbtTag::as_f64)
+            .map(|v| v as f32)?,
         min_creative_reach: tag
             .get("min_creative_reach")
             .and_then(NbtTag::as_f64)
@@ -1317,7 +1323,10 @@ fn food_from_nbt(tag: &NbtTag) -> Option<Food> {
         nutrition: tag.get_i32("nutrition")?,
         // B-M4: required like nutrition — a food without saturation is
         // corrupt, not zero-saturation food.
-        saturation: tag.get("saturation").and_then(NbtTag::as_f64).map(|v| v as f32)?,
+        saturation: tag
+            .get("saturation")
+            .and_then(NbtTag::as_f64)
+            .map(|v| v as f32)?,
         can_always_eat: tag.get_bool("can_always_eat").unwrap_or(false),
     })
 }
@@ -1444,21 +1453,19 @@ pub fn from_nbt(tag: &NbtTag) -> ServerResult<ItemComponents> {
                     }),
                 }
             }
-            "minecraft:stored_enchantments" => {
-                match value {
-                    NbtTag::List(_) => {
-                        out.push(DataComponent::StoredEnchantments(enchantments_from_nbt(
-                            value,
-                        )));
-                    }
-                    other => out.push(DataComponent::Unknown {
-                        key: "minecraft:stored_enchantments".to_owned(),
-                        type_id: 0,
-                        wire: Vec::new(),
-                        nbt: Some(other.clone()),
-                    }),
+            "minecraft:stored_enchantments" => match value {
+                NbtTag::List(_) => {
+                    out.push(DataComponent::StoredEnchantments(enchantments_from_nbt(
+                        value,
+                    )));
                 }
-            }
+                other => out.push(DataComponent::Unknown {
+                    key: "minecraft:stored_enchantments".to_owned(),
+                    type_id: 0,
+                    wire: Vec::new(),
+                    nbt: Some(other.clone()),
+                }),
+            },
             "minecraft:attack_range" => {
                 let range = attack_range_from_nbt(value).ok_or_else(|| {
                     ServerError::CorruptData(
@@ -1659,10 +1666,7 @@ mod tests {
         // is one logical component. Splitting it into a named half and a
         // `#id` half (the old behaviour) fails this test.
         let tag = NbtTag::Compound(vec![
-            (
-                "minecraft:foo".to_owned(),
-                NbtTag::Int(1),
-            ),
+            ("minecraft:foo".to_owned(), NbtTag::Int(1)),
             ("_wire/99".to_owned(), NbtTag::ByteArray(vec![0xAA])),
         ]);
         let components = from_nbt(&tag).expect("decodes");
@@ -1670,10 +1674,7 @@ mod tests {
         assert_eq!(unknowns.len(), 1, "one logical component, not two");
         match unknowns[0] {
             DataComponent::Unknown {
-                key,
-                type_id,
-                wire,
-                ..
+                key, type_id, wire, ..
             } => {
                 assert_eq!(key, "minecraft:foo");
                 assert_eq!(*type_id, 99);

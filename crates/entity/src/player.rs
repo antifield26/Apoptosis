@@ -145,7 +145,9 @@ pub const STARVATION_DAMAGE: f32 = 1.0;
 
 /// Health restored per saturation-regeneration tick.
 ///
-/// **jar** — `FoodData.tick` saturated arm: `heal(min(sat, 6.0) / 6.0)`.
+/// Whole-point simplification of the jar's saturated arm
+/// (`FoodData.tick`: `heal(min(sat, 6.0) / 6.0)` fractional): both regen
+/// arms heal this constant.
 pub const REGEN_HEALTH_PER_TICK: f32 = 1.0;
 
 /// Food level at or above which natural regeneration runs.

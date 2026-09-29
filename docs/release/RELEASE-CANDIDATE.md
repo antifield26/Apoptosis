@@ -3,8 +3,8 @@
 Status: **published as source under MIT** (ADR-0006, owner decision
 2026-09-12 — closes ADR-0001 R-09). The full history is on
 `github.com/antifield26/Apoptosis` (public) as of 2026-09-12. Tagged releases
-exist since then — `v0.1.0-rc.1`, the candidate this document records, and
-`v0.2.0`, the current release. This document is what a builder or operator
+exist since then — `v0.1.0-rc.1`, the candidate this document records,
+`v0.2.0`, and `v0.3.0`, the current release. This document is what a builder or operator
 needs to produce and run the server from source today.
 
 ## 1. What ships

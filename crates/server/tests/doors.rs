@@ -9,6 +9,10 @@
 //! assertions fail; stop feeding redstone on toggle and the observer
 //! half (P17-01 Step B groundwork) goes dark — covered here by the
 //! lever-driven open/close.
+//!
+//! Perturbation record (AUDIT-18 E-17): facing the look instead of the
+//! clicker (`opposite_facing` removed) turns
+//! `placing_a_door_sets_both_oriented_halves` red — verified 2026-09-29.
 
 #![allow(clippy::float_cmp)]
 #![allow(clippy::cast_possible_truncation)]

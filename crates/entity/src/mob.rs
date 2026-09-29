@@ -282,6 +282,10 @@ pub const WANDER_CHANCE_ONE_IN: i32 = 12;
 /// player standing on the acquisition boundary makes the mob flicker between
 /// `Chase` and `Wander` every tick. Checked at compile time because both values
 /// are constants: a future edit that breaks it stops the build.
+///
+/// Indirection note: decisions read `lose_range()` (per-kind follow range +
+/// [`LOSE_RADIUS_MARGIN`]), not this const directly — editing this const
+/// alone changes nothing live; the margin is the live knob.
 const _: () = assert!(TARGET_LOSE_RADIUS > AGGRO_RADIUS);
 
 /// The randomness the AI may consume.

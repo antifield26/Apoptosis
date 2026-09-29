@@ -226,7 +226,9 @@ fn decompress_frame(frame: &[u8], threshold: i32) -> ServerResult<Vec<u8>> {
     }
     let declared = declared as usize;
     if declared == 0 {
-        // Uncompressed fallback: must fit the cap and honour the threshold.
+        // Uncompressed fallback: marker 0 means the sender asserts the body is
+        // below the compression threshold (always legal; vanilla semantics).
+        // Only the size cap is checked here.
         let payload = cursor.to_vec();
         if payload.len() > MAX_PACKET_SIZE {
             return Err(ServerError::Protocol(

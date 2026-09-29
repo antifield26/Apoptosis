@@ -689,7 +689,8 @@ impl Menu {
         self.state_id
     }
 
-    /// Advance the state id after an accepted mutation.
+    /// Advance the state id after an accepted click (including no-ops; the
+    /// stale early-return does not bump).
     pub fn bump_state(&mut self) {
         self.state_id = self.state_id.wrapping_add(1);
     }

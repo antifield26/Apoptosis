@@ -30,8 +30,9 @@
 //!   the tick pure functions.
 //! - **No client sync**: no `block_entity_data`, so a chest's contents are invisible
 //!   to a client even though the server holds them.
-//! - **No `remove` on block break**: the caller must call [`BlockEntityStore::remove`]
-//!   when a block changes; nothing does that automatically, and a stale entry is
+//! - **No `remove` on block break inside this crate**: the caller must call
+//!   [`BlockEntityStore::remove`] when a block changes; the tick's broadcast
+//!   phase also retires them automatically, and a stale entry is
 //!   detectable with [`BlockEntityStore::audit_against`].
 
 use mc_core::error::{ServerError, ServerResult};

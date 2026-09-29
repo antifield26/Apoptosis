@@ -483,7 +483,9 @@ impl LevelChunkWithLight {
                 .map_err(|error| ServerError::Invariant(error.to_string()))?;
             writer.write_i16(section.block_count);
             writer.write_i16(section.fluid_count);
-            section.block_states.encode(&mut writer, packing::BLOCK_MIN_BITS)?;
+            section
+                .block_states
+                .encode(&mut writer, packing::BLOCK_MIN_BITS)?;
             section.biomes.encode(&mut writer, NETWORK_BIOME_MIN_BITS)?;
         }
         Ok(writer.finish())

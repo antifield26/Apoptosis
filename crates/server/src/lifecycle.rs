@@ -190,10 +190,7 @@ impl<H: TickHook> Server<H> {
         // World seed (AUDIT-18 F-H1): a stored seed always wins (opening a
         // vanilla world must not fork its terrain), then the configured seed
         // for fresh worlds, then the historical seed-0 default.
-        let stored_seed = world
-            .storage()
-            .level()
-            .and_then(|level| level.seed);
+        let stored_seed = world.storage().level().and_then(|level| level.seed);
         let seed = resolve_seed(self.config.storage.seed, stored_seed);
         if stored_seed.is_some() {
             tracing::info!(seed, "generating from the world's recorded seed");
@@ -611,10 +608,7 @@ mod tests {
         // Fresh worlds take the configured seed; unset means the
         // historical seed-0 default, stated not hidden.
         assert_eq!(resolve_seed(Some(42), None), 42);
-        assert_eq!(
-            resolve_seed(None, None),
-            crate::game::DEFAULT_RANDOM_SEED
-        );
+        assert_eq!(resolve_seed(None, None), crate::game::DEFAULT_RANDOM_SEED);
     }
 
     #[tokio::test]
