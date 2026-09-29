@@ -53,7 +53,7 @@ fn region_files(dir: &TempDir) -> Vec<std::path::PathBuf> {
 fn region_bytes(dir: &TempDir) -> u64 {
     region_files(dir)
         .iter()
-        .map(|path| std::fs::metadata(path).map(|m| m.len()).unwrap_or(0))
+        .map(|path| std::fs::metadata(path).map_or(0, |m| m.len()))
         .sum()
 }
 

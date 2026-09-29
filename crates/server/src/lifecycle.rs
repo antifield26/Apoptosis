@@ -292,13 +292,13 @@ impl<H: TickHook> Server<H> {
     /// rather than queued: console input before a world exists has nothing
     /// to act on, and holding it would replay stale intent into a fresh
     /// boot.
-    fn run_console_line(&mut self, text: String) {
+    fn run_console_line(&mut self, text: &str) {
         let Some(game) = self.game.as_mut() else {
             tracing::warn!("console input before a world exists; dropping the line");
             return;
         };
         let mut report = crate::game::TickReport::default();
-        match game.dispatch_console(&text, &mut report) {
+        match game.dispatch_console(text, &mut report) {
             Err(error) => tracing::error!(%error, "console command failed"),
             Ok(lines) => {
                 for line in lines {
@@ -696,7 +696,7 @@ impl<H: TickHook> Server<H> {
                     };
                     (line, eof)
                 };
-                if let Some(text) = line {
+                if let Some(text) = &line {
                     self.run_console_line(text);
                 } else if eof {
                     self.console_rx = None;

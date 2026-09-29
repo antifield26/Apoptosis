@@ -20,8 +20,9 @@ pub fn next_console_line(reader: &mut impl BufRead) -> Option<String> {
     loop {
         line.clear();
         match reader.read_line(&mut line) {
-            Err(_) => return None,
-            Ok(0) => return None,
+            // EOF (clean quit, exhausted pipe) and read errors both end
+            // input: a half-read line is not a command.
+            Err(_) | Ok(0) => return None,
             Ok(_) => {}
         }
         let text = line.trim_end_matches(['\r', '\n']).trim().to_owned();
