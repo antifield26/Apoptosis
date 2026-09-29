@@ -214,6 +214,16 @@ pub enum ClientEventKind {
         /// Where the game loop sends packets for this player.
         outbound: OutboundSender,
     },
+    /// The connection's remote IP, reported before `Joined` (P19-02).
+    ///
+    /// A separate event rather than a `Joined` field so existing producers
+    /// keep compiling: only the real connection sends it, always before its
+    /// `Joined` on the same FIFO channel. The game holds it pending until
+    /// the join consumes it into the session.
+    PeerAddress {
+        /// Remote address of the connection.
+        ip: std::net::IpAddr,
+    },
     /// A decoded gameplay intent.
     Intent(PlayIntent),
     /// A packet the network layer did not model (for observability).

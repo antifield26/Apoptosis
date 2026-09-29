@@ -918,6 +918,27 @@ pub struct Game {
     /// config file is the operator's and rewriting it behind them would be
     /// a worse surprise than re-asserting it on boot.
     whitelist_enforced: bool,
+    /// Who is banned, loaded once from the two ban files (P19-02).
+    ///
+    /// Same lifecycle as operators: loaded once at boot, empty when the
+    /// files are absent, and empty-with-a-log when malformed. `/ban` and
+    /// `/ban-ip` mutate it live and persist both files.
+    bans: crate::bans::BanList,
+    /// Remote IPs reported ahead of their joins, keyed by connection.
+    ///
+    /// `PeerAddress` always precedes its `Joined` on the same FIFO channel,
+    /// so the join gate reads here; a join consumes its entry and `Left`
+    /// drops it. Connections that never reported (all pre-P19-02 test
+    /// harnesses) simply have no entry, and the ip-ban check skips them —
+    /// production always reports, so the skip only narrows tests.
+    pending_ips: BTreeMap<ConnectionId, std::net::IpAddr>,
+    /// Live sessions owed a disconnect with a reason (P19-02).
+    ///
+    /// `/ban` and `/kick` run inside the tick, while session removal
+    /// belongs to the network phase (like overflow enforcement): queueing
+    /// keeps the phases' ownership straight, at the cost of under a tick
+    /// of delay before the client is gone.
+    pending_disconnects: Vec<(ConnectionId, String)>,
     /// World difficulty (P14-01).
     ///
     /// Read from `level.dat` when storage is present, `Normal` otherwise
@@ -1188,6 +1209,9 @@ impl Game {
             ops_directory: None,
             whitelist: crate::whitelist::Whitelist::new(),
             whitelist_enforced: false,
+            bans: crate::bans::BanList::new(),
+            pending_ips: BTreeMap::new(),
+            pending_disconnects: Vec::new(),
             difficulty,
             max_players: DEFAULT_MAX_PLAYERS,
             time_offset: 0,
@@ -2092,24 +2116,37 @@ impl Game {
     fn enforce_overflow(&mut self, ids: Vec<ConnectionId>) -> usize {
         let mut count = 0;
         for id in ids {
-            if let Some(session) = self.sessions.remove(&id) {
-                let packet = PlayDisconnect {
-                    reason: TextComponent::literal("Outbound queue overflow"),
-                }
-                .to_raw();
-                if let Ok(raw) = packet {
-                    let _ = session.outbound.try_send(raw);
-                }
-                // Same treatment as a clean leave: the entity goes on the sweep.
-                if let Some(entity) = self.entities.get_mut(session.entity) {
-                    entity.removed = true;
-                }
-                self.entity_ids.remove(&id);
+            if self.drop_session(id, "Outbound queue overflow") {
                 warn!(id = %id, "disconnected after an outbound queue overflow");
                 count += 1;
             }
         }
         count
+    }
+
+    /// Drop one live session with a reason, sweeping its entity like a
+    /// clean leave (P19-02).
+    ///
+    /// Shared by overflow enforcement and reason-carrying disconnects
+    /// (`/ban`, `/kick`): one removal path, so the sweep cannot drift
+    /// between them. Returns whether a session was there to drop.
+    fn drop_session(&mut self, id: ConnectionId, reason: &str) -> bool {
+        let Some(session) = self.sessions.remove(&id) else {
+            return false;
+        };
+        let packet = PlayDisconnect {
+            reason: TextComponent::literal(reason),
+        }
+        .to_raw();
+        if let Ok(raw) = packet {
+            let _ = session.outbound.try_send(raw);
+        }
+        // Same treatment as a clean leave: the entity goes on the sweep.
+        if let Some(entity) = self.entities.get_mut(session.entity) {
+            entity.removed = true;
+        }
+        self.entity_ids.remove(&id);
+        true
     }
 
     /// Record that a player must be dropped next tick.
@@ -2130,6 +2167,18 @@ fn refuse_join(outbound: &OutboundSender, reason: &str) {
     };
     if let Ok(raw) = packet.to_raw() {
         let _ = outbound.try_send(raw);
+    }
+}
+
+/// The ban screen for a disconnect: Vanilla's reason plus the removal date
+/// for temporary bans.
+fn ban_message(reason: &str, expires: Option<std::time::SystemTime>) -> String {
+    match expires {
+        Some(until) => format!(
+            "You are banned from this server.\nReason: {reason}\nYour ban will be removed on {}",
+            crate::bans::format_ban_time(until)
+        ),
+        None => format!("You are banned from this server.\nReason: {reason}"),
     }
 }
 

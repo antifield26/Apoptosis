@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 pub mod backup;
+pub mod bans;
 pub mod commands;
 pub mod config;
 pub mod execute;

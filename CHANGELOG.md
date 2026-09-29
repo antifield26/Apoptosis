@@ -12,6 +12,21 @@ entry is the release candidate matching the workspace version at the time
 with built artifacts. The current workspace version is `0.3.0`, published as
 tag `v0.3.0` (see below).
 
+## [Unreleased] — P19-02 bans (v0.4.0 "operable survival" second slice)
+
+`banned-players.json` + `banned-ips.json` (Vanilla's six keys, uuid/ip-keyed,
+Vanilla date shape with a hand-rolled total parser — no date library),
+expiry by injected clock, no operator exemption: banned profiles and
+addresses are refused at the join gate before a slot is spent, with the ban
+screen (reason + removal date for temp bans). `/ban` files the row then
+disconnects the live session; `/ban-ip` sweeps every holder of the address;
+`/pardon`/`/pardon-ip` remove rows (offline-resolvable, like the gate);
+`/banlist` names rows; `/kick` disconnects with a reason and writes nothing.
+The peer address rides a `PeerAddress` event ahead of `Joined` on the same
+FIFO channel into `Session.ip`. Pins: 5 file unit tests (dates, expiry,
+ip match, round-trip keys, malformed) + 8 `bans_e2e` tests (each proven red
+by neutralising its mechanism), KD-31 moves 30 → 36 roots.
+
 ## [Unreleased] — P19-01 whitelist (v0.4.0 "operable survival" first slice)
 
 `whitelist.json` (Vanilla's `{uuid, name}` shape, uuid-keyed like

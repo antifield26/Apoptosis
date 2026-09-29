@@ -12,6 +12,12 @@
 //! | `op` | player name, administrator-only | grants operator status at level 4 and persists `ops.json` |
 //! | `deop` | player name, administrator-only | revokes operator status and persists `ops.json` |
 //! | `whitelist` | action + optional player, administrator-only | manages the login whitelist: `on`/`off` toggles enforcement live, `add`/`remove` persist `whitelist.json`, `list` names entries, `reload` re-reads the file |
+//! | `ban` | player + greedy reason, administrator-only | bans a profile (offline-resolvable) and disconnects their live session, persisting `banned-players.json` |
+//! | `ban-ip` | address + greedy reason, administrator-only | bans an address and disconnects every live session holding it, persisting `banned-ips.json` |
+//! | `pardon` | player, administrator-only | removes a profile ban row, persisting `banned-players.json` |
+//! | `pardon-ip` | address, administrator-only | removes an address ban row, persisting `banned-ips.json` |
+//! | `banlist` | optional kind, administrator-only | names banned profiles or addresses |
+//! | `kick` | player + greedy reason, administrator-only | disconnects a live session with a reason; writes nothing |
 //! | `stop` | none, console-only | asks the server to shut down |
 //! | `gamemode` | word + optional player name, operator-only | sets the invoking player's game mode |
 //! | `give` | player name + resource + optional ranged integer, operator-only | gives items, dropping overflow at the player's feet |
@@ -299,6 +305,30 @@ impl Game {
             .with_argument(Argument::word("action"))
             .with_argument(Argument::optional("target", ArgumentKind::PlayerName))
             .requiring(PermissionLevel::Administrator));
+        // P19-02: bans and kicks. Administrator like Vanilla's level 3.
+        add(Command::new("ban", "Ban a profile and disconnect them")
+            .with_argument(Argument::required("target", ArgumentKind::PlayerName))
+            .with_argument(Argument::greedy("reason"))
+            .requiring(PermissionLevel::Administrator));
+        add(
+            Command::new("ban-ip", "Ban an address and disconnect its players")
+                .with_argument(Argument::word("address"))
+                .with_argument(Argument::greedy("reason"))
+                .requiring(PermissionLevel::Administrator),
+        );
+        add(Command::new("pardon", "Pardon a banned profile")
+            .with_argument(Argument::required("target", ArgumentKind::PlayerName))
+            .requiring(PermissionLevel::Administrator));
+        add(Command::new("pardon-ip", "Pardon a banned address")
+            .with_argument(Argument::word("address"))
+            .requiring(PermissionLevel::Administrator));
+        add(Command::new("banlist", "List bans")
+            .with_argument(Argument::optional("kind", ArgumentKind::Word))
+            .requiring(PermissionLevel::Administrator));
+        add(Command::new("kick", "Disconnect a player")
+            .with_argument(Argument::required("target", ArgumentKind::PlayerName))
+            .with_argument(Argument::greedy("reason"))
+            .requiring(PermissionLevel::Administrator));
         add(Command::new("stop", "Stop the server").requiring(PermissionLevel::Console));
         // P14-01: the admin set, all operator-only like Vanilla's level 2.
         add(Command::new("gamemode", "Set your game mode")
@@ -523,6 +553,12 @@ impl Game {
             "op" => Ok(self.command_op(id, parsed)),
             "deop" => Ok(self.command_deop(id, parsed)),
             "whitelist" => Ok(self.command_whitelist(id, parsed)),
+            "ban" => Ok(self.command_ban(id, parsed)),
+            "ban-ip" => Ok(self.command_ban_ip(id, parsed)),
+            "pardon" => Ok(self.command_pardon(id, parsed)),
+            "pardon-ip" => Ok(self.command_pardon_ip(id, parsed)),
+            "banlist" => Ok(self.command_banlist(id, parsed)),
+            "kick" => Ok(self.command_kick(id, parsed)),
             "gamemode" => Ok(self.command_gamemode(id, parsed, report)),
             "give" => Ok(self.command_give(id, parsed, report)),
             "effect" => Ok(self.command_effect(id, parsed, report)),
@@ -896,6 +932,250 @@ impl Game {
             },
             other => CommandResult::message(format!("Unknown whitelist action {other:?}. {USAGE}")),
         }
+    }
+
+    /// Resolve a ban/pardon name to the uuid the server would see (P19-02).
+    ///
+    /// Offline-mode derivation (`OfflinePlayer:<name>`), which is exactly
+    /// the identity an offline server joins with — so this resolves online
+    /// and offline profiles alike *while offline*. Under online-mode auth
+    /// (P19-05) names map to Mojang uuids instead, and this stays a named
+    /// gap: banning by name there must wait for the usercache.
+    fn ban_uuid_for(name: &str) -> String {
+        mc_network::auth::offline_profile(name).id.to_string()
+    }
+
+    /// Parse a `/ban-ip` address: a bare IP or an `ip:port` pair.
+    fn parse_ban_address(text: &str) -> Option<std::net::IpAddr> {
+        let text = text.trim();
+        if let Ok(ip) = text.parse() {
+            return Some(ip);
+        }
+        text.parse::<std::net::SocketAddr>()
+            .map(|addr| addr.ip())
+            .ok()
+    }
+
+    /// `/ban <player> [reason]` (P19-02): file the ban, then disconnect
+    /// the live session with the ban screen.
+    ///
+    /// The write lands before the kick: a failed save never kicks without
+    /// recording. Banning can target an offline profile (the uuid derives
+    /// from the name); only the disconnect needs a live session.
+    fn command_ban(
+        &mut self,
+        _id: mc_network::bridge::ConnectionId,
+        parsed: &mc_command::dispatch::ParsedCommand,
+    ) -> CommandResult {
+        let Some(name) = parsed.string(0) else {
+            return CommandResult::message("Usage: /ban <player> [reason]");
+        };
+        let reason = parsed.string(1).unwrap_or("").to_owned();
+        let uuid = Self::ban_uuid_for(name);
+        let source = parsed.source.name.clone();
+        let target = self
+            .sessions
+            .values()
+            .find(|session| session.uuid == uuid)
+            .map(|session| session.id);
+        let ban = crate::bans::PlayerBan {
+            uuid: uuid.clone(),
+            name: name.to_owned(),
+            created: std::time::SystemTime::now(),
+            source,
+            expires: None,
+            reason: if reason.is_empty() {
+                crate::bans::DEFAULT_BAN_REASON.to_owned()
+            } else {
+                reason.clone()
+            },
+        };
+        match self.file_player_ban(ban) {
+            Err(error) => CommandResult::message(format!(
+                "Could not persist the ban, and nothing was changed: {error}"
+            )),
+            Ok(false) => CommandResult::message(
+                "/ban cannot persist: no ops directory was ever set, so nothing was changed.",
+            ),
+            Ok(true) => {
+                if let Some(target) = target {
+                    self.kick_player(
+                        target,
+                        format!(
+                            "You are banned from this server.\nReason: {}",
+                            if reason.is_empty() {
+                                crate::bans::DEFAULT_BAN_REASON
+                            } else {
+                                reason.as_str()
+                            }
+                        ),
+                    );
+                }
+                CommandResult::message(format!("Banned {name}"))
+            }
+        }
+    }
+
+    /// `/ban-ip <address> [reason]` (P19-02): file the address ban, then
+    /// disconnect every live session holding it.
+    fn command_ban_ip(
+        &mut self,
+        _id: mc_network::bridge::ConnectionId,
+        parsed: &mc_command::dispatch::ParsedCommand,
+    ) -> CommandResult {
+        let Some(text) = parsed.string(0) else {
+            return CommandResult::message("Usage: /ban-ip <address> [reason]");
+        };
+        let Some(ip) = Self::parse_ban_address(text) else {
+            return CommandResult::message(format!(
+                "{text:?} is not an IP address (bare `1.2.3.4` or `ip:port`)"
+            ));
+        };
+        let reason = parsed.string(1).unwrap_or("").to_owned();
+        let source = parsed.source.name.clone();
+        match self.file_ip_ban(crate::bans::IpBan {
+            ip,
+            created: std::time::SystemTime::now(),
+            source,
+            expires: None,
+            reason: if reason.is_empty() {
+                crate::bans::DEFAULT_BAN_REASON.to_owned()
+            } else {
+                reason.clone()
+            },
+        }) {
+            Err(error) => CommandResult::message(format!(
+                "Could not persist the ban, and nothing was changed: {error}"
+            )),
+            Ok(None) => CommandResult::message(
+                "/ban-ip cannot persist: no ops directory was ever set, so nothing was changed.",
+            ),
+            Ok(Some(holders)) => {
+                for holder in holders {
+                    self.kick_player(
+                        holder,
+                        format!(
+                            "You are banned from this server.\nReason: {}",
+                            if reason.is_empty() {
+                                crate::bans::DEFAULT_BAN_REASON
+                            } else {
+                                reason.as_str()
+                            }
+                        ),
+                    );
+                }
+                CommandResult::message(format!("Banned {ip}"))
+            }
+        }
+    }
+
+    /// `/pardon <player>` (P19-02): remove the profile row.
+    ///
+    /// Works offline (uuid derives from the name); a missing row is a
+    /// no-op report, not an error.
+    fn command_pardon(
+        &mut self,
+        _id: mc_network::bridge::ConnectionId,
+        parsed: &mc_command::dispatch::ParsedCommand,
+    ) -> CommandResult {
+        let Some(name) = parsed.string(0) else {
+            return CommandResult::message("Usage: /pardon <player>");
+        };
+        match self.pardon_player(&Self::ban_uuid_for(name)) {
+            Err(error) => CommandResult::message(format!(
+                "Could not persist the pardon, and nothing was changed: {error}"
+            )),
+            Ok(true) => CommandResult::message(format!("Pardoned {name}")),
+            Ok(false) => CommandResult::message(format!("Nothing changed: {name} is not banned")),
+        }
+    }
+
+    /// `/pardon-ip <address>` (P19-02): remove the address row.
+    fn command_pardon_ip(
+        &mut self,
+        _id: mc_network::bridge::ConnectionId,
+        parsed: &mc_command::dispatch::ParsedCommand,
+    ) -> CommandResult {
+        let Some(text) = parsed.string(0) else {
+            return CommandResult::message("Usage: /pardon-ip <address>");
+        };
+        let Some(ip) = Self::parse_ban_address(text) else {
+            return CommandResult::message(format!("{text:?} is not an IP address"));
+        };
+        match self.pardon_address(&ip) {
+            Err(error) => CommandResult::message(format!(
+                "Could not persist the pardon, and nothing was changed: {error}"
+            )),
+            Ok(true) => CommandResult::message(format!("Pardoned {ip}")),
+            Ok(false) => CommandResult::message(format!("Nothing changed: {ip} is not banned")),
+        }
+    }
+
+    /// `/banlist [players|ips]` (P19-02): name the rows.
+    fn command_banlist(
+        &mut self,
+        _id: mc_network::bridge::ConnectionId,
+        parsed: &mc_command::dispatch::ParsedCommand,
+    ) -> CommandResult {
+        match parsed.string(0).unwrap_or("players") {
+            "players" => {
+                let names = self.ban_names();
+                if names.is_empty() {
+                    CommandResult::message("Nobody is banned")
+                } else {
+                    CommandResult::message(format!(
+                        "Banned players ({}): {}",
+                        names.len(),
+                        names.join(", ")
+                    ))
+                }
+            }
+            "ips" => {
+                let ips = self.banned_ips();
+                if ips.is_empty() {
+                    CommandResult::message("No addresses are banned")
+                } else {
+                    CommandResult::message(format!(
+                        "Banned addresses ({}): {}",
+                        ips.len(),
+                        ips.iter()
+                            .map(std::net::IpAddr::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))
+                }
+            }
+            other => CommandResult::message(format!(
+                "Unknown ban list {other:?}: ask for `players` or `ips`"
+            )),
+        }
+    }
+
+    /// `/kick <player> [reason]` (P19-02): disconnect a live session with
+    /// a reason. No file changes — a kick is a moment, not a record.
+    fn command_kick(
+        &mut self,
+        _id: mc_network::bridge::ConnectionId,
+        parsed: &mc_command::dispatch::ParsedCommand,
+    ) -> CommandResult {
+        let Some(name) = parsed.string(0) else {
+            return CommandResult::message("Usage: /kick <player> [reason]");
+        };
+        let Some(target) = self.session_id_by_name(name) else {
+            return CommandResult::message(format!(
+                "Cannot kick {name:?}: only online players can be kicked"
+            ));
+        };
+        let reason = parsed.string(1).unwrap_or("").to_owned();
+        self.kick_player(
+            target,
+            if reason.is_empty() {
+                "Kicked by an operator.".to_owned()
+            } else {
+                reason
+            },
+        );
+        CommandResult::message(format!("Kicked {name}"))
     }
 
     /// Parse a game-mode word: Vanilla's full names plus the `s`/`c`/`a`/`sp`

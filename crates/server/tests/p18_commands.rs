@@ -606,8 +606,8 @@ fn dispatcher_counts_pin_the_kd_31_and_kd_32_rows() {
         "P19-01 adds the whitelist root; tree has {names:?}"
     );
     assert_eq!(
-        kd31, 30,
-        "KD-31 counts {kd31} roots (29 at v0.3.0 + whitelist); bump the tree \
+        kd31, 36,
+        "KD-31 counts {kd31} roots (30 at P19-01 + 6 ban/kick roots); bump the tree \
          and this pin plus the parity row move together"
     );
 

@@ -74,12 +74,18 @@ struct Session {
     event_sender: Option<crate::bridge::EventSender>,
     /// Game-loop link, when the server is running a world.
     game: Option<GameLink>,
+    /// Remote IP, captured at accept for the join gate (P19-02).
+    peer_ip: std::net::IpAddr,
     /// Set once the join event has been published.
     joined: bool,
 }
 
 impl Session {
-    fn new(settings: Arc<NetworkSettings>, game: Option<GameLink>) -> Self {
+    fn new(
+        settings: Arc<NetworkSettings>,
+        game: Option<GameLink>,
+        peer_ip: std::net::IpAddr,
+    ) -> Self {
         Self {
             settings,
             compression: None,
@@ -91,6 +97,7 @@ impl Session {
             pending_since: None,
             event_sender: None,
             game,
+            peer_ip,
             joined: false,
         }
     }
@@ -191,7 +198,7 @@ pub async fn run_connection(
         tracing::debug!(%error, "could not set TCP_NODELAY");
     }
     let (mut reader, mut writer) = stream.into_split();
-    let mut session = Session::new(Arc::clone(&settings), game);
+    let mut session = Session::new(Arc::clone(&settings), game, peer.ip());
     let mut codec = FrameCodec::new();
 
     let outcome = session
@@ -647,6 +654,11 @@ impl Session {
         let id = game.next_id();
         let (sender, receiver, outbound) = game.channel_for(id);
         tracing::info!(%id, name = %profile.name, "player entering the world");
+        // The address rides ahead of the join on the same FIFO channel, so
+        // the game gate sees it before the profile it belongs to (P19-02).
+        if !sender.try_send(crate::bridge::ClientEventKind::PeerAddress { ip: self.peer_ip }) {
+            tracing::warn!(%id, "game loop queue is full; the player cannot be served");
+        }
         if !sender.try_send(crate::bridge::ClientEventKind::Joined { profile, outbound }) {
             tracing::warn!(%id, "game loop queue is full; the player cannot be served");
         }

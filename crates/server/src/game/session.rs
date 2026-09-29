@@ -138,6 +138,11 @@ pub(crate) struct Session {
     /// Ticks until this session may pick up another experience orb (vanilla's
     /// per-player 2-tick throttle; orbs themselves carry no pickup delay).
     pub(crate) xp_pickup_cooldown: u8,
+    /// Remote IP captured at accept (P19-02).
+    ///
+    /// `None` for connections that never reported one (all pre-P19-02 test
+    /// harnesses): ip-ban checks skip those sessions rather than guessing.
+    pub(crate) ip: Option<std::net::IpAddr>,
     /// Where this player last died, as `(dimension key, packed block position)`.
     ///
     /// Recorded in [`Game::after_damage`] and sent in [`Respawn`]'s
@@ -383,6 +388,9 @@ impl SessionView<'_> {
 impl Game {
     /// Remove a connection's player and mark its entity for the sweep.
     pub(crate) fn leave(&mut self, id: ConnectionId) {
+        // An address reported for a connection that never joined (refused at
+        // the gate) must not linger for a later connection id.
+        self.pending_ips.remove(&id);
         let Some(mut session) = self.sessions.remove(&id) else {
             return;
         };
@@ -473,6 +481,25 @@ impl Game {
         {
             warn!(id = %id, name = %profile.name, "refused a join: not on the whitelist");
             refuse_join(&outbound, "You are not white-listed on this server!");
+            return Ok(());
+        }
+        // The ban gate (P19-02): a banned profile or address is refused
+        // before a slot is taken, with no operator exemption. The address
+        // is the one reported ahead of this join; a connection that never
+        // reported (pre-P19-02 harnesses) skips the ip half.
+        let now = std::time::SystemTime::now();
+        if self.bans.is_player_banned_at(&profile.id.to_string(), now) {
+            let reason = self.ban_refusal_reason(&profile.id.to_string());
+            warn!(id = %id, name = %profile.name, "refused a join: profile is banned");
+            refuse_join(&outbound, &reason);
+            return Ok(());
+        }
+        if let Some(ip) = self.pending_ips.get(&id)
+            && self.bans.is_ip_banned_at(ip, now)
+        {
+            let reason = self.ip_ban_refusal_reason(ip);
+            warn!(id = %id, name = %profile.name, %ip, "refused a join: address is banned");
+            refuse_join(&outbound, &reason);
             return Ok(());
         }
         let Some(prepared) = self.prepare_join(id, profile, &outbound) else {
@@ -650,6 +677,7 @@ impl Game {
                 block_dirty: BTreeSet::new(),
                 food_exhaustion: 0.0,
                 eating: None,
+                ip: self.pending_ips.remove(&id),
             },
         );
 
@@ -1503,6 +1531,27 @@ impl Game {
             .collect()
     }
 
+    /// Install the ban lists loaded from the two ban files (P19-02).
+    ///
+    /// The lifecycle calls this at boot; until then both lists are empty
+    /// (which only matters at the join gate, and then bans nobody).
+    pub fn set_bans(&mut self, bans: crate::bans::BanList) {
+        self.bans = bans;
+    }
+
+    /// Every banned profile name, ascending by uuid.
+    pub(crate) fn ban_names(&self) -> Vec<String> {
+        self.bans
+            .player_bans()
+            .map(|ban| ban.name.clone())
+            .collect()
+    }
+
+    /// Every banned address, ascending.
+    pub(crate) fn banned_ips(&self) -> Vec<std::net::IpAddr> {
+        self.bans.ip_bans().map(|ban| ban.ip).collect()
+    }
+
     /// Re-read `whitelist.json`, replacing the live list (P19-01).
     ///
     /// A malformed file is an error and the live list is kept — the load
@@ -1522,6 +1571,168 @@ impl Game {
         let count = list.len();
         self.whitelist = list;
         Ok(Some(count))
+    }
+
+    /// The disconnect message for a banned profile.
+    ///
+    /// Vanilla's screen shows the reason and, for temporary bans, the
+    /// removal date; a row without a reason falls back to the default the
+    /// file writer uses.
+    fn ban_refusal_reason(&self, uuid: &str) -> String {
+        let (reason, expires) =
+            self.bans
+                .player_ban(uuid)
+                .map_or((crate::bans::DEFAULT_BAN_REASON, None), |ban| {
+                    (
+                        if ban.reason.is_empty() {
+                            crate::bans::DEFAULT_BAN_REASON
+                        } else {
+                            ban.reason.as_str()
+                        },
+                        ban.expires,
+                    )
+                });
+        super::ban_message(reason, expires)
+    }
+
+    /// The disconnect message for a banned address.
+    fn ip_ban_refusal_reason(&self, ip: &std::net::IpAddr) -> String {
+        let (reason, expires) =
+            self.bans
+                .ip_ban(ip)
+                .map_or((crate::bans::DEFAULT_BAN_REASON, None), |ban| {
+                    (
+                        if ban.reason.is_empty() {
+                            crate::bans::DEFAULT_BAN_REASON
+                        } else {
+                            ban.reason.as_str()
+                        },
+                        ban.expires,
+                    )
+                });
+        super::ban_message(reason, expires)
+    }
+
+    /// File a player row, persisting the player file (P19-02).
+    ///
+    /// The row replaces any previous one for the uuid. A failed save
+    /// restores the previous row (or removes the new one), so the file and
+    /// the live list never disagree. Returns whether the write landed;
+    /// without an ops directory there is nowhere to write and nothing is
+    /// changed.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Operational`] when the ban-file write fails.
+    pub(crate) fn file_player_ban(&mut self, ban: crate::bans::PlayerBan) -> ServerResult<bool> {
+        let Some(directory) = self.ops_directory.clone() else {
+            return Ok(false);
+        };
+        let previous = self.bans.player_ban(&ban.uuid).cloned();
+        let uuid = ban.uuid.clone();
+        self.bans.ban_player(ban);
+        if let Err(error) = self.bans.save(&directory) {
+            match previous {
+                Some(row) => self.bans.ban_player(row),
+                None => {
+                    self.bans.unban_player(&uuid);
+                }
+            }
+            return Err(error);
+        }
+        Ok(true)
+    }
+
+    /// File an address row, persisting the ip file (P19-02).
+    ///
+    /// Returns the live sessions holding that address (for the caller to
+    /// disconnect after the write lands), or `None` without an ops
+    /// directory, when nothing is changed.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Operational`] when the ban-file write fails, after
+    /// restoring the previous row (or removing the new one).
+    pub(crate) fn file_ip_ban(
+        &mut self,
+        ban: crate::bans::IpBan,
+    ) -> ServerResult<Option<Vec<mc_network::bridge::ConnectionId>>> {
+        let Some(directory) = self.ops_directory.clone() else {
+            return Ok(None);
+        };
+        let previous = self.bans.ip_ban(&ban.ip).cloned();
+        let ip = ban.ip;
+        self.bans.ban_ip(ban);
+        if let Err(error) = self.bans.save(&directory) {
+            match previous {
+                Some(row) => self.bans.ban_ip(row),
+                None => {
+                    self.bans.unban_ip(&ip);
+                }
+            }
+            return Err(error);
+        }
+        Ok(Some(
+            self.sessions
+                .values()
+                .filter(|session| session.ip == Some(ip))
+                .map(|session| session.id)
+                .collect(),
+        ))
+    }
+
+    /// Pardon a uuid, persisting the player file (P19-02).
+    ///
+    /// Returns whether a row was removed. Like the other ban writes, a
+    /// failed save restores the removed row.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Operational`] when the ban-file write fails.
+    pub(crate) fn pardon_player(&mut self, uuid: &str) -> ServerResult<bool> {
+        let Some(directory) = self.ops_directory.clone() else {
+            return Ok(false);
+        };
+        let Some(previous) = self.bans.player_ban(uuid).cloned() else {
+            return Ok(false);
+        };
+        self.bans.unban_player(uuid);
+        if let Err(error) = self.bans.save(&directory) {
+            self.bans.ban_player(previous);
+            return Err(error);
+        }
+        Ok(true)
+    }
+
+    /// Pardon an address, persisting the ip file (P19-02).
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Operational`] when the ban-file write fails.
+    pub(crate) fn pardon_address(&mut self, ip: &std::net::IpAddr) -> ServerResult<bool> {
+        let Some(directory) = self.ops_directory.clone() else {
+            return Ok(false);
+        };
+        let Some(previous) = self.bans.ip_ban(ip).cloned() else {
+            return Ok(false);
+        };
+        self.bans.unban_ip(ip);
+        if let Err(error) = self.bans.save(&directory) {
+            self.bans.ban_ip(previous);
+            return Err(error);
+        }
+        Ok(true)
+    }
+
+    /// Queue a live session for disconnect with a reason (P19-02).
+    ///
+    /// Removal itself happens in the network phase (see
+    /// `pending_disconnects`): this only records the intent, so callers in
+    /// command handlers never mutate the session map mid-dispatch.
+    pub(crate) fn kick_player(&mut self, target: mc_network::bridge::ConnectionId, reason: String) {
+        if self.sessions.contains_key(&target) {
+            self.pending_disconnects.push((target, reason));
+        }
     }
 
     /// World root for `playerdata/<uuid>.dat`, or `None` when this game has

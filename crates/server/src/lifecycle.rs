@@ -174,6 +174,32 @@ fn load_whitelist(world_dir: &std::path::Path) -> crate::whitelist::Whitelist {
     }
 }
 
+/// Load both ban files beside `ops.json`, logging and emptying on error.
+///
+/// Same policy as operators and the whitelist (P19-02): a malformed file
+/// never stops the boot.
+fn load_bans(world_dir: &std::path::Path) -> crate::bans::BanList {
+    match crate::bans::BanList::load(&crate::ops::ops_directory(world_dir)) {
+        Ok(list) => {
+            if list.player_count() + list.ip_count() > 0 {
+                tracing::info!(
+                    players = list.player_count(),
+                    ips = list.ip_count(),
+                    "loaded the ban lists"
+                );
+            }
+            list
+        }
+        Err(error) => {
+            tracing::error!(
+                %error,
+                "the ban files could not be read; the server will run banning nobody"
+            );
+            crate::bans::BanList::new()
+        }
+    }
+}
+
 /// Compare the freshly installed ore/carver set against the recorded one
 /// and record the current one (F-M2b).
 ///
@@ -321,6 +347,8 @@ impl<H: TickHook> Server<H> {
         // config (a restart restores it; `/whitelist on|off` is live-only).
         game.set_whitelist(whitelist);
         game.set_whitelist_enforced(self.config.access.whitelist_enforced);
+        // Bans ride the same directory with the same malformed policy.
+        game.set_bans(load_bans(&self.config.storage.world_dir));
         // Data packs. The world's `DataPacks` list is read from the `level.dat` of the world just
         // opened, which is why this happens here and not at config-validation time: the list is
         // world data, not configuration.

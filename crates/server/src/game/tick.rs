@@ -381,6 +381,14 @@ impl Game {
         }
         let overflowed = std::mem::take(&mut report.overflowed);
         report.disconnects += self.enforce_overflow(overflowed);
+        // Reason-carrying disconnects (`/ban`, `/kick`): queued during the
+        // tick so removal stays in this phase, each with its own message.
+        let queued: Vec<(ConnectionId, String)> = std::mem::take(&mut self.pending_disconnects);
+        for (id, reason) in queued {
+            if self.drop_session(id, &reason) {
+                report.disconnects += 1;
+            }
+        }
         Ok(())
     }
 
@@ -3885,6 +3893,12 @@ impl Game {
             }
             ClientEventKind::ViewDistance { distance } => {
                 self.apply_view_distance(event.id, distance, report)?;
+            }
+            ClientEventKind::PeerAddress { ip } => {
+                // Stashed until the join consumes it (P19-02). A second
+                // report for one connection overwrites: reconnects reuse
+                // the channel only after a `Left`, which drops the entry.
+                self.pending_ips.insert(event.id, ip);
             }
             ClientEventKind::Left => self.leave(event.id),
         }
