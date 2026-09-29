@@ -862,7 +862,8 @@ mod tests {
 
     /// P19-03: stdin EOF ends console input, not the server. A channel
     /// whose sender is already dropped reads as closed on the first wait;
-    /// the run must still tick until an external shutdown arrives.    #[tokio::test]
+    /// the run must still tick until an external shutdown arrives.
+    #[tokio::test]
     async fn console_eof_does_not_stop_the_server() {
         let mut server = Server::new(crate::config::ServerConfig::default());
         let (tx, rx) = tokio::sync::mpsc::channel(64);
