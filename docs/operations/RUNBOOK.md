@@ -9,15 +9,11 @@ run against this tree; anything that was not run says so.
 - Pure-Rust Minecraft Java **26.1.2** (protocol 775) dedicated server,
   10-player Vanilla Survival target, Pi 5 8 GB / Debian 13 / aarch64 first-class.
 - Offline mode is the default (`online_mode = false`). Setting
-  `online_mode = true` **refuses to start** — the Mojang session/encryption
-  flow is a structural boundary only (P02-08), and `start_network` returns
-  `Operational("online_mode is enabled but the Mojang session/encryption flow
-  is not implemented yet")` instead of silently degrading to offline auth.
-  There is no Online Mode validation procedure to document beyond that refusal;
-  the PHASE-08 prompt's "validate Online Mode path" item is therefore met by
-  the fail-fast plus its test
-  (`e2e_login_play::online_mode_refuses_to_start_without_provider`), not by a
-  handshake this build cannot perform.
+  `online_mode = true` runs the Mojang handshake (P19-05, ADR-0008):
+  RSA-1024 `EncryptionRequest`, session-hash `hasJoined` with timeout /
+  refusal vectors, AES-128/CFB8 from there, verified profile with
+  properties into `LoginSuccess`. A real-account join with skin is
+  owner-run NOT RUN; the automated handshake pins are green.
 - No 20 TPS claim: the P08-13 profile ran on a Windows dev host in a debug
   profile with a driven loop (see `docs/performance/BENCHMARK-BASELINE.md`
   §P08-13). Treat every number here as one order of magnitude.
@@ -160,7 +156,8 @@ backup: it covers neither region files nor operator error.
 | Symptom | Likely cause | Action |
 |---|---|---|
 | Refuses to start, `invalid config TOML` / `out of range` | bad `config.toml` | Fix the named key (§2); unknown fields are rejected, not ignored. |
-| `online_mode is enabled but ... not implemented yet` | `online_mode = true` | Set it back to `false` (default). Online auth has no handshake yet by design. |
+| `Failed to verify username!` on join | bad token or refused session | Normal login refusal (P19-05): a bad verify token or a session server with no such login kicks with Vanilla's message. Check the name; check `hasJoined` reachability. |
+| `Authentication servers are unavailable` on join | session-server transport/timeout | Mojang unreachable or slow (10 s timeout). Retry; offline mode needs no session server. |
 | `ops.json` ignored / "permissions stopped working" | file beside the wrong dir, bad JSON, or upper-case uuid confusion | `ops.json` lives **beside** the world dir (parent), not inside it (`ops::ops_directory`); a malformed file is an error naming file + problem (startup logs it and runs with no operators rather than refusing boot); uuid matching is case-insensitive. A missing file is normal (empty list). |
 | `The server is full` on join | at `max_players` | Wait for a slot, or have a listed operator with `bypassesPlayerLimit: true` join (they bypass the cap by design). |
 | `Outbound queue overflow` disconnect | slow client / burst | Per-client only; the server keeps running. Rejoin; check view distance and link. |

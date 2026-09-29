@@ -115,7 +115,7 @@ is jar-measured at 35.0 with a 16.0 default for other kinds, an A* chase arm
   drops and chatted (P10-11/P11), run the P17 container session (P17-05), and played a 30-minute mixed
   10-client soak (P14-06, pass with one noted idle spike); pickup-render, death→respawn and the
   post-restart chest screen are still unverified.
-- **Offline mode only.** `online_mode = true` refuses to start rather than degrading silently.
+- **Offline mode by default; online mode behind config.** `online_mode = false` is the default; `true` runs the Mojang handshake (P19-05, ADR-0008) with RSA-1024 keygen once per boot.
 
 ## Invariants a change must not break
 

@@ -23,6 +23,9 @@ pub struct GameProfile {
     pub id: Uuid,
     /// Player name as accepted by the server.
     pub name: String,
+    /// Verified skin/cape properties (P19-05); empty unless a session
+    /// server supplied them — offline profiles never carry any.
+    pub properties: Vec<mc_protocol::packets::login::ProfileProperty>,
 }
 
 /// Derive the vanilla offline-mode profile for `name`.
@@ -37,6 +40,7 @@ pub fn offline_profile(name: &str) -> GameProfile {
     GameProfile {
         id: Uuid::from_bytes(bytes),
         name: name.to_owned(),
+        properties: Vec::new(),
     }
 }
 
@@ -74,26 +78,6 @@ impl OnlineAuthProvider for OfflineOnlyAuth {
     }
 }
 
-/// Placeholder provider installed when `online_mode = true` but no real
-/// provider has been wired yet. Startup refuses to run with this provider so
-/// operators get a clear error instead of broken logins.
-#[derive(Debug, Default)]
-pub struct UnconfiguredOnlineAuth;
-
-impl UnconfiguredOnlineAuth {
-    /// Human-readable reason surfaced at startup and on kick.
-    #[must_use]
-    pub fn reason() -> &'static str {
-        "online mode is enabled but no authentication provider is configured"
-    }
-}
-
-impl OnlineAuthProvider for UnconfiguredOnlineAuth {
-    fn authenticate<'a>(&'a self, _name: &'a str, _server_hash: &'a str) -> AuthFuture<'a> {
-        Box::pin(async { Err(ServerError::Operational(Self::reason().to_owned())) })
-    }
-}
-
 /// Validate a requested username: 1..=16 chars of `[A-Za-z0-9_]`.
 ///
 /// # Errors
@@ -114,8 +98,7 @@ pub fn validate_username(name: &str) -> ServerResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{GameProfile, UnconfiguredOnlineAuth, offline_profile, validate_username};
-    use mc_core::error::ServerError;
+    use super::{offline_profile, validate_username};
 
     #[test]
     fn offline_profile_matches_vanilla_vector() {
@@ -144,16 +127,5 @@ mod tests {
         assert!(validate_username("bad name").is_err());
         assert!(validate_username("bad-name").is_err());
         assert!(validate_username("\u{4E2D}\u{6587}").is_err());
-    }
-
-    #[tokio::test]
-    async fn unconfigured_online_auth_fails_clearly() {
-        let provider = UnconfiguredOnlineAuth;
-        let result = super::OnlineAuthProvider::authenticate(&provider, "Steve", "hash").await;
-        assert!(matches!(result, Err(ServerError::Operational(_))));
-        let _ = GameProfile {
-            id: uuid::Uuid::nil(),
-            name: "x".to_owned(),
-        };
     }
 }

@@ -76,6 +76,10 @@ struct Session {
     game: Option<GameLink>,
     /// Remote IP, captured at accept for the join gate (P19-02).
     peer_ip: std::net::IpAddr,
+    /// Login stream cipher, installed once the online handshake completes
+    /// (P19-05). `None` before that and always in offline mode: plaintext
+    /// in, plaintext out.
+    cipher: Option<mc_protocol::cipher::PacketCipher>,
     /// Set once the join event has been published.
     joined: bool,
 }
@@ -98,44 +102,115 @@ impl Session {
             event_sender: None,
             game,
             peer_ip,
+            cipher: None,
             joined: false,
         }
     }
 
-    async fn resolve_profile(
-        &self,
-        provider: &dyn OnlineAuthProvider,
+    /// Online-mode login: encryption handshake, session check, cipher on.
+    ///
+    /// Returns the verified profile, or `None` when the client went away
+    /// quietly mid-handshake (like every other clean-EOF path, that ends
+    /// the login without an error). Refusals kick with Vanilla's messages
+    /// and also end quietly: a failed login is normal player input, not a
+    /// server failure.
+    async fn run_online_login(
+        &mut self,
+        reader: &mut OwnedReadHalf,
+        writer: &mut OwnedWriteHalf,
+        codec: &mut FrameCodec,
+        auth: &dyn OnlineAuthProvider,
         name: &str,
-    ) -> ServerResult<GameProfile> {
-        if self.settings.online_mode {
-            // Online flow (encryption request/response + session check) is
-            // deferred; `mc-server` refuses to start with online mode on, so
-            // this branch only runs when an operator wired a real provider.
-            provider.authenticate(name, "").await
-        } else {
-            Ok(offline_profile(name))
+    ) -> ServerResult<Option<GameProfile>> {
+        use crate::online::{OnlineIdentity, server_id_hash};
+        use mc_protocol::packets::login::{EncryptionRequest, EncryptionResponse};
+        let Some(identity) = self.settings.online_identity.clone() else {
+            self.kick(
+                writer,
+                ConnectionState::Login,
+                "online mode has no login identity",
+            )
+            .await;
+            return Ok(None);
+        };
+        let token = OnlineIdentity::verify_token();
+        self.send_typed(
+            writer,
+            &EncryptionRequest {
+                server_id: String::new(),
+                public_key: identity.public_der.clone(),
+                verify_token: token.to_vec(),
+            },
+        )
+        .await?;
+        let Some(packet) = read_packet(reader, codec, self.cipher.as_mut(), PHASE_TIMEOUT).await?
+        else {
+            return Ok(None);
+        };
+        if packet.id != serverbound::login::KEY {
+            return Err(ServerError::Protocol(format!(
+                "expected EncryptionResponse, got packet id {}",
+                packet.id
+            )));
         }
+        let response = EncryptionResponse::decode(&packet.payload)?;
+        let secret = identity.decrypt(&response.shared_secret)?;
+        if secret.len() != crate::online::SHARED_SECRET_LEN {
+            return Err(ServerError::Protocol(format!(
+                "shared secret is {} bytes, not {}",
+                secret.len(),
+                crate::online::SHARED_SECRET_LEN
+            )));
+        }
+        let echoed = identity.decrypt(&response.verify_token)?;
+        if !crate::online::fixed_time_eq(&echoed, &token) {
+            self.kick(writer, ConnectionState::Login, "Failed to verify username!")
+                .await;
+            return Ok(None);
+        }
+        let hash = server_id_hash("", &secret, &identity.public_der);
+        let profile = match auth.authenticate(name, &hash).await {
+            Ok(profile) => profile,
+            Err(ServerError::InvalidAction(_)) => {
+                self.kick(writer, ConnectionState::Login, "Failed to verify username!")
+                    .await;
+                return Ok(None);
+            }
+            Err(error) => {
+                self.kick(
+                    writer,
+                    ConnectionState::Login,
+                    "Authentication servers are unavailable",
+                )
+                .await;
+                return Err(error);
+            }
+        };
+        let mut secret_array = [0u8; crate::online::SHARED_SECRET_LEN];
+        secret_array.copy_from_slice(&secret);
+        self.cipher = Some(mc_protocol::cipher::PacketCipher::new(&secret_array));
+        Ok(Some(profile))
     }
 
     async fn send_typed<T: Packet>(
-        &self,
+        &mut self,
         writer: &mut OwnedWriteHalf,
         packet: &T,
     ) -> ServerResult<()> {
         let raw = packet.to_raw()?;
-        send_raw(writer, self.compression, &raw).await
+        send_raw(writer, self.compression, self.cipher.as_mut(), &raw).await
     }
 
     async fn send_raw_packet(
-        &self,
+        &mut self,
         writer: &mut OwnedWriteHalf,
         raw: &RawPacket,
     ) -> ServerResult<()> {
-        send_raw(writer, self.compression, raw).await
+        send_raw(writer, self.compression, self.cipher.as_mut(), raw).await
     }
 
     /// Send the state-appropriate disconnect packet, then close.
-    async fn kick(&self, writer: &mut OwnedWriteHalf, state: ConnectionState, reason: &str) {
+    async fn kick(&mut self, writer: &mut OwnedWriteHalf, state: ConnectionState, reason: &str) {
         // Owner-session placement disconnects: the client shows only a
         // garbled reason line, so every kick lands here in the log with its
         // reason — a kick and a raw TCP close are otherwise
@@ -233,7 +308,8 @@ impl Session {
         auth: &dyn OnlineAuthProvider,
     ) -> ServerResult<()> {
         // --- Handshake -----------------------------------------------------
-        let Some(packet) = read_packet(reader, codec, PHASE_TIMEOUT).await? else {
+        let Some(packet) = read_packet(reader, codec, self.cipher.as_mut(), PHASE_TIMEOUT).await?
+        else {
             return Ok(());
         };
         if packet.id != serverbound::handshake::INTENTION {
@@ -277,7 +353,9 @@ impl Session {
         codec: &mut FrameCodec,
     ) -> ServerResult<()> {
         loop {
-            let Some(packet) = read_packet(reader, codec, PHASE_TIMEOUT).await? else {
+            let Some(packet) =
+                read_packet(reader, codec, self.cipher.as_mut(), PHASE_TIMEOUT).await?
+            else {
                 return Ok(());
             };
             match packet.id {
@@ -312,7 +390,8 @@ impl Session {
         shutdown: &NetworkShutdown,
         auth: &dyn OnlineAuthProvider,
     ) -> ServerResult<()> {
-        let Some(packet) = read_packet(reader, codec, PHASE_TIMEOUT).await? else {
+        let Some(packet) = read_packet(reader, codec, self.cipher.as_mut(), PHASE_TIMEOUT).await?
+        else {
             return Ok(());
         };
         if packet.id != serverbound::login::HELLO {
@@ -327,7 +406,17 @@ impl Session {
             self.kick(writer, ConnectionState::Login, &reason).await;
             return Ok(());
         }
-        let profile = self.resolve_profile(auth, &login_start.name).await?;
+        let profile = if self.settings.online_mode {
+            let Some(profile) = self
+                .run_online_login(reader, writer, codec, auth, &login_start.name)
+                .await?
+            else {
+                return Ok(());
+            };
+            profile
+        } else {
+            offline_profile(&login_start.name)
+        };
         tracing::info!(name = %profile.name, uuid = %profile.id, "login accepted");
 
         // Compression negotiation happens before LoginSuccess.
@@ -344,7 +433,7 @@ impl Session {
             &LoginSuccess {
                 uuid: profile.id,
                 name: profile.name.clone(),
-                properties: Vec::new(),
+                properties: profile.properties.clone(),
             },
         )
         .await?;
@@ -356,7 +445,9 @@ impl Session {
         // client, so this is an ignore-loop with the same deadline as the other
         // login phases.
         loop {
-            let Some(packet) = read_packet(reader, codec, PHASE_TIMEOUT).await? else {
+            let Some(packet) =
+                read_packet(reader, codec, self.cipher.as_mut(), PHASE_TIMEOUT).await?
+            else {
                 return Ok(());
             };
             match packet.id {
@@ -393,7 +484,7 @@ impl Session {
         self.run_play(reader, writer, codec, shutdown).await
     }
 
-    async fn send_configuration(&self, writer: &mut OwnedWriteHalf) -> ServerResult<()> {
+    async fn send_configuration(&mut self, writer: &mut OwnedWriteHalf) -> ServerResult<()> {
         for packet in registry_data::configuration_packets(&self.settings.version_name)? {
             self.send_raw_packet(writer, &packet).await?;
         }
@@ -410,7 +501,9 @@ impl Session {
             if shutdown.is_requested() {
                 return Err(ServerError::Shutdown);
             }
-            let Some(packet) = read_packet(reader, codec, PHASE_TIMEOUT).await? else {
+            let Some(packet) =
+                read_packet(reader, codec, self.cipher.as_mut(), PHASE_TIMEOUT).await?
+            else {
                 return Err(ServerError::Protocol(
                     "client closed during configuration".to_owned(),
                 ));
@@ -508,7 +601,7 @@ impl Session {
                         self.send_raw_packet(writer, &packet).await?;
                     }
                 }
-                packet = read_packet(reader, codec, self.settings.keepalive_timeout) => {
+                packet = read_packet(reader, codec, self.cipher.as_mut(), self.settings.keepalive_timeout) => {
                     match packet {
                         Ok(Some(packet)) => {
                             match self.handle_play_packet(packet, writer).await? {
@@ -697,9 +790,15 @@ async fn next_outbound(outbound: &mut Option<crate::bridge::InboundReceiver>) ->
 }
 
 /// Read one packet, or `None` on clean EOF. The deadline bounds the whole read.
+///
+/// When the login cipher is installed, socket bytes are decrypted before
+/// they reach the frame codec, and the encoded frame is encrypted before
+/// the write — the whole stream past the handshake, length prefixes
+/// included, exactly like Vanilla.
 async fn read_packet(
     reader: &mut OwnedReadHalf,
     codec: &mut FrameCodec,
+    mut cipher: Option<&mut mc_protocol::cipher::PacketCipher>,
     deadline: Duration,
 ) -> ServerResult<Option<RawPacket>> {
     let expires = Instant::now() + deadline;
@@ -715,7 +814,13 @@ async fn read_packet(
         match tokio::time::timeout(remaining, reader.read(&mut buffer)).await {
             Err(_) => return Err(ServerError::Protocol(READ_TIMEOUT.to_owned())),
             Ok(Ok(0)) => return Ok(None),
-            Ok(Ok(read)) => codec.feed(&buffer[..read])?,
+            Ok(Ok(read)) => {
+                let bytes = &mut buffer[..read];
+                if let Some(cipher) = cipher.as_mut() {
+                    cipher.decrypt_bytes(bytes);
+                }
+                codec.feed(bytes)?;
+            }
             Ok(Err(error)) => {
                 return Err(ServerError::Operational(format!(
                     "socket read failed: {error}"
@@ -729,9 +834,13 @@ async fn read_packet(
 async fn send_raw(
     writer: &mut OwnedWriteHalf,
     compression: Option<i32>,
+    cipher: Option<&mut mc_protocol::cipher::PacketCipher>,
     packet: &RawPacket,
 ) -> ServerResult<()> {
-    let bytes = FrameCodec::encode(packet, compression)?;
+    let mut bytes = FrameCodec::encode(packet, compression)?;
+    if let Some(cipher) = cipher {
+        cipher.encrypt_bytes(&mut bytes);
+    }
     writer
         .write_all(&bytes)
         .await
@@ -777,5 +886,345 @@ mod tests {
         assert_eq!(parsed["version"]["name"], "26.1.2");
         assert_eq!(parsed["players"]["max"], 10);
         assert_eq!(parsed["description"]["text"], settings.motd);
+    }
+
+    /// A stub session provider: verifies nobody, returns a fixed profile
+    /// with one skin property — or refuses, to pin the kick path.
+    struct StubAuth {
+        verify: bool,
+    }
+
+    impl crate::auth::OnlineAuthProvider for StubAuth {
+        fn authenticate<'a>(
+            &'a self,
+            name: &'a str,
+            _server_hash: &'a str,
+        ) -> crate::auth::AuthFuture<'a> {
+            let verify = self.verify;
+            Box::pin(async move {
+                if !verify {
+                    return Err(mc_core::error::ServerError::InvalidAction(
+                        "no such login".to_owned(),
+                    ));
+                }
+                Ok(crate::auth::GameProfile {
+                    id: uuid::Uuid::parse_str("069a79f4-44e9-4726-a5be-f4a7b64ac909")
+                        .expect("fixture uuid"),
+                    name: name.to_owned(),
+                    properties: vec![mc_protocol::packets::login::ProfileProperty {
+                        name: "textures".to_owned(),
+                        value: "abc".to_owned(),
+                        signature: Some("sig".to_owned()),
+                    }],
+                })
+            })
+        }
+    }
+
+    fn framed(id: i32, body: &[u8]) -> Vec<u8> {
+        mc_protocol::framing::FrameCodec::encode(
+            &mc_protocol::packet::RawPacket::new(id, body.to_vec()),
+            None,
+        )
+        .expect("encodes")
+    }
+
+    async fn read_frame(
+        reader: &mut (impl tokio::io::AsyncReadExt + Unpin),
+        mut cipher: Option<&mut mc_protocol::cipher::PacketCipher>,
+    ) -> (i32, Vec<u8>) {
+        use mc_protocol::varint::read_varint;
+        let mut len_buf = Vec::new();
+        loop {
+            let mut one = [0u8; 1];
+            reader.read_exact(&mut one).await.expect("length byte");
+            if let Some(cipher) = cipher.as_deref_mut() {
+                cipher.decrypt_bytes(&mut one);
+            }
+            len_buf.push(one[0]);
+            let mut slice: &[u8] = &len_buf;
+            if let Ok(len) = read_varint(&mut slice)
+                && slice.is_empty()
+            {
+                let mut body = vec![0u8; len as usize];
+                reader.read_exact(&mut body).await.expect("body");
+                if let Some(cipher) = cipher.as_deref_mut() {
+                    cipher.decrypt_bytes(&mut body);
+                }
+                let mut slice: &[u8] = &body;
+                let id = read_varint(&mut slice).expect("id");
+                return (id, slice.to_vec());
+            }
+        }
+    }
+
+    /// Full online login over loopback (P19-05): handshake, `LoginStart`,
+    /// `EncryptionRequest`, encrypted `EncryptionResponse`, then
+    /// `LoginSuccess` read back *through the cipher* with the verified
+    /// profile and its skin property.
+    ///
+    /// The client half plays a stock client: RSA-encrypt the secret and
+    /// token with the server's DER key, enable AES/CFB8, and decode from
+    /// there. A token mismatch, a short secret or a refused session would
+    /// surface here as a kick or a hang rather than this packet.
+    #[tokio::test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one linear stock-client script; splitting it would scatter the handshake order the test exists to pin"
+    )]
+    async fn online_login_completes_through_the_cipher() {
+        use mc_protocol::cipher::PacketCipher;
+        use mc_protocol::packets::Packet as _;
+        use mc_protocol::packets::handshake::{Handshake, HandshakeIntent};
+        use mc_protocol::packets::login::{
+            EncryptionRequest, EncryptionResponse, LoginStart, LoginSuccess,
+        };
+        use tokio::io::AsyncWriteExt as _;
+
+        let identity = crate::online::OnlineIdentity::generate().expect("keygen works");
+        let settings = NetworkSettings {
+            online_mode: true,
+            compression_threshold: -1,
+            online_identity: Some(std::sync::Arc::new(identity)),
+            ..NetworkSettings::default()
+        };
+        let auth: std::sync::Arc<dyn crate::auth::OnlineAuthProvider> =
+            std::sync::Arc::new(StubAuth { verify: true });
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("loopback binds");
+        let addr = listener.local_addr().expect("addr");
+        let server_task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("one client");
+            let gate = std::sync::Arc::new(crate::limits::ConnectionGate::new(
+                8,
+                8,
+                std::time::Duration::ZERO,
+            ));
+            let now = std::time::Instant::now();
+            let guard = gate
+                .try_acquire("127.0.0.1".parse().expect("ip"), now)
+                .expect("admitted");
+            super::run_connection(
+                stream,
+                std::sync::Arc::new(settings),
+                crate::listener::NetworkShutdown::new(),
+                auth,
+                guard,
+                None,
+            )
+            .await
+        });
+
+        let mut client = tokio::net::TcpStream::connect(addr)
+            .await
+            .expect("client connects");
+        // Handshake (next state: login), plaintext.
+        let hello = Handshake {
+            protocol_version: 775,
+            server_address: "localhost".to_owned(),
+            server_port: 25565,
+            intent: HandshakeIntent::Login,
+        };
+        let body = hello.encode().expect("encodes");
+        client
+            .write_all(&framed(
+                mc_protocol::ids::serverbound::handshake::INTENTION,
+                &body,
+            ))
+            .await
+            .expect("handshake");
+        // LoginStart, plaintext.
+        let start = LoginStart {
+            name: "Miner".to_owned(),
+            uuid: uuid::Uuid::nil(),
+        };
+        let body = start.encode().expect("encodes");
+        client
+            .write_all(&framed(mc_protocol::ids::serverbound::login::HELLO, &body))
+            .await
+            .expect("login start");
+
+        // EncryptionRequest arrives plaintext.
+        let (id, body) = read_frame(&mut client, None).await;
+        assert_eq!(id, mc_protocol::ids::clientbound::login::HELLO);
+        let request = EncryptionRequest::decode(&body).expect("decodes");
+        assert!(request.server_id.is_empty());
+        assert!(!request.public_key.is_empty() && request.verify_token.len() == 4);
+
+        // Answer like a stock client: RSA-encrypt secret and token.
+        let secret = *b"0123456789abcdef";
+        let public: rsa::RsaPublicKey =
+            rsa::pkcs8::DecodePublicKey::from_public_key_der(&request.public_key)
+                .expect("server key parses");
+        let mut rng = rand::thread_rng();
+        let enc_secret = public
+            .encrypt(&mut rng, rsa::Pkcs1v15Encrypt, &secret)
+            .expect("encrypts");
+        let enc_token = public
+            .encrypt(&mut rng, rsa::Pkcs1v15Encrypt, &request.verify_token)
+            .expect("encrypts");
+        let answer = EncryptionResponse {
+            shared_secret: enc_secret,
+            verify_token: enc_token,
+        };
+        let body = answer.encode().expect("encodes");
+        client
+            .write_all(&framed(mc_protocol::ids::serverbound::login::KEY, &body))
+            .await
+            .expect("response");
+
+        // From here the server speaks cipher: enable ours and read
+        // LoginSuccess through it.
+        let mut cipher = PacketCipher::new(&secret);
+        let (id, body) = read_frame(&mut client, Some(&mut cipher)).await;
+        assert_eq!(id, mc_protocol::ids::clientbound::login::LOGIN_FINISHED);
+        let success = LoginSuccess::decode(&body).expect("decodes");
+        assert_eq!(success.name, "Miner");
+        assert_eq!(
+            success.uuid.to_string(),
+            "069a79f4-44e9-4726-a5be-f4a7b64ac909"
+        );
+        assert_eq!(success.properties.len(), 1);
+        assert_eq!(success.properties[0].name, "textures");
+        assert_eq!(success.properties[0].signature.as_deref(), Some("sig"));
+        drop(client);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), server_task)
+            .await
+            .expect("server ends with the client");
+    }
+
+    /// Refusals kick with Vanilla's message: a bad verify token and a
+    /// refused session both end in `LoginDisconnect`, never in a hang and
+    /// never past the gate.
+    #[tokio::test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one linear refusal script; same justification as the happy path above"
+    )]
+    async fn online_login_refusals_kick() {
+        use mc_protocol::packets::Packet as _;
+        use mc_protocol::packets::handshake::{Handshake, HandshakeIntent};
+        use mc_protocol::packets::login::{
+            EncryptionRequest, EncryptionResponse, LoginDisconnect, LoginStart,
+        };
+        use tokio::io::AsyncWriteExt as _;
+
+        /// One login attempt through `EncryptionResponse`; returns the
+        /// disconnect reason the client saw.
+        async fn attempt(addr: std::net::SocketAddr, name: &str, corrupt_token: bool) -> String {
+            let mut client = tokio::net::TcpStream::connect(addr)
+                .await
+                .expect("client connects");
+            let hello = Handshake {
+                protocol_version: 775,
+                server_address: "localhost".to_owned(),
+                server_port: 25565,
+                intent: HandshakeIntent::Login,
+            };
+            let body = hello.encode().expect("encodes");
+            client
+                .write_all(&framed(
+                    mc_protocol::ids::serverbound::handshake::INTENTION,
+                    &body,
+                ))
+                .await
+                .expect("handshake");
+            let start = LoginStart {
+                name: name.to_owned(),
+                uuid: uuid::Uuid::nil(),
+            };
+            let body = start.encode().expect("encodes");
+            client
+                .write_all(&framed(mc_protocol::ids::serverbound::login::HELLO, &body))
+                .await
+                .expect("login start");
+            let (id, body) = read_frame(&mut client, None).await;
+            assert_eq!(id, mc_protocol::ids::clientbound::login::HELLO);
+            let request = EncryptionRequest::decode(&body).expect("decodes");
+            let secret = *b"0123456789abcdef";
+            let public: rsa::RsaPublicKey =
+                rsa::pkcs8::DecodePublicKey::from_public_key_der(&request.public_key)
+                    .expect("server key parses");
+            let mut rng = rand::thread_rng();
+            let token = if corrupt_token {
+                *b"xxxx"
+            } else {
+                request.verify_token.clone().try_into().expect("4 bytes")
+            };
+            let answer = EncryptionResponse {
+                shared_secret: public
+                    .encrypt(&mut rng, rsa::Pkcs1v15Encrypt, &secret)
+                    .expect("encrypts"),
+                verify_token: public
+                    .encrypt(&mut rng, rsa::Pkcs1v15Encrypt, &token)
+                    .expect("encrypts"),
+            };
+            let body = answer.encode().expect("encodes");
+            client
+                .write_all(&framed(mc_protocol::ids::serverbound::login::KEY, &body))
+                .await
+                .expect("response");
+            let (id, body) = read_frame(&mut client, None).await;
+            assert_eq!(
+                id,
+                mc_protocol::ids::clientbound::login::LOGIN_DISCONNECT,
+                "a refusal is a kick, not silence"
+            );
+            LoginDisconnect::decode(&body).expect("decodes").json
+        }
+
+        async fn serve_once(verify: bool) -> std::net::SocketAddr {
+            let identity = crate::online::OnlineIdentity::generate().expect("keygen works");
+            let settings = NetworkSettings {
+                online_mode: true,
+                compression_threshold: -1,
+                online_identity: Some(std::sync::Arc::new(identity)),
+                ..NetworkSettings::default()
+            };
+            let auth: std::sync::Arc<dyn crate::auth::OnlineAuthProvider> =
+                std::sync::Arc::new(StubAuth { verify });
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("loopback binds");
+            let addr = listener.local_addr().expect("addr");
+            tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.expect("one client");
+                let gate = std::sync::Arc::new(crate::limits::ConnectionGate::new(
+                    8,
+                    8,
+                    std::time::Duration::ZERO,
+                ));
+                let guard = gate
+                    .try_acquire("127.0.0.1".parse().expect("ip"), std::time::Instant::now())
+                    .expect("admitted");
+                let _ = super::run_connection(
+                    stream,
+                    std::sync::Arc::new(settings),
+                    crate::listener::NetworkShutdown::new(),
+                    auth,
+                    guard,
+                    None,
+                )
+                .await;
+            });
+            addr
+        }
+
+        // Wrong token: the handshake's integrity check fires first.
+        let addr = serve_once(true).await;
+        let reason = attempt(addr, "Miner", true).await;
+        assert!(
+            reason.contains("verify"),
+            "a bad token is refused by name: {reason}"
+        );
+        // Refused session: the provider says no.
+        let addr = serve_once(false).await;
+        let reason = attempt(addr, "Miner", false).await;
+        assert!(
+            reason.contains("verify"),
+            "a refused session is refused by name: {reason}"
+        );
     }
 }

@@ -28,6 +28,7 @@ pub mod bridge;
 pub mod connection;
 pub mod limits;
 pub mod listener;
+pub mod online;
 pub mod registry_data;
 
 pub use listener::{NetworkService, NetworkSettings};

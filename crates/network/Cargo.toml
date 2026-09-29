@@ -14,6 +14,12 @@ mc-core = { path = "../core" }
 thiserror.workspace = true
 mc-protocol = { path = "../protocol" }
 md-5.workspace = true
+# P19-05 online-mode auth (ADR-0008): RSA handshake, SHA-1 server hash,
+# CSPRNG keygen, blocking HTTPS session check (run off-thread).
+rsa.workspace = true
+sha1.workspace = true
+rand.workspace = true
+ureq.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "net", "io-util", "sync", "time", "macros"] }
 tracing.workspace = true

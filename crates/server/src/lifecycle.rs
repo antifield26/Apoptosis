@@ -574,25 +574,22 @@ impl<H: TickHook> Server<H> {
 
     /// Bind the TCP listener and start serving the protocol slice.
     ///
+    /// Online mode (P19-05) generates the login keypair here, once per boot,
+    /// and wires the Mojang session provider: per-connection keygen would
+    /// stall every login, and starting keyless would accept nobody.
+    ///
     /// # Errors
     ///
-    /// [`ServerError::Operational`] when the bind fails or online mode is
-    /// enabled (the encryption/session flow is not implemented yet; see
-    /// the Phase 02 report, git history tag `phase-09-final`).
+    /// [`ServerError::Operational`] when the bind fails or the login
+    /// keypair cannot be generated.
     pub async fn start_network(&mut self) -> ServerResult<std::net::SocketAddr> {
-        if self.config.network.online_mode {
-            return Err(ServerError::Operational(
-                "online_mode is enabled but the Mojang session/encryption flow is not implemented yet".to_owned(),
-            ));
-        }
-        let bind: std::net::SocketAddr = self
-            .config
-            .network
-            .bind
-            .parse()
-            .map_err(|e| ServerError::Operational(format!("invalid bind address: {e}")))?;
-        let settings = mc_network::NetworkSettings {
-            bind,
+        let mut settings = mc_network::NetworkSettings {
+            bind: self
+                .config
+                .network
+                .bind
+                .parse()
+                .map_err(|e| ServerError::Operational(format!("invalid bind address: {e}")))?,
             max_players: self.config.network.max_players,
             online_mode: self.config.network.online_mode,
             compression_threshold: self.config.network.compression_threshold,
@@ -600,8 +597,23 @@ impl<H: TickHook> Server<H> {
             motd: self.config.network.motd.clone(),
             ..mc_network::NetworkSettings::default()
         };
+        let auth: Option<std::sync::Arc<dyn mc_network::auth::OnlineAuthProvider>> =
+            if self.config.network.online_mode {
+                let started = std::time::Instant::now();
+                let identity = mc_network::online::OnlineIdentity::generate()?;
+                tracing::info!(
+                    elapsed_ms = started.elapsed().as_millis(),
+                    "generated the online-mode login keypair"
+                );
+                settings.online_identity = Some(std::sync::Arc::new(identity));
+                Some(std::sync::Arc::new(
+                    mc_network::online::MojangSessionAuth::new(),
+                ))
+            } else {
+                None
+            };
         let service =
-            mc_network::NetworkService::start_with_game(settings, None, self.game_link.clone())
+            mc_network::NetworkService::start_with_game(settings, auth, self.game_link.clone())
                 .await?;
         let addr = service.local_addr();
         self.network = Some(service);

@@ -49,3 +49,17 @@ tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 flate2 = "1"
 uuid = "1"
 md-5 = "0.10"
+# P19-05 online-mode auth (ADR-0008): RSA keypair + PKCS#1 v1.5 decrypt for
+# the login handshake, SHA-1 for the Minecraft server-id hash, AES-128/CFB8
+# for the stream cipher, a CSPRNG for keygen, and blocking HTTPS for the
+# Mojang session-server check (run off-thread). All MIT/Apache-2.0 RustCrypto
+# or equivalent permissive crates; versions pinned by Cargo.lock.
+rsa = "0.9"
+aes = "0.8"
+# 0.8, not 0.9: cfb8 0.9 moved to `cipher` 0.5 while `aes` 0.8 still speaks
+# 0.4, and the two cannot compose. 0.8.1 pairs with `cipher` 0.4 (verified
+# in Cargo.lock); the mode on the wire is identical either way.
+cfb8 = "0.8"
+sha1 = "0.10"
+rand = "0.8"
+ureq = "3"

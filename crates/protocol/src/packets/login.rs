@@ -57,6 +57,113 @@ impl Packet for LoginAcknowledged {
     }
 }
 
+/// Cap for a length-prefixed byte array on the login wire.
+///
+/// RSA-1024 ciphertexts are 128 bytes and the DER public key is ~162; 4096
+/// leaves wide headroom while refusing allocation bombs outright.
+pub const MAX_LOGIN_BLOB_LEN: usize = 4096;
+
+/// Read a VarInt-length-prefixed byte array with the login cap.
+fn read_blob(reader: &mut crate::wire::PacketReader<'_>) -> ServerResult<Vec<u8>> {
+    let length = reader.read_varint()?;
+    if length < 0 || length as usize > MAX_LOGIN_BLOB_LEN {
+        return Err(mc_core::error::ServerError::Protocol(format!(
+            "login blob of {length} bytes is outside 0..={MAX_LOGIN_BLOB_LEN}"
+        )));
+    }
+    #[allow(clippy::cast_sign_loss)]
+    let length = length as usize;
+    Ok(reader.read_bytes(length)?.to_vec())
+}
+
+/// Write a VarInt-length-prefixed byte array.
+fn write_blob(writer: &mut crate::wire::PacketWriter, bytes: &[u8]) -> ServerResult<()> {
+    writer.write_varint(i32::try_from(bytes.len()).map_err(|_| {
+        mc_core::error::ServerError::Protocol("login blob exceeds maximum size".to_owned())
+    })?);
+    writer.write_bytes(bytes);
+    Ok(())
+}
+
+/// `minecraft:login_hello` / `EncryptionRequest` (clientbound 1, online
+/// mode only).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncryptionRequest {
+    /// Server id, conventionally empty (it feeds the session hash on the
+    /// client side together with the secret and the key).
+    pub server_id: String,
+    /// RSA public key, X.509 DER (`SubjectPublicKeyInfo`).
+    pub public_key: Vec<u8>,
+    /// Random verify token (4 bytes from a CSPRNG).
+    pub verify_token: Vec<u8>,
+}
+
+impl Packet for EncryptionRequest {
+    const ID: i32 = clientbound::login::HELLO;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = crate::wire::PacketReader::new(payload);
+        let server_id = reader.read_string(64)?;
+        let public_key = read_blob(&mut reader)?;
+        let verify_token = read_blob(&mut reader)?;
+        if !reader.is_empty() {
+            return Err(mc_core::error::ServerError::Protocol(format!(
+                "encryption_request has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self {
+            server_id,
+            public_key,
+            verify_token,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = crate::wire::PacketWriter::new();
+        writer.write_string(&self.server_id)?;
+        write_blob(&mut writer, &self.public_key)?;
+        write_blob(&mut writer, &self.verify_token)?;
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:key` / `EncryptionResponse` (serverbound 1, online mode only).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncryptionResponse {
+    /// Shared secret encrypted with the server's RSA public key.
+    pub shared_secret: Vec<u8>,
+    /// Verify token encrypted with the server's RSA public key.
+    pub verify_token: Vec<u8>,
+}
+
+impl Packet for EncryptionResponse {
+    const ID: i32 = serverbound::login::KEY;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = crate::wire::PacketReader::new(payload);
+        let shared_secret = read_blob(&mut reader)?;
+        let verify_token = read_blob(&mut reader)?;
+        if !reader.is_empty() {
+            return Err(mc_core::error::ServerError::Protocol(format!(
+                "encryption_response has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self {
+            shared_secret,
+            verify_token,
+        })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = crate::wire::PacketWriter::new();
+        write_blob(&mut writer, &self.shared_secret)?;
+        write_blob(&mut writer, &self.verify_token)?;
+        Ok(writer.finish())
+    }
+}
+
 /// A profile property (skin/cape data); empty for offline profiles.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileProperty {

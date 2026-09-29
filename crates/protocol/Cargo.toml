@@ -19,6 +19,13 @@ mc-entity = { path = "../entity" }
 flate2.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+# P19-05: AES-128 for the online-mode stream cipher (ADR-0008). The CFB8
+# mode itself is hand-rolled in `cipher.rs` (the `cfb8` crate's API is
+# one-shot by construction); `cfb8` stays as a dev-dependency as the
+# independent known-answer oracle.
+aes.workspace = true
 
 [dev-dependencies]
 mc-test-support = { path = "../test-support" }
+# P19-05: known-answer oracle for the CFB8 wiring test only.
+cfb8.workspace = true

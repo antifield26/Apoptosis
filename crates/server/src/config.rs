@@ -63,7 +63,8 @@ pub struct NetworkConfig {
     /// Concurrent player slots. Product contract: 10 (AGENTS.md section 2).
     pub max_players: u32,
     /// Mojang authentication. Product default: OFF (AGENTS.md section 2);
-    /// `true` selects the online-mode provider boundary (P02-08, validated P08).
+    /// `true` verifies logins against Mojang's session server (P19-05,
+    /// ADR-0008): RSA handshake, `hasJoined` check, encrypted transport.
     pub online_mode: bool,
     /// Compression threshold in bytes; `-1` disables compression.
     pub compression_threshold: i32,

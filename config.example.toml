@@ -6,8 +6,9 @@
 bind = "127.0.0.1:25565"
 # Concurrent player slots (product contract: 10).
 max_players = 10
-# Mojang authentication. Default OFF; set true only when the online-mode
-# provider boundary (P02-08) is configured and validated (P08).
+# Mojang authentication. Default OFF; set true to verify logins against
+# Mojang's session server (P19-05, ADR-0008): RSA handshake, `hasJoined`
+# check, encrypted transport. Needs outbound HTTPS to sessionserver.
 online_mode = false
 # Compression threshold in bytes; -1 disables compression.
 compression_threshold = 256

@@ -5,8 +5,13 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 764 passed, 0 failed, 41 ignored** across **140 suites**, re-derived from
+Totals: **1 775 passed, 0 failed, 41 ignored** across **140 suites**, re-derived from
 `python tools/gates/run.py --quick` on the current tree (every gate passed).
+The +11 over the **1 764** figure is P19-05 (online auth): +3 lib
+(`cipher` KAT/wiring/segmentation) +8 `mc-network` (keygen, RSA round
+trip, hash vectors + shape, uuid, `hasJoined` parse + refusals, full
+handshake e2e + refusal e2e, minus the deleted placeholder test); no new
+suite files.
 The +11 over the **1 753** figure is P19-04 (RCON): +8 lib
 (6 codec pins, config gate, tick-loop round trip) +3 the binary's listener
 pins; no new suite files.
@@ -221,10 +226,10 @@ before the P18 landing — the 8 differential suites in the last section (16 tes
 (**35 + 5 + 1 = 41**), all run on demand.
 
 **Every per-crate count below was re-measured with `cargo test -p <crate> --lib`**
-crate by crate on the current tree. The 17 lib counts sum to **1 193**
-(`mc-command` 96, `mc-core` 28, `mc-test-support` 4, `mc-protocol` 135,
+crate by crate on the current tree. The 17 lib counts sum to **1 204**
+(`mc-command` 96, `mc-core` 28, `mc-test-support` 4, `mc-protocol` 138,
 `mc-nbt` 17, `mc-container` **136**, `mc-data` 135, `mc-registry` 27,
-`mc-entity` 187, `mc-world` 49, `mc-persistence` 69, `mc-network` 19,
+`mc-entity` 187, `mc-world` 49, `mc-persistence` 69, `mc-network` 27,
 `mc-redstone` 69, `mc-server` 93, `mc-simulation` 18, `mc-worldgen` 100,
 `mc-capture-rig` 11). Four entries drifted unnoticed across the P16–P18
 landings and are corrected here with the drift flagged, not absorbed:
@@ -236,8 +241,11 @@ was evidently not run for every crate. The AUDIT-18 round adds +16 lib
 (`mc-protocol` +6 decoders/boundaries, `mc-entity` +2 unknown strictness,
 `mc-persistence` +2 seed, `mc-container` +1 clone patch, `mc-worldgen` +1
 extreme carve, `mc-server` +5 fill-boundary/seed/execute-angle/fingerprint)
-and P19-01 (`mc-server` +7 whitelist file/config pins) and the
-area cells below carry the matching figures.
+and P19-01 (`mc-server` +7 whitelist file/config pins), P19-02 (`mc-server`
++5 bans), P19-03 (`mc-server` +1 console EOF; binary pins live outside lib
+counts), P19-04 (`mc-server` +8 RCON: 6 codec, config gate, tick-loop round
+trip), P19-05 (`mc-protocol` +3 cipher, `mc-network` +8 online/handshake),
+and the area cells below carry the matching figures.
 Several of these differ from the figures this sentence used to carry
 (`mc-protocol` 118, `mc-entity` 136, `mc-simulation` 28, `mc-data` 129,
 `mc-world` 44, `mc-persistence` 74, `mc-worldgen` 81, `mc-registry` 21,
@@ -279,8 +287,8 @@ remaining per-crate lib binaries are itemised above and complete the total above
 
 | Area | Named suites (lib count) | What they prove |
 |---|---|---|
-| Protocol | `packet_ids` (6), `fixtures` (4), `mc-protocol` lib (**135**) | every packet id matches the jar's registration bytecode (incl. the `chat_command`=7 regression, L7); **every constant in `ids.rs` is compared against the jar-extracted table, in its own state and direction** (110 of them: 105 + P12 `open_screen`/`container_set_data`/`container_close`/`set_cursor_item` + P14 `forget_level_chunk`); **the protocol version is compared against the jar's own `version.json`** (AUDIT-09 E-03); golden wire bytes for frames/handshake/NBT; hostile VarInt/frame corpora; compression bomb rejection; **`respawn` is decoded the way the client decodes it** — a reader transcribed from `CommonPlayerSpawnInfo`'s bytecode, not a round trip through our own encoder, with the old truncated shape pinned as an out-of-bytes read (M-1); **P12 window packets round-trip with jar-verified shapes** (`open_screen` VarInt+MENU+Component, `container_set_data` VarInt+short+short, `container_close` VarInt, `set_cursor_item` single stack) |
-| Network | `mc-network` lib (19), `keepalive` (1), `login_tolerance` (2), `e2e_login_play` (6) | connection lifecycle, admission limits, keepalive timeout kick, malformed input drops only that connection, login-phase tolerance, full offline login over a real socket |
+| Protocol | `packet_ids` (6), `fixtures` (4), `mc-protocol` lib (**138**) | every packet id matches the jar's registration bytecode (incl. the `chat_command`=7 regression, L7); **every constant in `ids.rs` is compared against the jar-extracted table, in its own state and direction** (110 of them: 105 + P12 `open_screen`/`container_set_data`/`container_close`/`set_cursor_item` + P14 `forget_level_chunk`); **the protocol version is compared against the jar's own `version.json`** (AUDIT-09 E-03); golden wire bytes for frames/handshake/NBT; hostile VarInt/frame corpora; compression bomb rejection; **`respawn` is decoded the way the client decodes it** — a reader transcribed from `CommonPlayerSpawnInfo`'s bytecode, not a round trip through our own encoder, with the old truncated shape pinned as an out-of-bytes read (M-1); **P12 window packets round-trip with jar-verified shapes** (`open_screen` VarInt+MENU+Component, `container_set_data` VarInt+short+short, `container_close` VarInt, `set_cursor_item` single stack) |
+| Network | `mc-network` lib (27), `keepalive` (1), `login_tolerance` (2), `e2e_login_play` (6) | connection lifecycle, admission limits, keepalive timeout kick, malformed input drops only that connection, login-phase tolerance, full offline login over a real socket; P19-05 online handshake (RSA/`hasJoined`/cipher/properties) with loopback e2e |
 | Persistence | `mc-persistence` lib (**69**), `anvil_fixture` (9), `corruption` (16), `restart` (7) | region/NBT codec edges, byte-identical palette repack, bit-flip → typed error with no partial publish, save→close→reopen semantics, atomic tmp→rename pinned by `a_failed_commit_leaves_the_live_file_untouched` (Audit 07 finding H1), dirty-flag retry on failure. Commit order is journalled by `location_word_is_written_after_payload` (AUDIT-09 B-02 closed in P15-07; AUDIT-16 P-2: the pin asserts location **after payload**, not absolute last vs timestamp) |
 | Survival & world | `mc-world` lib (49), `light_cache` (**10**), `vanilla_chunk` (4), `survival_e2e` (**31** `#[test]` in source; the old 29 was a one-off overcount), `network_game_bridge` (4), **`block_change_ack` (4)**, **`reach_validation` (7)**, **`chunk_streaming` (3)**, **`admin_commands` (17)**, **`reconnect` (5)** | collision/ray/hostile movement guards; a real vanilla chunk walks and round-trips losslessly; join/stream budgets (unload forgets by name, per-session view distance, cache centre on every crossing), break/place validation, death/respawn, save-reload over real sockets, admin commands, reconnect sweep; **light-cache invalidation drops the diagonal chunk at a corner**, compared against an oracle derived independently from the margin interval (AUDIT-09 B-05); **a fluid is non-solid *and* liquid, and an unknown id is neither** — the predicate M-4's lookahead reads; **a dig is acknowledged with the client's own sequence, once per tick at the high-water mark, after the block update and even when the dig was refused** (M-2); **the reach rule is the jar's arithmetic** — the survival buffer case (4.5 < d < 5.5 accepted, which the pre-AUDIT-11 constant refused), the creative `+0.5`, the strict `<` boundary, the 3-D eye measurement, and the entity gate that stops a swing landing from anywhere (AUDIT-11 N-1) |
 | Entities & simulation | `mc-entity` lib (**187**), `entity_lifecycle` (9), `entity_persistence` (2), `player_attack` (9), `natural_spawn` (4), `ai_wiring` (**8**), **`mob_pathing` (5)**, `join_entity_id` (1) | ids never reused, timers/effects/projectiles/pathfinding invariants, JDK-25-verified RNG, phase ordering, determinism replays, spawn/despawn/chunk-unload lifecycle; **a second `Game` on the same `world_dir` gets the saved mobs and drops back**, and a joining player is told about a resident entity on the join tick (P11-08); **one swing takes exactly the fist damage, a second inside the 10-tick window is refused** (P11-06); **a landed hit broadcasts `hurt_animation` (play 42) with the damage-direction yaw** (owner round 2 — `entity_event` 2 is not the flash on a modern client); **a rejoin's `JoinGame` names its own allocated entity id** (owner round 2); day/night spawn rules and the 24-block minimum (P11-01); **the walk-speed constant is the measured zombie ceiling, not the player extrapolation, and a zombie is pinned below 7.5 blocks/s** (M-3); **a mob walks up to water and stops at its edge, and a clear course still lets it reach the player** — the negative control that keeps the two refusal tests from being satisfied by a lookahead that refuses everything (M-4) |

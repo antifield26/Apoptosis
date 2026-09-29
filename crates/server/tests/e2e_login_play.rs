@@ -225,13 +225,13 @@ async fn malformed_input_drops_connection_but_not_process() {
 }
 
 #[tokio::test]
-async fn online_mode_refuses_to_start_without_provider() {
+async fn online_mode_starts_with_generated_identity() {
+    // P19-05: online mode boots (keygen + Mojang provider wired) instead
+    // of refusing. Ephemeral port so no fixture port can collide.
     let mut config = ServerConfig::default();
     config.network.online_mode = true;
+    "127.0.0.1:0".clone_into(&mut config.network.bind);
     let mut server = Server::new(config);
-    let error = server
-        .start_network()
-        .await
-        .expect_err("online mode must fail fast in Phase 02");
-    assert!(matches!(error, ServerError::Operational(_)));
+    let addr = server.start_network().await.expect("online mode starts");
+    assert!(addr.ip().is_loopback(), "test binds loopback");
 }

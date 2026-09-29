@@ -12,6 +12,19 @@ entry is the release candidate matching the workspace version at the time
 with built artifacts. The current workspace version is `0.3.0`, published as
 tag `v0.3.0` (see below).
 
+## [Unreleased] — P19-05 online auth (v0.4.0 "operable survival" fifth slice, closes KD-01 split-a)
+
+Mojang handshake behind `online_mode` (default stays offline): RSA-1024
+`EncryptionRequest`, fixed-time token check, SHA-1 session hash (recipe
+vectors), blocking `hasJoined` with timeout/refusal vectors (loopback
+stub), AES-128/CFB8 from there (KAT + segmentation), verified profile
+**with properties** into `LoginSuccess`. Split: (a) automated pins green,
+required; (b) a real Mojang account joining with its skin is owner-run,
+NOT RUN without blocking P19-07. ADR-0008 accepted with license rows and
+measured cost (keygen 320 ms once per boot, decrypt 5 ms per login, 2 KiB
+burst 819 µs). Pins: cipher/handshake/session e2e (each proven red),
+KD-01 moves to partial. `UnconfiguredOnlineAuth` deleted.
+
 ## [Unreleased] — P19-04 RCON (v0.4.0 "operable survival" fourth slice)
 
 Vanilla's RCON on its own port (default `127.0.0.1:25575`, off unless

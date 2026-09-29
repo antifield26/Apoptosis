@@ -41,6 +41,11 @@ pub struct NetworkSettings {
     pub keepalive_interval: Duration,
     /// Time allowed for a keepalive response before disconnecting.
     pub keepalive_timeout: Duration,
+    /// Online-mode login identity, present exactly when `online_mode` is
+    /// on (P19-05). Generated once per boot — keygen per connection would
+    /// stall every login — and shared by reference; the private half never
+    /// leaves this struct except into the decrypt call.
+    pub online_identity: Option<std::sync::Arc<crate::online::OnlineIdentity>>,
 }
 
 impl Default for NetworkSettings {
@@ -56,6 +61,7 @@ impl Default for NetworkSettings {
             protocol_version: mc_protocol::ids::PROTOCOL_VERSION,
             keepalive_interval: Duration::from_secs(15),
             keepalive_timeout: Duration::from_secs(30),
+            online_identity: None,
         }
     }
 }

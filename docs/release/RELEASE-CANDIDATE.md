@@ -59,8 +59,8 @@ Copy `config.example.toml` and edit `bind`, `world_dir`, `max_players`,
 `view_distance`. Defaults are offline mode, 10 players, view 8, compression on
 at 256 bytes, autosave every 6000 ticks. A first start creates a new
 `level.dat` (DataVersion 4790, version 19133 — measured on a vanilla 26.1.2
-world); a second start reuses it. `online_mode = true` is a **fail-fast
-boundary**: it refuses to start because no Mojang-auth provider exists (KD-01).
+world); a second start reuses it. `online_mode = true` runs the Mojang
+handshake (P19-05, ADR-0008); offline stays the default.
 
 Operational material: `docs/operations/RUNBOOK.md` (install, config, observe,
 backup/restore, failure playbook), `deploy/mc-server.service` (systemd unit,

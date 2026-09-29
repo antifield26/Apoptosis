@@ -28,6 +28,7 @@
     clippy::cast_sign_loss
 )]
 
+pub mod cipher;
 pub mod framing;
 pub mod ids;
 pub mod nbt;
