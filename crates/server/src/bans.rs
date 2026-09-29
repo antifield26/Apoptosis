@@ -260,9 +260,9 @@ impl BanList {
     /// Re-banning replaces the row (new source/reason/expiry): the file can
     /// never hold two rows for one profile.
     pub fn ban_player(&mut self, ban: PlayerBan) {
-        let uuid = normalise_uuid(&ban.uuid);
         let mut ban = ban;
-        ban.uuid = uuid.clone();
+        ban.uuid = normalise_uuid(&ban.uuid);
+        let uuid = ban.uuid.clone();
         self.players.insert(uuid, ban);
     }
 
