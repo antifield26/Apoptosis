@@ -2167,7 +2167,10 @@ fn write_back_inventory(
 /// half. Only the **container** slot indices in `dirty` are written: a full
 /// overwrite is last-writer-wins across two viewers of the same block, and each
 /// session's menu is a snapshot that still holds the other viewer's slots as
-/// they were at open. A missing entity or a size mismatch is a no-op rather
+/// they were at open. Same-slot concurrent writes are therefore
+/// last-writer-wins by design; different-slot interleavings keep both (co-viewer
+/// pushes keep every viewer current, but the entity still takes the last
+/// click per slot). A missing entity or a size mismatch is a no-op rather
 /// than a panic: the menu still holds the items, so the next open replays them.
 fn write_back_block_slots(
     menu: &mc_container::Menu,
@@ -2187,6 +2190,40 @@ fn write_back_block_slots(
         let index = usize::from(slot);
         if index < items.len() {
             items[index] = container.get(index);
+        }
+    }
+}
+
+/// Copy dirty slots of a 54-slot double menu into one 27-slot half entity.
+///
+/// `write_back_block_slots` no-ops on size mismatch (54 menu vs 27 entity),
+/// which left every mid-open double click out of the entities until close
+/// (B-H1). `menu_base` is 0 for the RIGHT half (menu slots 0..27) and 27 for
+/// the LEFT half (27..54) — the same right-first order the open path shows.
+/// A missing entity or a wrong-sized half is skipped, like the single path
+/// skips mismatches.
+fn write_back_double_half(
+    menu: &mc_container::Menu,
+    entity: &mut mc_container::BlockEntity,
+    menu_base: usize,
+    dirty: &std::collections::BTreeSet<u16>,
+) {
+    let Some(container) = menu.container(0) else {
+        return;
+    };
+    if container.len() != 54 {
+        return;
+    }
+    let Some(items) = entity.data.items_mut() else {
+        return;
+    };
+    if items.len() != 27 {
+        return;
+    }
+    for &slot in dirty {
+        let index = usize::from(slot);
+        if index >= menu_base && index < menu_base + 27 {
+            items[index - menu_base] = container.get(index);
         }
     }
 }

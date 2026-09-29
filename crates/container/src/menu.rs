@@ -1225,7 +1225,11 @@ impl Menu {
         } else {
             stack.count()
         };
-        let cloned = ItemStack::new(stack.item_id().unwrap_or(0), count)?;
+        let cloned = ItemStack::with_components(
+            stack.item_id().unwrap_or(0),
+            count,
+            stack.components().clone(),
+        )?;
         self.set_cursor(cloned);
         outcome.cursor_changed = true;
         Ok(outcome)

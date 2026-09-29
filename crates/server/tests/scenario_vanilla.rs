@@ -57,6 +57,7 @@ fn world_config(dir: &TempDir) -> mc_server::config::StorageConfig {
     mc_server::config::StorageConfig {
         world_dir: dir.path().join("world"),
         autosave_ticks: 0,
+        seed: None,
     }
 }
 

@@ -37,7 +37,7 @@ use super::{
     chunk_of, clockwise, counter_clockwise, entity_reach, face_offset, floor_to_i32,
     horizontal_offset, is_chest_family, is_container_block, mark_block_dirty, mirror_inventory,
     open_kind_for, recompute_crafting_result, refuse_join, take_craft_result, targets_a_block,
-    wire_stack, write_back_block_slots, write_back_inventory,
+    wire_stack, write_back_block_slots, write_back_double_half, write_back_inventory,
 };
 
 /// One connected player's server-side state.
@@ -1304,9 +1304,26 @@ impl Game {
         let stack = if item.is_empty() || item.count <= 0 {
             mc_entity::stack::ItemStack::EMPTY
         } else {
-            mc_entity::stack::ItemStack::new(item.item_id, item.count).map_err(|error| {
-                ServerError::Protocol(format!("creative stack refused: {error}"))
-            })?
+            // The packet carries a full patch: keep it, so a creative-taken
+            // damaged/enchanted/renamed item arrives with its components
+            // (B-H2). Fall back to plain exactly like `wire_stack` when the
+            // patch will not convert.
+            item.to_typed_components()
+                .ok()
+                .and_then(|components| {
+                    mc_entity::stack::ItemStack::with_components(
+                        item.item_id,
+                        item.count,
+                        components,
+                    )
+                    .ok()
+                })
+                .or_else(|| {
+                    mc_entity::stack::ItemStack::new(item.item_id, item.count).ok()
+                })
+                .ok_or_else(|| {
+                    ServerError::Protocol(format!("creative stack refused: id {}", item.item_id))
+                })?
         };
         {
             let session = self.sessions.get_mut(&id).expect("session checked above");
@@ -2604,10 +2621,139 @@ impl Game {
                 }
                 if let Some(session) = self.sessions.get(&id) {
                     let menu = &session.menu;
-                    if let Some(entity) = self.block_entities.get_mut(pos) {
-                        write_back_block_slots(menu, entity, &dirty);
-                        mark_block_dirty(&mut self.world, pos.x, pos.z);
+                    let is_double = menu
+                        .container(0)
+                        .is_some_and(|container| container.len() == 54);
+                    let halves = if is_double {
+                        self.double_halves(pos)
+                    } else {
+                        None
+                    };
+                    match halves {
+                        Some((right_pos, left_pos)) => {
+                            // A 54-menu spans two 27-slot entities; the
+                            // single write-back no-ops on the size mismatch
+                            // (B-H1), so each dirty slot rides its half here.
+                            if let Some(right) =
+                                self.block_entities.get_mut(right_pos)
+                            {
+                                write_back_double_half(menu, right, 0, &dirty);
+                            }
+                            if let Some(left) =
+                                self.block_entities.get_mut(left_pos)
+                            {
+                                write_back_double_half(menu, left, 27, &dirty);
+                            }
+                            mark_block_dirty(&mut self.world, right_pos.x, right_pos.z);
+                            mark_block_dirty(&mut self.world, left_pos.x, left_pos.z);
+                        }
+                        None => {
+                            if let Some(entity) = self.block_entities.get_mut(pos) {
+                                write_back_block_slots(menu, entity, &dirty);
+                                mark_block_dirty(&mut self.world, pos.x, pos.z);
+                            }
+                        }
                     }
+
+                    // Co-viewers of the same block see the click (B-H3):
+                    // refresh their menu's block half from the clicker's and
+                    // push the deltas with their own window and state ids
+                    // (server-side changes never bump the revision). Inside
+                    // the dirty branch, so clicks that touch only the player
+                    // half cost nothing. A viewer whose container-0 length
+                    // differs (e.g. watching a single while the pair formed)
+                    // is skipped; their next open resyncs. Same-slot
+                    // concurrent writes stay last-writer-wins by design.
+                    let viewers: Vec<ConnectionId> = self
+                        .sessions
+                        .values()
+                        .filter(|session| {
+                            session.id != id && session.open_block == Some(pos)
+                        })
+                        .map(|session| session.id)
+                        .collect();
+            if !viewers.is_empty() {
+                let snapshot: Vec<mc_entity::stack::ItemStack> = self
+                    .sessions
+                    .get(&id)
+                    .and_then(|session| session.menu.container(0))
+                    .map_or_else(Vec::new, |container| {
+                        (0..container.len()).map(|i| container.get(i)).collect()
+                    });
+                // (viewer, window, state, [(menu slot, stack)]), collected
+                // before any send (which needs `&mut self`).
+                let mut pushes: Vec<(
+                    ConnectionId,
+                    i32,
+                    i32,
+                    Vec<(i16, mc_protocol::packets::play::ItemStack)>,
+                )> = Vec::new();
+                for other in viewers {
+                    let Some(session) = self.sessions.get_mut(&other) else {
+                        continue;
+                    };
+                    let same_len = session
+                        .menu
+                        .container(0)
+                        .is_some_and(|container| container.len() == snapshot.len());
+                    if snapshot.is_empty() || !same_len {
+                        continue;
+                    }
+                    let mut deltas = Vec::new();
+                    // Menu slots addressing container 0, resolved before
+                    // the mutable borrow below.
+                    let block_menu_slots: Vec<(i16, usize)> = {
+                        let menu = &session.menu;
+                        (0..menu.slot_count())
+                            .filter_map(|menu_slot| {
+                                menu.mapping(menu_slot).and_then(|mapping| {
+                                    (mapping.container == 0).then_some((
+                                        menu_slot as i16,
+                                        usize::from(mapping.slot),
+                                    ))
+                                })
+                            })
+                            .collect()
+                    };
+                    if let Some(container) = session.menu.container_mut(0) {
+                        for (index, stack) in snapshot.iter().enumerate() {
+                            if container.get(index) != *stack {
+                                let _ = container.set(index, stack.clone());
+                                for (menu_slot, container_index) in &block_menu_slots {
+                                    if *container_index == index {
+                                        deltas.push((
+                                            *menu_slot,
+                                            wire_stack(stack.clone()),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if deltas.is_empty() {
+                        continue;
+                    }
+                    pushes.push((
+                        other,
+                        i32::from(session.menu.window_id()),
+                        session.menu.state_id(),
+                        deltas,
+                    ));
+                }
+                for (other, window, state, deltas) in pushes {
+                    for (menu_slot, item) in deltas {
+                        let packet = ContainerSetSlot {
+                            window_id: window,
+                            state_id: state,
+                            slot: menu_slot,
+                            item,
+                        };
+                        if let Err(error) = self.send(other, &packet, report) {
+                            debug!(id = %other, %error, "could not push a co-viewer slot update");
+                        }
+                    }
+                }
+            }
                 }
             }
         }
@@ -4438,6 +4584,27 @@ impl Game {
     /// menu order). A half whose entity is gone (partner broken mid-open)
     /// cannot take its 27 back — those drop at the player's feet instead of
     /// vanishing (conservation; the surviving half still gets its own 27).
+    /// The two halves of a double chest in (right, left) menu order.
+    ///
+    /// Shared by the close flush and the mid-open click write-back so the
+    /// two cannot disagree about which half is which.
+    fn double_halves(
+        &self,
+        pos: mc_container::BlockPos,
+    ) -> Option<(mc_container::BlockPos, mc_container::BlockPos)> {
+        let (_, _, kind) = self.chest_shape(pos.x, pos.y, pos.z)?;
+        let (nx, ny, nz) = self.chest_partner(pos.x, pos.y, pos.z)?;
+        let here = pos;
+        let there = mc_container::BlockPos::new(nx, ny, nz);
+        if kind == "right" {
+            Some((here, there))
+        } else if kind == "left" {
+            Some((there, here))
+        } else {
+            None
+        }
+    }
+
     fn flush_double_menu(
         &mut self,
         id: ConnectionId,
@@ -4449,19 +4616,8 @@ impl Game {
             debug!(id = %id, "a double menu closed with no 54 slots; left alone");
             return;
         }
-        let halves: Option<(mc_container::BlockPos, mc_container::BlockPos)> = (|| {
-            let (_, _, kind) = self.chest_shape(pos.x, pos.y, pos.z)?;
-            let (nx, ny, nz) = self.chest_partner(pos.x, pos.y, pos.z)?;
-            let here = pos;
-            let there = mc_container::BlockPos::new(nx, ny, nz);
-            if kind == "right" {
-                Some((here, there))
-            } else if kind == "left" {
-                Some((there, here))
-            } else {
-                None
-            }
-        })();
+        let halves: Option<(mc_container::BlockPos, mc_container::BlockPos)> =
+            self.double_halves(pos);
         let Some((right, left)) = halves else {
             // The pair broke mid-open: the first 27 still belong to the
             // clicked half when it has an entity; everything else drops.

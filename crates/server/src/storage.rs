@@ -43,10 +43,13 @@ impl WorldService {
             let name = root
                 .file_name()
                 .map_or_else(|| "world".to_owned(), |n| n.to_string_lossy().into_owned());
-            let level = mc_persistence::level::LevelDat::new(
+            let mut level = mc_persistence::level::LevelDat::new(
                 &name,
                 mc_persistence::save::unix_millis(std::time::SystemTime::now()),
             );
+            // A configured seed is recorded at creation so reboots keep it
+            // even if the config later drops the key (stored seed wins).
+            level.seed = config.seed;
             storage.save_level(level)?;
             tracing::info!(world = %root.display(), "created a new world");
         }
@@ -137,6 +140,7 @@ mod tests {
         StorageConfig {
             world_dir: dir.path().join("world"),
             autosave_ticks,
+            seed: None,
         }
     }
 

@@ -127,6 +127,7 @@ mod tests {
         let config = crate::config::StorageConfig {
             world_dir: dir.path().join("world"),
             autosave_ticks: 0,
+            seed: None,
         };
         let storage = crate::storage::WorldService::open(&config).expect("world opens");
         let (_, rx) = game_channel(64);

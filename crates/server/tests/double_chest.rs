@@ -37,6 +37,7 @@ impl Harness {
         let config = mc_server::config::StorageConfig {
             world_dir: dir.path().join("world"),
             autosave_ticks: 0,
+            seed: None,
         };
         let storage = WorldService::open(&config).expect("world opens");
         let (tx, rx) = game_channel(256);
@@ -341,6 +342,69 @@ fn transacting_then_closing_splits_back_into_halves() {
         .expect("west items")[3]
         .clone();
     assert_eq!(west.item_id(), Some(harness.item("minecraft:stone")));
+}
+
+/// A mid-open click reaches the block entity immediately, not just at
+/// close (B-H1): the same two clicks as above, but the west entity is read
+/// *before* the close flush runs.
+#[test]
+fn clicking_into_a_double_writes_the_half_entity_mid_open() {
+    let mut harness = Harness::new("p17-double-midopen");
+    harness.join("Trader");
+    let (sx, sy, sz) = harness.game.spawn();
+    floor(&mut harness, sx, sy, sz);
+    harness.look(0.0);
+    let (ax, ay, az) = (sx + 1, sy, sz);
+    let (bx, by, bz) = (sx + 2, sy, sz);
+    harness.place("minecraft:chest", ax, ay - 1, az, 1);
+    harness.place("minecraft:chest", bx, by - 1, bz, 1);
+    harness.empty_hand();
+    harness.click(ax, ay, az, 1);
+    let window = harness.game.menu_window_id(harness.id).expect("window");
+    harness.give("minecraft:stone");
+    {
+        let stone = harness.item("minecraft:stone");
+        harness
+            .game
+            .player_mut(harness.id)
+            .expect("player")
+            .inventory
+            .set_slot(
+                0,
+                mc_entity::stack::ItemStack::new(stone, 4).expect("stack"),
+            )
+            .expect("stones");
+    }
+    let mut state = harness.game.menu_state_id(harness.id).expect("state");
+    harness.intent(PlayIntent::ContainerClick {
+        window_id: i32::from(window),
+        state_id: state,
+        slot: 81,
+        button: 0,
+        click_type: 0,
+    });
+    state = harness.game.menu_state_id(harness.id).expect("state");
+    harness.intent(PlayIntent::ContainerClick {
+        window_id: i32::from(window),
+        state_id: state,
+        slot: 30,
+        button: 0,
+        click_type: 0,
+    });
+    // No close yet: the west (left) half entity must already hold the stone
+    // in its slot 3. Today it holds nothing until close.
+    let west = harness
+        .game
+        .block_entities()
+        .get(mc_container::BlockPos::new(ax, ay, az))
+        .and_then(|e| e.data.items())
+        .expect("west items")[3]
+        .clone();
+    assert_eq!(
+        west.item_id(),
+        Some(harness.item("minecraft:stone")),
+        "a mid-open click must reach the half entity, not wait for close"
+    );
 }
 
 #[test]

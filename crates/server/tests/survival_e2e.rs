@@ -51,6 +51,7 @@ impl Harness {
         let config = mc_server::config::StorageConfig {
             world_dir: dir.path().join("world"),
             autosave_ticks: 0,
+            seed: None,
         };
         let storage = WorldService::open(&config).expect("world opens");
         let (tx, rx) = game_channel(256);
@@ -2434,6 +2435,7 @@ fn the_world_survives_a_save_and_reload() {
     let config = mc_server::config::StorageConfig {
         world_dir: dir.path().join("world"),
         autosave_ticks: 0,
+        seed: None,
     };
 
     let (sx, sy, sz, diamond) = {
@@ -2754,6 +2756,22 @@ fn two_viewers_interleaving_writes_to_different_slots_keep_both() {
         })
         .expect("Alice place queued");
     harness.game.tick().expect("Alice places into slot 0");
+
+    // B-H3: Bob sees Alice's click without clicking himself — neither his
+    // menu nor his client may sit on the pre-click contents indefinitely.
+    let bob_slot = harness
+        .game
+        .menu_slot(id_b, 0)
+        .expect("Bob's menu slot 0");
+    assert_eq!(
+        bob_slot.item_id(),
+        Some(stone),
+        "Bob's menu follows Alice's place with no click of his own"
+    );
+    assert!(
+        Harness::drain_ids(&mut out_b).contains(&clientbound::play::CONTAINER_SET_SLOT),
+        "Bob's client is pushed the slot delta"
+    );
 
     // Bob picks up dirt and places it into chest slot 1 — a *different* slot.
     {

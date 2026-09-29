@@ -27,6 +27,7 @@ async fn a_generated_world_contains_trees() {
     let config = StorageConfig {
         world_dir: dir.path().join("world"),
         autosave_ticks: 0,
+        seed: None,
     };
     let storage = WorldService::open(&config).expect("world opens");
     let (events, rx) = game_channel(256);

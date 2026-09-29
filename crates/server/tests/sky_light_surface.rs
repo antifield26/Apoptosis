@@ -59,6 +59,7 @@ async fn surface_air_open_to_the_sky_is_fully_lit() {
     let config = StorageConfig {
         world_dir: dir.path().join("world"),
         autosave_ticks: 0,
+        seed: None,
     };
     let storage = WorldService::open(&config).expect("world opens");
     let (events, rx) = game_channel(256);
@@ -469,6 +470,7 @@ async fn light_does_not_jump_between_adjacent_cells_at_a_chunk_border() {
     let config = StorageConfig {
         world_dir: dir.path().join("world"),
         autosave_ticks: 0,
+        seed: None,
     };
     let storage = WorldService::open(&config).expect("world opens");
     let (events, rx) = game_channel(256);

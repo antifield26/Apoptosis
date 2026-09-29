@@ -435,6 +435,30 @@ fn creative_clone_is_the_only_way_to_create_items() {
     assert_eq!(menu.cursor().count(), 64, "clone-to-max");
 }
 
+/// B-H2: a middle-click clone keeps the source patch — a damaged tool
+/// clones damaged, not plain.
+#[test]
+fn creative_clone_keeps_the_component_patch() {
+    use mc_entity::components::{DataComponent, ItemComponents};
+
+    let mut menu = chest_menu();
+    let mut components = ItemComponents::new();
+    components.set(DataComponent::Damage(3));
+    menu.set_slot(
+        0,
+        ItemStack::with_components(item("minecraft:wooden_shovel"), 1, components)
+            .expect("a damaged shovel"),
+    )
+    .expect("set");
+    menu.set_creative(true);
+    apply(&mut menu, 0, 0, ClickType::Clone);
+    assert_eq!(
+        menu.cursor().components().damage(),
+        Some(3),
+        "the clone carries the source damage patch"
+    );
+}
+
 // -------------------------------------------------------------- limits
 
 #[test]

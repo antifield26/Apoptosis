@@ -365,6 +365,7 @@ mod tests {
         let config = crate::config::StorageConfig {
             world_dir: world.clone(),
             autosave_ticks: 0,
+            seed: None,
         };
         let service = crate::storage::WorldService::open(&config).expect("world opens");
         service.close().expect("closes");
@@ -401,6 +402,7 @@ mod tests {
         let config = crate::config::StorageConfig {
             world_dir: target.clone(),
             autosave_ticks: 0,
+            seed: None,
         };
         crate::storage::WorldService::open(&config).expect("restored world opens");
     }

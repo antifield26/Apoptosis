@@ -133,6 +133,7 @@ fn ten_players_tick_within_the_frame_budget() {
     let config = mc_server::config::StorageConfig {
         world_dir: dir.path().join("world"),
         autosave_ticks: 0,
+        seed: None,
     };
     let mut storage = WorldService::open(&config).expect("world opens");
     let (tx, rx) = game_channel(4096);
@@ -263,6 +264,7 @@ fn entity_heavy_ticks_within_the_frame_budget() {
     let config = mc_server::config::StorageConfig {
         world_dir: dir.path().join("world"),
         autosave_ticks: 0,
+        seed: None,
     };
     let storage = WorldService::open(&config).expect("world opens");
     let (tx, rx) = game_channel(4096);

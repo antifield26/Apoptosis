@@ -81,6 +81,14 @@ pub struct StorageConfig {
     pub world_dir: PathBuf,
     /// Ticks between autosaves; 0 disables the timer (explicit saves only).
     pub autosave_ticks: u64,
+    /// World seed for generation, when the operator names one (AUDIT-18 F-H1).
+    ///
+    /// `None` (the default) means "no opinion": a world whose `level.dat`
+    /// already records a seed keeps generating from it; a fresh world
+    /// generates from seed 0 (the long-standing default, stated not hidden).
+    /// A stored seed always wins over this value, so setting it cannot fork
+    /// an existing world — it only seeds worlds that have none.
+    pub seed: Option<i64>,
 }
 
 impl Default for ServerConfig {
@@ -117,6 +125,7 @@ impl Default for StorageConfig {
         Self {
             world_dir: PathBuf::from("world"),
             autosave_ticks: 6000,
+            seed: None,
         }
     }
 }
@@ -237,6 +246,16 @@ mod tests {
         )
         .expect("documented example must parse");
         assert_eq!(config.network.bind, "127.0.0.1:25565");
+    }
+
+    #[test]
+    fn parses_an_explicit_world_seed() {
+        let config = ServerConfig::from_toml("[storage]\nworld_dir = \"world\"\nseed = 1361882806\n")
+            .expect("a seed must parse");
+        assert_eq!(config.storage.seed, Some(1_361_882_806));
+        let bare = ServerConfig::from_toml("[storage]\nworld_dir = \"world\"\n")
+            .expect("missing seed must parse");
+        assert_eq!(bare.storage.seed, None, "no seed is the default");
     }
 
     #[test]

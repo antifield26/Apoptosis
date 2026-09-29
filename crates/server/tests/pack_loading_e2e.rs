@@ -57,6 +57,7 @@ impl Harness {
         let storage = WorldService::open(&mc_server::config::StorageConfig {
             world_dir: world.clone(),
             autosave_ticks: 0,
+            seed: None,
         })
         .expect("world opens");
         let (event_tx, event_rx) = game_channel(256);
@@ -266,6 +267,7 @@ fn the_loader_reports_what_it_loaded_and_what_it_left_out() {
     let storage = WorldService::open(&mc_server::config::StorageConfig {
         world_dir: world.clone(),
         autosave_ticks: 0,
+        seed: None,
     })
     .expect("opens");
     let mut game = Game::new(&storage, 3, game_channel(64).1).expect("game");
@@ -313,6 +315,7 @@ fn a_world_pack_overrides_a_vanilla_function_of_the_same_name() {
     let storage = WorldService::open(&mc_server::config::StorageConfig {
         world_dir: world.clone(),
         autosave_ticks: 0,
+        seed: None,
     })
     .expect("opens");
     let mut game = Game::new(&storage, 3, game_channel(64).1).expect("game");
@@ -349,6 +352,7 @@ fn a_configured_vanilla_data_path_that_does_not_exist_is_reported() {
     let storage = WorldService::open(&mc_server::config::StorageConfig {
         world_dir: world.clone(),
         autosave_ticks: 0,
+        seed: None,
     })
     .expect("opens");
     let mut game = Game::new(&storage, 3, game_channel(64).1).expect("game");
@@ -395,6 +399,7 @@ fn a_world_pack_recipe_reaches_the_crafting_table() {
     let storage = WorldService::open(&mc_server::config::StorageConfig {
         world_dir: world.clone(),
         autosave_ticks: 0,
+        seed: None,
     })
     .expect("opens");
     let mut game = Game::new(&storage, 3, game_channel(64).1).expect("game");
@@ -426,6 +431,7 @@ fn loading_with_no_packs_keeps_the_loot_baseline() {
     let storage = WorldService::open(&mc_server::config::StorageConfig {
         world_dir: world.clone(),
         autosave_ticks: 0,
+        seed: None,
     })
     .expect("opens");
     let mut game = Game::new(&storage, 3, game_channel(64).1).expect("game");

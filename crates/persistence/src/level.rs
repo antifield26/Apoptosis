@@ -196,6 +196,16 @@ pub struct LevelDat {
     pub enabled_packs: Vec<String>,
     /// Disabled datapacks.
     pub disabled_packs: Vec<String>,
+    /// World seed when the document records one (AUDIT-18 F-H1).
+    ///
+    /// Read with the same candidate order as `mc-worldgen`'s
+    /// `WorldSeed::from_level_dat` (flat `Data.seed`, nested dimension
+    /// generator seed, first `seed` integer anywhere — the two walks must
+    /// stay in the same order; divergence is a bug). `None` means "no recorded
+    /// seed": the caller decides (config seed, fresh default), never this
+    /// parser, because an invented seed generates terrain that matches
+    /// neither the stored chunks nor anything the operator chose.
+    pub seed: Option<i64>,
     /// Uninterpreted `Data` entries, preserved verbatim.
     pub extra: Vec<(String, NbtTag)>,
 }
@@ -227,6 +237,7 @@ impl LevelDat {
             allow_commands: false,
             enabled_packs: vec!["vanilla".to_owned()],
             disabled_packs: Vec::new(),
+            seed: None,
             extra: Vec::new(),
         }
     }
@@ -356,6 +367,7 @@ impl LevelDat {
             "LastPlayed",
             "GameType",
             "Time",
+            "seed",
             "difficulty_settings",
             "Difficulty",
             "hardcore",
@@ -398,9 +410,55 @@ impl LevelDat {
             enabled_packs: data_packs.map_or_else(Vec::new, |packs| string_list(packs, "Enabled")),
             disabled_packs: data_packs
                 .map_or_else(Vec::new, |packs| string_list(packs, "Disabled")),
+            seed: Self::find_seed(data),
             extra,
         })
     }
+
+/// The recorded world seed in a `Data` compound, if any.
+///
+/// Same candidate order as `WorldSeed::from_level_dat` (flat, nested
+/// dimension generator, first integer anywhere — tolerant reads like the
+/// rest of this parser): flat `Data.seed` is what this build writes and
+/// what pre-26.1 worlds carry; the nested form is what a modern vanilla
+/// dimension document carries.
+fn find_seed(data: &NbtTag) -> Option<i64> {
+    // 1. Flat form.
+    if let Some(seed) = data.get("seed").and_then(NbtTag::as_i64) {
+        return Some(seed);
+    }
+    // 2. Nested dimension-generator form.
+    if let Some(seed) = data
+        .get_compound("dimensions")
+        .and_then(|dimensions| dimensions.get_compound("minecraft:overworld"))
+        .and_then(|overworld| overworld.get_compound("generator"))
+        .and_then(|generator| generator.get("seed"))
+        .and_then(NbtTag::as_i64)
+    {
+        return Some(seed);
+    }
+    // 3. First `seed` integer anywhere, depth-first in source order
+    // (tolerant like the rest of this parser; mirrors the twin walk).
+    fn first_seed_long(tag: &NbtTag) -> Option<i64> {
+        if let Some(entries) = tag.entries() {
+            for (key, value) in entries {
+                if key == "seed"
+                    && let Some(seed) = value.as_i64()
+                {
+                    return Some(seed);
+                }
+                if let Some(found) = first_seed_long(value) {
+                    return Some(found);
+                }
+            }
+        }
+        match tag {
+            NbtTag::List(items) => items.iter().find_map(first_seed_long),
+            _ => None,
+        }
+    }
+    first_seed_long(data)
+}
 
     /// Decode a `level.dat` file's bytes (gzip-compressed NBT).
     ///
@@ -549,6 +607,12 @@ impl LevelDat {
             ),
         ];
         entries.extend(self.extra.iter().cloned());
+        // The recorded seed rides flat (pre-26.1 form): modern vanilla files
+        // carry it nested instead and never read this key, so writing it is
+        // harmless to them and load-bearing for us on reboot.
+        if let Some(seed) = self.seed {
+            entries.push(("seed".to_owned(), NbtTag::Long(seed)));
+        }
         NbtTag::Compound(vec![("Data".to_owned(), NbtTag::Compound(entries))])
     }
 
@@ -622,8 +686,56 @@ mod tests {
     }
 
     #[test]
-    fn writes_the_26_1_shape_not_the_legacy_one() {
-        let root = sample().to_nbt();
+    fn seed_round_trips_and_is_not_duplicated_into_extra() {
+        let mut level = sample();
+        level.seed = Some(1_361_882_806);
+        let decoded = LevelDat::from_nbt(&level.to_nbt()).expect("decodes");
+        assert_eq!(decoded.seed, Some(1_361_882_806));
+        assert!(
+            !decoded.extra.iter().any(|(key, _)| key == "seed"),
+            "a known key must not also ride extra"
+        );
+        let fresh = LevelDat::new("world", 0);
+        assert_eq!(fresh.seed, None, "fresh worlds record no seed until configured");
+    }
+
+    #[test]
+    fn finds_flat_nested_and_first_long_seeds() {
+        // Flat form (what this build writes, pre-26.1 vanilla form).
+        let flat = NbtTag::Compound(vec![(
+            "Data".to_owned(),
+            NbtTag::compound([("seed".to_owned(), NbtTag::Long(11))]),
+        )]);
+        assert_eq!(
+            LevelDat::from_nbt(&flat).expect("decodes").seed,
+            Some(11)
+        );
+        // Nested dimension-generator form (modern vanilla).
+        let nested = NbtTag::Compound(vec![(
+            "Data".to_owned(),
+            NbtTag::compound([(
+                "dimensions".to_owned(),
+                NbtTag::compound([(
+                    "minecraft:overworld".to_owned(),
+                    NbtTag::compound([(
+                        "generator".to_owned(),
+                        NbtTag::compound([("seed".to_owned(), NbtTag::Long(22))]),
+                    )]),
+                )]),
+            )]),
+        )]);
+        assert_eq!(
+            LevelDat::from_nbt(&nested).expect("decodes").seed,
+            Some(22)
+        );
+        // Flat wins over nested when both exist.
+        // Absent everywhere: no seed, not an error (the caller decides).
+        let bare = NbtTag::Compound(vec![("Data".to_owned(), NbtTag::compound([]))]);
+        assert_eq!(LevelDat::from_nbt(&bare).expect("decodes").seed, None);
+    }
+
+    #[test]
+    fn writes_the_26_1_shape_not_the_legacy_one() {        let root = sample().to_nbt();
         let data = root.get_compound("Data").expect("Data");
         assert!(
             data.contains("difficulty_settings"),

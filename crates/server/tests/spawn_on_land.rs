@@ -25,6 +25,7 @@ async fn a_fresh_world_spawns_the_player_on_land() {
     let config = StorageConfig {
         world_dir: dir.path().join("world"),
         autosave_ticks: 0,
+        seed: None,
     };
     let storage = WorldService::open(&config).expect("world opens");
     let (events, rx) = game_channel(256);
@@ -81,6 +82,7 @@ async fn the_land_search_moves_a_spawn_that_is_under_water() {
     let config = StorageConfig {
         world_dir: dir.path().join("world"),
         autosave_ticks: 0,
+        seed: None,
     };
     let storage = WorldService::open(&config).expect("world opens");
     let (events, rx) = game_channel(256);

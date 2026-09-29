@@ -38,6 +38,7 @@ impl Harness {
         let config = mc_server::config::StorageConfig {
             world_dir: dir.path().join("world"),
             autosave_ticks: 0,
+            seed: None,
         };
         let storage = WorldService::open(&config).expect("world opens");
         let (tx, rx) = game_channel(256);
@@ -235,6 +236,7 @@ fn a_barrel_saves_under_its_own_id() {
     let mut storage = WorldService::open(&mc_server::config::StorageConfig {
         world_dir: harness.dir.path().join("world"),
         autosave_ticks: 0,
+        seed: None,
     })
     .expect("world reopens");
     let chunk_pos = mc_persistence::chunk::ChunkPos::new(bx >> 4, bz >> 4);
@@ -278,6 +280,7 @@ fn a_barrel_survives_a_restart_with_its_contents() {
     let config = StorageConfig {
         world_dir: dir.path().join("world"),
         autosave_ticks: 0,
+        seed: None,
     };
     let (chunk, stone_item) = {
         let storage = WorldService::open(&config).expect("world opens");

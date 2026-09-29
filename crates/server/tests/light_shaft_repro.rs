@@ -17,6 +17,7 @@ fn game() -> Game {
     let config = mc_server::config::StorageConfig {
         world_dir: dir.path().join("world"),
         autosave_ticks: 0,
+        seed: None,
     };
     let service = mc_server::storage::WorldService::open(&config).expect("world opens");
     Game::with_seed_and_storage(service, 3, mc_network::bridge::game_channel(64).1, 7)

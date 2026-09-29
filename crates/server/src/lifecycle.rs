@@ -187,6 +187,23 @@ impl<H: TickHook> Server<H> {
         // load a chunk from disk before creating an all-air placeholder for it;
         // `Server` therefore drives saving through the game and never closes the
         // handle itself (see `Game`'s threading notes).
+        // World seed (AUDIT-18 F-H1): a stored seed always wins (opening a
+        // vanilla world must not fork its terrain), then the configured seed
+        // for fresh worlds, then the historical seed-0 default.
+        let stored_seed = world
+            .storage()
+            .level()
+            .and_then(|level| level.seed);
+        let seed = resolve_seed(self.config.storage.seed, stored_seed);
+        if stored_seed.is_some() {
+            tracing::info!(seed, "generating from the world's recorded seed");
+        } else if self.config.storage.seed.is_some() {
+            tracing::info!(seed, "generating from the configured seed");
+        }
+        // The game takes ownership of the open world so its Broadcast phase can
+        // load a chunk from disk before creating an all-air placeholder for it;
+        // `Server` therefore drives saving through the game and never closes the
+        // handle itself (see `Game`'s threading notes).
         // `ops.json` lives beside `server.properties`, which is the directory *containing*
         // the world. A malformed file is logged and treated as empty rather than stopping the
         // boot: refusing to start would take a working world offline over an operator file,
@@ -217,7 +234,7 @@ impl<H: TickHook> Server<H> {
             Some(world),
             i32::try_from(self.config.simulation.view_distance).unwrap_or(8),
             events_rx,
-            crate::game::DEFAULT_RANDOM_SEED,
+            seed,
             operators,
         )?;
         // `/op` persists through this directory (P14-02): the same join that
@@ -553,9 +570,21 @@ impl<H: TickHook> Server<H> {
     }
 }
 
+/// Resolve the world-generation seed for a boot (AUDIT-18 F-H1).
+///
+/// A stored seed always wins: opening a world that records one (vanilla or
+/// a previous boot with a configured seed) must generate from it, or new
+/// chunks fork the terrain. Otherwise the configured seed applies (fresh
+/// worlds), else the historical seed-0 default.
+fn resolve_seed(configured: Option<i64>, stored: Option<i64>) -> i64 {
+    stored
+        .or(configured)
+        .unwrap_or(crate::game::DEFAULT_RANDOM_SEED)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{LifecycleState, NoopHook, Server, ShutdownHandle, TickHook};
+    use super::{LifecycleState, NoopHook, Server, ShutdownHandle, TickHook, resolve_seed};
     use mc_core::error::{ServerError, ServerResult};
     use mc_core::tick::Tick;
     use std::sync::Arc;
@@ -571,6 +600,21 @@ mod tests {
             self.ticks.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
+    }
+
+    #[test]
+    fn seed_resolution_prefers_stored_then_configured_then_zero() {
+        // A world that records a seed keeps it no matter the config: opening
+        // a vanilla world must not fork its terrain (F-H1).
+        assert_eq!(resolve_seed(Some(7), Some(1361882806)), 1361882806);
+        assert_eq!(resolve_seed(None, Some(1361882806)), 1361882806);
+        // Fresh worlds take the configured seed; unset means the
+        // historical seed-0 default, stated not hidden.
+        assert_eq!(resolve_seed(Some(42), None), 42);
+        assert_eq!(
+            resolve_seed(None, None),
+            crate::game::DEFAULT_RANDOM_SEED
+        );
     }
 
     #[tokio::test]

@@ -63,6 +63,7 @@ fn an_unreadable_stored_chunk_is_never_generated_over_nor_replaced() {
     let config = mc_server::config::StorageConfig {
         world_dir: dir.path().join("world"),
         autosave_ticks: 0,
+        seed: None,
     };
 
     // ---- find the spawn chunk and plant the unreadable file ---------------

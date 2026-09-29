@@ -37,6 +37,7 @@ impl Harness {
         let config = mc_server::config::StorageConfig {
             world_dir: dir.path().join("world"),
             autosave_ticks: 0,
+            seed: None,
         };
         let service = WorldService::open(&config).expect("world opens");
         let (tx, rx) = game_channel(256);
@@ -410,6 +411,7 @@ fn difficulty_queries_sets_and_persists() {
     let service = mc_server::storage::WorldService::open(&mc_server::config::StorageConfig {
         world_dir: path,
         autosave_ticks: 0,
+        seed: None,
     })
     .expect("world reopens");
     assert_eq!(
@@ -673,6 +675,7 @@ fn locked_difficulty_refuses_the_set() {
     let config = mc_server::config::StorageConfig {
         world_dir: dir.path().join("world"),
         autosave_ticks: 0,
+        seed: None,
     };
     let mut service = WorldService::open(&config).expect("world opens");
     let mut level = service

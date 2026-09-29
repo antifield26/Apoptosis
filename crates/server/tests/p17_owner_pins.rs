@@ -34,6 +34,7 @@ impl Harness {
         let config = mc_server::config::StorageConfig {
             world_dir: dir.path().join("world"),
             autosave_ticks: 0,
+            seed: None,
         };
         let storage = WorldService::open(&config).expect("world opens");
         let (tx, rx) = game_channel(256);
@@ -275,6 +276,35 @@ fn creative_take_writes_hotbar_and_survival_is_refused() {
         harness.inv_count("minecraft:stick"),
         0,
         "survival never mints from set_creative_mode_slot"
+    );
+}
+
+/// B-H2: a creative take keeps the wire patch — a damaged shovel arrives
+/// damaged, not plain.
+#[test]
+fn creative_take_keeps_the_component_patch() {
+    let mut harness = Harness::new("p17-pin-creative-patch");
+    harness.join("Architect");
+    harness.set_game_mode(GameMode::Creative);
+    let shovel = harness.item_id("minecraft:wooden_shovel");
+    harness.intent(PlayIntent::SetCreativeModeSlot {
+        slot: 36,
+        item: WireStack {
+            item_id: shovel,
+            count: 1,
+            components: vec![(mc_entity::components::TYPE_DAMAGE, vec![0x01])],
+        },
+    });
+    let stack = harness
+        .game
+        .player(harness.id)
+        .expect("player")
+        .inventory
+        .slot(0);
+    assert_eq!(
+        stack.components().damage(),
+        Some(1),
+        "the creative-taken shovel carries its damage patch"
     );
 }
 

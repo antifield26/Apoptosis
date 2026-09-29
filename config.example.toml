@@ -23,6 +23,11 @@ view_distance = 8
 world_dir = "world"
 # Ticks between autosaves at 20 TPS (6000 = 5 min); 0 disables the timer.
 autosave_ticks = 6000
+# World seed for generation, when the operator names one. Unset means "no
+# opinion": a world whose level.dat already records a seed keeps generating
+# from it; a fresh world generates from seed 0. A stored seed always wins,
+# so setting this cannot fork an existing world.
+# seed = 1361882806
 
 [datapacks]
 # Optional: the **vanilla** data pack — the 26.1.2 server jar's own

@@ -33,6 +33,7 @@ impl Harness {
         let config = mc_server::config::StorageConfig {
             world_dir: dir.path().join("world"),
             autosave_ticks: 0,
+            seed: None,
         };
         let storage = WorldService::open(&config).expect("world opens");
         let (tx, rx) = game_channel(256);
@@ -55,6 +56,7 @@ impl Harness {
         let config = mc_server::config::StorageConfig {
             world_dir: dir.path().join("world"),
             autosave_ticks: 0,
+            seed: None,
         };
         let storage = WorldService::open(&config).expect("world opens");
         let (tx, rx) = game_channel(256);
@@ -144,6 +146,7 @@ fn rejoin_after_a_full_restart_works() {
     let service = WorldService::open(&mc_server::config::StorageConfig {
         world_dir: world_dir.clone(),
         autosave_ticks: 0,
+        seed: None,
     })
     .expect("world reopens");
     // Non-default construction (seed, view distance, listed operators):
@@ -272,6 +275,7 @@ fn restart_restores_the_player_from_the_playerdata_file() {
     let service = WorldService::open(&mc_server::config::StorageConfig {
         world_dir: world_dir.clone(),
         autosave_ticks: 0,
+        seed: None,
     })
     .expect("world reopens");
     let (tx, rx) = game_channel(256);
