@@ -109,20 +109,20 @@ impl BanList {
     pub fn load(directory: &Path) -> ServerResult<Self> {
         let players = {
             let path = directory.join(BANNED_PLAYERS_FILE_NAME);
-            if !path.exists() {
-                BTreeMap::new()
-            } else {
+            if path.exists() {
                 let value = read_json(&path, LIMITS).map_err(ServerError::from)?;
                 Self::players_from_value(&value, &path)?
+            } else {
+                BTreeMap::new()
             }
         };
         let ips = {
             let path = directory.join(BANNED_IPS_FILE_NAME);
-            if !path.exists() {
-                BTreeMap::new()
-            } else {
+            if path.exists() {
                 let value = read_json(&path, LIMITS).map_err(ServerError::from)?;
                 Self::ips_from_value(&value, &path)?
+            } else {
+                BTreeMap::new()
             }
         };
         Ok(Self { players, ips })
@@ -513,7 +513,9 @@ pub fn parse_ban_time(text: &str) -> Option<SystemTime> {
     let seconds =
         days * 86_400 + i64::from(hour) * 3600 + i64::from(minute) * 60 + i64::from(second)
             - offset_minutes * 60;
-    UNIX_EPOCH.checked_add(Duration::from_secs(seconds.max(0) as u64))
+    UNIX_EPOCH.checked_add(Duration::from_secs(
+        u64::try_from(seconds.max(0)).unwrap_or(0),
+    ))
 }
 
 /// Format a time as Vanilla's ban date, always `+0000`.
@@ -522,8 +524,9 @@ pub fn format_ban_time(time: SystemTime) -> String {
     let seconds = time
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let (year, month, day, _, _, _) = civil_from_days((seconds / 86_400) as i64);
+        .unwrap_or_default();
+    let (year, month, day, _, _, _) =
+        civil_from_days(i64::try_from(seconds / 86_400).unwrap_or(i64::MAX));
     let rest = seconds % 86_400;
     format!(
         "{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02} +0000",
@@ -581,8 +584,8 @@ fn civil_from_days(days: i64) -> (i32, i32, i32, i32, i32, i32) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     (
         i32::try_from(if m <= 2 { y + 1 } else { y }).unwrap_or(0),
-        m as i32,
-        d as i32,
+        i32::try_from(m).unwrap_or(0),
+        i32::try_from(d).unwrap_or(0),
         0,
         0,
         0,
@@ -643,7 +646,7 @@ mod tests {
         assert_eq!(parse_ban_time("2023-11-14 22:13:20 +0000"), Some(fixed()));
         assert_eq!(
             parse_ban_time("2023-11-14 22:13:20 -0500"),
-            Some(fixed() + Duration::from_secs(5 * 3600))
+            Some(fixed() + Duration::from_hours(5))
         );
         // Malformed shapes are all refused, never read as forever.
         for bad in [

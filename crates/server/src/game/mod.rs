@@ -1078,6 +1078,10 @@ impl Game {
     ///
     /// Never in practice: the hand-written loot baseline parses, and its unit
     /// tests fail the build if it ever stops doing so.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one linear struct assembly; splitting it would scatter field init across helpers with no seam (same justification as `join`)"
+    )]
     pub fn build_with_operators(
         borrowed: Option<&WorldService>,
         owned: Option<WorldService>,
