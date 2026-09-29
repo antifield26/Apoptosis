@@ -439,25 +439,31 @@ impl LevelDat {
         }
         // 3. First `seed` integer anywhere, depth-first in source order
         // (tolerant like the rest of this parser; mirrors the twin walk).
-        fn first_seed_long(tag: &NbtTag) -> Option<i64> {
-            if let Some(entries) = tag.entries() {
-                for (key, value) in entries {
-                    if key == "seed"
-                        && let Some(seed) = value.as_i64()
-                    {
-                        return Some(seed);
-                    }
-                    if let Some(found) = first_seed_long(value) {
-                        return Some(found);
-                    }
+        Self::first_seed_long(data)
+    }
+
+    /// First integer `seed` entry in a deterministic depth-first walk.
+    ///
+    /// A separate associated function (rather than nested in `find_seed`):
+    /// the crate denies `clippy::items_after_statements`, and a nested item
+    /// trips it.
+    fn first_seed_long(tag: &NbtTag) -> Option<i64> {
+        if let Some(entries) = tag.entries() {
+            for (key, value) in entries {
+                if key == "seed"
+                    && let Some(seed) = value.as_i64()
+                {
+                    return Some(seed);
+                }
+                if let Some(found) = Self::first_seed_long(value) {
+                    return Some(found);
                 }
             }
-            match tag {
-                NbtTag::List(items) => items.iter().find_map(first_seed_long),
-                _ => None,
-            }
         }
-        first_seed_long(data)
+        match tag {
+            NbtTag::List(items) => items.iter().find_map(Self::first_seed_long),
+            _ => None,
+        }
     }
 
     /// Decode a `level.dat` file's bytes (gzip-compressed NBT).
