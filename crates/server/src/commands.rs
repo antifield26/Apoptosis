@@ -1,4 +1,4 @@
-//! The server's command set (P07-05, P14-01, P18-02).
+//! The server's command set (P07-05, P14-01, P18-02, P19-01).
 //!
 //! The P18-02 **closed list** — anything outside it stays refused by name:
 //!
@@ -11,6 +11,7 @@
 //! | `tp` / `teleport` | word + block position + optional rotation | moves the source |
 //! | `op` | player name, administrator-only | grants operator status at level 4 and persists `ops.json` |
 //! | `deop` | player name, administrator-only | revokes operator status and persists `ops.json` |
+//! | `whitelist` | action + optional player, administrator-only | manages the login whitelist: `on`/`off` toggles enforcement live, `add`/`remove` persist `whitelist.json`, `list` names entries, `reload` re-reads the file |
 //! | `stop` | none, console-only | asks the server to shut down |
 //! | `gamemode` | word + optional player name, operator-only | sets the invoking player's game mode |
 //! | `give` | player name + resource + optional ranged integer, operator-only | gives items, dropping overflow at the player's feet |
@@ -293,6 +294,11 @@ impl Game {
         add(Command::new("deop", "Revoke operator status")
             .with_argument(Argument::required("target", ArgumentKind::PlayerName))
             .requiring(PermissionLevel::Administrator));
+        // P19-01: the whitelist gate. Administrator like Vanilla's level 3.
+        add(Command::new("whitelist", "Manage the login whitelist")
+            .with_argument(Argument::word("action"))
+            .with_argument(Argument::optional("target", ArgumentKind::PlayerName))
+            .requiring(PermissionLevel::Administrator));
         add(Command::new("stop", "Stop the server").requiring(PermissionLevel::Console));
         // P14-01: the admin set, all operator-only like Vanilla's level 2.
         add(Command::new("gamemode", "Set your game mode")
@@ -516,6 +522,7 @@ impl Game {
             "function" => self.command_function(id, parsed, report),
             "op" => Ok(self.command_op(id, parsed)),
             "deop" => Ok(self.command_deop(id, parsed)),
+            "whitelist" => Ok(self.command_whitelist(id, parsed)),
             "gamemode" => Ok(self.command_gamemode(id, parsed, report)),
             "give" => Ok(self.command_give(id, parsed, report)),
             "effect" => Ok(self.command_effect(id, parsed, report)),
@@ -789,6 +796,105 @@ impl Game {
             Ok(Some(revoked)) => {
                 CommandResult::message(format!("Made {revoked} no longer a server operator"))
             }
+        }
+    }
+
+    /// `/whitelist <on|off|list|add|remove|reload> [player]` (P19-01).
+    ///
+    /// Administrator like Vanilla's level 3. `on|off` toggles enforcement
+    /// live (a restart restores the config value — stated, not hidden);
+    /// `add|remove` name online players only and persist `whitelist.json`
+    /// with the same rollback contract as `/op`; `list` names the listed
+    /// profiles; `reload` re-reads the file, replacing the live list.
+    fn command_whitelist(
+        &mut self,
+        _id: mc_network::bridge::ConnectionId,
+        parsed: &mc_command::dispatch::ParsedCommand,
+    ) -> CommandResult {
+        const USAGE: &str = "Usage: /whitelist <on|off|list|add|remove|reload> [player]";
+        let Some(action) = parsed.string(0) else {
+            return CommandResult::message(USAGE);
+        };
+        match action {
+            "on" => {
+                self.set_whitelist_enforced(true);
+                CommandResult::message("Whitelist is now enforced")
+            }
+            "off" => {
+                self.set_whitelist_enforced(false);
+                CommandResult::message("Whitelist is no longer enforced")
+            }
+            "list" => {
+                let names = self.whitelist_names();
+                if names.is_empty() {
+                    CommandResult::message("Nobody is whitelisted")
+                } else {
+                    CommandResult::message(format!(
+                        "Whitelisted ({}): {}",
+                        names.len(),
+                        names.join(", ")
+                    ))
+                }
+            }
+            "add" => {
+                let Some(name) = parsed.string(1) else {
+                    return CommandResult::message("Usage: /whitelist add <player>");
+                };
+                let Some(target) = self.session_id_by_name(name) else {
+                    return CommandResult::message(format!(
+                        "Cannot whitelist {name:?}: only online players can be listed \
+                         (name matching cannot identify anyone else)"
+                    ));
+                };
+                match self.add_to_whitelist(target) {
+                    Err(error) => CommandResult::message(format!(
+                        "Could not persist the listing, and nothing was changed: {error}"
+                    )),
+                    Ok(None) => CommandResult::message(
+                        "/whitelist cannot persist: no ops directory was ever set, \
+                         so nothing was changed.",
+                    ),
+                    Ok(Some((listed, true))) => {
+                        CommandResult::message(format!("Added {listed} to the whitelist"))
+                    }
+                    Ok(Some((listed, false))) => CommandResult::message(format!(
+                        "Nothing changed: {listed} is already whitelisted"
+                    )),
+                }
+            }
+            "remove" => {
+                let Some(name) = parsed.string(1) else {
+                    return CommandResult::message("Usage: /whitelist remove <player>");
+                };
+                let Some(target) = self.session_id_by_name(name) else {
+                    return CommandResult::message(format!(
+                        "Cannot unwhitelist {name:?}: only online players can be unlisted"
+                    ));
+                };
+                match self.remove_from_whitelist(target) {
+                    Err(error) => CommandResult::message(format!(
+                        "Could not persist the removal, and nothing was changed: {error}"
+                    )),
+                    Ok(None) => CommandResult::message(format!(
+                        "Nothing changed: {name} is not whitelisted"
+                    )),
+                    Ok(Some(unlisted)) => {
+                        CommandResult::message(format!("Removed {unlisted} from the whitelist"))
+                    }
+                }
+            }
+            "reload" => match self.reload_whitelist() {
+                Err(error) => CommandResult::message(format!(
+                    "Could not reload the whitelist, and nothing was changed: {error}"
+                )),
+                Ok(None) => CommandResult::message(
+                    "/whitelist cannot reload: no ops directory was ever set.",
+                ),
+                Ok(Some(count)) => {
+                    CommandResult::message(format!("Reloaded the whitelist ({count} listed)"))
+                }
+            },
+            other => CommandResult::message(format!("Unknown whitelist action {other:?}. {USAGE}")),
         }
     }
 

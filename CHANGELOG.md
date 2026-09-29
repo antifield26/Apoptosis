@@ -12,6 +12,19 @@ entry is the release candidate matching the workspace version at the time
 with built artifacts. The current workspace version is `0.3.0`, published as
 tag `v0.3.0` (see below).
 
+## [Unreleased] — P19-01 whitelist (v0.4.0 "operable survival" first slice)
+
+`whitelist.json` (Vanilla's `{uuid, name}` shape, uuid-keyed like
+`ops.json`) plus the join-gate check and `/whitelist
+on|off|list|add|remove|reload` (level 3): listed profiles join under
+enforcement, unlisted ones are refused at login with Vanilla's message
+before any state is spent, operators bypass without being listed, and a
+malformed file boots open rather than stopping the server. Enforcement
+rides `[access] whitelist_enforced` (default off); on/off toggles live and
+a restart restores the config value. Pins: 6 file unit tests + 8
+`whitelist_e2e` gate/command tests (each proven red by neutralising its
+mechanism), KD-31 moves 29 → 30 roots.
+
 ## [Unreleased] — AUDIT-18 fix round (P00–P18 audit closeout)
 
 Six H-grade and a string of M-grade findings from `docs/audits/AUDIT-18.md`,

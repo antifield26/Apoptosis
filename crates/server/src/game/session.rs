@@ -462,6 +462,19 @@ impl Game {
             refuse_join(&outbound, "The server is full");
             return Ok(());
         }
+        // The whitelist gate (P19-01): when enforced, a profile that is
+        // neither listed nor an operator is refused at login with Vanilla's
+        // message, before a slot, an entity or any state is spent on it.
+        // Operators bypass, as in Vanilla. Every refusal below disconnects
+        // *that* client rather than failing the tick.
+        if self.whitelist_enforced
+            && !self.whitelist.contains(&profile.id.to_string())
+            && !self.operators.is_operator(&profile.id.to_string())
+        {
+            warn!(id = %id, name = %profile.name, "refused a join: not on the whitelist");
+            refuse_join(&outbound, "You are not white-listed on this server!");
+            return Ok(());
+        }
         let Some(prepared) = self.prepare_join(id, profile, &outbound) else {
             return Ok(());
         };
@@ -1388,6 +1401,127 @@ impl Game {
     /// persist rather than failing.
     pub fn set_ops_directory(&mut self, directory: std::path::PathBuf) {
         self.ops_directory = Some(directory);
+    }
+
+    /// Install the whitelist loaded from `whitelist.json` (P19-01).
+    ///
+    /// The lifecycle calls this at boot; until then the list is empty (which
+    /// only matters when enforcement is on, and then means "nobody listed").
+    pub fn set_whitelist(&mut self, whitelist: crate::whitelist::Whitelist) {
+        self.whitelist = whitelist;
+    }
+
+    /// Whether the join gate enforces the whitelist (P19-01).
+    ///
+    /// Set from config at boot; `/whitelist on|off` toggles it live.
+    pub fn set_whitelist_enforced(&mut self, enforced: bool) {
+        self.whitelist_enforced = enforced;
+    }
+
+    /// Whether the join gate currently enforces the whitelist.
+    #[must_use]
+    pub const fn whitelist_enforced(&self) -> bool {
+        self.whitelist_enforced
+    }
+
+    /// List `target` (an online player) on the whitelist, persisting
+    /// `whitelist.json` (P19-01).
+    ///
+    /// Same rollback contract as [`Game::grant_operator`]: the in-memory
+    /// insert happens first, then the save, and a failed save rolls the
+    /// insert back. Only online players can be listed (their uuid comes
+    /// from the session). Returns the listed name and whether the list
+    /// changed, or `None` when no session holds `target` or no ops
+    /// directory was ever set (nothing is changed then).
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Operational`] when the `whitelist.json` write fails,
+    /// after rolling the insert back.
+    pub(crate) fn add_to_whitelist(
+        &mut self,
+        target: mc_network::bridge::ConnectionId,
+    ) -> ServerResult<Option<(String, bool)>> {
+        let Some(directory) = self.ops_directory.clone() else {
+            return Ok(None);
+        };
+        let (uuid, name) = {
+            let Some(session) = self.sessions.get(&target) else {
+                return Ok(None);
+            };
+            (session.uuid.clone(), session.name.clone())
+        };
+        let changed = self.whitelist.insert(&uuid, &name);
+        if changed && let Err(error) = self.whitelist.save(&directory) {
+            self.whitelist.remove(&uuid);
+            return Err(error);
+        }
+        Ok(Some((name, changed)))
+    }
+
+    /// Unlist `target`'s uuid, persisting `whitelist.json` (P19-01).
+    ///
+    /// Same rollback contract: a failed save restores the removed entry.
+    /// Returns the unlisted name, or `None` when the uuid was never listed
+    /// (nothing is changed then) — or when no session holds `target` or no
+    /// ops directory was ever set.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Operational`] when the `whitelist.json` write fails,
+    /// after restoring the entry.
+    pub(crate) fn remove_from_whitelist(
+        &mut self,
+        target: mc_network::bridge::ConnectionId,
+    ) -> ServerResult<Option<String>> {
+        let Some(directory) = self.ops_directory.clone() else {
+            return Ok(None);
+        };
+        let (uuid, name) = {
+            let Some(session) = self.sessions.get(&target) else {
+                return Ok(None);
+            };
+            (session.uuid.clone(), session.name.clone())
+        };
+        let Some(previous) = self.whitelist.get(&uuid).cloned() else {
+            return Ok(None);
+        };
+        self.whitelist.remove(&uuid);
+        if let Err(error) = self.whitelist.save(&directory) {
+            self.whitelist.restore(previous);
+            return Err(error);
+        }
+        Ok(Some(name))
+    }
+
+    /// Every whitelisted name, ascending by uuid.
+    pub(crate) fn whitelist_names(&self) -> Vec<String> {
+        self.whitelist
+            .names()
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// Re-read `whitelist.json`, replacing the live list (P19-01).
+    ///
+    /// A malformed file is an error and the live list is kept — the load
+    /// refuses partial lists, so there is never a half-replaced one.
+    /// Returns the listed count, or `None` when no ops directory was ever
+    /// set (nothing is changed then).
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::CorruptData`] when the file exists but cannot be
+    /// understood; [`ServerError::Io`] when it exists and cannot be read.
+    pub(crate) fn reload_whitelist(&mut self) -> ServerResult<Option<usize>> {
+        let Some(directory) = self.ops_directory.clone() else {
+            return Ok(None);
+        };
+        let list = crate::whitelist::Whitelist::load(&directory)?;
+        let count = list.len();
+        self.whitelist = list;
+        Ok(Some(count))
     }
 
     /// World root for `playerdata/<uuid>.dat`, or `None` when this game has

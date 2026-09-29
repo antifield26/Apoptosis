@@ -1,0 +1,399 @@
+//! The server whitelist, `whitelist.json` (P19-01).
+//!
+//! Vanilla's shape, beside `ops.json`: a JSON array of `{uuid, name}`
+//! entries. Matching is by uuid, exactly like operators — names change, and
+//! matching by name would let anyone take a listed identity by taking their
+//! name. Policy mirrors [`crate::ops`]:
+//!
+//! - **A missing file is not an error.** A server that never listed anyone
+//!   is ordinary; its absence only matters when enforcement is on, and then
+//!   it means "nobody is listed", not "the file is broken".
+//! - **A malformed file is an error from [`Whitelist::load`], and the
+//!   *caller* decides.** The load returns it rather than a partial list;
+//!   [`crate::lifecycle`] logs it and boots with an empty list, because
+//!   taking a working world offline over a comma is the worse failure.
+//! - **The file stays Vanilla-pure.** No extra keys are written, so a
+//!   Vanilla server boots on our file and keeps every entry (P19-01
+//!   acceptance) — enforcement state lives in config + memory, never here.
+//! - **Operators bypass the whitelist.** Vanilla exempts ops from the
+//!   check; the exemption is evaluated at the join gate, not stored here.
+
+use mc_core::error::{ServerError, ServerResult};
+use mc_data::json::{Limits, read_json};
+use serde_json::Value;
+use std::collections::BTreeMap;
+use std::path::Path;
+
+/// The file's name beside `ops.json` (the world's parent directory).
+pub const WHITELIST_FILE_NAME: &str = "whitelist.json";
+
+/// Size and depth limits for the file.
+///
+/// A whitelist is a handful of lines, so these are generous. Stated rather
+/// than relying on `mc_data::json`'s defaults so a future change to *those*
+/// defaults cannot widen what this file accepts without anyone noticing.
+pub const LIMITS: Limits = Limits {
+    max_bytes: 1024 * 1024,
+    max_depth: 16,
+};
+
+/// One whitelisted profile, as the file states it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Whitelisted {
+    /// Profile uuid, and the key matching uses.
+    pub uuid: String,
+    /// The name as recorded. For messages; **not** used for matching.
+    pub name: String,
+}
+
+/// Who may join when enforcement is on, loaded from `whitelist.json`.
+///
+/// Ordered by uuid so iteration is reproducible (AGENTS.md §3.6).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Whitelist {
+    by_uuid: BTreeMap<String, Whitelisted>,
+}
+
+impl Whitelist {
+    /// An empty list: nobody is listed.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            by_uuid: BTreeMap::new(),
+        }
+    }
+
+    /// Load `whitelist.json` from a directory.
+    ///
+    /// A missing file yields an empty list, which is an ordinary server. A
+    /// **malformed** file is an error returned rather than a partial list —
+    /// the policy for the error belongs to the caller, and
+    /// `crate::lifecycle` logs it and boots with an empty list.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::CorruptData`] naming the file and the problem when it
+    /// exists but cannot be understood, and [`ServerError::Io`] when it
+    /// exists and cannot be read.
+    pub fn load(directory: &Path) -> ServerResult<Self> {
+        let path = directory.join(WHITELIST_FILE_NAME);
+        // Same split as operators: "not there" is a different answer from
+        // "there and unreadable", and only the second is reported.
+        if !path.exists() {
+            return Ok(Self::new());
+        }
+        let value = read_json(&path, LIMITS).map_err(ServerError::from)?;
+        Self::from_value(&value, &path)
+    }
+
+    /// Build a list from an already-parsed JSON value.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::CorruptData`] naming the file and the problem.
+    pub fn from_value(value: &Value, path: &Path) -> ServerResult<Self> {
+        let Some(entries) = value.as_array() else {
+            return Err(ServerError::CorruptData(format!(
+                "{}: a whitelist must be a JSON array of entries, found {}",
+                path.display(),
+                json_type_name(value)
+            )));
+        };
+
+        let mut list = Self::new();
+        for (index, entry) in entries.iter().enumerate() {
+            let whitelisted = parse_entry(entry, path, index)?;
+            // A duplicated uuid is a file that cannot mean what it says, so
+            // it is refused rather than resolved by last-wins.
+            if list.by_uuid.contains_key(&whitelisted.uuid) {
+                return Err(ServerError::CorruptData(format!(
+                    "{}: entry {index} repeats uuid {}",
+                    path.display(),
+                    whitelisted.uuid
+                )));
+            }
+            list.by_uuid.insert(whitelisted.uuid.clone(), whitelisted);
+        }
+        Ok(list)
+    }
+
+    /// List `uuid` under `name`. Returns whether the list changed.
+    ///
+    /// Re-listing the same uuid updates the recorded name rather than
+    /// adding a second entry, so the file can never hold two rows for one
+    /// profile.
+    pub fn insert(&mut self, uuid: &str, name: &str) -> bool {
+        let uuid = normalise_uuid(uuid);
+        let changed = self
+            .by_uuid
+            .get(&uuid)
+            .is_none_or(|current| current.name != name);
+        self.by_uuid.insert(
+            uuid.clone(),
+            Whitelisted {
+                uuid,
+                name: name.to_owned(),
+            },
+        );
+        changed
+    }
+
+    /// Unlist `uuid`. Returns whether an entry was removed.
+    pub fn remove(&mut self, uuid: &str) -> bool {
+        self.by_uuid.remove(&normalise_uuid(uuid)).is_some()
+    }
+
+    /// Restore a previously removed entry verbatim.
+    ///
+    /// `pub(crate)` for the failed-`save` rollback, mirroring operators:
+    /// a failed write must put back *exactly* what was there.
+    pub(crate) fn restore(&mut self, whitelisted: Whitelisted) {
+        self.by_uuid.insert(whitelisted.uuid.clone(), whitelisted);
+    }
+
+    /// Write the list back to `whitelist.json` in `directory`, Vanilla's shape.
+    ///
+    /// Entries ascending by uuid (the map order), pretty-printed like
+    /// Vanilla's own writer, with exactly the two keys Vanilla reads —
+    /// nothing extra, so a Vanilla server keeps every entry. A missing
+    /// directory is created; anything else that goes wrong is an error the
+    /// caller reports rather than a list change the caller pretends happened.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Operational`] when the directory cannot be created or
+    /// the file cannot be written or serialised.
+    pub fn save(&self, directory: &Path) -> ServerResult<()> {
+        let entries: Vec<serde_json::Value> = self
+            .by_uuid
+            .values()
+            .map(|whitelisted| {
+                serde_json::json!({
+                    "uuid": whitelisted.uuid,
+                    "name": whitelisted.name,
+                })
+            })
+            .collect();
+        let text = serde_json::to_string_pretty(&entries).map_err(|error| {
+            ServerError::Operational(format!(
+                "{}: cannot serialise: {error}",
+                directory.display()
+            ))
+        })?;
+        std::fs::create_dir_all(directory).map_err(|error| {
+            ServerError::Operational(format!(
+                "{}: cannot create directory: {error}",
+                directory.display()
+            ))
+        })?;
+        std::fs::write(directory.join(WHITELIST_FILE_NAME), text).map_err(|error| {
+            ServerError::Operational(format!(
+                "{}: cannot write {WHITELIST_FILE_NAME}: {error}",
+                directory.display()
+            ))
+        })
+    }
+
+    /// The entry for a uuid, normalising the key the way `parse_entry` does.
+    ///
+    /// **Every accessor goes through here**: lower-casing on the way in but
+    /// not on the way out would make a listed profile invisible to an
+    /// upper-case query, with "not white-listed" as the silent symptom.
+    #[must_use]
+    pub fn get(&self, uuid: &str) -> Option<&Whitelisted> {
+        self.by_uuid.get(&normalise_uuid(uuid))
+    }
+
+    /// Whether a profile is listed.
+    #[must_use]
+    pub fn contains(&self, uuid: &str) -> bool {
+        self.get(uuid).is_some()
+    }
+
+    /// How many profiles are listed.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.by_uuid.len()
+    }
+
+    /// Whether nobody is listed.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.by_uuid.is_empty()
+    }
+
+    /// Every listed name, ascending by uuid (the map order).
+    #[must_use]
+    pub fn names(&self) -> Vec<&str> {
+        self.by_uuid
+            .values()
+            .map(|whitelisted| whitelisted.name.as_str())
+            .collect()
+    }
+}
+
+/// A uuid as this module keys on it: trimmed and lower-case.
+///
+/// Files in the wild are not consistent about case, and a mismatch here is
+/// invisible — the profile simply appears not to be listed.
+#[must_use]
+fn normalise_uuid(uuid: &str) -> String {
+    uuid.trim().to_ascii_lowercase()
+}
+
+/// Parse one array entry.
+fn parse_entry(entry: &Value, path: &Path, index: usize) -> ServerResult<Whitelisted> {
+    let Some(object) = entry.as_object() else {
+        return Err(ServerError::CorruptData(format!(
+            "{}: entry {index} is {}, not an object",
+            path.display(),
+            json_type_name(entry)
+        )));
+    };
+
+    let uuid = object
+        .get("uuid")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            ServerError::CorruptData(format!(
+                "{}: entry {index} has no string `uuid`, which is the field that identifies \
+                 a listed profile",
+                path.display()
+            ))
+        })?;
+    let uuid = normalise_uuid(uuid);
+    if uuid.is_empty() {
+        return Err(ServerError::CorruptData(format!(
+            "{}: entry {index} has an empty `uuid`",
+            path.display()
+        )));
+    }
+
+    // A name is optional in practice: Vanilla always writes one, but matching
+    // is by uuid, so a missing name is a cosmetic loss rather than a reason
+    // to refuse the whole file.
+    let name = object
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+
+    Ok(Whitelisted { uuid, name })
+}
+
+/// The JSON type name for refusal messages.
+fn json_type_name(value: &Value) -> &'static str {
+    if value.is_null() {
+        "null"
+    } else if value.is_boolean() {
+        "a boolean"
+    } else if value.is_number() {
+        "a number"
+    } else if value.is_string() {
+        "a string"
+    } else if value.is_array() {
+        "an array"
+    } else {
+        "an object"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WHITELIST_FILE_NAME, Whitelist};
+    use mc_test_support::fixtures::TempDir;
+    use std::path::Path;
+
+    fn dir(tag: &str) -> TempDir {
+        TempDir::new(tag)
+    }
+
+    #[test]
+    fn missing_file_is_an_empty_list() {
+        let dir = dir("whitelist-missing");
+        let list = Whitelist::load(dir.path()).expect("missing file loads");
+        assert!(list.is_empty());
+    }
+
+    #[test]
+    fn round_trip_keeps_uuid_and_name() {
+        let dir = dir("whitelist-round-trip");
+        let mut list = Whitelist::new();
+        assert!(list.insert("069a79f4-44e9-4726-a5be-f4a7b64ac909", "Notch"));
+        assert!(!list.insert("069a79f4-44e9-4726-a5be-f4a7b64ac909", "Notch"));
+        list.save(dir.path()).expect("saves");
+        let back = Whitelist::load(dir.path()).expect("reloads");
+        assert_eq!(back, list);
+        assert!(back.contains("069a79f4-44e9-4726-a5be-f4a7b64ac909"));
+        assert_eq!(back.names(), vec!["Notch"]);
+    }
+
+    #[test]
+    fn matching_ignores_uuid_case() {
+        let mut list = Whitelist::new();
+        list.insert("069A79F4-44E9-4726-A5BE-F4A7B64AC909", "Notch");
+        assert!(
+            list.contains("069a79f4-44e9-4726-a5be-f4a7b64ac909"),
+            "an upper-case file entry must still match"
+        );
+    }
+
+    #[test]
+    fn duplicate_uuid_is_refused() {
+        let value = serde_json::json!([
+            {"uuid": "069a79f4-44e9-4726-a5be-f4a7b64ac909", "name": "Notch"},
+            {"uuid": "069a79f4-44e9-4726-a5be-f4a7b64ac909", "name": "Notch2"},
+        ]);
+        assert!(
+            Whitelist::from_value(&value, Path::new("whitelist.json")).is_err(),
+            "a duplicated uuid cannot mean what it says"
+        );
+    }
+
+    #[test]
+    fn malformed_files_are_refused_by_name() {
+        for value in [
+            serde_json::json!({"uuid": "x"}),
+            serde_json::json!([{"name": "NoUuid"}]),
+            serde_json::json!([{"uuid": ""}]),
+            serde_json::json!(["a string entry"]),
+        ] {
+            assert!(
+                Whitelist::from_value(&value, Path::new("whitelist.json")).is_err(),
+                "refused: {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn vanilla_shaped_file_loads_and_stays_vanilla_shaped() {
+        // What a Vanilla server writes: uuid + name only. Loading keeps both,
+        // and saving writes exactly those two keys back.
+        let dir = dir("whitelist-vanilla");
+        std::fs::write(
+            dir.path().join(WHITELIST_FILE_NAME),
+            r#"[{"uuid": "069a79f4-44e9-4726-a5be-f4a7b64ac909", "name": "Notch"}]"#,
+        )
+        .expect("fixture");
+        let list = Whitelist::load(dir.path()).expect("vanilla file loads");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list.names(), vec!["Notch"]);
+        list.save(dir.path()).expect("saves");
+        let text = std::fs::read_to_string(dir.path().join(WHITELIST_FILE_NAME)).expect("reads");
+        let back: serde_json::Value = serde_json::from_str(&text).expect("json");
+        for entry in back.as_array().expect("array") {
+            let mut keys: Vec<&str> = entry
+                .as_object()
+                .expect("object")
+                .keys()
+                .map(String::as_str)
+                .collect();
+            keys.sort_unstable();
+            assert_eq!(
+                keys,
+                vec!["name", "uuid"],
+                "only Vanilla's two keys are written, saw {keys:?}"
+            );
+        }
+    }
+}

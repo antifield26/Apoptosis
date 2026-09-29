@@ -17,6 +17,9 @@
 //! [storage]
 //! world_dir = "world"
 //! autosave_ticks = 6000
+//!
+//! [access]
+//! whitelist_enforced = false
 //! ```
 
 use mc_core::error::{ServerError, ServerResult};
@@ -45,6 +48,8 @@ pub struct ServerConfig {
     pub storage: StorageConfig,
     /// Data pack paths.
     pub datapacks: DataPackConfig,
+    /// Who may join (P19-01; P19-06 owns the rest of the properties).
+    pub access: AccessConfig,
 }
 
 /// Networking configuration.
@@ -98,6 +103,7 @@ impl Default for ServerConfig {
             simulation: SimulationConfig::default(),
             storage: StorageConfig::default(),
             datapacks: DataPackConfig::default(),
+            access: AccessConfig::default(),
         }
     }
 }
@@ -148,6 +154,26 @@ pub struct DataPackConfig {
 impl Default for DataPackConfig {
     fn default() -> Self {
         Self { vanilla_data: None }
+    }
+}
+
+/// Join-access configuration (P19-01).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct AccessConfig {
+    /// Enforce `whitelist.json` at login: a profile that is neither listed
+    /// nor an operator is refused with Vanilla's message.
+    ///
+    /// Vanilla's `white-list` key, default off like Vanilla. `/whitelist
+    /// on|off` toggles it live; a restart restores this value.
+    pub whitelist_enforced: bool,
+}
+
+impl Default for AccessConfig {
+    fn default() -> Self {
+        Self {
+            whitelist_enforced: false,
+        }
     }
 }
 
@@ -257,6 +283,18 @@ mod tests {
         let bare = ServerConfig::from_toml("[storage]\nworld_dir = \"world\"\n")
             .expect("missing seed must parse");
         assert_eq!(bare.storage.seed, None, "no seed is the default");
+    }
+
+    #[test]
+    fn whitelist_enforcement_defaults_off_and_parses() {
+        let bare = ServerConfig::default();
+        assert!(
+            !bare.access.whitelist_enforced,
+            "an open server is the default, like Vanilla"
+        );
+        let config = ServerConfig::from_toml("[access]\nwhitelist_enforced = true\n")
+            .expect("the access section must parse");
+        assert!(config.access.whitelist_enforced);
     }
 
     #[test]

@@ -29,6 +29,12 @@ autosave_ticks = 6000
 # so setting this cannot fork an existing world.
 # seed = 1361882806
 
+[access]
+# Enforce `whitelist.json` at login (Vanilla's `white-list`, default off).
+# A profile that is neither listed nor an operator is refused with Vanilla's
+# message. `/whitelist on|off` toggles it live; a restart restores this value.
+whitelist_enforced = false
+
 [datapacks]
 # Optional: the **vanilla** data pack — the 26.1.2 server jar's own
 # `data/minecraft`. That data is Mojang's, so it is deliberately not committed

@@ -25,3 +25,4 @@ pub mod packs;
 pub mod playerdata;
 pub mod spawn;
 pub mod storage;
+pub mod whitelist;

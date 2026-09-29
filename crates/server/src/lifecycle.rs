@@ -151,6 +151,29 @@ impl Server<NoopHook> {
     }
 }
 
+/// Load `whitelist.json` beside `ops.json`, logging and emptying on error.
+///
+/// Split out of `open_world` so the boot keeps its line budget: the policy
+/// (log-and-empty, never stop the boot) is identical to operators by
+/// decision, and sharing one helper would couple two files' fates.
+fn load_whitelist(world_dir: &std::path::Path) -> crate::whitelist::Whitelist {
+    match crate::whitelist::Whitelist::load(&crate::ops::ops_directory(world_dir)) {
+        Ok(list) => {
+            if !list.is_empty() {
+                tracing::info!(listed = list.len(), "loaded the whitelist");
+            }
+            list
+        }
+        Err(error) => {
+            tracing::error!(
+                %error,
+                "whitelist.json could not be read; the server will run with an empty whitelist"
+            );
+            crate::whitelist::Whitelist::new()
+        }
+    }
+}
+
 /// Compare the freshly installed ore/carver set against the recorded one
 /// and record the current one (F-M2b).
 ///
@@ -278,6 +301,10 @@ impl<H: TickHook> Server<H> {
                 crate::ops::OperatorList::new()
             }
         };
+        // `whitelist.json` lives beside `ops.json` and follows the same
+        // policy (P19-01): a malformed file is logged and treated as empty
+        // rather than stopping the boot.
+        let whitelist = load_whitelist(&self.config.storage.world_dir);
         let mut game = crate::game::Game::build_with_operators(
             None,
             Some(world),
@@ -290,6 +317,10 @@ impl<H: TickHook> Server<H> {
         // the load above reads from, so a grant lands where the next boot
         // looks.
         game.set_ops_directory(crate::ops::ops_directory(&self.config.storage.world_dir));
+        // The whitelist rides the same directory, and enforcement rides the
+        // config (a restart restores it; `/whitelist on|off` is live-only).
+        game.set_whitelist(whitelist);
+        game.set_whitelist_enforced(self.config.access.whitelist_enforced);
         // Data packs. The world's `DataPacks` list is read from the `level.dat` of the world just
         // opened, which is why this happens here and not at config-validation time: the list is
         // world data, not configuration.

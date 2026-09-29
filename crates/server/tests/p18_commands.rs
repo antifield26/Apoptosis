@@ -127,6 +127,7 @@ fn every_operator_command_denies_a_level_zero_player() {
         ("fill", "fill 0 64 0 0 64 0 minecraft:stone"),
         ("summon", "summon zombie"),
         ("setworldspawn", "setworldspawn"),
+        ("whitelist", "whitelist list"),
     ];
     for (name, text) in cases {
         let lines = harness.command(id, &mut out, text);
@@ -601,8 +602,13 @@ fn dispatcher_counts_pin_the_kd_31_and_kd_32_rows() {
     // own roots (vanilla does the same for `msg`/`tell`/`w` and `xp`/`experience`).
     let kd31 = names.len();
     assert!(
-        kd31 >= 29,
-        "KD-31 counts {kd31} roots; the P18-02 closed list alone is 13 new names"
+        names.contains(&"whitelist"),
+        "P19-01 adds the whitelist root; tree has {names:?}"
+    );
+    assert_eq!(
+        kd31, 30,
+        "KD-31 counts {kd31} roots (29 at v0.3.0 + whitelist); bump the tree \
+         and this pin plus the parity row move together"
     );
 
     // KD-32: execute modifiers this build resolves (not refused-by-name).

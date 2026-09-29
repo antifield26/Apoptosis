@@ -902,6 +902,22 @@ pub struct Game {
     /// directory is the world's parent (Vanilla puts the file beside
     /// `server.properties`), resolved once by [`crate::ops::ops_directory`].
     ops_directory: Option<PathBuf>,
+    /// Who may join when enforcement is on, loaded once from
+    /// `whitelist.json` (P19-01).
+    ///
+    /// Same lifecycle as operators: loaded once at boot (a change needs
+    /// `/whitelist reload` or a restart), empty when the file is absent,
+    /// and empty-with-a-log when it is malformed. The file stays
+    /// Vanilla-pure; enforcement state is the flag below, never the file.
+    whitelist: crate::whitelist::Whitelist,
+    /// Whether the join gate enforces the whitelist (P19-01).
+    ///
+    /// Vanilla's `white-list` key, default off. Set from config at boot;
+    /// `/whitelist on|off` toggles it live, and a restart restores the
+    /// config value — the toggle is deliberately not persisted, because the
+    /// config file is the operator's and rewriting it behind them would be
+    /// a worse surprise than re-asserting it on boot.
+    whitelist_enforced: bool,
     /// World difficulty (P14-01).
     ///
     /// Read from `level.dat` when storage is present, `Normal` otherwise
@@ -1170,6 +1186,8 @@ impl Game {
             carvers: Box::new(mc_worldgen::carver::CarverSet::empty()),
             operators,
             ops_directory: None,
+            whitelist: crate::whitelist::Whitelist::new(),
+            whitelist_enforced: false,
             difficulty,
             max_players: DEFAULT_MAX_PLAYERS,
             time_offset: 0,
@@ -1660,6 +1678,16 @@ impl Game {
     #[must_use]
     pub const fn operators(&self) -> &crate::ops::OperatorList {
         &self.operators
+    }
+
+    /// The whitelist this game loaded.
+    ///
+    /// Exposed so a test can assert the *file* reached the live gate — a
+    /// join-only check cannot catch a list that was bypassed rather than
+    /// consulted.
+    #[must_use]
+    pub const fn whitelist(&self) -> &crate::whitelist::Whitelist {
+        &self.whitelist
     }
 
     /// The configured maximum player count, for `/list`.
