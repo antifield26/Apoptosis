@@ -12,6 +12,33 @@ entry is the release candidate matching the workspace version at the time
 with built artifacts. The current workspace version is `0.3.0`, published as
 tag `v0.3.0` (see below).
 
+## [Unreleased] — AUDIT-18 fix round (P00–P18 audit closeout)
+
+Six H-grade and a string of M-grade findings from `docs/audits/AUDIT-18.md`,
+fixed with a named red test each (every test proven red by neutralising its
+mechanism, then restored):
+
+- **P0**: double-chest per-click write-back split by half (crash-loss closed),
+  `StorageConfig.seed` plumbing with stored-seed-wins (no more seed-0
+  default on vanilla worlds), co-viewer block-half push with same-slot LWW
+  documented, creative takes and middle-click clones keep the component patch.
+- **P1**: hopper take/generic symmetric commit with rollback, loud
+  `wire_stack` fallback, disk-unknown merge with `type_id == 0` refused at
+  the wire boundary, strict-or-Unknown disk reads, metadata-strip pin,
+  c2s 43/56 round-trip + hostile pins, c2s 17/20 modelled intents, chunk
+  unload 3×3 light drop + survivor queue, full-struct rejoin restore,
+  live-pipeline order + determinism pins, pack→sets install e2e plus the
+  `worldgen_fingerprint` fork warning, fill at-cap boundary pin, split
+  hunger pins, player knockback via `set_entity_motion` (mob melee and PvP),
+  `rotated` angle-context pin, chase A* waypoint pin.
+- **P2**: wording drift (PARITY/TEST-MATRIX/protocol/code comments), count
+  cells re-measured, knockback decay doc deduplicated, E-17 perturbation
+  records, P15-03/E-12 honesty note.
+- Still open by decision: capture-gated differentials/sweep (need the
+  capture env), C2/C3 (need owner repro), P15-03 pre/post equivalence (no
+  pre-split oracle in-tree), per-connection ingress bound (documented,
+  unmetered).
+
 ## [0.3.0] — 2026-09-28 (tag `v0.3.0`)
 
 Gameplay round release (P15 observability/hardening, P16 combat, P17 world

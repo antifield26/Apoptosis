@@ -321,8 +321,10 @@ fn fill_volume_over_the_named_cap_is_refused() {
     // The named constant is the figure the refusal cites; the over-cap
     // refusal above is the named red. An at-cap fill is accepted by the same
     // check (it is the boundary the `>` comparison draws) but is not executed
-    // here: writing 32 768 blocks in a debug build is a multi-second loop, and
-    // the acceptance is the cap, not the fill throughput.
+    // here: writing 32 768 blocks in a debug build is a multi-second loop.
+    // The boundary itself is executed at unit level
+    // (`commands::tests::fill_boundary_accepts_at_cap_and_refuses_above`,
+    // AUDIT-18 E-15 closeout).
     const {
         assert!(
             MAX_FILL_VOLUME > 0 && MAX_FILL_VOLUME == 32_768,

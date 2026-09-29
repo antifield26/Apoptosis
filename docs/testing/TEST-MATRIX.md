@@ -30,9 +30,11 @@ also left a pin behind it — `execute_e2e`'s refusal table still listed `rotate
 unsupported after P18-02 implemented it — and the one test added when that table was
 corrected is the 80th. **Named closed set (P18-07 census):** 92
 integration files / **519** `#[test]`+`#[tokio::test]` counted by
-`target/p18_07_census.py`; 1 105 lib + 5 doc + 519 named = 1 629 vs 1 632
+`target/p18_07_census.py` (a gitignored scratch script, not shipped — recount
+with `grep -r '#\[test\]'` + `tokio::test` over `crates/*/tests/*.rs`, minus
+the `scenario_vanilla.rs:12` doc-comment phantom); 1 105 lib + 5 doc + 519 named = 1 629 vs 1 632
 measured (Δ3 labelled, not absorbed) — **that census predates the same landing and
-is not restated as current**; re-run the script to refresh it. The count has
+is not restated as current**; recount to refresh it. The count has
 moved 1 194 -> 1 196 -> 1 206 -> 1 207 -> 1 212 -> 1 325 -> 1 344 -> 1 346 -> 1 358 ->
 1 365 -> 1 380 -> 1 384 -> 1 386 -> 1 388 -> 1 389 -> 1 392 -> 1 399 -> 1 412 -> 1 426 -> 1 428 -> 1 431 -> 1 433 -> 1 437 -> 1 440 -> 1 441 -> 1 445 -> 1 451 -> 1 452 -> 1 468 -> 1 475 -> 1 477 -> 1 491 -> 1 500 -> 1 513 -> 1 520 -> 1 519 -> 1 524 -> 1 529 -> **1 537** -> **1 550** -> **1 558** -> **1 565** -> **1 570** -> **1 575** -> **1 577** -> **1 580** -> **1 581** -> **1 582** -> **1 583** -> **1 587** -> **1 597** -> **1 677** -> **1 679** -> **1 681** -> **1 684** -> **1 685**: three from the Audit 07 remediation, two Audit 08 coverage tests, ten from the
 `mc-capture-rig` crate (P10-01), one regression test for the

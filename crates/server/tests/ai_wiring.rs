@@ -141,6 +141,32 @@ fn a_summoned_zombie_closes_on_the_player() {
     let _ = (sx, sy, sz);
 }
 
+/// A M-1: the chase engages A*, not just direct steering. A search failure
+/// degrades to direct steering silently, so movement alone cannot tell them
+/// apart — a nonzero waypoint count proves the search ran.
+#[test]
+fn a_chasing_zombie_holds_search_waypoints() {
+    let mut harness = Harness::new("p11-ai-path", "Tester");
+    harness.join();
+    harness.summon("zombie", 8, 1, 0);
+    let mut max_waypoints = 0usize;
+    for _ in 0..40 {
+        harness.run(1);
+        max_waypoints = max_waypoints.max(
+            harness
+                .game
+                .mob_path_lengths()
+                .into_iter()
+                .max()
+                .unwrap_or(0),
+        );
+    }
+    assert!(
+        max_waypoints > 0,
+        "a chase across open ground must hold A* waypoints (saw none in 40 ticks)"
+    );
+}
+
 #[test]
 fn an_iron_suit_blunts_the_zombies_melee() {
     // P16-01: full iron (15 armour, no toughness) turns the zombie's 3.0

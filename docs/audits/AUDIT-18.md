@@ -191,7 +191,7 @@ piston/rail、repeater/comparator 输出、torch delay、 brewing/村民/末地�
 |---|---|
 | 全量门禁 | **PASS**（§1，`d378602` 实跑 1685/0/41/135） |
 | CI（tag commit） | **PASS**（run `36438306811` 五项全绿；release `36443106872` 出 x86_64 构建已发布） |
-| E-21/E-31 等 5 个 provisional | 测试名存在已确认（父代理 grep）；函数体未逐行重读——标 provisional，补读即关 |
+| E-21/E-24/E-31 provisional | **已关**：`a_pack_book_expands_tags_and_converts_simple_transmute`（`crafting/tests.rs:1153`，内含 `transmute_seen` 2 / `complex_transmute` 1 计数断言）、`the_speed_constant_is_the_measured_zombie_ceiling`（`mob.rs:1128`）、`wire_ids_match_the_vanilla_registry`（`effect.rs:365`）均存在——修复轮 grep + 行读确认 |
 | D F-M3 极端坐标 carve | 未跑（中和提案已给） |
 | capture-gated 差分 / sweep | 未跑（需 capture 环境，与历轮同） |
 | Pi5 硬件 / systemd / 24h | 未在本机复验（与历轮同；P22-04 拥有） |

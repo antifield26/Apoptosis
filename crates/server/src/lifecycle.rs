@@ -280,6 +280,50 @@ impl<H: TickHook> Server<H> {
                         "data packs loaded"
                     );
                 }
+                // F-M2b: the installed ore/carver set is fingerprinted into
+                // `level.dat`, and a boot whose set differs from the recorded
+                // one warns loudly. Without this a mid-world `vanilla_data`
+                // loss (or partial skip) forks terrain with only the summary
+                // line above as evidence. (Through the local `game`: it owns
+                // the world already; `self.game` is set below.)
+                let fingerprint = outcome.worldgen_fingerprint();
+                let stored = game
+                    .storage()
+                    .and_then(|service| service.storage().level())
+                    .and_then(|level| {
+                        level.extra.iter().find_map(|(key, value)| {
+                            (key == crate::packs::WORLDGEN_FINGERPRINT_KEY).then_some(value)
+                        })
+                    })
+                    .and_then(|tag| match tag {
+                        mc_nbt::NbtTag::String(previous) => Some(previous.as_str()),
+                        _ => None,
+                    });
+                if !crate::packs::worldgen_fingerprint_matches(stored, &fingerprint) {
+                    tracing::warn!(
+                        previous = stored.unwrap_or("<none recorded>"),
+                        current = %fingerprint,
+                        "the installed worldgen set changed since last boot; new chunks generate with a different ore/carver set"
+                    );
+                }
+                if let Some(service) = game.storage_mut()
+                    && let Some(level) = service.storage_mut().level_mut()
+                {
+                    match level
+                        .extra
+                        .iter_mut()
+                        .find(|(key, _)| key == crate::packs::WORLDGEN_FINGERPRINT_KEY)
+                    {
+                        Some((_, slot)) => {
+                            *slot = mc_nbt::NbtTag::String(fingerprint);
+                        }
+                        None => level.extra.push((
+                            crate::packs::WORLDGEN_FINGERPRINT_KEY.to_owned(),
+                            mc_nbt::NbtTag::String(fingerprint),
+                        )),
+                    }
+                    service.storage_mut().mark_level_dirty();
+                }
             }
             // A pack problem must never stop the boot: a world that has run for months has to start
             // on a machine where nobody copied the jar data (AGENTS.md §9).

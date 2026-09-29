@@ -2701,6 +2701,9 @@ impl Game {
                 Some(distance) if distance > CREEPER_DEFUSE_RANGE && mob.ai.fuse > 0 => {
                     mob.ai.fuse -= 1;
                 }
+                // Mid-band (ignite < d <= defuse) holds and keeps climbing
+                // rather than decrementing: by decision, matching the doc
+                // "stands down one tick at a time past 7" (AUDIT-18 A M-4).
                 _ => {
                     if mob.ai.fuse > 0 && mob.ai.fuse < CREEPER_FUSE_TICKS {
                         mob.ai.fuse += 1;
@@ -2975,6 +2978,10 @@ impl Game {
             && let EntityBody::Mob(mob) = &entity.body
         {
             let max = mob.kind.max_health();
+            // One heal per amplifier entry (matches the player path, which
+            // heals per effect per tick). In practice at most one
+            // Regeneration effect exists per entity (give-effect merges by
+            // id), so the loop shape is symmetry, not stacking.
             for amplifier in regen_amps {
                 let shift = u32::try_from(amplifier.max(0)).unwrap_or(0);
                 let interval = (50u64 >> shift.min(6)).max(1);

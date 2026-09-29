@@ -101,6 +101,10 @@ pub struct PackLoadOutcome {
     pub carvers_skipped: Vec<String>,
 }
 
+/// `LevelDat.extra` key under which the boot records the installed
+/// worldgen set (F-M2b).
+pub const WORLDGEN_FINGERPRINT_KEY: &str = "worldgen_fingerprint";
+
 impl PackLoadOutcome {
     /// Whether anything went wrong or was left out.
     ///
@@ -109,6 +113,32 @@ impl PackLoadOutcome {
     #[must_use]
     pub fn has_problems(&self) -> bool {
         !self.rejected.is_empty()
+    }
+
+    /// Fingerprint of the installed ore/carver generation (F-M2b).
+    ///
+    /// Counts plus the sorted skip list plus whether vanilla data was
+    /// present at all: any install change (pack added/removed, feature
+    /// skipped, vanilla data lost) changes the string, so a boot that
+    /// compares it against the recorded one turns a silent terrain fork
+    /// into a loud warning. Deterministic: the skip vectors are sorted
+    /// before joining.
+    #[must_use]
+    pub fn worldgen_fingerprint(&self) -> String {
+        let mut skipped: Vec<&str> = self
+            .ores_skipped
+            .iter()
+            .chain(&self.carvers_skipped)
+            .map(String::as_str)
+            .collect();
+        skipped.sort_unstable();
+        format!(
+            "ores={} carvers={} skipped=[{}] vanilla_data={}",
+            self.ores_loaded,
+            self.carvers_loaded,
+            skipped.join(","),
+            self.vanilla_data
+        )
     }
 
     /// A one-line summary for a startup log.
@@ -162,6 +192,16 @@ impl PackLoadOutcome {
         }
         text
     }
+}
+
+/// Whether a boot's freshly installed worldgen set matches the recorded one.
+///
+/// `None` (no recorded fingerprint — first boot, or a world from before
+/// F-M2b) always matches: there is nothing to fork *from* yet. The caller
+/// records the current fingerprint either way, so the second boot compares.
+#[must_use]
+pub fn worldgen_fingerprint_matches(stored: Option<&str>, current: &str) -> bool {
+    stored.is_none_or(|previous| previous == current)
 }
 
 /// The pack roots a server loads from.
@@ -534,7 +574,10 @@ pub fn resolve_vanilla_data(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{PackLoadOutcome, PackRoots, looks_like_vanilla_data, resolve_vanilla_data};
+    use super::{
+        PackLoadOutcome, PackRoots, looks_like_vanilla_data, resolve_vanilla_data,
+        worldgen_fingerprint_matches,
+    };
     use mc_test_support::fixtures::TempDir;
 
     #[test]
@@ -667,5 +710,70 @@ mod tests {
             !summary.contains("no vanilla data"),
             "vanilla data was loaded: {summary}"
         );
+    }
+
+    /// F-M2b: the fingerprint moves with every install change and the
+    /// matcher accepts first boots.
+    #[test]
+    fn worldgen_fingerprint_moves_with_the_install() {
+        let base = PackLoadOutcome {
+            ores_loaded: 25,
+            carvers_loaded: 3,
+            ..PackLoadOutcome::default()
+        };
+        let same = PackLoadOutcome {
+            ores_loaded: 25,
+            carvers_loaded: 3,
+            ..PackLoadOutcome::default()
+        };
+        assert_eq!(base.worldgen_fingerprint(), same.worldgen_fingerprint());
+        // A lost pack, a new skip, and lost vanilla data all change it.
+        for changed in [
+            PackLoadOutcome {
+                ores_loaded: 0,
+                carvers_loaded: 3,
+                ..PackLoadOutcome::default()
+            },
+            PackLoadOutcome {
+                ores_loaded: 25,
+                carvers_loaded: 3,
+                ores_skipped: vec!["coal: bad json".to_owned()],
+                ..PackLoadOutcome::default()
+            },
+            PackLoadOutcome {
+                ores_loaded: 25,
+                carvers_loaded: 3,
+                vanilla_data: true,
+                ..PackLoadOutcome::default()
+            },
+        ] {
+            assert_ne!(
+                base.worldgen_fingerprint(),
+                changed.worldgen_fingerprint(),
+                "every install change must move the fingerprint"
+            );
+        }
+        // Skip order does not: the vectors are sorted before joining.
+        let mut swapped = base.clone();
+        swapped.ores_skipped = vec!["b".to_owned(), "a".to_owned()];
+        let mut ordered = base.clone();
+        ordered.ores_skipped = vec!["a".to_owned(), "b".to_owned()];
+        assert_eq!(
+            swapped.worldgen_fingerprint(),
+            ordered.worldgen_fingerprint()
+        );
+        // First boots (nothing recorded) match; anything else must equal.
+        assert!(worldgen_fingerprint_matches(
+            None,
+            &base.worldgen_fingerprint()
+        ));
+        assert!(worldgen_fingerprint_matches(
+            Some(&base.worldgen_fingerprint()),
+            &base.worldgen_fingerprint()
+        ));
+        assert!(!worldgen_fingerprint_matches(
+            Some("ores=1 carvers=1 skipped=[] vanilla_data=true"),
+            &base.worldgen_fingerprint()
+        ));
     }
 }

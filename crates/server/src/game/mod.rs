@@ -1322,6 +1322,24 @@ impl Game {
             .collect()
     }
 
+    /// Waypoint counts of every mob's chase path, ascending by entity id.
+    ///
+    /// Read-only view for tests (A M-1): a chase that always steers direct
+    /// with an empty path is indistinguishable from A* chase by movement
+    /// alone — the search failure degrades silently. A nonzero count proves
+    /// the search engaged.
+    pub fn mob_path_lengths(&self) -> Vec<usize> {
+        self.entities
+            .iter()
+            .filter_map(|entity| {
+                let mc_entity::EntityBody::Mob(mob) = &entity.body else {
+                    return None;
+                };
+                Some(mob.ai.path.len())
+            })
+            .collect()
+    }
+
     /// Every dropped-item entity as `(stack, position)`, ascending by entity id.
     ///
     /// The same kind of read-only view as [`Self::mobs`], and for the same reason:
