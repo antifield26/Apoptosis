@@ -62,9 +62,10 @@ fn roundtrip<T: Packet>(body: &[u8]) -> Result<(), String> {
     }
 }
 
-/// `SetEntityMotion` has no [`Packet`] impl (the server never sends it); the
-/// sweep covers it through its inherent codec plus an explicit exhaustion
-/// check instead of leaving 2 342 bodies unasserted.
+/// `SetEntityMotion` rides its inherent codec here (plus an explicit
+/// exhaustion check) rather than the [`Packet`] round-trip the sweep uses
+/// elsewhere; the server sends it to player victims on melee (A-H1), so the
+/// 2 342 capture bodies stay asserted either way.
 fn motion(body: &[u8]) -> Result<(), String> {
     use mc_protocol::packets::play::SetEntityMotion;
     let mut reader = PacketReader::new(body);

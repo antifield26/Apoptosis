@@ -204,6 +204,44 @@ fn a_zombie_in_range_swings_and_the_player_hurts() {
     );
 }
 
+/// A-H1: a zombie hit shoves the player on the wire, not just in health.
+/// Before the fix the server never sent `set_entity_motion` at all (no
+/// `Packet` impl, no send site): the hurt landed in health while the client
+/// stood still.
+#[test]
+fn a_zombie_hit_shoves_the_player_with_set_entity_motion() {
+    use mc_protocol::packets::play::SetEntityMotion;
+    use mc_protocol::wire::PacketReader;
+
+    let mut harness = Harness::new("p11-ai-knockback", "Tester");
+    let mut out = harness.join();
+    harness.summon("zombie", 2, 1, 0);
+    harness.run(90);
+    assert!(
+        harness.health() < 20.0,
+        "the test only means something if a hit landed (saw {})",
+        harness.health()
+    );
+    let mut bodies = Vec::new();
+    while let Some(raw) = out.try_recv() {
+        if raw.id == clientbound::play::SET_ENTITY_MOTION {
+            bodies.push(raw.payload);
+        }
+    }
+    assert!(
+        !bodies.is_empty(),
+        "a landed zombie hit must send set_entity_motion to the victim"
+    );
+    let mut reader = PacketReader::new(&bodies[0]);
+    let packet = SetEntityMotion::decode(&mut reader).expect("decodes");
+    assert!(reader.is_empty(), "no trailing bytes");
+    let (x, _, z) = packet.velocity();
+    assert!(
+        x != 0.0 || z != 0.0,
+        "the shove must have a horizontal component, saw ({x}, {z})"
+    );
+}
+
 #[test]
 fn an_adjacent_creeper_fuses_instead_of_meleeing() {
     // P16-04: the creeper still never lands a direct melee hit — but an

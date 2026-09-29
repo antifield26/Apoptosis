@@ -2879,9 +2879,10 @@ impl Game {
         let hit = (kind.attack_damage() + bonus).max(0.0);
         let outcome = self.sessions.get_mut(&session_id).map(|session| {
             session.hurt_invuln_ticks = INVULNERABLE_TICKS;
-            // Armour is the victim's worn set (P16-01); knockback does not
-            // apply —projections carry no velocity under client-driven
-            // motion, so there is nowhere honest to put the shove.
+            // Armour is the victim's worn set (P16-01); the shove rides
+            // `set_entity_motion` to the victim's client (A-H1) — player
+            // motion is client-driven, so the impulse lives on the wire,
+            // not in a server-side velocity.
             let armor = worn_stats(&session.player.inventory, &self.registries.items);
             session
                 .player
@@ -2893,6 +2894,17 @@ impl Game {
         if outcome.applied {
             debug!(attacker = %attacker, kind = kind.name(), dealt = outcome.dealt, "mob melee hit");
             self.wear_armor_on_hit(session_id);
+            // A-H1: the player victim gets the shove on the wire (see
+            // `send_player_shove`).
+            if let Some(atk_entity) = self.entities.get(attacker) {
+                self.send_player_shove(
+                    target,
+                    Attacker {
+                        pos: atk_entity.position,
+                        yaw: atk_entity.yaw,
+                    },
+                );
+            }
         }
         self.after_damage(session_id, outcome);
         // The swing is spent whether or not it landed.
@@ -3110,8 +3122,52 @@ impl Game {
         true
     }
 
-    /// The red hurt flash for one applied hit: `hurt_animation` (clientbound
-    /// play 42) to every ready client, lethal hits included.
+    /// The shove a player victim receives on the wire (A-H1).
+    ///
+    /// Mob victims ride the knockback channel (folded after steering);
+    /// player motion is client-driven, so the impulse is sent as
+    /// `set_entity_motion`, which the client applies — vanilla's server
+    /// sends the velocity the same way. Same 0.4 base and direction math
+    /// as `Entity::apply_knockback`; the vertical pop mirrors its
+    /// on-ground shape without server-side velocity state to halve.
+    pub(crate) fn send_player_shove(&self, victim: EntityId, atk: Attacker) {
+        let Some(session_id) = self
+            .sessions
+            .values()
+            .find(|session| session.entity == victim)
+            .map(|session| session.id)
+        else {
+            return;
+        };
+        let Some(session) = self.sessions.get(&session_id) else {
+            return;
+        };
+        let (mut dx, mut dz) = (
+            atk.pos.x - session.player.position.x,
+            atk.pos.z - session.player.position.z,
+        );
+        if dx * dx + dz * dz < 1.0e-5 {
+            let yaw = f64::from(atk.yaw).to_radians();
+            dx = yaw.sin();
+            dz = -yaw.cos();
+        }
+        let len = (dx * dx + dz * dz).sqrt();
+        let y = if session.player.on_ground {
+            BASE_MELEE_KNOCKBACK
+        } else {
+            0.0
+        };
+        let Ok(packet) = mc_protocol::packets::play::SetEntityMotion::from_velocity(
+            victim.get(),
+            -dx / len * BASE_MELEE_KNOCKBACK,
+            y,
+            -dz / len * BASE_MELEE_KNOCKBACK,
+        ) else {
+            return;
+        };
+        let mut report = TickReport::default();
+        let _ = self.send(session_id, &packet, &mut report);
+    }
     ///
     /// Owner session: landed hits showed no red, because the server sent
     /// `entity_event` 2 —which is not the flash on a modern client (jar
@@ -3174,9 +3230,10 @@ impl Game {
             return false;
         }
         // Knockback past the window (vanilla order: the shove lands before
-        // armour and resistance are figured), mobs only —player projections
-        // carry no velocity under client-driven motion, so shoving one would
-        // be bytes into a field nothing reads.
+        // armour and resistance are figured). Mob victims ride the
+        // knockback channel (folded after steering); player projections
+        // are client-driven, so their shove is sent as `set_entity_motion`
+        // at the melee/attack call sites (A-H1), not applied here.
         if source.applies_knockback()
             && let (Some(atk), EntityBody::Mob(_)) = (attacker, &entity.body)
         {

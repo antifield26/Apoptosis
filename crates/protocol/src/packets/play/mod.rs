@@ -1018,6 +1018,37 @@ impl SetEntityMotion {
     }
 }
 
+impl Packet for SetEntityMotion {
+    const ID: i32 = crate::ids::clientbound::play::SET_ENTITY_MOTION;
+
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] on truncation or trailing bytes.
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let packet = Self::decode(&mut reader)?;
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "set_entity_motion has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(packet)
+    }
+
+    /// # Errors
+    ///
+    /// [`ServerError::Protocol`] when the body cannot be encoded, which for these field types means never.
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(self.entity_id);
+        writer.write_i16(self.velocity_x);
+        writer.write_i16(self.velocity_y);
+        writer.write_i16(self.velocity_z);
+        Ok(writer.finish())
+    }
+}
+
 impl Packet for RemoveEntities {
     const ID: i32 = crate::ids::clientbound::play::REMOVE_ENTITIES;
 

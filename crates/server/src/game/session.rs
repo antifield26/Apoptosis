@@ -963,6 +963,17 @@ impl Game {
                             mc_entity::combat::DamageSource::PlayerAttack,
                             attacker,
                         );
+                        // A-H1: a player victim is shoved on the wire like a
+                        // mob-melee victim (mob victims ride the channel
+                        // inside `damage_entity`).
+                        if let (Some(atk), true) = (
+                            attacker,
+                            self.entities.get(target).is_some_and(|entity| {
+                                matches!(entity.body, EntityBody::Player)
+                            }),
+                        ) {
+                            self.send_player_shove(target, atk);
+                        }
                         if connects {
                             self.wear_held(id, wear::WEAR_ON_ATTACK, report);
                         }
