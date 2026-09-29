@@ -47,7 +47,9 @@ async fn run() -> i32 {
             return 1;
         }
     }
-    match server.run().await {
+    // `run()`'s future tops 16 KiB (game + world state machine): heap it
+    // rather than holding it on the task stack (clippy `large_future`).
+    match Box::pin(server.run()).await {
         Err(ServerError::Shutdown) => {
             tracing::info!("shutdown complete");
             0

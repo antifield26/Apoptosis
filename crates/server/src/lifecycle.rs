@@ -151,6 +151,58 @@ impl Server<NoopHook> {
     }
 }
 
+/// Compare the freshly installed ore/carver set against the recorded one
+/// and record the current one (F-M2b).
+///
+/// Without this a mid-world `vanilla_data` loss (or partial skip) forks
+/// terrain with only the pack summary line as evidence. Takes the local
+/// `game` (not `&mut self`): it owns the world already while `open_world`
+/// is still building it, and splitting this out keeps `open_world` under
+/// clippy's `too_many_lines` bar.
+fn record_worldgen_fingerprint(
+    game: &mut crate::game::Game,
+    outcome: &crate::packs::PackLoadOutcome,
+) {
+    let fingerprint = outcome.worldgen_fingerprint();
+    let stored = game
+        .storage()
+        .and_then(|service| service.storage().level())
+        .and_then(|level| {
+            level.extra.iter().find_map(|(key, value)| {
+                (key == crate::packs::WORLDGEN_FINGERPRINT_KEY).then_some(value)
+            })
+        })
+        .and_then(|tag| match tag {
+            mc_nbt::NbtTag::String(previous) => Some(previous.as_str()),
+            _ => None,
+        });
+    if !crate::packs::worldgen_fingerprint_matches(stored, &fingerprint) {
+        tracing::warn!(
+            previous = stored.unwrap_or("<none recorded>"),
+            current = %fingerprint,
+            "the installed worldgen set changed since last boot; new chunks generate with a different ore/carver set"
+        );
+    }
+    if let Some(service) = game.storage_mut()
+        && let Some(level) = service.storage_mut().level_mut()
+    {
+        match level
+            .extra
+            .iter_mut()
+            .find(|(key, _)| key == crate::packs::WORLDGEN_FINGERPRINT_KEY)
+        {
+            Some((_, slot)) => {
+                *slot = mc_nbt::NbtTag::String(fingerprint);
+            }
+            None => level.extra.push((
+                crate::packs::WORLDGEN_FINGERPRINT_KEY.to_owned(),
+                mc_nbt::NbtTag::String(fingerprint),
+            )),
+        }
+        service.storage_mut().mark_level_dirty();
+    }
+}
+
 impl<H: TickHook> Server<H> {
     /// Build a server with an explicit tick hook (tests, future scheduler).
     #[must_use]
@@ -282,48 +334,8 @@ impl<H: TickHook> Server<H> {
                 }
                 // F-M2b: the installed ore/carver set is fingerprinted into
                 // `level.dat`, and a boot whose set differs from the recorded
-                // one warns loudly. Without this a mid-world `vanilla_data`
-                // loss (or partial skip) forks terrain with only the summary
-                // line above as evidence. (Through the local `game`: it owns
-                // the world already; `self.game` is set below.)
-                let fingerprint = outcome.worldgen_fingerprint();
-                let stored = game
-                    .storage()
-                    .and_then(|service| service.storage().level())
-                    .and_then(|level| {
-                        level.extra.iter().find_map(|(key, value)| {
-                            (key == crate::packs::WORLDGEN_FINGERPRINT_KEY).then_some(value)
-                        })
-                    })
-                    .and_then(|tag| match tag {
-                        mc_nbt::NbtTag::String(previous) => Some(previous.as_str()),
-                        _ => None,
-                    });
-                if !crate::packs::worldgen_fingerprint_matches(stored, &fingerprint) {
-                    tracing::warn!(
-                        previous = stored.unwrap_or("<none recorded>"),
-                        current = %fingerprint,
-                        "the installed worldgen set changed since last boot; new chunks generate with a different ore/carver set"
-                    );
-                }
-                if let Some(service) = game.storage_mut()
-                    && let Some(level) = service.storage_mut().level_mut()
-                {
-                    match level
-                        .extra
-                        .iter_mut()
-                        .find(|(key, _)| key == crate::packs::WORLDGEN_FINGERPRINT_KEY)
-                    {
-                        Some((_, slot)) => {
-                            *slot = mc_nbt::NbtTag::String(fingerprint);
-                        }
-                        None => level.extra.push((
-                            crate::packs::WORLDGEN_FINGERPRINT_KEY.to_owned(),
-                            mc_nbt::NbtTag::String(fingerprint),
-                        )),
-                    }
-                    service.storage_mut().mark_level_dirty();
-                }
+                // one warns loudly (see `record_worldgen_fingerprint`).
+                record_worldgen_fingerprint(&mut game, &outcome);
             }
             // A pack problem must never stop the boot: a world that has run for months has to start
             // on a machine where nobody copied the jar data (AGENTS.md §9).
@@ -647,8 +659,8 @@ mod tests {
     fn seed_resolution_prefers_stored_then_configured_then_zero() {
         // A world that records a seed keeps it no matter the config: opening
         // a vanilla world must not fork its terrain (F-H1).
-        assert_eq!(resolve_seed(Some(7), Some(1361882806)), 1361882806);
-        assert_eq!(resolve_seed(None, Some(1361882806)), 1361882806);
+        assert_eq!(resolve_seed(Some(7), Some(1_361_882_806)), 1_361_882_806);
+        assert_eq!(resolve_seed(None, Some(1_361_882_806)), 1_361_882_806);
         // Fresh worlds take the configured seed; unset means the
         // historical seed-0 default, stated not hidden.
         assert_eq!(resolve_seed(Some(42), None), 42);
@@ -664,8 +676,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(120)).await;
             handle.request();
         });
-        let err = server
-            .run()
+        let err = Box::pin(server.run())
             .await
             .expect_err("run returns Shutdown, not Ok");
         assert!(matches!(err, ServerError::Shutdown), "wrong error: {err:?}");
@@ -685,7 +696,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(160)).await;
             handle.request();
         });
-        let _ = server.run().await;
+        let _ = Box::pin(server.run()).await;
         let ticks = seen.load(Ordering::SeqCst);
         assert!(
             ticks >= 2,
@@ -705,7 +716,7 @@ mod tests {
         // Pre-request shutdown is NOT set; the hook error must surface instead.
         // Give the clock a chance to release a tick by pre-anchoring via a short run.
         tokio::select! {
-            r = server.run() => {
+            r = Box::pin(server.run()) => {
                 assert!(matches!(r, Err(ServerError::Invariant(_))), "wrong result: {r:?}");
             }
             () = tokio::time::sleep(Duration::from_millis(500)) => {
@@ -727,7 +738,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(120)).await;
             handle.request();
         });
-        let err = server.run().await.expect_err("shutdown");
+        let err = Box::pin(server.run()).await.expect_err("shutdown");
         assert!(matches!(err, ServerError::Shutdown), "{err:?}");
         assert_eq!(server.state(), LifecycleState::Stopped);
     }
@@ -755,7 +766,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(120)).await;
             handle.request();
         });
-        let err = server.run().await.expect_err("shutdown");
+        let err = Box::pin(server.run()).await.expect_err("shutdown");
         assert!(matches!(err, ServerError::Shutdown), "{err:?}");
         assert!(server.world().is_none(), "the world is closed by run()");
         // The shutdown path left a complete, readable level.dat behind.

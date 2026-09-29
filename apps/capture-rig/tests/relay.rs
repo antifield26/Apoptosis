@@ -85,7 +85,7 @@ fn events(trace: &str) -> Vec<serde_json::Value> {
 async fn a_client_reaches_play_through_the_rig_and_the_trace_records_the_join() {
     let (mut server, server_addr, shutdown) = start_server().await;
     let server_task = tokio::spawn(async move {
-        let _ = server.run().await;
+        let _ = Box::pin(server.run()).await;
     });
     let (rig_addr, trace) = start_rig(server_addr).await;
 
@@ -160,7 +160,7 @@ async fn a_client_reaches_play_through_the_rig_and_the_trace_records_the_join() 
 async fn the_rig_relays_a_status_ping_and_records_the_status_state() {
     let (mut server, server_addr, shutdown) = start_server().await;
     let server_task = tokio::spawn(async move {
-        let _ = server.run().await;
+        let _ = Box::pin(server.run()).await;
     });
     let (rig_addr, trace) = start_rig(server_addr).await;
 

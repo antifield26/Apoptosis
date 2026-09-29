@@ -1328,6 +1328,7 @@ impl Game {
     /// with an empty path is indistinguishable from A* chase by movement
     /// alone — the search failure degrades silently. A nonzero count proves
     /// the search engaged.
+    #[must_use]
     pub fn mob_path_lengths(&self) -> Vec<usize> {
         self.entities
             .iter()

@@ -26,8 +26,7 @@ async fn start_server(motd: &str) -> (Server, SocketAddr, mc_server::lifecycle::
 }
 
 async fn run_until_shutdown(mut server: Server) -> ServerError {
-    server
-        .run()
+    Box::pin(server.run())
         .await
         .expect_err("run returns Shutdown on request")
 }

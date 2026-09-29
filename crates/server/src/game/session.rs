@@ -1284,11 +1284,11 @@ impl Game {
             // sweep total without changing what the game does.
             | PlayIntent::KeepAlive { .. }
             | PlayIntent::ChunkBatchReceived { .. }
-            | PlayIntent::PlayerLoaded => {}
+            | PlayIntent::PlayerLoaded
             // C M-6: button clicks and crafter toggles decode so they are
             // visible in traces, but no menu this build opens uses either —
             // unacted until beacon/enchant/crafter menus ship.
-            PlayIntent::ContainerButtonClick { .. }
+            | PlayIntent::ContainerButtonClick { .. }
             | PlayIntent::ContainerSlotStateChanged { .. } => {}
         }
         Ok(())
