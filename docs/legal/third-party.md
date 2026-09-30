@@ -116,11 +116,17 @@ class file, asset or datapack is committed.
 
 ## 8. Phase 19 (P19-05): online-mode auth (ADR-0008)
 
-P19-05 adds six third-party crates, all `MIT OR Apache-2.0` (verified in
-the registry manifests; `Cargo.lock` pins the versions below and is
-committed). Transitives (`pkcs8`, `cipher`, `rand_core`, `zeroize`,
-`subtle`, `rustls`, etc.) are permissive MIT/Apache-2.0; no copyleft
-entered the tree and `deny.toml` is unchanged.
+P19-05 adds six third-party crates directly (verified in the registry
+manifests; `Cargo.lock` pins the versions below and is committed), and it
+pulls the `ureq` → `rustls` chain in transitively. **The first version of
+this section claimed all of them were `MIT OR Apache-2.0` and that
+`deny.toml` was unchanged; that was wrong**, and `cargo deny` said so:
+`ureq`'s TLS stack carries `ring` (Apache-2.0 AND ISC), `rustls-webpki`
+(ISC) and `webpki-roots` (**CDLA-Permissive-2.0**, Mozilla's permissive
+data licence for the bundled root store), and the last of those was not in
+the allow list — the `licenses` job failed on every push from P19-05 to
+P19-07. It is now allowed in `deny.toml` (permissive, so no owner/copyleft
+rule is engaged) and recorded below. No copyleft entered the tree.
 
 | Crate (locked) | License | Purpose | First use |
 |---|---|---|---|
@@ -130,6 +136,10 @@ entered the tree and `deny.toml` is unchanged.
 | rand 0.8.8 | MIT OR Apache-2.0 | CSPRNG keygen/token | P19-05 (`mc-network::online`) |
 | ureq 3.4.2 | MIT OR Apache-2.0 | blocking HTTPS `hasJoined` | P19-05 (`mc-network::online`) |
 | cfb8 0.8.1 (dev-only) | MIT OR Apache-2.0 | known-answer oracle for the wiring test | P19-05 (`mc-protocol` dev-deps) |
+| rustls 0.23.45 | Apache-2.0 OR ISC OR MIT | TLS for the `hasJoined` request (transitive via ureq) | P19-05 |
+| ring 0.17.14 | Apache-2.0 AND ISC | rustls' crypto backend; ships C and assembly, which is why the aarch64 CI job needs a cross C compiler | P19-05 |
+| rustls-webpki 0.103.15 | ISC | certificate-path validation (transitive) | P19-05 |
+| webpki-roots 1.0.9 | **CDLA-Permissive-2.0** | Mozilla's bundled root store (transitive). The one licence P19-05's first record missed; allowed in `deny.toml` since | P19-05 |
 
 `cfb8 0.8.1` (not 0.9: pairs with `cipher` 0.4 like `aes` 0.8; the wire
 mode is identical either way) is a dev-dependency only — it never ships,

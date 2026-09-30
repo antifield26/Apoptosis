@@ -65,7 +65,17 @@ jobs:
           toolchain: "1.98.1"
           components: rustfmt, clippy
           targets: aarch64-unknown-linux-gnu
+      # **A cross C compiler is needed even for a `check`.** `cc-rs` runs a
+      # dependency's build script whether or not the crate links, and `ring`
+      # (through `ureq` -> `rustls`, the online-mode session check) builds C and
+      # assembly. Without this the job died in ~30 s with "failed to find tool
+      # aarch64-linux-gnu-gcc" on every push from P19-05 to P19-07. The job still
+      # does not *link* the workspace — this only lets the build scripts run — so
+      # the limitation its comment above states is unchanged.
+      - run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
       - run: cargo check --target aarch64-unknown-linux-gnu --workspace --all-targets
+        env:
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
 
   dependency-policy:
     # P01-03 / ADR-0001 D-08: the licence/dependency gate the policy promises.

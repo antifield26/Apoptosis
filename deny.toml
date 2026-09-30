@@ -32,6 +32,13 @@ allow = [
     "Unicode-DFS-2016",
     "CC0-1.0",
     "MPL-2.0",
+    # Mozilla's permissive *data* licence, carried by `webpki-roots` (the bundled
+    # root store) through `ureq` -> `rustls` for the online-mode session check
+    # (P19-05, ADR-0008). Permissive, not copyleft, so the owner + legal rule
+    # above does not apply to it. Added after the gate first ran against the
+    # P19-05 tree: the adoption row missed this crate, and `cargo deny` reported
+    # `rejected: license is not explicitly allowed` on every push since.
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.9
 
