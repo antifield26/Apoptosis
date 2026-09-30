@@ -1452,6 +1452,87 @@ impl Game {
         self.whitelist_enforced
     }
 
+    /// Install the gameplay properties from config (P19-06).
+    ///
+    /// The lifecycle calls this at boot; until then the defaults hold.
+    pub fn set_gameplay_config(&mut self, gameplay: crate::config::GameplayConfig) {
+        self.gameplay = gameplay;
+    }
+
+    /// The whole gameplay config, for diagnostics.
+    #[must_use]
+    pub const fn gameplay(&self) -> &crate::config::GameplayConfig {
+        &self.gameplay
+    }
+
+    /// Spawn protection radius in blocks (P19-06; enforcement P20-owned).
+    #[must_use]
+    pub const fn spawn_protection(&self) -> u32 {
+        self.gameplay.spawn_protection
+    }
+
+    /// Set the spawn protection radius (P19-06).
+    pub fn set_spawn_protection(&mut self, radius: u32) {
+        self.gameplay.spawn_protection = radius;
+    }
+
+    /// Whether players may damage each other (P19-06; the gate P20-owned).
+    #[must_use]
+    pub const fn pvp(&self) -> bool {
+        self.gameplay.pvp
+    }
+
+    /// Set whether `PvP` is allowed (P19-06).
+    pub fn set_pvp(&mut self, allowed: bool) {
+        self.gameplay.pvp = allowed;
+    }
+
+    /// Minutes of inactivity before disconnect, 0 = disabled (P19-06; the
+    /// tracker P20-owned).
+    #[must_use]
+    pub const fn idle_timeout_minutes(&self) -> u32 {
+        self.gameplay.idle_timeout_minutes
+    }
+
+    /// Set the idle timeout (P19-06).
+    pub fn set_idle_timeout_minutes(&mut self, minutes: u32) {
+        self.gameplay.idle_timeout_minutes = minutes;
+    }
+
+    /// Tick radius in chunks (P19-06; honoured by ticking in P20).
+    #[must_use]
+    pub const fn simulation_distance(&self) -> u32 {
+        self.gameplay.simulation_distance
+    }
+
+    /// Set the simulation distance (P19-06).
+    pub fn set_simulation_distance(&mut self, distance: u32) {
+        self.gameplay.simulation_distance = distance;
+    }
+
+    /// Game mode for new players (P19-06; applied at join by P20).
+    #[must_use]
+    pub const fn default_gamemode(&self) -> crate::config::DefaultGameMode {
+        self.gameplay.default_gamemode
+    }
+
+    /// Set the default game mode (P19-06).
+    pub fn set_default_gamemode(&mut self, mode: crate::config::DefaultGameMode) {
+        self.gameplay.default_gamemode = mode;
+    }
+
+    /// Whether the status response hides the player sample (P19-06; wiring
+    /// P20-owned).
+    #[must_use]
+    pub const fn hide_online_players(&self) -> bool {
+        self.gameplay.hide_online_players
+    }
+
+    /// Set whether the player sample is hidden (P19-06).
+    pub fn set_hide_online_players(&mut self, hide: bool) {
+        self.gameplay.hide_online_players = hide;
+    }
+
     /// List `target` (an online player) on the whitelist, persisting
     /// `whitelist.json` (P19-01).
     ///

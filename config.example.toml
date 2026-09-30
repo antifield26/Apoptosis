@@ -36,6 +36,26 @@ autosave_ticks = 6000
 # message. `/whitelist on|off` toggles it live; a restart restores this value.
 whitelist_enforced = false
 
+[gameplay]
+# Spawn protection radius in blocks (Vanilla `spawn-protection`, default 16;
+# 0 disables). Enforcement is P20-owned; this release only stores it.
+spawn_protection = 16
+# Whether players may damage each other (Vanilla `pvp`, default true).
+# The damage gate is P20-owned.
+pvp = true
+# Minutes of inactivity before disconnect (Vanilla `player-idle-timeout`,
+# default 0 = disabled). The idle tracker is P20-owned.
+idle_timeout_minutes = 0
+# Tick radius in chunks (Vanilla `simulation-distance`, default 8 like
+# view_distance). Stored now; ticking honours it in P20.
+simulation_distance = 8
+# Game mode for new players (Vanilla `gamemode`): "survival" (default),
+# "creative", "adventure" or "spectator". Applied at join by P20.
+default_gamemode = "survival"
+# Whether the status response hides the player sample (Vanilla
+# `hide-online-players`, default false). Wiring is P20-owned.
+hide_online_players = false
+
 [rcon]
 # Serve the RCON admin protocol. Default off: an admin protocol that answers
 # commands must be opted into, never on by accident. Enabling with an empty

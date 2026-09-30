@@ -12,6 +12,17 @@ entry is the release candidate matching the workspace version at the time
 with built artifacts. The current workspace version is `0.3.0`, published as
 tag `v0.3.0` (see below).
 
+## [Unreleased] — P19-06 properties (v0.4.0 "operable survival" sixth slice)
+
+`[gameplay]` (`spawn_protection`, `pvp`, `idle_timeout_minutes`,
+`simulation_distance`, `default_gamemode`, `hide_online_players`) with
+Vanilla defaults, bounds validation and unknown-key refusal, plus per-key
+Game read/write accessors installed from config at boot. Enforcement of
+every key is P20-owned (named per key, not stubbed). Non-loopback bind +
+offline + no whitelist logs the exposure warning once at startup. Pins:
+3 config tests + Game read/write/boot tests + the exposure matrix (each
+proven red by neutralising its mechanism).
+
 ## [Unreleased] — P19-05 online auth (v0.4.0 "operable survival" fifth slice, closes KD-01 split-a)
 
 Mojang handshake behind `online_mode` (default stays offline): RSA-1024

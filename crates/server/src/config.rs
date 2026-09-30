@@ -20,6 +20,14 @@
 //!
 //! [access]
 //! whitelist_enforced = false
+//!
+//! [gameplay]
+//! spawn_protection = 16
+//! pvp = true
+//! idle_timeout_minutes = 0
+//! simulation_distance = 8
+//! default_gamemode = "survival"
+//! hide_online_players = false
 //! ```
 
 use mc_core::error::{ServerError, ServerResult};
@@ -50,6 +58,8 @@ pub struct ServerConfig {
     pub datapacks: DataPackConfig,
     /// Who may join (P19-01; P19-06 owns the rest of the properties).
     pub access: AccessConfig,
+    /// Gameplay properties (P19-06; Vanilla `server.properties` analogues).
+    pub gameplay: GameplayConfig,
     /// RCON admin protocol (P19-04; off unless configured).
     pub rcon: RconConfig,
 }
@@ -107,6 +117,7 @@ impl Default for ServerConfig {
             storage: StorageConfig::default(),
             datapacks: DataPackConfig::default(),
             access: AccessConfig::default(),
+            gameplay: GameplayConfig::default(),
             rcon: RconConfig::default(),
         }
     }
@@ -177,6 +188,71 @@ impl Default for AccessConfig {
     fn default() -> Self {
         Self {
             whitelist_enforced: false,
+        }
+    }
+}
+
+/// Default game mode for new players (P19-06).
+///
+/// Config-side twin of `mc_entity::GameMode` with Vanilla's lowercase
+/// names: kept here (rather than deriving serde over there) so `mc-entity`
+/// gains no serialization dependency for one config key. P20 converts this
+/// to `GameMode` when applying it at join.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DefaultGameMode {
+    /// Vanilla Survival (and this build's default).
+    #[default]
+    Survival,
+    /// Vanilla Creative.
+    Creative,
+    /// Vanilla Adventure.
+    Adventure,
+    /// Vanilla Spectator.
+    Spectator,
+}
+
+/// Gameplay properties (P19-06; Vanilla `server.properties` analogues).
+///
+/// Config + Game plumbing only: every key reads, writes, validates and has
+/// a Game accessor, but enforcement is P20-owned (named per key) — this
+/// release stores intent, it does not act on it. The one exception is the
+/// exposure warning, which is a startup log, not behaviour.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct GameplayConfig {
+    /// Spawn protection radius in blocks (Vanilla `spawn-protection`,
+    /// default 16; 0 disables). Enforcement (non-op edits refused in
+    /// radius) is P20-owned.
+    pub spawn_protection: u32,
+    /// Whether players may damage each other (Vanilla `pvp`, default
+    /// true). The damage gate is P20-owned.
+    pub pvp: bool,
+    /// Minutes of inactivity before disconnect (Vanilla
+    /// `player-idle-timeout`, default 0 = disabled). The idle tracker is
+    /// P20-owned (it needs per-tick activity timestamps).
+    pub idle_timeout_minutes: u32,
+    /// Tick radius in chunks (Vanilla `simulation-distance`). Stored now;
+    /// ticking honours it in P20 (view distance stays the streaming
+    /// radius until then).
+    pub simulation_distance: u32,
+    /// Game mode for new players (Vanilla `gamemode`). Applied at join by
+    /// P20; until then joins use Survival.
+    pub default_gamemode: DefaultGameMode,
+    /// Whether the status response hides the player sample (Vanilla
+    /// `hide-online-players`, default false). Wiring is P20-owned.
+    pub hide_online_players: bool,
+}
+
+impl Default for GameplayConfig {
+    fn default() -> Self {
+        Self {
+            spawn_protection: 16,
+            pvp: true,
+            idle_timeout_minutes: 0,
+            simulation_distance: 8,
+            default_gamemode: DefaultGameMode::Survival,
+            hide_online_players: false,
         }
     }
 }
@@ -281,6 +357,27 @@ impl ServerConfig {
                 "rcon.enabled refuses an empty rcon.password: set one or disable RCON".to_owned(),
             ));
         }
+        // P19-06 gameplay bounds: typos rejected, policy untouched. Zero
+        // disables spawn protection and idle timeout alike (Vanilla's
+        // convention); the upper bounds reject misplaced digits, not intent.
+        if self.gameplay.spawn_protection > 256 {
+            return Err(ServerError::Operational(format!(
+                "gameplay.spawn_protection out of range (0..=256): {}",
+                self.gameplay.spawn_protection
+            )));
+        }
+        if self.gameplay.idle_timeout_minutes > 1440 {
+            return Err(ServerError::Operational(format!(
+                "gameplay.idle_timeout_minutes out of range (0..=1440): {}",
+                self.gameplay.idle_timeout_minutes
+            )));
+        }
+        if self.gameplay.simulation_distance < 2 || self.gameplay.simulation_distance > 32 {
+            return Err(ServerError::Operational(format!(
+                "gameplay.simulation_distance out of range (2..=32): {}",
+                self.gameplay.simulation_distance
+            )));
+        }
         if self.rcon.enabled && self.rcon.bind.parse::<std::net::SocketAddr>().is_err() {
             return Err(ServerError::Operational(format!(
                 "rcon.bind is not a socket address: {:?}",
@@ -339,6 +436,61 @@ mod tests {
         let config = ServerConfig::from_toml("[access]\nwhitelist_enforced = true\n")
             .expect("the access section must parse");
         assert!(config.access.whitelist_enforced);
+    }
+
+    #[test]
+    fn gameplay_defaults_match_vanilla_analogues() {
+        use super::{DefaultGameMode, GameplayConfig};
+        let gameplay = GameplayConfig::default();
+        assert_eq!(gameplay.spawn_protection, 16);
+        assert!(gameplay.pvp, "Vanilla pvp defaults on");
+        assert_eq!(gameplay.idle_timeout_minutes, 0, "0 disables, like Vanilla");
+        assert_eq!(gameplay.simulation_distance, 8);
+        assert_eq!(gameplay.default_gamemode, DefaultGameMode::Survival);
+        assert!(!gameplay.hide_online_players);
+        ServerConfig::default()
+            .validate()
+            .expect("defaults validate");
+    }
+
+    #[test]
+    fn gameplay_parses_and_round_trips() {
+        use super::DefaultGameMode;
+        let config = ServerConfig::from_toml(
+            "[gameplay]\nspawn_protection = 0\npvp = false\nidle_timeout_minutes = 15\n\
+             simulation_distance = 10\ndefault_gamemode = \"creative\"\nhide_online_players = true\n",
+        )
+        .expect("a full gameplay section must parse");
+        assert_eq!(config.gameplay.spawn_protection, 0);
+        assert!(!config.gameplay.pvp);
+        assert_eq!(config.gameplay.idle_timeout_minutes, 15);
+        assert_eq!(config.gameplay.simulation_distance, 10);
+        assert_eq!(config.gameplay.default_gamemode, DefaultGameMode::Creative);
+        assert!(config.gameplay.hide_online_players);
+        // Write path: what parses must serialize back to what parses.
+        let text = toml::to_string(&config).expect("serializes");
+        let back = ServerConfig::from_toml(&text).expect("round-trips");
+        assert_eq!(back.gameplay, config.gameplay);
+    }
+
+    #[test]
+    fn gameplay_refuses_unknown_keys_and_values() {
+        assert!(
+            ServerConfig::from_toml("[gameplay]\nevil = 1\n").is_err(),
+            "unknown gameplay keys are refused like every other section"
+        );
+        for bad in [
+            "[gameplay]\nspawn_protection = 257\n",
+            "[gameplay]\nidle_timeout_minutes = 1441\n",
+            "[gameplay]\nsimulation_distance = 1\n",
+            "[gameplay]\nsimulation_distance = 33\n",
+            "[gameplay]\ndefault_gamemode = \"hardcore\"\n",
+        ] {
+            assert!(
+                ServerConfig::from_toml(bad).is_err(),
+                "should reject {bad:?}"
+            );
+        }
     }
 
     #[test]

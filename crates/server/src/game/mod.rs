@@ -939,6 +939,12 @@ pub struct Game {
     /// keeps the phases' ownership straight, at the cost of under a tick
     /// of delay before the client is gone.
     pending_disconnects: Vec<(ConnectionId, String)>,
+    /// Gameplay properties (P19-06).
+    ///
+    /// Set from config at boot; read and written through the accessors
+    /// below (each key has one, each tested). Enforcement of every key is
+    /// P20-owned — this release stores intent, it does not act on it.
+    gameplay: crate::config::GameplayConfig,
     /// World difficulty (P14-01).
     ///
     /// Read from `level.dat` when storage is present, `Normal` otherwise
@@ -1222,6 +1228,7 @@ impl Game {
             bans: crate::bans::BanList::new(),
             pending_ips: BTreeMap::new(),
             pending_disconnects: Vec::new(),
+            gameplay: crate::config::GameplayConfig::default(),
             difficulty,
             max_players: DEFAULT_MAX_PLAYERS,
             time_offset: 0,

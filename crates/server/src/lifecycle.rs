@@ -185,6 +185,21 @@ fn load_whitelist(world_dir: &std::path::Path) -> crate::whitelist::Whitelist {
     }
 }
 
+/// Whether the startup exposure warning applies (P19-06).
+///
+/// Non-loopback bind + offline mode + no whitelist enforcement: anyone on
+/// the network can join as anyone. An unparsable bind yields false —
+/// validation already failed the boot by then, so warning too would be noise
+/// on top of the error. Logged once per boot at the end of `start_network`
+/// (which runs once per boot by construction), never per tick or player.
+#[must_use]
+pub fn exposure_warning_needed(bind: &str, online_mode: bool, whitelist_enforced: bool) -> bool {
+    let loopback = bind
+        .parse::<std::net::SocketAddr>()
+        .map_or(true, |addr| addr.ip().is_loopback());
+    !loopback && !online_mode && !whitelist_enforced
+}
+
 /// Load both ban files beside `ops.json`, logging and emptying on error.
 ///
 /// Same policy as operators and the whitelist (P19-02): a malformed file
@@ -454,6 +469,9 @@ impl<H: TickHook> Server<H> {
         game.set_whitelist_enforced(self.config.access.whitelist_enforced);
         // Bans ride the same directory with the same malformed policy.
         game.set_bans(load_bans(&self.config.storage.world_dir));
+        // Gameplay properties ride the config into the game (P19-06):
+        // stored intent only, enforcement is P20-owned per key.
+        game.set_gameplay_config(self.config.gameplay);
         // Data packs. The world's `DataPacks` list is read from the `level.dat` of the world just
         // opened, which is why this happens here and not at config-validation time: the list is
         // world data, not configuration.
@@ -617,6 +635,21 @@ impl<H: TickHook> Server<H> {
                 .await?;
         let addr = service.local_addr();
         self.network = Some(service);
+        // Exposure warning (P19-06): exactly once per boot, right after the
+        // bind succeeds — never per tick or per player, so "once" is
+        // structural, not counted.
+        if exposure_warning_needed(
+            &self.config.network.bind,
+            self.config.network.online_mode,
+            self.config.access.whitelist_enforced,
+        ) {
+            tracing::warn!(
+                bind = %self.config.network.bind,
+                "the server is reachable off loopback with offline auth and no whitelist: \
+                 anyone on the network can join as anyone; enable online-mode, \
+                 enforce the whitelist, or bind loopback"
+            );
+        }
         Ok(addr)
     }
 
@@ -842,7 +875,10 @@ fn resolve_seed(configured: Option<i64>, stored: Option<i64>) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{LifecycleState, NoopHook, Server, ShutdownHandle, TickHook, resolve_seed};
+    use super::{
+        LifecycleState, NoopHook, Server, ShutdownHandle, TickHook, exposure_warning_needed,
+        resolve_seed,
+    };
     use mc_core::error::{ServerError, ServerResult};
     use mc_core::tick::Tick;
     use std::sync::Arc;
@@ -870,6 +906,22 @@ mod tests {
         // historical seed-0 default, stated not hidden.
         assert_eq!(resolve_seed(Some(42), None), 42);
         assert_eq!(resolve_seed(None, None), crate::game::DEFAULT_RANDOM_SEED);
+    }
+
+    #[test]
+    fn exposure_warning_fires_only_off_loopback_offline_and_open() {
+        // The exposed shape: reachable off loopback, offline auth, no
+        // whitelist. Every mitigation alone silences it.
+        assert!(exposure_warning_needed("0.0.0.0:25565", false, false));
+        assert!(exposure_warning_needed("192.168.1.10:25565", false, false));
+        assert!(!exposure_warning_needed("127.0.0.1:25565", false, false));
+        assert!(!exposure_warning_needed("[::1]:25565", false, false));
+        assert!(!exposure_warning_needed("0.0.0.0:25565", true, false));
+        assert!(!exposure_warning_needed("0.0.0.0:25565", false, true));
+        assert!(
+            !exposure_warning_needed("not-an-addr", false, false),
+            "an unparsable bind never warns (validation already failed the boot)"
+        );
     }
 
     /// P19-03: stdin EOF ends console input, not the server. A channel
