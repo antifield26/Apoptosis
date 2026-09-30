@@ -104,6 +104,7 @@
 
 use mc_command::source::{CommandSource, SourceKind};
 use mc_core::error::ServerResult;
+use mc_persistence::chunk::ChunkPos;
 use mc_protocol::packets::play::SetTime;
 use mc_protocol::text::TextComponent;
 use tracing::{debug, info, warn};
@@ -2088,7 +2089,30 @@ impl BlockWriteMode {
     }
 
     /// Apply one cell. Returns whether the world changed.
+    ///
+    /// **The load comes first, and it is load-bearing** (P19-08, finding F3). A
+    /// command names arbitrary coordinates, so the target chunk is often one no
+    /// player has loaded. The world's answer to `set_block` in that case is the
+    /// all-air placeholder `World::ensure_chunk` builds — and that placeholder is
+    /// dirty by construction, so the next save writes it over the stored chunk:
+    /// the terrain and every player edit in that chunk are gone. The ordering
+    /// that prevents it lives in [`Game::load_or_create_chunk`] (already loaded →
+    /// nothing; stored → read from disk; absent → generate; unreadable →
+    /// placeholder, marked clean and never written back). Bypassing it here
+    /// re-opens the AUDIT-09 B-01 data-loss class through the command path. The
+    /// pin is `setblock_into_an_unloaded_chunk_keeps_the_stored_blocks`.
+    ///
+    /// It is also what makes `keep` mean anything for an unloaded chunk: with the
+    /// real chunk read first, `get_block_loaded` answers with what is stored,
+    /// where it used to answer `None` and the air test read that as "empty, so
+    /// write".
+    ///
+    /// Cost: a wide `/fill` loads every chunk it spans, one read or generation
+    /// each, on the tick thread — the same on-demand load Vanilla's command
+    /// performs, bounded by [`MAX_FILL_VOLUME`] (the worst case, a
+    /// 32 768 × 1 × 1 bar, is one chunk per 16 blocks of length).
     fn apply(self, game: &mut Game, x: i32, y: i32, z: i32, state: i32) -> Result<bool, String> {
+        game.load_or_create_chunk(ChunkPos::new(x >> 4, z >> 4));
         let current = game.world().get_block_loaded(x, y, z);
         match self {
             Self::Keep => {

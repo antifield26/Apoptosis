@@ -12,6 +12,49 @@ entry is the release candidate matching the workspace version at the time
 with built artifacts. The current workspace version is `0.3.0`, published as
 tag `v0.3.0` (see below).
 
+## [Unreleased] — P19-08 F3/F4: a command write must load its chunk
+
+A command names coordinates, not players, so `/setblock` and `/fill` routinely
+target a chunk nobody has loaded. `BlockWriteMode::apply` wrote through
+`World::set_block` without loading one first, and the world answers an absent
+chunk with the all-air placeholder `World::ensure_chunk` builds — dirty by
+construction, so the next save wrote it over the stored chunk. The terrain and
+every player edit in that chunk were gone, silently, on the next autosave; the
+owner access session hit it live and left a 16×16 void column at the spawn
+(`docs/testing/P19-ACCESS-SESSION.md` §F3). RCON (P19-04) put that write behind
+a remote operator surface, which is what made it urgent.
+
+**The fix** is the ordering every other writer already uses:
+`BlockWriteMode::apply` now calls `Game::load_or_create_chunk` for the target
+before reading or writing — already loaded → nothing; stored → read from disk;
+absent → generate; unreadable → placeholder, marked clean and never written
+back. The same line is what makes `keep` mean anything for an unloaded chunk:
+`get_block_loaded` used to answer `None`, and the air test read that as "empty,
+so write" (F4). Cost: a `/fill` now loads every chunk it spans, one read or
+generation each, on the tick thread — the same on-demand load Vanilla's command
+performs, capped by `MAX_FILL_VOLUME`.
+
+**Pins (DoD item 13).** Two named reds, both in
+`crates/server/tests/p18_commands.rs`:
+`setblock_into_an_unloaded_chunk_keeps_the_stored_blocks` (red without the fix:
+the stored diamond reads back as block 0, air) and
+`keep_reads_the_stored_block_of_an_unloaded_chunk` (red without the fix: the
+command answers `Set the block at -4000 64 -4000` instead of `No change … (mode
+keep)`). Neutralising the mechanism — deleting the `load_or_create_chunk` call —
+turned exactly those two red and left the other 16 green; the file was restored
+byte-exact (sha256 `1293236c…9309c`, verified before perturbation and after
+restore, then rebuilt and re-run green). The live reproduction was re-run after
+the fix and inverted: a `/setblock` into the same unloaded chunk now leaves the
+diamond, the second write and the generated terrain at y=0 intact, while a
+control cell that really is air still writes.
+
+**Residual, named rather than assumed away:** the other writers in the tick loop
+read first with `let Some(…) = world.get_block_loaded(…) else { return }`
+(`tick.rs:494`, `mod.rs:1651` and the `session.rs` gameplay writers), so an
+unloaded chunk aborts them; `BlockWriteMode::apply` was the one place that read
+the same way and then wrote anyway. That is why the door was the command path,
+and why no second site was changed here.
+
 ## [Unreleased] — P19-07 adversarial review + owner access session + whitelist offline fix
 
 `/whitelist add|remove` now resolves offline names by the same derivation

@@ -5,7 +5,11 @@
 //! 1. a **permission** test — level 0 is refused for the operator-only set,
 //!    and allowed for `msg`/`me`;
 //! 2. an **argument-refusal** test — a bad mode, unknown name or over-cap
-//!    volume is refused with a message, and never applies a side effect.
+//!    volume is refused with a message, and never applies a side effect;
+//! 3. a **durability** test — `setblock`/`fill` name coordinates, not players, so
+//!    the target chunk is often one nobody has loaded. The two P19-08 pins at the
+//!    end hold the load-before-write ordering that stops such a write from
+//!    replacing the stored chunk with the all-air placeholder.
 //!
 //! `fill`'s volume cap is its own named red:
 //! `fill_volume_over_the_named_cap_is_refused` goes red if `MAX_FILL_VOLUME`
@@ -20,31 +24,37 @@ use mc_entity::MobKind;
 use mc_network::bridge::{
     ClientEvent, ClientEventKind, ConnectionId, ConnectionIds, InboundReceiver, game_channel,
 };
+use mc_persistence::dimension::Dimension;
 use mc_protocol::ids::clientbound;
 use mc_protocol::packets::Packet;
 use mc_protocol::packets::play::SystemChat;
+use mc_registry::Registries;
 use mc_server::commands::MAX_FILL_VOLUME;
 use mc_server::game::{Game, TickReport};
 use mc_server::ops::OperatorList;
 use mc_server::storage::WorldService;
 use mc_test_support::fixtures::TempDir;
+use mc_world::chunk::Chunk;
+use mc_world::{ChunkPos, OVERWORLD_MIN_SECTION_Y, OVERWORLD_SECTION_COUNT};
 use std::path::Path;
 
 struct Harness {
     game: Game,
     events: tokio::sync::mpsc::Sender<ClientEvent>,
     ids: ConnectionIds,
-    _dir: TempDir,
+    dir: TempDir,
 }
 
 impl Harness {
     fn new(tag: &str, operators: OperatorList) -> Self {
-        let dir = TempDir::new(tag);
-        let config = mc_server::config::StorageConfig {
-            world_dir: dir.path().join("world"),
-            autosave_ticks: 0,
-            seed: None,
-        };
+        Self::over(TempDir::new(tag), operators)
+    }
+
+    /// The same harness over a world that already exists on disk — what the
+    /// P19-08 durability pins need, since the chunk under test has to be stored
+    /// *before* any game can load it.
+    fn over(dir: TempDir, operators: OperatorList) -> Self {
+        let config = storage_config(&dir);
         let service = WorldService::open(&config).expect("world opens");
         let (tx, rx) = game_channel(256);
         let game = Game::build_with_operators(None, Some(service), 3, rx, 7, operators)
@@ -53,7 +63,7 @@ impl Harness {
             game,
             events: tx,
             ids: ConnectionIds::new(),
-            _dir: dir,
+            dir,
         }
     }
 
@@ -714,4 +724,173 @@ fn clear_removes_matching_items_and_max_count_zero_only_counts() {
         })
         .sum();
     assert_eq!(held, 0, "clear must empty the matching stacks");
+}
+
+// ---------------------------------------------------------------- P19-08 pins
+//
+// The owner access session (2026-09-30) found that a `/setblock` into a chunk no
+// player had loaded destroyed that chunk's stored contents. `World::set_block`
+// answers an absent chunk with the all-air placeholder `World::ensure_chunk`
+// builds, and that placeholder is dirty by construction, so the next save wrote
+// it over the region entry. The two tests below are the pins: each goes red when
+// the `load_or_create_chunk` call in `BlockWriteMode::apply` is removed.
+
+/// A world directory that a test can hand to [`Harness::over`] and reopen.
+fn storage_config(dir: &TempDir) -> mc_server::config::StorageConfig {
+    mc_server::config::StorageConfig {
+        world_dir: dir.path().join("world"),
+        autosave_ticks: 0,
+        seed: None,
+    }
+}
+
+/// Put one diamond marker into `home` **on disk**, before any game exists.
+fn store_diamond_marker(
+    dir: &TempDir,
+    home: ChunkPos,
+    bx: i32,
+    by: i32,
+    bz: i32,
+    diamond: i32,
+    registries: &Registries,
+) {
+    let mut storage = WorldService::open(&storage_config(dir)).expect("world opens");
+    let mut chunk = Chunk::air(
+        home,
+        OVERWORLD_MIN_SECTION_Y,
+        OVERWORLD_SECTION_COUNT,
+        &registries.blocks,
+    );
+    chunk
+        .set_block(bx, by, bz, diamond, &registries.blocks)
+        .expect("sets")
+        .expect("the block changed");
+    let data = chunk.to_chunk_data(&registries.blocks).expect("encodes");
+    storage
+        .storage_mut()
+        .queue_chunk_save(&Dimension::Overworld, &data)
+        .expect("queued");
+    storage.storage_mut().flush().expect("flushed");
+    storage.close().expect("closes");
+}
+
+/// That chunk as it is on disk right now.
+fn stored_chunk(dir: &TempDir, home: ChunkPos, registries: &Registries) -> Chunk {
+    let mut storage = WorldService::open(&storage_config(dir)).expect("world reopens");
+    let data = storage
+        .storage_mut()
+        .read_chunk(&Dimension::Overworld, home)
+        .expect("reads")
+        .expect("the chunk is still stored");
+    let chunk = Chunk::from_chunk_data(&data, &registries.blocks).expect("converts");
+    storage.close().expect("closes");
+    chunk
+}
+
+/// P19-08 F3: a command written into an unloaded chunk must not destroy it.
+///
+/// The marker sits ~4 000 blocks out on purpose — the harness joins a player with
+/// view distance 3, so the join never streams it and the command runs against a
+/// chunk the game has not loaded. Red without the fix: the placeholder replaces
+/// the chunk on disk and the diamond comes back as air.
+#[test]
+fn setblock_into_an_unloaded_chunk_keeps_the_stored_blocks() {
+    let dir = TempDir::new("p19-08-unloaded-setblock");
+    let registries = Registries::vanilla().expect("registry");
+    let diamond = registries
+        .blocks
+        .default_state("minecraft:diamond_block")
+        .expect("diamond block");
+    let stone = registries
+        .blocks
+        .default_state("minecraft:stone")
+        .expect("stone");
+    let (bx, by, bz) = (4_000, 64, 4_000);
+    let home = ChunkPos::new(bx >> 4, bz >> 4);
+    store_diamond_marker(&dir, home, bx, by, bz, diamond, &registries);
+
+    let mut harness = Harness::over(dir, ops_for("Builder", 4));
+    let (id, mut out) = harness.join("Builder");
+    assert!(
+        !harness.game.world().is_loaded(home),
+        "the join view must not have streamed a chunk 4 000 blocks away"
+    );
+
+    let target = format!("{bx} {} {bz}", by - 1);
+    let lines = harness.command(id, &mut out, &format!("setblock {target} minecraft:stone"));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains(&format!("Set the block at {target}"))),
+        "the command must land beside the marker, saw {lines:?}"
+    );
+    harness.game.save_all_owned().expect("saves");
+    let storage = harness
+        .game
+        .into_storage()
+        .expect("the game owns the world");
+    storage.close().expect("closes");
+
+    let chunk = stored_chunk(&harness.dir, home, &registries);
+    assert_eq!(
+        chunk.get_block(bx, by, bz),
+        diamond,
+        "the stored block must survive a command that writes into its chunk"
+    );
+    assert_eq!(
+        chunk.get_block(bx, by - 1, bz),
+        stone,
+        "and the command's own edit must still be persisted"
+    );
+}
+
+/// P19-08 F4: `keep` must read the stored chunk, not an absent one.
+///
+/// The old rule asked `get_block_loaded`, which answers `None` for a chunk that
+/// is not loaded; the air test read that as "empty, so write" and overwrote the
+/// stored block. Red without the fix on the message alone.
+#[test]
+fn keep_reads_the_stored_block_of_an_unloaded_chunk() {
+    let dir = TempDir::new("p19-08-unloaded-keep");
+    let registries = Registries::vanilla().expect("registry");
+    let diamond = registries
+        .blocks
+        .default_state("minecraft:diamond_block")
+        .expect("diamond block");
+    let (bx, by, bz) = (-4_000, 64, -4_000);
+    let home = ChunkPos::new(bx >> 4, bz >> 4);
+    store_diamond_marker(&dir, home, bx, by, bz, diamond, &registries);
+
+    let mut harness = Harness::over(dir, ops_for("Builder", 4));
+    let (id, mut out) = harness.join("Builder");
+    assert!(
+        !harness.game.world().is_loaded(home),
+        "chunk must be unloaded"
+    );
+
+    let target = format!("{bx} {by} {bz}");
+    let lines = harness.command(
+        id,
+        &mut out,
+        &format!("setblock {target} minecraft:stone keep"),
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains(&format!("No change at {target} (mode keep)"))),
+        "keep must refuse against the stored block, saw {lines:?}"
+    );
+    harness.game.save_all_owned().expect("saves");
+    let storage = harness
+        .game
+        .into_storage()
+        .expect("the game owns the world");
+    storage.close().expect("closes");
+
+    let chunk = stored_chunk(&harness.dir, home, &registries);
+    assert_eq!(
+        chunk.get_block(bx, by, bz),
+        diamond,
+        "a refused keep must leave the stored block untouched"
+    );
 }

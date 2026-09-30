@@ -1,12 +1,16 @@
-﻿# Test Matrix — current view
+# Test Matrix — current view
 
 Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 `L3` integration · `L4` golden/fixture · `L5` end-to-end · `L6` differential vs
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 786 passed, 0 failed, 41 ignored** across **141 suites**, re-derived from
+Totals: **1 788 passed, 0 failed, 41 ignored** across **141 suites**, re-derived from
 `python tools/gates/run.py --quick` on the current tree (every gate passed).
+The +2 over the **1 786** figure is P19-08 (the F3/F4 fix): +2 `p18_commands`
+regression pins (`setblock_into_an_unloaded_chunk_keeps_the_stored_blocks`,
+`keep_reads_the_stored_block_of_an_unloaded_chunk`); no new suite files, lib
+counts untouched.
 The +4 over the **1 782** figure is P19-07 (review): +3 `whitelist_e2e`
 (offline add, offline remove, malformed-reload keeps live list) +1 `bans_e2e`
 (offline ban documents the path the whitelist now mirrors); no new suite
@@ -405,6 +409,7 @@ of the pre-governance matrix — 49 entries, none duplicated.
 | 11 | **Mobs walked into water and walls** — direct steering wrote a velocity at the target with no look at what was in the way. For water this was not even a collision failure: water is non-solid, so the mob had simply decided to swim | the owner's acceptance round | the AI checks the next cell (feet and head) before steering: solid or fluid refuses the step, a blocked wander abandons its destination and re-rolls. `mob_pathing.rs` pins the water and lava refusals **and** the clear-course arrival that stops them being vacuous (M-4) |
 | 11 | **The reach check was stricter than the jar's, in the one band a client actually uses** — it was the bare `block_interaction_range` attribute (4.5) for every game mode, so a survival dig between 4.5 and 5.5 blocks from the eye was refused although vanilla accepts it | AUDIT-11 N-1 (whose stated evidence and conclusion were both refuted; the real defect was underneath them) | the rule is now vanilla's own, bytecode-read: `AABB(pos).distanceToSqr(eye) < (blockInteractionRange() + 1.0)^2` — 5.5 survival, 6.0 creative, strict `<` (`reach_validation.rs`, 7 tests, each perturbation-verified) |
 | 11 | **A swing damaged an entity from any distance at all** — `PlayIntent::Interact` never checked reach, a recorded open divergence since AUDIT-09 | AUDIT-11 N-1's *concern*, verified against the jar | `Game::within_entity_reach` applies `isWithinEntityInteractionRange(aabb, 3.0)`, the gate vanilla takes in `handleInteract` before branching on the action: effective 6.0 from the eye. Two suites that had been measuring *wandering* rather than damage were corrected to keep their target in reach (`player_attack`, `loot_and_pickup`) |
+| 19 | **A command write into an unloaded chunk destroyed that chunk** — the Phase-05 class above through a door that landed later: `/setblock` and `/fill` wrote through `World::set_block` without loading the target, the world answered an absent chunk with the all-air placeholder `ensure_chunk` builds, and that placeholder is dirty by construction, so the next save wrote it over the stored chunk — terrain and every player edit in it gone. `keep` was silent for the same reason: an unloaded chunk answered `None` and the air test read that as "empty, so write". RCON (P19-04) had just put this write behind a remote operator surface | the P19-07 owner access session, probing past its checklist; the live run left a 16×16 void column at the spawn | `BlockWriteMode::apply` now calls `Game::load_or_create_chunk` for the target before reading or writing — stored → read from disk, absent → generate, unreadable → a placeholder marked clean and never written back. Pins: `setblock_into_an_unloaded_chunk_keeps_the_stored_blocks` (red without the fix: the stored diamond reads back as block 0) and `keep_reads_the_stored_block_of_an_unloaded_chunk` (red: `Set the block …` instead of `No change … (mode keep)`); the live reproduction was re-run and inverted (P19-08) |
 
 ## Known-false-assertion lessons
 
