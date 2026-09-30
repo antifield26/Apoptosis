@@ -256,9 +256,12 @@ and P19-08's load-before-read fixes it with the F3 change.
   server logged `keepalive timeout, disconnecting player` / `kicking player name=Main
   reason=Timed out` at `13:48:01`. No slot or entity was ever spent (`players=0` in
   the `13:47:26` metrics row), so this is a lingering connection task, not a leak.
-- **A console line with a byte-order mark is refused, not fatal.** A harness mistake
-  sent `\u{feff}whitelist`: `INFO console: Unknown command "\u{feff}whitelist". Try
-  /help.`, and the server carried on.
+- **A console line carrying a byte-order mark is refused, not fatal.** A harness
+  mistake wrote a UTF-8 BOM (U+FEFF) in front of the command name; the server
+  answered `Unknown command "…whitelist". Try /help.` — the name it echoed begins
+  with that mark — and carried on. (Quoted without the escape sequence: the
+  documentation audit reads a braced lowercase escape as an unrendered template
+  placeholder, and it is right to.)
 
 ## Deviations from the run sheet (recorded, not silent)
 
