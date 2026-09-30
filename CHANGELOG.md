@@ -12,7 +12,7 @@ entry is the release candidate matching the workspace version at the time
 with built artifacts. The current workspace version is `0.3.0`, published as
 tag `v0.3.0` (see below).
 
-## [Unreleased] — P19-07 adversarial review (agent half) + whitelist offline fix
+## [Unreleased] — P19-07 adversarial review + owner access session + whitelist offline fix
 
 `/whitelist add|remove` now resolves offline names by the same derivation
 bans use (`ban_uuid_for`, one site shared with bans), so an offline listing
@@ -22,9 +22,31 @@ does for bans. Adversarial finding F1, fixed with two pins (each proven red
 by restoring the refuse path). Finding F2 pinned: `whitelist reload` loads
 before replacing, so a malformed file errors with the live list kept (proven
 red by clearing first). Review table: `docs/testing/P19-REVIEW.md` (16 rows:
-13 confirmed, 1 confirmed+pinned, 1 refuted-then-fixed, 1 NOT RUN). Owner
-real-client session NOT RUN (checklist in the review); KD-01 stays partial
-(split-b still needs owner evidence). Pins: +3 `whitelist_e2e`, +1 `bans_e2e`
+13 confirmed, 1 confirmed+pinned, 1 refuted-then-fixed, 1 NOT RUN).
+
+**Owner access session, 2026-09-30** (`docs/testing/P19-ACCESS-SESSION.md`):
+the owner's real 26.1.2 client passed all four runnable items — the whitelist
+refusal on screen, an offline `/whitelist add` followed by a clean join, the
+ban screen naming its reason (on the live disconnect and again at the join
+gate) with pardon restoring the join, the console save round trip (the region
+file held at 0 bytes while `save-off`, written by `save-all flush`, the edit
+surviving a restart), and a third-party RCON client running `list` and `stop`.
+Item 6 (online join) is withdrawn by the 2026-09-30 no-online-mode decision,
+so split-b is dropped-by-decision and KD-01 rests at partial with automated
+pins only.
+
+The session raised three findings. **F3 (P0, open)** — a `/setblock` or
+`/fill` into a chunk that is not loaded replaces the stored chunk with the
+all-air placeholder (`World::ensure_chunk`) and the next save writes it over
+the region entry, destroying that chunk's terrain and every player edit in it:
+the AUDIT-09 B-01 class through a door that landed later, the P18-02 command
+path, which does not go through `Game::load_or_create_chunk`. F4 —
+`setblock … keep` passes on an unloaded chunk where Vanilla loads it first.
+F5 — a normal shutdown and a normal RCON client close are logged as errors,
+and a failed RCON login logs nothing at all. F3 is recorded with its
+end-to-end reproduction and is not fixed in this pass.
+
+Pins: +3 `whitelist_e2e`, +1 `bans_e2e`
 (documenting the pre-existing offline-ban path).
 
 ## [Unreleased] — P19-06 properties (v0.4.0 "operable survival" sixth slice)
