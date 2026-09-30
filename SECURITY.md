@@ -40,10 +40,11 @@ coincidence.
 
 - DDoS volumetric attacks (not a capability of this project; deploy behind
   standard network protections).
-- The online-mode boundary: enabling `online_mode = true` refuses to start by
-  design (no Mojang session flow is implemented), so "online mode is
-  unsupported" is a documented product boundary, not a flaw — but a *crash* or
-  auth bypass through that path would absolutely be in scope.
+- Online mode is **in scope**. `online_mode = true` runs the Mojang handshake
+  and session verify (P19-05, [ADR-0008](docs/adr/ADR-0008-online-auth.md)), so
+  an authentication bypass, a crash, or a session-hash/`hasJoined` spoof through
+  that path is a vulnerability like any other. Leaving the flag off on a given
+  deployment is a deployment decision, not a scope boundary.
 - Vanilla-parity gaps (missing features are tracked publicly in the
   [parity matrix](docs/vanilla-parity/PARITY-MATRIX.md), not as security
   issues, unless they are exploitable).

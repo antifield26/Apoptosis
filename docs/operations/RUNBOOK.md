@@ -172,11 +172,16 @@ backup: it covers neither region files nor operator error.
   (`docs/performance/BENCHMARK-BASELINE.md` §§P09-Pi, P14-Pi) — the second is
   the re-soak after P12 tick work, mixed real+scripted, pass with one noted
   idle spike. Soak at INFO level (the P14 run logged DEBUG: 32 MB).
-- Online mode: fail-fast boundary only; enabling it is an error, not auth.
+- Online mode: implemented (P19-05, [ADR-0008](../adr/ADR-0008-online-auth.md)) —
+  the handshake and session verify are pinned by automated vectors, the default
+  stays offline, and a real Mojang-account join has not been exercised here
+  (KD-01 partial). Enabling it needs outbound HTTPS to the session server.
 - `.zip` data packs unread; structure subset is single-chunk only; redstone timing
   (torch delay/burn-out, update order) unmodelled; advancements load but never fire; loot fires as the
   block/mob drop authority (P11-04); furnace recipes come from the loaded pack
   once `vanilla_data` is set, else the hand-written baseline (P12-08; see the
   parity matrix's smelting row).
-- Backup/restore are library calls awaiting a CLI; the unit file was reviewed
-  by reading, never applied to a real Pi here.
+- Backup/restore are library calls awaiting a CLI (KD-37); the systemd unit has
+  been applied on the Pi 5 — installed per §1, enabled, the soak run under it and
+  the graceful stop verified on hardware (KD-36), where the first application
+  exposed the registry-fixture deployment defect, since fixed.

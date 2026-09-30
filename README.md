@@ -32,7 +32,7 @@ in [docs/vanilla-parity/PARITY-MATRIX.md](docs/vanilla-parity/PARITY-MATRIX.md).
   end-to-end: 529 vanilla chunks decoded, rewritten by this server, then
   **booted on a real vanilla 26.1.2 server**, which preserved our edits and
   re-saved every dimension.
-- **Commands & data packs** — 29 of ~90 Vanilla root literals with permission
+- **Commands & data packs** — 39 of ~90 Vanilla root literals with permission
   levels (`/op` and `/deop` persist grants to `ops.json`, which is also read
   at boot; `/gamemode`, `/give`, `/kill`, `/seed`, `/difficulty` are
   operator-only), plus `/function` running under the invoker's permissions;
@@ -67,7 +67,7 @@ This project records gaps instead of papering over them. The headline items
   scheduled ticks propagate and broadcast, and P17-01 added doors, trapdoors,
   gates, observers and dispensers. Open: pistons and rails, exact update
   order, delay constants.
-- **29 of ~90 commands**; chests, furnaces and hoppers open as windows a real
+- **39 of ~90 commands**; chests, furnaces and hoppers open as windows a real
   client can transact with (P12-07/08), and the P17-02/P17-05 owner session
   transacted a double chest and a hopper→furnace chain on a live client.
   Open: the remaining root literals, and `execute` covers 9 of ~20 modifiers.
@@ -76,8 +76,11 @@ This project records gaps instead of papering over them. The headline items
   container session (P17-05), and played a 30-minute mixed 10-client soak
   (P14-06, pass with one noted idle spike), but pickup-render, death→respawn
   and the post-restart chest screen are still unverified on a live client.
-- Offline mode only: enabling `online_mode` refuses to start (no Mojang
-  session flow is implemented).
+- **No real-account online-mode join** — `online_mode = true` runs the Mojang
+  handshake and session verify (P19-05, [ADR-0008](docs/adr/ADR-0008-online-auth.md);
+  RSA-1024 keygen once per boot) with the automated vectors green, but offline
+  stays the default and the split's owner-run part — a real Mojang account
+  joining — has not been executed here (KD-01).
 
 ## Build and run
 
