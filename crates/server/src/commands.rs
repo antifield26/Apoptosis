@@ -918,7 +918,8 @@ impl Game {
     ///
     /// Administrator like Vanilla's level 3. `on|off` toggles enforcement
     /// live (a restart restores the config value — stated, not hidden);
-    /// `add|remove` name online players only and persist `whitelist.json`
+    /// `add|remove` name online or offline players (offline names resolve
+    /// by derivation, like bans) and persist `whitelist.json`
     /// with the same rollback contract as `/op`; `list` names the listed
     /// profiles; `reload` re-reads the file, replacing the live list.
     fn command_whitelist(
@@ -955,13 +956,9 @@ impl Game {
                 let Some(name) = parsed.string(1) else {
                     return CommandResult::message("Usage: /whitelist add <player>");
                 };
-                let Some(target) = self.session_id_by_name(name) else {
-                    return CommandResult::message(format!(
-                        "Cannot whitelist {name:?}: only online players can be listed \
-                         (name matching cannot identify anyone else)"
-                    ));
-                };
-                match self.add_to_whitelist(target) {
+                // Offline names resolve by derivation, like bans: only the
+                // file write can refuse now.
+                match self.add_to_whitelist(name) {
                     Err(error) => CommandResult::message(format!(
                         "Could not persist the listing, and nothing was changed: {error}"
                     )),
@@ -981,12 +978,7 @@ impl Game {
                 let Some(name) = parsed.string(1) else {
                     return CommandResult::message("Usage: /whitelist remove <player>");
                 };
-                let Some(target) = self.session_id_by_name(name) else {
-                    return CommandResult::message(format!(
-                        "Cannot unwhitelist {name:?}: only online players can be unlisted"
-                    ));
-                };
-                match self.remove_from_whitelist(target) {
+                match self.remove_from_whitelist(name) {
                     Err(error) => CommandResult::message(format!(
                         "Could not persist the removal, and nothing was changed: {error}"
                     )),
@@ -1013,14 +1005,14 @@ impl Game {
         }
     }
 
-    /// Resolve a ban/pardon name to the uuid the server would see (P19-02).
+    /// Resolve a ban/pardon/whitelist name to the uuid the server would see.
     ///
     /// Offline-mode derivation (`OfflinePlayer:<name>`), which is exactly
     /// the identity an offline server joins with — so this resolves online
     /// and offline profiles alike *while offline*. Under online-mode auth
     /// (P19-05) names map to Mojang uuids instead, and this stays a named
-    /// gap: banning by name there must wait for the usercache.
-    fn ban_uuid_for(name: &str) -> String {
+    /// gap: naming by name there must wait for the usercache.
+    pub(crate) fn ban_uuid_for(name: &str) -> String {
         mc_network::auth::offline_profile(name).id.to_string()
     }
 

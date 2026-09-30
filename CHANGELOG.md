@@ -12,6 +12,21 @@ entry is the release candidate matching the workspace version at the time
 with built artifacts. The current workspace version is `0.3.0`, published as
 tag `v0.3.0` (see below).
 
+## [Unreleased] — P19-07 adversarial review (agent half) + whitelist offline fix
+
+`/whitelist add|remove` now resolves offline names by the same derivation
+bans use (`ban_uuid_for`, one site shared with bans), so an offline listing
+admits the later join and an offline removal unlists without a join; the
+online-mode named gap (Mojang uuids need the usercache) applies here as it
+does for bans. Adversarial finding F1, fixed with two pins (each proven red
+by restoring the refuse path). Finding F2 pinned: `whitelist reload` loads
+before replacing, so a malformed file errors with the live list kept (proven
+red by clearing first). Review table: `docs/testing/P19-REVIEW.md` (16 rows:
+13 confirmed, 1 confirmed+pinned, 1 refuted-then-fixed, 1 NOT RUN). Owner
+real-client session NOT RUN (checklist in the review); KD-01 stays partial
+(split-b still needs owner evidence). Pins: +3 `whitelist_e2e`, +1 `bans_e2e`
+(documenting the pre-existing offline-ban path).
+
 ## [Unreleased] — P19-06 properties (v0.4.0 "operable survival" sixth slice)
 
 `[gameplay]` (`spawn_protection`, `pvp`, `idle_timeout_minutes`,

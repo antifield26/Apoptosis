@@ -238,6 +238,32 @@ fn ban_disconnects_the_live_session_and_persists() {
     );
 }
 
+/// P19-07: banning works for profiles that never joined — the uuid derives
+/// from the name (offline), so the file row refuses the first join.
+#[test]
+fn ban_files_an_offline_profile() {
+    let mut harness = Harness::new("bans-offline", ops_for("Chief", 4), BanList::new());
+    let (chief, mut chief_in) = harness.join("Chief", test_ip(5));
+    // "Ghost" never joined: no session holds them.
+    let lines = harness.command(chief, &mut chief_in, "ban Ghost griefing");
+    assert!(
+        lines.iter().any(|line| line.contains("Banned Ghost")),
+        "offline ban confirms: {lines:?}"
+    );
+    let ghost_uuid = mc_network::auth::offline_profile("Ghost").id.to_string();
+    let text = std::fs::read_to_string(harness.dir.path().join(BANNED_PLAYERS_FILE_NAME))
+        .expect("player ban file written");
+    assert!(
+        text.contains(&ghost_uuid),
+        "the file carries the offline ban"
+    );
+    let (id, _) = harness.join("Ghost", test_ip(6));
+    assert!(
+        !harness.game.has_player(id),
+        "the offline ban refuses the first join"
+    );
+}
+
 #[test]
 fn pardon_releases_and_banlist_names_rows() {
     let mut harness = Harness::new(

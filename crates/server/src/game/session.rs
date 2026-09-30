@@ -1533,32 +1533,33 @@ impl Game {
         self.gameplay.hide_online_players = hide;
     }
 
-    /// List `target` (an online player) on the whitelist, persisting
-    /// `whitelist.json` (P19-01).
+    /// List a profile on the whitelist, persisting `whitelist.json` (P19-01,
+    /// offline names since P19-07).
     ///
     /// Same rollback contract as [`Game::grant_operator`]: the in-memory
     /// insert happens first, then the save, and a failed save rolls the
-    /// insert back. Only online players can be listed (their uuid comes
-    /// from the session). Returns the listed name and whether the list
-    /// changed, or `None` when no session holds `target` or no ops
-    /// directory was ever set (nothing is changed then).
+    /// insert back. An online session gives the authoritative uuid and name;
+    /// an offline name resolves by offline derivation, exactly like bans
+    /// (`command_ban`'s `ban_uuid_for` and its online-mode named gap apply
+    /// here too). Returns the listed name and whether the list changed, or
+    /// `None` when no ops directory was ever set (nothing is changed then).
     ///
     /// # Errors
     ///
     /// [`ServerError::Operational`] when the `whitelist.json` write fails,
     /// after rolling the insert back.
-    pub(crate) fn add_to_whitelist(
-        &mut self,
-        target: mc_network::bridge::ConnectionId,
-    ) -> ServerResult<Option<(String, bool)>> {
+    pub(crate) fn add_to_whitelist(&mut self, name: &str) -> ServerResult<Option<(String, bool)>> {
         let Some(directory) = self.ops_directory.clone() else {
             return Ok(None);
         };
-        let (uuid, name) = {
-            let Some(session) = self.sessions.get(&target) else {
-                return Ok(None);
-            };
-            (session.uuid.clone(), session.name.clone())
+        let (uuid, name) = match self.session_id_by_name(name) {
+            Some(target) => {
+                let Some(session) = self.sessions.get(&target) else {
+                    return Ok(None);
+                };
+                (session.uuid.clone(), session.name.clone())
+            }
+            None => (Self::ban_uuid_for(name), name.to_owned()),
         };
         let changed = self.whitelist.insert(&uuid, &name);
         if changed && let Err(error) = self.whitelist.save(&directory) {
@@ -1568,29 +1569,30 @@ impl Game {
         Ok(Some((name, changed)))
     }
 
-    /// Unlist `target`'s uuid, persisting `whitelist.json` (P19-01).
+    /// Unlist a profile's uuid, persisting `whitelist.json` (P19-01, offline
+    /// names since P19-07).
     ///
     /// Same rollback contract: a failed save restores the removed entry.
-    /// Returns the unlisted name, or `None` when the uuid was never listed
-    /// (nothing is changed then) — or when no session holds `target` or no
-    /// ops directory was ever set.
+    /// Uuid resolution mirrors [`Game::add_to_whitelist`]. Returns the
+    /// unlisted name, or `None` when the uuid was never listed (nothing is
+    /// changed then) — or when no ops directory was ever set.
     ///
     /// # Errors
     ///
     /// [`ServerError::Operational`] when the `whitelist.json` write fails,
     /// after restoring the entry.
-    pub(crate) fn remove_from_whitelist(
-        &mut self,
-        target: mc_network::bridge::ConnectionId,
-    ) -> ServerResult<Option<String>> {
+    pub(crate) fn remove_from_whitelist(&mut self, name: &str) -> ServerResult<Option<String>> {
         let Some(directory) = self.ops_directory.clone() else {
             return Ok(None);
         };
-        let (uuid, name) = {
-            let Some(session) = self.sessions.get(&target) else {
-                return Ok(None);
-            };
-            (session.uuid.clone(), session.name.clone())
+        let (uuid, name) = match self.session_id_by_name(name) {
+            Some(target) => {
+                let Some(session) = self.sessions.get(&target) else {
+                    return Ok(None);
+                };
+                (session.uuid.clone(), session.name.clone())
+            }
+            None => (Self::ban_uuid_for(name), name.to_owned()),
         };
         let Some(previous) = self.whitelist.get(&uuid).cloned() else {
             return Ok(None);

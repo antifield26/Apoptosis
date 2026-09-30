@@ -194,6 +194,90 @@ fn unenforced_unlisted_profile_joins() {
     assert!(harness.game.has_player(id), "nobody is refused while off");
 }
 
+/// P19-07 F1: listing works for profiles that never joined — the uuid
+/// derives exactly like bans, so an offline listing admits the later join.
+#[test]
+fn whitelist_add_lists_an_offline_profile() {
+    let mut harness = Harness::new(
+        "whitelist-offline",
+        ops_for("Chief", 4),
+        Whitelist::new(),
+        true,
+    );
+    let (chief, mut chief_in) = harness.join("Chief");
+    // "FarAway" never joins before the add: no session holds them.
+    let lines = harness.command(chief, &mut chief_in, "whitelist add FarAway");
+    assert!(
+        lines.iter().any(|line| line.contains("Added FarAway")),
+        "offline add confirms: {lines:?}"
+    );
+    let far_uuid = mc_network::auth::offline_profile("FarAway").id.to_string();
+    let text = std::fs::read_to_string(harness.dir.path().join(WHITELIST_FILE_NAME))
+        .expect("whitelist.json written");
+    assert!(
+        text.contains(&far_uuid),
+        "the file carries the offline addition, saw {text}"
+    );
+    let (id, _) = harness.join("FarAway");
+    assert!(
+        harness.game.has_player(id),
+        "the offline listing admits the later join under enforcement"
+    );
+}
+
+/// P19-07 F1 (second half): removal resolves by name too, so an entry
+/// added offline can be removed without its profile ever joining.
+#[test]
+fn whitelist_remove_unlists_an_offline_profile() {
+    let mut harness = Harness::new(
+        "whitelist-offline-remove",
+        ops_for("Chief", 4),
+        Whitelist::new(),
+        false,
+    );
+    let (chief, mut chief_in) = harness.join("Chief");
+    let lines = harness.command(chief, &mut chief_in, "whitelist add FarAway");
+    assert!(
+        lines.iter().any(|line| line.contains("Added FarAway")),
+        "offline add confirms: {lines:?}"
+    );
+    // "FarAway" still never joined: no session holds them.
+    let lines = harness.command(chief, &mut chief_in, "whitelist remove FarAway");
+    assert!(
+        lines.iter().any(|line| line.contains("Removed FarAway")),
+        "offline remove confirms: {lines:?}"
+    );
+    let lines = harness.command(chief, &mut chief_in, "whitelist list");
+    assert!(
+        lines.iter().any(|line| line.contains("Nobody")),
+        "the entry is gone: {lines:?}"
+    );
+}
+
+/// P19-07: a malformed file on `reload` keeps the live list — the load
+/// refuses partial lists, so there is never a half-replaced one.
+#[test]
+fn whitelist_reload_malformed_keeps_the_live_list() {
+    let mut harness = Harness::new(
+        "whitelist-reload-bad",
+        ops_for("Chief", 4),
+        whitelist_for("Listed"),
+        false,
+    );
+    let (chief, mut chief_in) = harness.join("Chief");
+    std::fs::write(harness.dir.path().join(WHITELIST_FILE_NAME), "{nope").expect("bad file");
+    let lines = harness.command(chief, &mut chief_in, "whitelist reload");
+    assert!(
+        lines.iter().any(|line| line.contains("Could not reload")),
+        "a bad file is reported, not applied: {lines:?}"
+    );
+    let lines = harness.command(chief, &mut chief_in, "whitelist list");
+    assert!(
+        lines.iter().any(|line| line.contains("Listed")),
+        "the live list survives the failed reload: {lines:?}"
+    );
+}
+
 #[test]
 fn whitelist_commands_list_add_and_remove() {
     let mut harness = Harness::new(

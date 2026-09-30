@@ -5,8 +5,12 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 782 passed, 0 failed, 41 ignored** across **141 suites**, re-derived from
+Totals: **1 786 passed, 0 failed, 41 ignored** across **141 suites**, re-derived from
 `python tools/gates/run.py --quick` on the current tree (every gate passed).
+The +4 over the **1 782** figure is P19-07 (review): +3 `whitelist_e2e`
+(offline add, offline remove, malformed-reload keeps live list) +1 `bans_e2e`
+(offline ban documents the path the whitelist now mirrors); no new suite
+files, lib counts untouched.
 The +7 over the **1 775** figure is P19-06 (properties): +4 lib
 (3 `gameplay` config pins + the exposure-warning matrix) +3 the
 `gameplay_config_e2e` suite; suites +1 new file.
