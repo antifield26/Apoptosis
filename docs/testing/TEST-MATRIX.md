@@ -5,8 +5,14 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 788 passed, 0 failed, 41 ignored** across **141 suites**, re-derived from
+Totals: **1 844 passed, 0 failed, 41 ignored** across **148 suites**, re-derived from
 `python tools/gates/run.py --quick` on the current tree (every gate passed).
+The +56 over the **1 788** figure is the AUDIT-19 fix round: new suites
+\pvp_authority\ (5), \whitelist_revocation\ (4), \ccess_files_atomic\ (9),
+\execute_permission\ (1), \hello_wire_shape\ (4), \config_wire_tails\ (3),
+\has_joined_query\ (4) plus new pins inside \double_chest\, \p18_commands\,
+\ans_e2e\, \whitelist_e2e\, econnect\, \console_save_e2e\ and the RCON/console
+unit tests.
 The +2 over the **1 786** figure is P19-08 (the F3/F4 fix): +2 `p18_commands`
 regression pins (`setblock_into_an_unloaded_chunk_keeps_the_stored_blocks`,
 `keep_reads_the_stored_block_of_an_unloaded_chunk`); no new suite files, lib

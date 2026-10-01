@@ -184,6 +184,14 @@ C19-L1（"vanilla 4 KiB 上限"失实，实为 ≤1460 且长度须精确）、C
 
 ## 8. 修复队列（审计后另开修复轮，本文件不改行为）
 
+> **修复轮状态（2026-10-01，第一波）**：P0 的 1–6 全部落地（G-01、A-01/A-02、D-19-H1+M1、
+> C19-H1、G-02/G-03、A-06），P1 的 7（RCON 预算/超时/共享节流）、8（console 非法 UTF-8 + `ip=` 接线）、
+> 9（双箱 close 臂与半边 viewer）、11（`/fill` 预算）与 10 的两处弱钉已落地；G-04/G-06（RUNBOOK）
+> 一并修好。每一项都带了具名红测与扰动记录，见 CHANGELOG 的 "AUDIT-19 fix round" 条目。
+> **仍开放**：P1-10 的其余弱/缺钉、P1-12 的 B/A/D/E 残余、P2 文档批、以及 §9 里那些 NOT RUN 项。
+> 保留边界：访问文件顶层不可解析仍按 Vanilla 行为以空表启动（写入路径已不可能产出这种文件）；
+> 种子文档的确切磁盘位置与键路径仍未验证（无 jar fixture）。
+
 ### P0 — 安全与数据（建议 v0.3.1 或 P20 首批）
 1. **G-01 提权**：`/execute as|at|positioned` 不得转移权限等级——按 Vanilla 保留调用者 level（`select` 不再 `with_permission`），并按"至少两个 session"重写 `as_does_not_grant_permission`（现有钉单 session，纯空洞）。
 2. **A-01 + A-02 PvP**：玩家受害走权威 `session.player.health` 并发 `SetHealth`；无敌帧在玩家路径上衰减；玩家投影进入 `pending_entity_spawns`（否则合法客户端看不到彼此，PvP 无从谈起）。

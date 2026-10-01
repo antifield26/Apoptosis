@@ -27,12 +27,21 @@ chown mc-server:mc-server /var/lib/mc-server /var/backups/mc-server
 install -m 0755 target/release/mc-server /srv/mc-server/mc-server
 # The registry tables are read at runtime from next to the binary (P09 finding:
 # the binary does not carry them compiled-in, and the service user cannot read
-# the build tree):
+# the build tree). All ten are installed: the first four are required (the boot
+# fails without them), the other six are optional and each one missing costs a
+# documented behaviour with a WARN (AUDIT-19 G-04: installing only the first
+# four left 5 WARNs, wrong default block states and flat dig rates):
 mkdir -p /srv/mc-server/fixtures/registry
 install -m 0644 crates/test-support/fixtures/registry/blocks.tsv \
                  crates/test-support/fixtures/registry/items.tsv \
                  crates/test-support/fixtures/registry/block_light.tsv \
                  crates/test-support/fixtures/registry/entity_types.tsv \
+                 crates/test-support/fixtures/registry/block_defaults.tsv \
+                 crates/test-support/fixtures/registry/block_hardness.tsv \
+                 crates/test-support/fixtures/registry/block_shapes.tsv \
+                 crates/test-support/fixtures/registry/block_mineable.tsv \
+                 crates/test-support/fixtures/registry/block_tool_tiers.tsv \
+                 crates/test-support/fixtures/registry/tool_rules.tsv \
                  /srv/mc-server/fixtures/registry/
 install -m 0644 docs/operations/RUNBOOK.md /srv/mc-server/RUNBOOK.md
 install -m 0644 config.example.toml /srv/mc-server/config.toml
@@ -43,6 +52,25 @@ install -m 0644 deploy/mc-server.service /etc/systemd/system/mc-server.service
 systemctl daemon-reload
 systemctl enable --now mc-server.service
 ```
+
+The ten tables, and what each one costs when it is missing (`Registries::load`,
+`mc-registry`):
+
+| Table | Missing it means |
+|---|---|
+| `blocks.tsv` | **Boot fails**: no block states, so no world opens. |
+| `items.tsv` | **Boot fails**: no items. |
+| `block_light.tsv` | **Boot fails**: no per-state light properties. |
+| `entity_types.tsv` | **Boot fails**: `add_entity` has no registry id. |
+| `block_defaults.tsv` | WARN; 642 of 1 168 blocks fall back to their lowest state id — logs on their side, water inside every leaf. |
+| `block_hardness.tsv` | WARN; digs fall back to a flat rate, and `block_shapes.tsv` is not read either (`apply_mining_tables` returns early). |
+| `block_shapes.tsv` | WARN; partial blocks collide as full cubes. |
+| `block_mineable.tsv` | WARN; the mineable tag lists are empty, so tool judgments lose their membership data. |
+| `block_tool_tiers.tsv` | WARN; tier refusals (a stone pick on obsidian) are not enforced. |
+| `tool_rules.tsv` | WARN; every held item digs as an empty hand. |
+
+`biome_spawners.tsv` and `entity_metadata.tsv` sit in the same directory but
+are compiled into the binary (`include_str!`), so they are not installed.
 
 The unit file is `deploy/mc-server.service` in this repo. Its load-bearing
 lines and why they are what they are:
@@ -69,10 +97,22 @@ bad values with `Operational` **before any socket is bound**:
 |---|---|---|
 | `network.bind` | parseable `SocketAddr` | `network.bind is not a socket address: ...` |
 | `network.max_players` | 1..=100 | `network.max_players out of range (1..=100): ...` |
+| `network.online_mode` | `true`/`false` | none (bool): `true` needs outbound HTTPS to the session server, and a login it cannot verify is refused (§0) |
 | `simulation.view_distance` | 2..=32 | `simulation.view_distance out of range (2..=32): ...` |
 | `network.compression_threshold` | -1 or 0..=65536 | `network.compression_threshold must be -1 or 0..=65536: ...` |
 | `network.motd` | ≤ 128 chars | `network.motd must be at most 128 characters` |
 | `storage.world_dir` | non-empty | `storage.world_dir must not be empty` |
+| `storage.seed` | any `i64`; unset means "no opinion" | none: a seed stored in `level.dat` always wins, so naming one cannot fork an existing world (a fresh world uses it, else 0) |
+| `access.whitelist_enforced` | `true`/`false` | none (bool): read at boot by the join gate, `/whitelist on\|off` overrides it live and a restart restores this value |
+| `gameplay.spawn_protection` | 0..=256 | `gameplay.spawn_protection out of range (0..=256): ...` |
+| `gameplay.pvp` | `true`/`false` | none (bool); the damage gate is P20-owned |
+| `gameplay.idle_timeout_minutes` | 0..=1440 | `gameplay.idle_timeout_minutes out of range (0..=1440): ...` |
+| `gameplay.simulation_distance` | 2..=32 | `gameplay.simulation_distance out of range (2..=32): ...` |
+| `gameplay.default_gamemode` | `"survival"`, `"creative"`, `"adventure"`, `"spectator"` (lower-case) | `invalid config TOML: ...` — another spelling fails the enum |
+| `gameplay.hide_online_players` | `true`/`false` | none (bool); the status-sample wiring is P20-owned |
+| `rcon.enabled` | `true`/`false` | `rcon.enabled refuses an empty rcon.password: set one or disable RCON` |
+| `rcon.password` | non-empty whenever `rcon.enabled` | the message above; it crosses the wire in clear, so RCON stays on loopback unless moved deliberately |
+| `rcon.bind` | parseable `SocketAddr`, checked only when `rcon.enabled` | `rcon.bind is not a socket address: ...` |
 | unknown fields | — | rejected (`deny_unknown_fields`): `invalid config TOML: ...` |
 
 Operational notes:
@@ -165,6 +205,8 @@ backup: it covers neither region files nor operator error.
 | Connection drain timeout at shutdown | unresponsive peer | Expected path: 5 s drain (`DRAIN_TIMEOUT`), then abort the rest. No action unless every shutdown does this. |
 | Reconnect storm / address spray | hostile or flapping client | Per-IP: max 4 concurrent, burst 8 then one token per 250 ms. Legitimate burst logins never notice; a storm is throttled per address. The IP table forgets idle entries past 4096 tracked addresses. |
 | Corrupt chunk / region errors | disk or hostile file | Typed `CorruptData`, never a panic; the affected unit is refused, never silently continued. Restore the region from backup if the disk is at fault. |
+| `whitelist.json` / `ops.json` / `banned-*.json` named in an `ERROR`, that table empty after the boot or a `reload` | the file is damaged: not the JSON array it must be (hand edit, disk corruption, or a file a pre-atomic build left truncated mid-write) | The whole file is refused, and the impact differs by table: the **whitelist** fails closed (nobody is listed — only operators get in), `ops.json` boots with no operators, and the **bans fail open for that boot** ("banning nobody"). Restore the file from a backup (§4) before opening the server, or fix the JSON and restart. One damaged **row** is *not* this case: it is skipped with a `WARN` naming the file and the row, its siblings load, and the server starts normally — but the skipped row is **not enforced**, so a skipped ban row is a ban that is not in force until the row is fixed. Grep the journal for `skipping a damaged` after any hand edit. |
+| `/whitelist add` / `/ban` / `/op` answers with an error and the access file is unchanged | the access file, or its directory, is not writable (ownership, `ReadWritePaths=` in the unit, read-only filesystem, full disk) | The write is atomic (temp file → fsync → rename) and the in-memory change is rolled back, so the file and the list still agree and nothing is half-applied; the error names the file. Fix the permission or the space and repeat the command — no restart is needed, and a crash inside the write can no longer truncate the file. **Bans fail closed from this release on**: a write that fails leaves the previous ban file live (before it, a truncated `banned-players.json` read as "banning nobody" — the fail-open AUDIT-19 G-02/G-03 reproduced). |
 
 ## 6. Known gaps (not hidden)
 
@@ -185,3 +227,14 @@ backup: it covers neither region files nor operator error.
   been applied on the Pi 5 — installed per §1, enabled, the soak run under it and
   the graceful stop verified on hardware (KD-36), where the first application
   exposed the registry-fixture deployment defect, since fixed.
+- Access-file durability (AUDIT-19 G-02/G-03): **fixed in this release, with two
+  boundaries stated rather than hidden.** `whitelist.json`, `ops.json` and both
+  ban files are now written the way `level.dat` is — sibling temp file, fsync,
+  one rename (`mc_persistence::save::write_atomic`) — so a crash or a full disk
+  inside a write leaves the previous file live and **bans fail closed from this
+  change on** (before it, a truncated `banned-players.json` silently read as
+  "banning nobody" and a permanently banned player joined). The boundaries: a
+  damaged *row* is skipped with a `WARN` rather than enforced (§5 says what to do
+  about it), and a file damaged outside the write path — bit rot, a hand edit —
+  is still reported and boots that table empty, so restore it from a backup (§4).
+  A file that yields *no* readable row is an error, never an empty table.

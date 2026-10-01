@@ -12,6 +12,88 @@ entry is the release candidate matching the workspace version at the time
 with built artifacts. The current workspace version is `0.3.0`, published as
 tag `v0.3.0` (see below).
 
+## [Unreleased] — AUDIT-19 fix round
+
+The first half of the audit's fix queue (`docs/audits/AUDIT-19.md` §8), landed
+with the audit's own method: every item carries a named test that goes red when
+its mechanism is neutralised, restored byte-exact afterwards.
+
+**Security and data (P0).**
+
+- **G-01 privilege escalation (HIGH).** `/execute` handed the *selected* player's
+  permission level to the inner command, so a level-0 player could run
+  `/execute as @a[name=Admin] run op <self>` and then `/stop` — reproduced live by
+  the audit. The chain now keeps the **invoker's** level, which is Vanilla's rule
+  ("the execution permission level cannot be modified by /execute"); the code
+  comment that claimed the opposite is gone. Pin:
+  `execute_as_cannot_borrow_a_matched_operators_permission`, which needs **two**
+  sessions on purpose — the older case had one, so `@a`/`@s`/`@p` all resolved to
+  the invoker and the escalation was unobservable. Perturbation: deleting the
+  override lets a level-0 player read `Seed: 7`.
+- **A-01/A-02 PvP (HIGH).** Damage to a player victim now lands on the
+  authoritative session health (not only the entity projection), syncs through the
+  vitals path, decays the hurt window like a mob's, and reaches the death path;
+  player entities are streamed to other clients again (`entities::PLAYER` had zero
+  references, so no client ever saw another player). Pins: `pvp_authority` (5).
+- **D-19-H1 seed (HIGH) + D-19-M1.** 26.1 keeps world-gen settings in
+  `data/minecraft/world_gen_settings.dat`, which nothing read, so a vanilla world
+  still generated seed-0 terrain. The seed is now read from there (two documented
+  placements, flat or nested key) and the resolved seed is recorded back into
+  `level.dat`, so a later `seed` key cannot fork an existing world. A corrupt
+  document now **refuses the boot** instead of silently generating seed-0. Pins:
+  `a_world_whose_seed_is_only_in_the_26_1_settings_file_keeps_its_terrain` and
+  `a_world_created_here_records_its_seed_so_a_later_config_key_cannot_fork_it`;
+  perturbation showed `left: 0, right: 1361882806` without the fix.
+- **C19-H1 Hello packet (HIGH).** `EncryptionRequest` was three fields; the jar's
+  `ClientboundHelloPacket` reads a fourth `shouldAuthenticate` **last**, and our
+  own decoder refused trailing bytes — so the round-trip stayed green while no real
+  26.1.2 client could decode the packet. The field is added in the jar's order and
+  written last; `hello_wire_shape.rs` asserts the byte vector, and both the
+  deletion and the move of that boolean turn it red. The two documents that called
+  this "confirmed/pinned" now say what is actually pinned (field order + vectors)
+  and that a real-client join is still NOT RUN by decision.
+- **G-02/G-03 access files (fail-open).** The three writers used truncating
+  `std::fs::write`, and one damaged row voided a whole file: a truncated
+  `banned-players.json` booted "banning nobody" and a banned player joined. They
+  now use the existing `write_atomic` staging protocol (temp → fsync → rename),
+  skip a damaged row with one warning that names it, treat a file with **no**
+  readable row as an error rather than an empty table, and read `expires`
+  case-insensitively so `"FOREVER"` is a permanent ban. Nine tests, nine
+  perturbations recorded. The one boundary kept and documented: a file that is
+  unparsable at the top level still boots that table empty, which is what Vanilla's
+  own loader does — and the write path can no longer produce such a file.
+- **A-06 online-mode identity.** In online mode `/ban` and `/whitelist` derived the
+  offline uuid while the join gate compared the Mojang one, so banning a live
+  player neither kicked nor matched. They now use the live session's uuid, with the
+  offline derivation as the fallback and the absent-player case named as a gap.
+
+**Operator surface (P1).**
+
+- **A-05/C19-M1/M2 RCON.** No connection budget and no pre-authentication timeout:
+  8 sockets globally, 4 per address, 1 s refill, a 10 s silence deadline, and a
+  bad-login budget of 20 per address per 5 minutes **shared across reconnects**
+  (≈4 guesses/min instead of ≈50). A persistent `accept` error warns and backs off
+  instead of spinning hot.
+- **C19-M4 console.** Invalid UTF-8 in a console line (a cp936 byte on this host)
+  used to end input for the process lifetime, silently. It is now logged and
+  skipped, and only EOF or a real read error ends the console.
+- **C19-M3 `hasJoined`.** The request now carries `&ip=<peer>`: the URL builder was
+  fixed and pinned first, then the address was threaded through
+  `OnlineAuthProvider::authenticate_from` and the login path, with a
+  provider-level test proving it reaches the request.
+- **C19-M5 configuration tails.** The fixed-width, socket-reachable configuration
+  decoders (`keep_alive`, `pong`) now refuse a trailing byte; the module header's
+  claim that these "never run on hostile socket bytes" was false and now describes
+  what the code does, including which decoder stays tolerant and why.
+- **A-12 whitelist revocation** and **B19-1/B19-1b double-chest close/half-viewer**
+  paths, plus the `/fill` chunk-budget question (A-09), are covered by the same
+  batch: `whitelist_revocation` (4) and `double_chest` (10).
+
+**Audit findings about the pins themselves (P1-10).** Two tests the audit proved
+could not fail now can: the rejoin test asserts the partial experience bar it had
+only set, and the `save-off` test gained an anti-vacuity leg that requires the
+autosave timer to actually fire before it claims a hold.
+
 ## [Unreleased] — Phase 19 closed (Access Control & the Operator Surface)
 
 P19 is the first round of v0.4.0 "operable survival": a small community can run a
