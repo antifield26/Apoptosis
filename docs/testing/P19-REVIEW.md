@@ -97,8 +97,10 @@ Run 2026-09-30; verdicts below, evidence per item in
 
 ## Phase verdict
 
-**P19 is closed on `2d1d66b`** (`gates/EXIT-GATES.md` §P19, universal
-phase-close clause). The phase's own evidence: this review's 16 claim rows, the
+**P19 is closed on `2d1d66b`** (the phase exit gate and the universal
+phase-close clause — the pack's gate file, a local input rather than a
+repository file, carries the matching status line). The phase's own evidence:
+this review's 16 claim rows, the
 owner session above, and P19-08's two pins. The gate evidence: `run.py --quick`
 every gate passed (1 788 / 0 / 41 / 141) and CI run `36803950975` green on the
 same commit. Named open at closure: **F5** (log severity, no owner) and the

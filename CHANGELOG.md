@@ -20,8 +20,9 @@ landed — P19-01 whitelist, P19-02 bans/kick, P19-03 console + save control,
 P19-04 RCON, P19-05 online-mode auth, P19-06 gameplay properties, P19-07 the
 adversarial review + owner access session, P19-08 the F3/F4 data-loss fix.
 
-**Exit gate satisfied on `2d1d66b`** (`gates/EXIT-GATES.md` §P19), clause by
-clause:
+**Exit gate satisfied on `2d1d66b`**, clause by clause — the prompt pack's phase-gate file
+records the same verdict and evidence (it is a local workflow input, not a repository
+file, so it is described rather than cited here):
 
 | Gate clause | Evidence |
 |---|---|
