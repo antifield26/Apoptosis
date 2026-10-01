@@ -25,9 +25,11 @@ world_dir = "world"
 # Ticks between autosaves at 20 TPS (6000 = 5 min); 0 disables the timer.
 autosave_ticks = 6000
 # World seed for generation, when the operator names one. Unset means "no
-# opinion": a world whose level.dat already records a seed keeps generating
-# from it; a fresh world generates from seed 0. A stored seed always wins,
-# so setting this cannot fork an existing world.
+# opinion": a world that records a seed keeps generating from it (a 26.1 world
+# records it in `data/minecraft/world_gen_settings.dat`, not in `level.dat`);
+# a fresh world generates from seed 0. Every world this build creates or opens
+# records the seed it generated from, so setting or clearing this key cannot
+# fork a world the server has already opened.
 # seed = 1361882806
 
 [access]

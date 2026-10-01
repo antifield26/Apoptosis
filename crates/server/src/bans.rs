@@ -2,15 +2,29 @@
 //!
 //! Vanilla's shape, beside `ops.json`: player entries carry
 //! `{uuid, name, created, source, expires, reason}`, ip entries carry
-//! `{ip, created, source, expires, reason}`. `expires` is `"forever"` or a
-//! Vanilla-format date (`"2026-12-31 23:59:59 +0000"`); anything else is
-//! refused rather than read as forever (forever is authority, never a
-//! fallback). Policy mirrors [`crate::ops`] and [`crate::whitelist`]:
+//! `{ip, created, source, expires, reason}`. `expires` is `"forever"`
+//! (case-insensitive, as Vanilla reads it) or a Vanilla-format date
+//! (`"2026-12-31 23:59:59 +0000"`); any other shape costs that **row**, not
+//! the file (forever is authority, never a fallback). Policy mirrors
+//! [`crate::ops`] and [`crate::whitelist`]:
 //!
 //! - **Missing files are not an error.** Either file absent means that half
 //!   bans nobody.
-//! - **A malformed file is an error naming the file**, and the caller
-//!   decides (`crate::lifecycle` logs and boots banning nobody).
+//! - **One damaged row does not void the table.** A row that cannot be
+//!   parsed is skipped with a `warn!` naming the file and the row, and its
+//!   siblings still load (AUDIT-19 G-02/G-03). A file that is not a JSON
+//!   array, or whose *every* row is damaged, is an error naming the file and
+//!   the caller decides (`crate::lifecycle` logs and boots banning nobody) —
+//!   an empty list must never be indistinguishable from a file nobody could
+//!   read.
+//! - **The files are replaced atomically.** A sibling temp file is written,
+//!   fsynced and renamed over the target — the repository's
+//!   `mc_persistence::save::write_atomic` protocol, the same one `level.dat`
+//!   uses. `std::fs::write` truncates in place, so a crash inside the write
+//!   window left a truncated `banned-players.json`, which read as "banning
+//!   nobody" and let a permanently banned player in (AUDIT-19 G-02/G-03,
+//!   reproduced live by the audit). A failed write leaves the previous file
+//!   live, so a ban is never lifted by a write that did not finish.
 //! - **The files stay Vanilla-pure**: written with exactly Vanilla's keys
 //!   and date shape, so a Vanilla server boots on them and keeps every
 //!   entry.
@@ -24,6 +38,7 @@
 
 use mc_core::error::{ServerError, ServerResult};
 use mc_data::json::{Limits, read_json};
+use mc_persistence::save::write_atomic;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
@@ -42,6 +57,8 @@ pub const LIMITS: Limits = Limits {
 };
 
 /// Vanilla's `expires` for a ban that never lapses.
+///
+/// Written exactly like this; read case-insensitively, matching Vanilla.
 pub const EXPIRES_FOREVER: &str = "forever";
 
 /// Default reason when `/ban` names none (Vanilla's own default).
@@ -98,9 +115,10 @@ impl BanList {
 
     /// Load both files from a directory.
     ///
-    /// A missing file yields that half empty, which is an ordinary server.
-    /// A **malformed** file is an error naming it, returned rather than a
-    /// partial list.
+    /// A missing file yields that half empty, which is an ordinary server. A
+    /// damaged **row** is skipped and logged, its siblings still load; a
+    /// **file** that is not a JSON array, or whose every row is damaged, is
+    /// an error naming it rather than an empty list.
     ///
     /// # Errors
     ///
@@ -130,9 +148,16 @@ impl BanList {
 
     /// Build the player half from an already-parsed JSON value.
     ///
+    /// A damaged row is skipped and logged, its siblings still load; a file
+    /// whose every row is damaged is an error (the first row's problem)
+    /// rather than an empty list, because "bans nobody" and "nobody could be
+    /// read" must not look alike.
+    ///
     /// # Errors
     ///
-    /// [`ServerError::CorruptData`] naming the file and the problem.
+    /// [`ServerError::CorruptData`] naming the file and the problem when the
+    /// value is not an array, when no row could be read, or when a uuid
+    /// repeats.
     pub fn players_from_value(
         value: &Value,
         path: &Path,
@@ -145,8 +170,26 @@ impl BanList {
             )));
         };
         let mut players = BTreeMap::new();
+        let mut first_problem: Option<ServerError> = None;
         for (index, entry) in entries.iter().enumerate() {
-            let ban = player_entry(entry, path, index)?;
+            let ban = match player_entry(entry, path, index) {
+                Ok(ban) => ban,
+                Err(error) => {
+                    // One damaged row must not void the table: the siblings
+                    // still load, and the line names the file and the row, so
+                    // a skipped ban is never silent (AUDIT-19 G-02/G-03).
+                    tracing::warn!(
+                        path = %path.display(),
+                        row = index,
+                        %error,
+                        "skipping a damaged player-ban row"
+                    );
+                    if first_problem.is_none() {
+                        first_problem = Some(error);
+                    }
+                    continue;
+                }
+            };
             if players.contains_key(&ban.uuid) {
                 return Err(ServerError::CorruptData(format!(
                     "{}: entry {index} repeats uuid {}",
@@ -156,14 +199,27 @@ impl BanList {
             }
             players.insert(ban.uuid.clone(), ban);
         }
+        if players.is_empty() && !entries.is_empty() {
+            return Err(first_problem.unwrap_or_else(|| {
+                ServerError::CorruptData(format!(
+                    "{}: none of the {} entries could be read",
+                    path.display(),
+                    entries.len()
+                ))
+            }));
+        }
         Ok(players)
     }
 
     /// Build the ip half from an already-parsed JSON value.
     ///
+    /// Same row-level policy as [`BanList::players_from_value`].
+    ///
     /// # Errors
     ///
-    /// [`ServerError::CorruptData`] naming the file and the problem.
+    /// [`ServerError::CorruptData`] naming the file and the problem when the
+    /// value is not an array, when no row could be read, or when an address
+    /// repeats.
     pub fn ips_from_value(value: &Value, path: &Path) -> ServerResult<BTreeMap<IpAddr, IpBan>> {
         let Some(entries) = value.as_array() else {
             return Err(ServerError::CorruptData(format!(
@@ -173,8 +229,23 @@ impl BanList {
             )));
         };
         let mut ips = BTreeMap::new();
+        let mut first_problem: Option<ServerError> = None;
         for (index, entry) in entries.iter().enumerate() {
-            let ban = ip_entry(entry, path, index)?;
+            let ban = match ip_entry(entry, path, index) {
+                Ok(ban) => ban,
+                Err(error) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        row = index,
+                        %error,
+                        "skipping a damaged ip-ban row"
+                    );
+                    if first_problem.is_none() {
+                        first_problem = Some(error);
+                    }
+                    continue;
+                }
+            };
             if ips.contains_key(&ban.ip) {
                 return Err(ServerError::CorruptData(format!(
                     "{}: entry {index} repeats ip {}",
@@ -183,6 +254,15 @@ impl BanList {
                 )));
             }
             ips.insert(ban.ip, ban);
+        }
+        if ips.is_empty() && !entries.is_empty() {
+            return Err(first_problem.unwrap_or_else(|| {
+                ServerError::CorruptData(format!(
+                    "{}: none of the {} entries could be read",
+                    path.display(),
+                    entries.len()
+                ))
+            }));
         }
         Ok(ips)
     }
@@ -193,6 +273,16 @@ impl BanList {
     /// pretty-printed with exactly Vanilla's keys. A missing directory is
     /// created; anything else that goes wrong is an error the caller
     /// reports rather than a ban the caller pretends happened.
+    ///
+    /// Each file is replaced **atomically** (AUDIT-19 G-02/G-03): a sibling
+    /// temp file, fsynced, then renamed over the target by
+    /// [`mc_persistence::save::write_atomic`] — the protocol `level.dat`
+    /// already uses. Before this, `std::fs::write` truncated the live file,
+    /// so a crash inside the write window left a truncated
+    /// `banned-players.json`, which read as "banning nobody" and let a
+    /// permanently banned player join. A failed write now leaves the
+    /// previous file byte-identical, so a ban is never lifted by a write
+    /// that did not finish.
     ///
     /// # Errors
     ///
@@ -245,7 +335,7 @@ impl BanList {
             let text = serde_json::to_string_pretty(&entries).map_err(|error| {
                 ServerError::Operational(format!("{file}: cannot serialise: {error}"))
             })?;
-            std::fs::write(directory.join(file), text).map_err(|error| {
+            write_atomic(&directory.join(file), text.as_bytes(), false).map_err(|error| {
                 ServerError::Operational(format!(
                     "{}: cannot write {file}: {error}",
                     directory.display()
@@ -461,9 +551,14 @@ fn required_time(
 
 /// A required `expires` field: `"forever"` or a Vanilla date.
 ///
-/// Anything else is refused: reading an unknown shape as forever would
-/// grant permanent authority to a typo, and reading it as expired would
-/// silently unban.
+/// `"forever"` is matched case-insensitively, which is how Vanilla reads it
+/// (`UserBanListEntry` compares with `equalsIgnoreCase`), so a file that says
+/// `"FOREVER"` is a permanent ban and not a row that costs the table
+/// (AUDIT-19 G-03).
+///
+/// Any *other* shape is refused, and now costs only that row: reading an
+/// unknown shape as forever would grant permanent authority to a typo, and
+/// reading it as expired would silently unban.
 fn required_expires(
     object: &serde_json::Map<String, Value>,
     path: &Path,
@@ -475,7 +570,7 @@ fn required_expires(
             p = path.display()
         )));
     };
-    if text == EXPIRES_FOREVER {
+    if text.eq_ignore_ascii_case(EXPIRES_FOREVER) {
         return Ok(None);
     }
     parse_ban_time(text)

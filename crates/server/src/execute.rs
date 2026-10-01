@@ -126,16 +126,19 @@ impl Game {
             return self.reply(id, format!("Test failed: {which}"), report);
         };
 
-        // The inner command goes back through the dispatcher, so its **own** permission check
-        // applies -- and the source it is checked against is the one the chain produced.
-        // `select` attaches each matched session's **own** permission level
-        // (`with_permission(session.permission)`), so `/execute as @a run <op command>`
-        // succeeds only for the operators in `@a`: the permission travels with the new
-        // source rather than staying with the invoker. An earlier version of this comment
-        // said the opposite ("`as` changes who the command runs as, not what they are
-        // allowed to do"), which is the reverse of what the code does and was read that way
-        // (AUDIT-09 C-06). That the transfer is also Vanilla's behaviour is AUDIT-09 lane C's
-        // finding; it is not re-derived here, and `execute_e2e` pins our side.
+        // **The permission level never travels with the chain** (AUDIT-19 G-01).
+        //
+        // Vanilla is explicit that `/execute` changes *who* and *where* a command runs, and not
+        // what the invoker may do ("the execution permission level cannot be modified by
+        // /execute"). `select` builds each matched player's source, so it carries that player's
+        // level — and an earlier version of this code let the inner command be checked against
+        // it, which made `/execute as @a[name=Admin] run op <self>` an escalation any level-0
+        // player could run. The level is therefore overwritten with the **invoker's** here, at
+        // the single point where the chain hands its command back to the dispatcher.
+        //
+        // The inner command goes back through the dispatcher, so its own permission check still
+        // applies — against the invoker's level, which is the point.
+        let inner_source = inner_source.with_permission(source.permission);
         let dispatcher = mc_command::Dispatcher::new(Self::build_command_tree());
         match dispatcher.parse(&command, &inner_source) {
             mc_command::CommandOutcome::Parsed(parsed) => {

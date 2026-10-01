@@ -147,6 +147,35 @@ fn save_off_holds_autosave_writes_and_save_all_writes_through() {
         "save-on confirms: {lines:?}"
     );
     assert!(game.saving_enabled());
+
+    // Anti-vacuity (AUDIT-19 P-2). Every leg above is satisfied by a timer that
+    // never fires at all: forcing `autosave_due` to `false` left this test green,
+    // because the hold is proved by *not* writing and the flush is explicit. So
+    // dirty the chunk once more and let **only** the timer save it.
+    game.world_mut()
+        .set_block(2, 70, 2, stone)
+        .expect("dirty the chunk again");
+    assert!(
+        !game.world().dirty_chunks().is_empty(),
+        "the edit must leave the chunk dirty, or this leg proves nothing"
+    );
+    let mut fired = 0u32;
+    for _ in 0..30 {
+        game.tick().expect("tick");
+        if game.autosave_due(game.tick_count()) {
+            fired += 1;
+            game.save_all_owned().expect("saves");
+        }
+    }
+    assert!(
+        fired > 0,
+        "the autosave timer must fire while saving is enabled; a timer that never \
+         fires passes every assertion above"
+    );
+    assert!(
+        game.world().dirty_chunks().is_empty(),
+        "the timer's own save must reach the save path and clear the dirty set"
+    );
 }
 
 #[test]

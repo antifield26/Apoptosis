@@ -278,6 +278,42 @@ fn whitelist_reload_malformed_keeps_the_live_list() {
     );
 }
 
+/// AUDIT-19 G-02/G-03: a damaged row must not unlist its siblings, so the
+/// profile the file still lists joins under enforcement. The audit's
+/// fail-open was the same shape one file over: a damaged access file read as
+/// an empty table.
+#[test]
+fn a_damaged_row_does_not_unlist_the_rest_of_the_file() {
+    let dir = TempDir::new("whitelist-damaged-row");
+    let listed = mc_network::auth::offline_profile("Listed").id;
+    std::fs::write(
+        dir.path().join(WHITELIST_FILE_NAME),
+        format!(
+            r#"[{{"uuid": "{listed}", "name": "Listed"}},
+                {{"uuid": "", "name": "Damaged"}}]"#
+        ),
+    )
+    .expect("whitelist file");
+    let whitelist = Whitelist::load(dir.path()).expect("a damaged row must not void the table");
+
+    let mut harness = Harness::new(
+        "whitelist-damaged-row-game",
+        OperatorList::new(),
+        whitelist,
+        true,
+    );
+    let (id, _) = harness.join("Listed");
+    assert!(
+        harness.game.has_player(id),
+        "the intact row still admits its profile"
+    );
+    let (stranger, _) = harness.join("Stranger");
+    assert!(
+        !harness.game.has_player(stranger),
+        "and enforcement still refuses everyone else"
+    );
+}
+
 #[test]
 fn whitelist_commands_list_add_and_remove() {
     let mut harness = Harness::new(

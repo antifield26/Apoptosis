@@ -72,9 +72,13 @@ impl Game {
     ///    never license overwriting a file.
     ///
     /// Reads happen on the tick thread and stop at the per-tick chunk budget, so the
-    /// worst case per tick is [`CHUNKS_PER_TICK`] chunk decodes. Moving them to a
-    /// worker is P08-11 and would change the determinism story, not just the
-    /// threading, so it is deliberately left on the tick thread here.
+    /// worst case per tick is [`CHUNKS_PER_TICK`] chunk decodes. **Every caller that
+    /// can name a region is budgeted to that same number**: `/fill` refuses a span
+    /// above [`crate::commands::MAX_FILL_CHUNKS`] before it loads anything (AUDIT-19
+    /// A-09, where a `32768×1×1` fill loaded 2048 chunks in one tick), and streaming
+    /// truncates at the budget in `stream_for`. Moving reads to a worker is P08-11 and
+    /// would change the determinism story, not just the threading, so it is
+    /// deliberately left on the tick thread here.
     /// A chunk's blocks became available (stored load or fresh generation):
     /// drop the 3×3 light cache and queue updates.
     ///

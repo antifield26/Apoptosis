@@ -12,9 +12,14 @@
 //!
 //! | Path | Meaning | Evidence label |
 //! |---|---|---|
-//! | [`WorldSeed::from_level_dat`] | the seed stored in an existing world's world-gen document, e.g. `data/minecraft/world_gen_settings.dat` | **verified**: the evidence world in this repository carries `1361882806` (`crates/test-support/fixtures/anvil/MANIFEST.txt`, `docs/vanilla-parity/PARITY-MATRIX.md`) |
+//! | [`WorldSeed::from_level_dat`] | the seed stored in an existing world's world-gen document, e.g. `data/minecraft/world_gen_settings.dat` | **verified (value) / tolerant (key path)**: the evidence world in this repository was generated with `1361882806` (`crates/test-support/fixtures/anvil/MANIFEST.txt`, `docs/vanilla-parity/PARITY-MATRIX.md`), but its `level.dat` carries **no** seed key and the key path inside `world_gen_settings.dat` is unverified (AUDIT-19 section 9) |
 //! | [`WorldSeed::from_raw`] | an operator-supplied seed (`--seed`/`level-seed`) | **product decision** |
 //! | [`WorldSeed::fresh`] | a seed derived from the system clock for a *new* world | **approximation**: Vanilla derives a new world's seed from the system time; the exact expression it uses is not verified here, so this one is ours, documented below, and must not be claimed as Vanilla's |
+//!
+//! [`WorldSeed::from_level_dat`] is the **stored-world** path the server uses
+//! (`mc_server::storage::WorldService::recorded_seed`, AUDIT-19 D-19-H1): a
+//! world that already exists on disk already has a seed, and generating its new
+//! chunks from anything else forks its terrain.
 //!
 //! ## Per-chunk derivation (the important part)
 //!
@@ -86,17 +91,23 @@ impl WorldSeed {
 
     /// The seed stored in a parsed world-gen document.
     ///
-    /// `world_gen_settings.dat` is a gzipped NBT document whose root is
-    /// `{ Data: { … } }` (the same wrapper `level.dat` uses, per
-    /// `mc-persistence::level`). The seed lives somewhere inside it; which key
-    /// path is *not* verified here, so this walks a list of candidates in a
-    /// fixed order and, as a last resort, takes the **first** `seed` tag found in
-    /// a depth-first, source-order walk:
+    /// `world_gen_settings.dat` is a gzipped NBT document whose root wraps the
+    /// generator settings (`mc-persistence::level::read_world_gen_settings`
+    /// reads the file; this function interprets it). The seed lives somewhere
+    /// inside it; which key path is *not* verified here — the repository holds
+    /// no fixture for this file (AUDIT-19 section 9) — so this walks a list of
+    /// candidates in a fixed order and, as a last resort, takes the **first**
+    /// `seed` tag found in a depth-first, source-order walk:
     ///
-    /// 1. `Data.seed` — the flat form `level.dat` used before 26.1;
-    /// 2. `Data.dimensions.minecraft.overworld.generator.seed` — the nested form a
-    ///    modern dimension document uses;
-    /// 3. the first `seed` entry anywhere in the document that is a long.
+    /// 1. `<wrapper>.seed` — the flat form `level.dat` used before 26.1;
+    /// 2. `<wrapper>.dimensions.minecraft:overworld.generator.seed` — the
+    ///    nested form a modern dimension document uses;
+    /// 3. the first `seed` entry anywhere in the document that is an integer.
+    ///
+    /// `<wrapper>` is `Data` for a `level.dat` and `data` for the 26.1
+    /// world-gen settings document (`docs/research/protocol-baseline.md`
+    /// section 2: "each wrapped in `{DataVersion, data}`"); both are accepted,
+    /// in that order, because which one a given file uses is not verified.
     ///
     /// If none exists the world has no recorded seed and the caller must decide
     /// (create a new world, or refuse): this returns
@@ -105,21 +116,20 @@ impl WorldSeed {
     ///
     /// # Errors
     ///
-    /// [`ServerError::CorruptData`] when no long `seed` is present.
+    /// [`ServerError::CorruptData`] when no integer `seed` is present.
     pub fn from_level_dat(document: &NbtTag) -> ServerResult<Self> {
         const CANDIDATES: [&[&str]; 2] = [
-            &["Data", "seed"],
-            &[
-                "Data",
-                "dimensions",
-                "minecraft:overworld",
-                "generator",
-                "seed",
-            ],
+            &["seed"],
+            &["dimensions", "minecraft:overworld", "generator", "seed"],
         ];
-        for path in CANDIDATES {
-            if let Some(seed) = lookup_path(document, path) {
-                return Ok(Self(seed));
+        for wrapper in ["Data", "data"] {
+            let Some(payload) = document.get_compound(wrapper) else {
+                continue;
+            };
+            for path in CANDIDATES {
+                if let Some(seed) = lookup_path(payload, path) {
+                    return Ok(Self(seed));
+                }
             }
         }
         first_seed_long(document).map(Self).ok_or_else(|| {
@@ -593,6 +603,57 @@ mod tests {
             )]),
         )]);
         assert_eq!(WorldSeed::from_level_dat(&buried).expect("seed").raw(), -5);
+    }
+
+    #[test]
+    fn the_26_1_world_gen_settings_wrapper_is_readable() {
+        // A real 26.1 `level.dat` has no seed key at all: the seed lives in
+        // `data/minecraft/world_gen_settings.dat`, wrapped in `{DataVersion,
+        // data}` — lowercase `data`, unlike `level.dat`'s `Data`
+        // (`docs/research/protocol-baseline.md` section 2). The document below
+        // is synthetic: no jar-derived fixture for this file exists in the
+        // repository (AUDIT-19 section 9), so only the *shape the tree
+        // records* is asserted here, in both candidate key paths.
+        let flat = NbtTag::compound([
+            ("DataVersion".to_owned(), NbtTag::Int(4790)),
+            (
+                "data".to_owned(),
+                NbtTag::compound([("seed".to_owned(), NbtTag::Long(1_361_882_806))]),
+            ),
+        ]);
+        assert_eq!(
+            WorldSeed::from_level_dat(&flat).expect("seed").raw(),
+            1_361_882_806
+        );
+
+        let nested = NbtTag::compound([
+            ("DataVersion".to_owned(), NbtTag::Int(4790)),
+            (
+                "data".to_owned(),
+                NbtTag::compound([(
+                    "dimensions".to_owned(),
+                    NbtTag::compound([(
+                        "minecraft:overworld".to_owned(),
+                        NbtTag::compound([(
+                            "generator".to_owned(),
+                            NbtTag::compound([("seed".to_owned(), NbtTag::Long(7))]),
+                        )]),
+                    )]),
+                )]),
+            ),
+        ]);
+        assert_eq!(WorldSeed::from_level_dat(&nested).expect("seed").raw(), 7);
+
+        // A lowercase wrapper holding no seed is still refused rather than
+        // silently reading nothing (the caller must decide, not this parser).
+        let empty = NbtTag::compound([
+            ("DataVersion".to_owned(), NbtTag::Int(4790)),
+            (
+                "data".to_owned(),
+                NbtTag::compound([("version".to_owned(), NbtTag::Int(19133))]),
+            ),
+        ]);
+        assert!(WorldSeed::from_level_dat(&empty).is_err());
     }
 
     #[test]

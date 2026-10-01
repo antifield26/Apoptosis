@@ -17,7 +17,7 @@ use mc_network::bridge::{
 use mc_protocol::ids::clientbound;
 use mc_protocol::packets::Packet;
 use mc_protocol::packets::play::{
-    MENU_GENERIC_9X3, MENU_GENERIC_9X6, OpenScreen, PlayIntent, block_position,
+    ContainerClose, MENU_GENERIC_9X3, MENU_GENERIC_9X6, OpenScreen, PlayIntent, block_position,
 };
 use mc_server::game::Game;
 use mc_server::storage::WorldService;
@@ -524,6 +524,203 @@ fn covered_chest_refuses_but_covered_barrel_opens() {
         }
     }
     assert_eq!(barrel_screens.len(), 1, "a covered barrel still opens");
+}
+
+/// Drain every `container_close` a client received.
+fn closed_windows(out: &mut InboundReceiver) -> Vec<i32> {
+    let mut seen = Vec::new();
+    while let Some(raw) = out.try_recv() {
+        if raw.id == clientbound::play::CONTAINER_CLOSE
+            && let Ok(close) = ContainerClose::decode(&raw.payload)
+        {
+            seen.push(close.window_id);
+        }
+    }
+    seen
+}
+
+/// AUDIT-19 B19-1b: the force-close only matched viewers whose `open_block`
+/// was the **broken** half, so a viewer transacting against the *surviving*
+/// half kept a stale 54-slot window with no correction packet — a menu
+/// silently disagreeing with the world until they closed it themselves.
+#[test]
+fn breaking_a_half_closes_the_viewer_on_the_other_half() {
+    let mut harness = Harness::new("p19-b19b-survivor-viewer");
+    let mut out = harness.join("Wrecker");
+    let (sx, sy, sz) = harness.game.spawn();
+    floor(&mut harness, sx, sy, sz);
+    harness.look(0.0);
+    let (ax, ay, az) = (sx + 1, sy, sz);
+    let (bx, by, bz) = (sx + 2, sy, sz);
+    harness.place("minecraft:chest", ax, ay - 1, az, 1);
+    harness.place("minecraft:chest", bx, by - 1, bz, 1);
+    harness.fill(ax, ay, az, 0, "minecraft:dirt", 7);
+    harness.fill(bx, by, bz, 0, "minecraft:stone", 5);
+    // Open the LEFT half (the one that will survive) and note the window.
+    harness.empty_hand();
+    harness.click(ax, ay, az, 1);
+    let window = i32::from(harness.game.menu_window_id(harness.id).expect("window"));
+    assert_ne!(window, 0, "the chest window is a block window");
+    assert_eq!(
+        harness
+            .game
+            .menu_slot(harness.id, 27)
+            .expect("slot 27")
+            .count(),
+        7,
+        "the 54-slot menu shows this half's dirt at slot 27"
+    );
+
+    // Break the RIGHT half through the real dig path.
+    let axe = harness.item("minecraft:diamond_axe");
+    harness
+        .game
+        .player_mut(harness.id)
+        .expect("player")
+        .inventory
+        .set_slot(0, mc_entity::stack::ItemStack::new(axe, 1).expect("stack"))
+        .expect("axe");
+    harness.stand();
+    harness.intent(PlayIntent::PlayerAction {
+        status: 0,
+        position: block_position(bx, by, bz),
+        facing: 1,
+        sequence: 0,
+    });
+    harness.run(15);
+
+    assert!(
+        closed_windows(&mut out).contains(&window),
+        "the viewer on the surviving half must be told its window is gone"
+    );
+    assert_eq!(
+        harness.game.menu_window_id(harness.id),
+        Some(0),
+        "and its menu is back to the player inventory"
+    );
+    // Conservation across the whole episode: the survivor keeps its own 7 and
+    // the broken half's 5 landed once.
+    assert_eq!(
+        harness.entity_total(ax, ay, az),
+        7,
+        "the surviving half keeps exactly its own items"
+    );
+    let stone_drops: i32 = harness
+        .game
+        .dropped_items()
+        .iter()
+        .filter(|(stack, _)| stack.item_id() == Some(harness.item("minecraft:stone")))
+        .map(|(stack, _)| stack.count())
+        .sum();
+    assert_eq!(
+        stone_drops, 5,
+        "the broken half's contents are on the ground exactly once"
+    );
+}
+
+/// AUDIT-19 B19-1: the close arm used to judge "is this a double?" by menu
+/// length alone while `flush_double_menu` judged the pair separately, and its
+/// single-container arm indexed a 27-slot entity with menu slots up to 53 under
+/// an `index < items.len()` filter that silently ate the rest.
+///
+/// The state this pins is a **broken pair at close time**: the window was
+/// opened as a double, the partner half is gone from the world with no queued
+/// block change (so the B19-1b force-close has not run — this is the close
+/// path's own fallback), and the partner's contents were delivered the way the
+/// break path delivers them. The old shape wrote the *first* 27 menu slots —
+/// the orphan half's stone — into the surviving LEFT half, overwriting its dirt
+/// and duplicating the stone already on the ground; the survivor's own 27 were
+/// dumped at the player's feet.
+#[test]
+fn closing_after_the_pair_breaks_keeps_each_halves_own_items() {
+    let mut harness = Harness::new("p19-b19-close-broken-pair");
+    harness.join("Trader");
+    let (sx, sy, sz) = harness.game.spawn();
+    floor(&mut harness, sx, sy, sz);
+    harness.look(0.0);
+    let (ax, ay, az) = (sx + 1, sy, sz);
+    let (bx, by, bz) = (sx + 2, sy, sz);
+    harness.place("minecraft:chest", ax, ay - 1, az, 1);
+    harness.place("minecraft:chest", bx, by - 1, bz, 1);
+    harness.fill(ax, ay, az, 0, "minecraft:dirt", 7);
+    harness.fill(bx, by, bz, 0, "minecraft:stone", 5);
+    harness.empty_hand();
+    harness.click(ax, ay, az, 1);
+    let window = i32::from(harness.game.menu_window_id(harness.id).expect("window"));
+    assert_eq!(harness.entity_total(ax, ay, az), 7);
+    assert_eq!(harness.entity_total(bx, by, bz), 5);
+
+    // Break the RIGHT half the way the world-side break leaves it — block gone,
+    // entity gone, contents on the ground — but without the block-change
+    // broadcast that would force the window closed (B19-1b), so the close flush
+    // is what has to get this right.
+    let air = harness.game.registries().blocks.air_id();
+    harness
+        .game
+        .world_mut()
+        .set_block(bx, by, bz, air)
+        .expect("the right half is broken");
+    let retired = harness
+        .game
+        .block_entities_mut()
+        .remove(mc_container::BlockPos::new(bx, by, bz))
+        .expect("the broken half had a block entity");
+    let stone = harness.item("minecraft:stone");
+    for stack in retired
+        .data
+        .items()
+        .map_or_else(Vec::new, <[mc_entity::stack::ItemStack]>::to_vec)
+        .iter()
+        .filter(|stack| !stack.is_empty())
+    {
+        harness
+            .game
+            .spawn_item(
+                stack.clone(),
+                mc_world::Vec3::new(
+                    f64::from(bx) + 0.5,
+                    f64::from(by) + 0.5,
+                    f64::from(bz) + 0.5,
+                ),
+            )
+            .expect("the broken half's contents drop");
+    }
+    // Drop the queued block change: its broadcast is the B19-1b path, and this
+    // pin is about the close arm underneath it.
+    let _ = harness.game.world_mut().take_block_changes();
+
+    harness.intent(PlayIntent::ContainerClose { window_id: window });
+
+    // Every slot landed somewhere, and each half kept its own items: the
+    // survivor still holds its 7 dirt, and the 5 stone exists once (the drop
+    // above), not twice.
+    assert_eq!(
+        harness.entity_total(ax, ay, az),
+        7,
+        "the surviving half keeps its own dirt instead of taking the orphan's stone"
+    );
+    let dropped: i32 = harness
+        .game
+        .dropped_items()
+        .iter()
+        .filter(|(stack, _)| stack.item_id() == Some(stone))
+        .map(|(stack, _)| stack.count())
+        .sum();
+    assert_eq!(
+        dropped, 5,
+        "the orphan half's stone stays exactly where the break put it"
+    );
+    let dirt_drops: i32 = harness
+        .game
+        .dropped_items()
+        .iter()
+        .filter(|(stack, _)| stack.item_id() == Some(harness.item("minecraft:dirt")))
+        .map(|(stack, _)| stack.count())
+        .sum();
+    assert_eq!(
+        dirt_drops, 0,
+        "and the survivor's own items are not dumped on the floor"
+    );
 }
 
 #[test]

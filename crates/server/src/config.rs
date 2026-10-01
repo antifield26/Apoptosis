@@ -99,13 +99,23 @@ pub struct StorageConfig {
     pub world_dir: PathBuf,
     /// Ticks between autosaves; 0 disables the timer (explicit saves only).
     pub autosave_ticks: u64,
-    /// World seed for generation, when the operator names one (AUDIT-18 F-H1).
+    /// World seed for generation, when the operator names one
+    /// (AUDIT-18 F-H1, AUDIT-19 D-19-M1).
     ///
-    /// `None` (the default) means "no opinion": a world whose `level.dat`
-    /// already records a seed keeps generating from it; a fresh world
-    /// generates from seed 0 (the long-standing default, stated not hidden).
-    /// A stored seed always wins over this value, so setting it cannot fork
-    /// an existing world — it only seeds worlds that have none.
+    /// `None` (the default) means "no opinion": a world that records a seed
+    /// keeps generating from it, and a fresh world generates from seed 0 (the
+    /// long-standing default, stated not hidden).
+    ///
+    /// A recorded seed always wins, and **every world this build creates or
+    /// opens records one**: the resolved seed is written into `level.dat` at
+    /// creation and on the first boot of a world that records none
+    /// (`crate::storage::WorldService`, AUDIT-19 D-19-M1). So setting or
+    /// clearing this key cannot fork a world this server has already opened —
+    /// it only seeds a world that records no seed at all, i.e. one written by
+    /// another tool or by an older build, and only until its first boot here.
+    /// A real 26.1 world records that seed in
+    /// `data/minecraft/world_gen_settings.dat`, not in `level.dat`
+    /// (AUDIT-19 D-19-H1); both are read.
     pub seed: Option<i64>,
 }
 

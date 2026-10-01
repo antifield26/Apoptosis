@@ -8,10 +8,21 @@
 //! - **A missing file is not an error.** A server that never listed anyone
 //!   is ordinary; its absence only matters when enforcement is on, and then
 //!   it means "nobody is listed", not "the file is broken".
-//! - **A malformed file is an error from [`Whitelist::load`], and the
-//!   *caller* decides.** The load returns it rather than a partial list;
+//! - **One damaged row does not void the table.** A row that cannot be
+//!   parsed is skipped with a `warn!` naming the file and the row, and its
+//!   siblings still load (AUDIT-19 G-02/G-03). A file that is not a JSON
+//!   array at all, or whose *every* row is damaged, is still an error from
+//!   [`Whitelist::load`] and the *caller* decides: an empty list must never
+//!   be indistinguishable from a file nobody could read.
 //!   [`crate::lifecycle`] logs it and boots with an empty list, because
 //!   taking a working world offline over a comma is the worse failure.
+//! - **The file is replaced atomically.** A sibling temp file is written,
+//!   fsynced and renamed over the target — the repository's
+//!   `mc_persistence::save::write_atomic` protocol, the same one `level.dat`
+//!   uses. `std::fs::write` truncates in place, so a crash inside the write
+//!   window left a truncated `whitelist.json`, which reads as "nobody is
+//!   listed" (AUDIT-19 G-02/G-03). A failed write leaves the previous file
+//!   live, so the caller's rollback of the in-memory list cannot diverge.
 //! - **The file stays Vanilla-pure.** No extra keys are written, so a
 //!   Vanilla server boots on our file and keeps every entry (P19-01
 //!   acceptance) — enforcement state lives in config + memory, never here.
@@ -20,6 +31,7 @@
 
 use mc_core::error::{ServerError, ServerResult};
 use mc_data::json::{Limits, read_json};
+use mc_persistence::save::write_atomic;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -66,9 +78,11 @@ impl Whitelist {
     /// Load `whitelist.json` from a directory.
     ///
     /// A missing file yields an empty list, which is an ordinary server. A
-    /// **malformed** file is an error returned rather than a partial list —
-    /// the policy for the error belongs to the caller, and
-    /// `crate::lifecycle` logs it and boots with an empty list.
+    /// damaged **row** is skipped and logged, its siblings still load; a
+    /// **file** that is not a JSON array, or whose every row is damaged, is
+    /// an error returned rather than an empty list — the policy for the
+    /// error belongs to the caller, and `crate::lifecycle` logs it and boots
+    /// with an empty list.
     ///
     /// # Errors
     ///
@@ -88,9 +102,16 @@ impl Whitelist {
 
     /// Build a list from an already-parsed JSON value.
     ///
+    /// A damaged row is skipped and logged, its siblings still load. A file
+    /// whose every row is damaged is an error (the first row's problem,
+    /// naming the file) rather than an empty list: "lists nobody" and
+    /// "nobody could be read" must not look alike.
+    ///
     /// # Errors
     ///
-    /// [`ServerError::CorruptData`] naming the file and the problem.
+    /// [`ServerError::CorruptData`] naming the file and the problem when the
+    /// value is not an array, when no row could be read, or when a uuid
+    /// repeats.
     pub fn from_value(value: &Value, path: &Path) -> ServerResult<Self> {
         let Some(entries) = value.as_array() else {
             return Err(ServerError::CorruptData(format!(
@@ -101,8 +122,26 @@ impl Whitelist {
         };
 
         let mut list = Self::new();
+        let mut first_problem: Option<ServerError> = None;
         for (index, entry) in entries.iter().enumerate() {
-            let whitelisted = parse_entry(entry, path, index)?;
+            let whitelisted = match parse_entry(entry, path, index) {
+                Ok(whitelisted) => whitelisted,
+                Err(error) => {
+                    // One damaged row must not void the table: the siblings
+                    // still load. The line names the file and the row, so a
+                    // skipped entry is never silent (AUDIT-19 G-02/G-03).
+                    tracing::warn!(
+                        path = %path.display(),
+                        row = index,
+                        %error,
+                        "skipping a damaged whitelist row"
+                    );
+                    if first_problem.is_none() {
+                        first_problem = Some(error);
+                    }
+                    continue;
+                }
+            };
             // A duplicated uuid is a file that cannot mean what it says, so
             // it is refused rather than resolved by last-wins.
             if list.by_uuid.contains_key(&whitelisted.uuid) {
@@ -113,6 +152,15 @@ impl Whitelist {
                 )));
             }
             list.by_uuid.insert(whitelisted.uuid.clone(), whitelisted);
+        }
+        if list.is_empty() && !entries.is_empty() {
+            return Err(first_problem.unwrap_or_else(|| {
+                ServerError::CorruptData(format!(
+                    "{}: none of the {} entries could be read",
+                    path.display(),
+                    entries.len()
+                ))
+            }));
         }
         Ok(list)
     }
@@ -159,6 +207,13 @@ impl Whitelist {
     /// directory is created; anything else that goes wrong is an error the
     /// caller reports rather than a list change the caller pretends happened.
     ///
+    /// The replacement is **atomic** (AUDIT-19 G-02/G-03): a sibling temp
+    /// file, fsynced, then renamed over the target by
+    /// [`mc_persistence::save::write_atomic`] — the protocol `level.dat`
+    /// already uses. Before this, `std::fs::write` truncated the live file,
+    /// so a crash inside the write window left a truncated whitelist; a
+    /// failed write now leaves the previous file byte-identical.
+    ///
     /// # Errors
     ///
     /// [`ServerError::Operational`] when the directory cannot be created or
@@ -186,12 +241,14 @@ impl Whitelist {
                 directory.display()
             ))
         })?;
-        std::fs::write(directory.join(WHITELIST_FILE_NAME), text).map_err(|error| {
-            ServerError::Operational(format!(
-                "{}: cannot write {WHITELIST_FILE_NAME}: {error}",
-                directory.display()
-            ))
-        })
+        write_atomic(&directory.join(WHITELIST_FILE_NAME), text.as_bytes(), false).map_err(
+            |error| {
+                ServerError::Operational(format!(
+                    "{}: cannot write {WHITELIST_FILE_NAME}: {error}",
+                    directory.display()
+                ))
+            },
+        )
     }
 
     /// The entry for a uuid, normalising the key the way `parse_entry` does.

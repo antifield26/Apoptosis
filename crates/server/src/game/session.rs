@@ -117,6 +117,21 @@ pub(crate) struct Session {
     pub(crate) next_window: u8,
     /// Which block entity the open window belongs to, when it is a block menu.
     pub(crate) open_block: Option<mc_container::BlockPos>,
+    /// For a **double-chest** window: the partner half, and the
+    /// menu-container-0 index where *this* block's 27 slots begin (`0` = this
+    /// block is the RIGHT half, `27` = LEFT — the right-first order
+    /// [`Game::chest_merged_items`] shows). `None` for every other window.
+    ///
+    /// Recorded at open because the live world stops answering the question
+    /// once the pair breaks: the survivor's `type` is `single` and its partner
+    /// is gone, so `double_halves` answers `None` and the close flush could no
+    /// longer tell which 27 of the 54 menu slots belong to the surviving half
+    /// (AUDIT-19 B19-1, where guessing "the first 27" wrote the *orphan* half's
+    /// items into the survivor and duplicated what the break had already
+    /// dropped). The partner position is also what
+    /// `broadcast_block_changes` watches to close a viewer whose window spans
+    /// a half that just broke (B19-1b).
+    pub(crate) open_double: Option<(mc_container::BlockPos, usize)>,
     /// Which kind of window is open, when the menu is not the player inventory.
     ///
     /// Needed because the menu shape alone does not always say: a crafting
@@ -636,6 +651,13 @@ impl Game {
         mirror_inventory(&mut menu, &player.inventory);
 
         self.entity_ids.insert(id, entity);
+        // A player body is announced like every other spawn (AUDIT-19 A-02):
+        // `broadcast_entity_spawns` turns this id into an `add_entity` with
+        // `minecraft:player` (155) for the players who hold the chunk, and
+        // skips the owner — whose own id the client already has from
+        // `JoinGame`. Players who were *already* in that chunk learn about
+        // them through `send_chunk`'s resident announcement instead.
+        self.pending_entity_spawns.push(entity);
         info!(
             id = %id,
             name = %profile.name,
@@ -667,6 +689,7 @@ impl Game {
                 menu,
                 next_window: 1,
                 open_block: None,
+                open_double: None,
                 open_kind: None,
                 ready: false,
                 hurt_invuln_ticks: 0,
@@ -1194,8 +1217,12 @@ impl Game {
                     return Ok(());
                 }
                 // Flush the block half before discarding the menu. A 54-slot
-                // double menu splits 27/27 back into its halves (P17-02
-                // Step B); anything else writes straight through.
+                // menu splits 27/27, and **which half is which is judged in
+                // one place**: `flush_double_menu` (via `double_halves` and the
+                // half recorded on the session at open). This arm only asks the
+                // *shape* question (54 or not); it does not re-judge the pair
+                // the way it used to, when the two arms could disagree about
+                // the same conservation duty (AUDIT-19 B19-1).
                 if let Some(pos) = open {
                     // `open` came out of this same session map lines above, so
                     // absence here is a desync bug, surfaced as a typed error
@@ -1217,22 +1244,15 @@ impl Game {
                         (double, session.block_dirty.clone(), block_slots)
                     };
                     if double {
-                        self.flush_double_menu(id, pos, block_slots, report);
+                        self.flush_double_menu(id, pos, &block_slots, report);
                     } else if !dirty.is_empty() {
-                        if let Some(entity) = self.block_entities.get_mut(pos)
-                            && let Some(items) = entity.data.items_mut()
-                        {
-                            for &slot in &dirty {
-                                let index = usize::from(slot);
-                                if index < items.len() && index < block_slots.len() {
-                                    items[index] = block_slots[index].clone();
-                                }
-                            }
-                        }
-                        mark_block_dirty(&mut self.world, pos.x, pos.z);
+                        self.flush_single_menu(id, pos, &dirty, &block_slots, report);
                     }
                     if let Some(session) = self.sessions.get_mut(&id) {
                         session.block_dirty.clear();
+                        // The window this map describes is about to be
+                        // replaced by the player menu.
+                        session.open_double = None;
                     }
                 }
                 // A crafting grid returns its contents on close (P17-02 Step C):
@@ -1594,6 +1614,21 @@ impl Game {
             }
             None => (Self::ban_uuid_for(name), name.to_owned()),
         };
+        // A row written while the player was **offline** carries the offline
+        // derivation; the same person online carries the Mojang uuid
+        // (AUDIT-19 A-06). "Remove this name" must unlist whichever row
+        // exists, or the operator's removal silently reports "not
+        // whitelisted" while the stale row stays in the file.
+        let uuid = if self.whitelist.get(&uuid).is_some() {
+            uuid
+        } else {
+            let derived = Self::ban_uuid_for(&name);
+            if derived != uuid && self.whitelist.get(&derived).is_some() {
+                derived
+            } else {
+                uuid
+            }
+        };
         let Some(previous) = self.whitelist.get(&uuid).cloned() else {
             return Ok(None);
         };
@@ -1816,6 +1851,38 @@ impl Game {
         if self.sessions.contains_key(&target) {
             self.pending_disconnects.push((target, reason));
         }
+    }
+
+    /// Whether the whitelist gate would refuse `uuid` right now.
+    ///
+    /// The gate's rule and its order, in one place (AUDIT-19 A-12): only an
+    /// enforced whitelist refuses, the listed uuid passes, and an operator
+    /// bypasses without being listed. The join gate and the live revocation
+    /// both read this, so "who is refused" cannot drift between them.
+    #[must_use]
+    pub(crate) fn whitelist_denies(&self, uuid: &str) -> bool {
+        self.whitelist_enforced
+            && !self.whitelist.contains(uuid)
+            && !self.operators.is_operator(uuid)
+    }
+
+    /// Queue every online player the whitelist would now refuse (AUDIT-19 A-12).
+    ///
+    /// `/whitelist on` called this the moment enforcement flipped; without it a
+    /// player who lost access kept it until they happened to reconnect, because
+    /// the gate only runs at login. Returns how many sessions were queued (0
+    /// while enforcement is off, when nobody is refused).
+    pub(crate) fn kick_unlisted_players(&mut self, reason: &str) -> usize {
+        let denied: Vec<mc_network::bridge::ConnectionId> = self
+            .sessions
+            .values()
+            .filter(|session| self.whitelist_denies(&session.uuid))
+            .map(|session| session.id)
+            .collect();
+        for id in &denied {
+            self.kick_player(*id, reason.to_owned());
+        }
+        denied.len()
     }
 
     /// World root for `playerdata/<uuid>.dat`, or `None` when this game has
@@ -2500,6 +2567,9 @@ impl Game {
             mirror_inventory(&mut menu, &session.player.inventory);
             session.menu = menu;
             session.open_block = Some(pos);
+            // A crafting table is never a half of a double: clear any record
+            // from the window this one replaces.
+            session.open_double = None;
             session.open_kind = Some(OpenKind::Crafting);
             let contents: Vec<mc_protocol::packets::play::ItemStack> = session
                 .menu
@@ -2697,7 +2767,7 @@ impl Game {
                 return;
             }
         };
-        let (mut menu, menu_type, title) = match kind {
+        let (mut menu, menu_type, title, double_state) = match kind {
             // Crafting tables never reach this path (their own open needs
             // no entity); the arm keeps the mapping exhaustive.
             OpenKind::Crafting => return,
@@ -2738,7 +2808,20 @@ impl Game {
                 } else {
                     MENU_GENERIC_9X3
                 };
-                (menu, menu_type, chest_title(&name, doubled))
+                // The menu's slot 0..27 is the RIGHT half and 27..54 the LEFT,
+                // whichever half was clicked, so "which slice is mine" is the
+                // clicked block's own `type` (AUDIT-19 B19-1). Recorded with
+                // the partner for the close flush and the break watcher.
+                let double_state = if doubled {
+                    let base = usize::from(
+                        self.chest_shape(x, y, z)
+                            .is_some_and(|(_, _, half)| half == "left"),
+                    ) * 27;
+                    partner.map(|(nx, ny, nz)| (mc_container::BlockPos::new(nx, ny, nz), base))
+                } else {
+                    None
+                };
+                (menu, menu_type, chest_title(&name, doubled), double_state)
             }
             OpenKind::Furnace => {
                 let mut block =
@@ -2761,7 +2844,7 @@ impl Game {
                             return;
                         }
                     };
-                (menu, MENU_FURNACE, "Furnace")
+                (menu, MENU_FURNACE, "Furnace", None)
             }
             OpenKind::Hopper => {
                 let mut block =
@@ -2787,7 +2870,7 @@ impl Game {
                         return;
                     }
                 };
-                (menu, MENU_HOPPER, "Hopper")
+                (menu, MENU_HOPPER, "Hopper", None)
             }
             OpenKind::Dispenser => {
                 let mut block =
@@ -2813,7 +2896,7 @@ impl Game {
                         return;
                     }
                 };
-                (menu, MENU_GENERIC_3X3, "Dispenser")
+                (menu, MENU_GENERIC_3X3, "Dispenser", None)
             }
         };
 
@@ -2825,6 +2908,7 @@ impl Game {
             mirror_inventory(&mut menu, &session.player.inventory);
             session.menu = menu;
             session.open_block = Some(pos);
+            session.open_double = double_state;
             session.open_kind = Some(kind);
 
             let contents: Vec<mc_protocol::packets::play::ItemStack> = session
@@ -3359,7 +3443,7 @@ impl Game {
 
     /// Copy authoritative player state into the entity projection.
     pub(crate) fn project_player_entities(&mut self) {
-        let updates: Vec<(EntityId, mc_world::Vec3, bool, f32, f32)> = self
+        let updates: Vec<(EntityId, mc_world::Vec3, bool, f32, f32, f32)> = self
             .sessions
             .values()
             .map(|session| {
@@ -3369,10 +3453,11 @@ impl Game {
                     session.player.on_ground,
                     session.player.yaw,
                     session.player.pitch,
+                    session.player.health,
                 )
             })
             .collect();
-        for (entity, position, on_ground, yaw, pitch) in updates {
+        for (entity, position, on_ground, yaw, pitch, health) in updates {
             let Some(projection) = self.entities.get_mut(entity) else {
                 continue;
             };
@@ -3382,6 +3467,11 @@ impl Game {
             projection.on_ground = on_ground;
             projection.yaw = yaw;
             projection.pitch = pitch;
+            // Health rides the same projection (AUDIT-19 A-01). Without it the
+            // projection kept whatever it spawned with, so `is_alive` on a
+            // player body stayed true through death and a heal (respawn,
+            // Regeneration) never reached a reader of the entity store.
+            projection.health = health;
             // The projection keeps no velocity of its own: player movement is
             // resolved from the client's reported position, so a velocity here would
             // be a second, disagreeing source of truth. Zero is also what the
@@ -5060,11 +5150,70 @@ impl Game {
         }
     }
 
+    /// Write a closed **single**-container menu's dirty slots back
+    /// (AUDIT-19 B19-1).
+    ///
+    /// A slot the block entity has no room for cannot simply be skipped: the
+    /// menu is discarded right after this call, so a stack that is only in the
+    /// menu would vanish with it. The old close arm filtered those slots with
+    /// `index < items.len()` and let the rest go with no log and no ground
+    /// item — the shape that would eat menu slots 27..53 if the single arm were
+    /// ever reached with a 54-slot menu. Anything the entity cannot take lands
+    /// at the player's feet instead, the same conservation rule the double
+    /// path uses for a half that is gone.
+    fn flush_single_menu(
+        &mut self,
+        id: ConnectionId,
+        pos: mc_container::BlockPos,
+        dirty: &BTreeSet<u16>,
+        block_slots: &[mc_entity::stack::ItemStack],
+        report: &mut TickReport,
+    ) {
+        let mut stranded: Vec<mc_entity::stack::ItemStack> = Vec::new();
+        let mut wrote = false;
+        match self.block_entities.get_mut(pos) {
+            Some(entity) => match entity.data.items_mut() {
+                Some(items) => {
+                    for &slot in dirty {
+                        let index = usize::from(slot);
+                        match block_slots.get(index) {
+                            Some(_) if index < items.len() => {
+                                items[index] = block_slots[index].clone();
+                                wrote = true;
+                            }
+                            Some(stack) => stranded.push(stack.clone()),
+                            None => {}
+                        }
+                    }
+                }
+                // No inventory in this entity: the menu holds the only copies.
+                None => {
+                    for &slot in dirty {
+                        if let Some(stack) = block_slots.get(usize::from(slot)) {
+                            stranded.push(stack.clone());
+                        }
+                    }
+                }
+            },
+            None => {
+                for &slot in dirty {
+                    if let Some(stack) = block_slots.get(usize::from(slot)) {
+                        stranded.push(stack.clone());
+                    }
+                }
+            }
+        }
+        if wrote {
+            mark_block_dirty(&mut self.world, pos.x, pos.z);
+        }
+        self.drop_at_feet(id, stranded, report);
+    }
+
     fn flush_double_menu(
         &mut self,
         id: ConnectionId,
         pos: mc_container::BlockPos,
-        items: Vec<mc_entity::stack::ItemStack>,
+        items: &[mc_entity::stack::ItemStack],
         report: &mut TickReport,
     ) {
         if items.len() != 54 {
@@ -5074,22 +5223,52 @@ impl Game {
         let halves: Option<(mc_container::BlockPos, mc_container::BlockPos)> =
             self.double_halves(pos);
         let Some((right, left)) = halves else {
-            // The pair broke mid-open: the first 27 still belong to the
-            // clicked half when it has an entity; everything else drops.
-            let mut rest = items;
-            let head: Vec<mc_entity::stack::ItemStack> = rest.drain(..27.min(rest.len())).collect();
-            if let Some(entity) = self.block_entities.get_mut(pos)
-                && let Some(slots) = entity.data.items_mut()
-                && slots.len() == head.len()
-            {
-                for (index, slot) in slots.iter_mut().enumerate() {
-                    *slot = head[index].clone();
-                }
+            // The pair broke mid-open. The live world can no longer say which
+            //27 slots are the clicked half's — the survivor's `type` reads
+            //`single` and its partner is gone — so the answer comes from the
+            //half recorded when the window opened (AUDIT-19 B19-1). The old
+            //shape guessed "the first 27": for a window opened on the LEFT half
+            // that is the *orphan's* slice, so the orphan's items were written
+            // into the survivor and the survivor's own items were dropped,
+            // duplicating whatever the break path had already delivered.
+            let Some((partner, base)) = self.sessions.get(&id).and_then(|s| s.open_double) else {
+                // No record: this window was not opened as a double, so the
+                // menu cannot be attributed to a side. Writing a guessed slice
+                // is what B19-1 was; the entities keep their own contents and
+                // the stale menu copy is discarded rather than duplicated.
+                debug!(
+                    id = %id,
+                    "a 54-slot menu closed with no recorded half; entities left alone"
+                );
+                return;
+            };
+            let mine: Vec<mc_entity::stack::ItemStack> = items[base..base + 27].to_vec();
+            // The clicked half's own 27 go back to its entity when it is still
+            // there. When it is not, they were delivered nowhere (a break of
+            // *this* half force-closes the window, so reaching the close with
+            // it gone means no break path ran) and drop at the feet instead.
+            let delivered = match self.block_entities.get_mut(pos) {
+                Some(entity) => match entity.data.items_mut() {
+                    Some(slots) if slots.len() == mine.len() => {
+                        for (index, slot) in slots.iter_mut().enumerate() {
+                            *slot = mine[index].clone();
+                        }
+                        true
+                    }
+                    _ => false,
+                },
+                None => false,
+            };
+            if delivered {
                 mark_block_dirty(&mut self.world, pos.x, pos.z);
             } else {
-                rest.splice(..0, head);
+                self.drop_at_feet(id, mine, report);
             }
-            self.drop_at_feet(id, rest, report);
+            // The other half's slice is **not** re-delivered: its home is
+            // `partner`, whose contents a break already dropped on the ground
+            // (or whose chunk still holds them on disk), so dropping the stale
+            // menu copy would be the duplication this arm used to cause.
+            debug!(id = %id, %partner, base, delivered, "double menu closed with a broken pair");
             return;
         };
         let mut missing: Vec<mc_entity::stack::ItemStack> = Vec::new();

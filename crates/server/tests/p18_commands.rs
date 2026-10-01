@@ -347,6 +347,71 @@ fn fill_volume_over_the_named_cap_is_refused() {
     }
 }
 
+/// Named red: the fill **chunk** budget (AUDIT-19 A-09). The volume cap does
+/// not bound the chunk reads under it: a one-block-tall bar 4097 blocks long is
+/// 4097 blocks (inside the volume cap) and 257 chunks (outside the per-tick
+/// budget `persist.rs` promises), so before this it loaded 257 chunks on the
+/// tick thread in one command. Goes red if `MAX_FILL_CHUNKS` is zeroed, the
+/// check is removed, or the span arithmetic forgets that a region's cost is
+/// quadratic in chunk corners rather than linear in blocks. The refusal itself
+/// names the limit, which is the "refuse with a named message" half.
+#[test]
+fn fill_region_spanning_more_chunks_than_the_budget_is_refused() {
+    let mut harness = Harness::new("p18-fill-chunks", ops_for("Chief", 4));
+    let (id, mut out) = harness.join("Chief");
+    let air = harness
+        .game
+        .registries()
+        .blocks
+        .default_state("minecraft:air")
+        .expect("air");
+    let _ = harness.game.world_mut().set_block(1000, 70, 1000, air);
+
+    // 4097 blocks along x: 257 chunks, and well inside the block cap. Both
+    // constants are compile-time, so they are asserted in a const block (the
+    // same shape the volume pin above uses) rather than as runtime asserts
+    // clippy reads as constant.
+    const {
+        assert!(
+            mc_server::commands::MAX_FILL_VOLUME >= 4097,
+            "the volume cap must not be what refuses this region"
+        );
+        assert!(
+            mc_server::commands::MAX_FILL_CHUNKS == 64,
+            "the budget is the per-tick chunk budget"
+        );
+    }
+    let lines = harness.command(
+        id,
+        &mut out,
+        "fill 1000 70 1000 5096 70 1000 minecraft:stone",
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("257 chunks") && line.contains("64-chunk limit")),
+        "an over-budget fill must be refused by a message naming both numbers, saw {lines:?}"
+    );
+    assert_eq!(
+        harness.game.world().get_block(1000, 70, 1000),
+        air,
+        "a refused fill loads and writes nothing"
+    );
+
+    // The boundary: a span at the budget is accepted, so this is a budget and
+    // not a blanket refusal of long bars. x=1000 starts in chunk 62, so the
+    // 64th chunk ends at x=2015.
+    let lines = harness.command(
+        id,
+        &mut out,
+        "fill 1000 70 1000 2015 70 1000 minecraft:stone",
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("Filled")),
+        "an at-budget span runs, saw {lines:?}"
+    );
+}
+
 #[test]
 fn summon_refuses_unmodelled_kinds_by_name() {
     let mut harness = Harness::new("p18-summon", ops_for("Chief", 4));

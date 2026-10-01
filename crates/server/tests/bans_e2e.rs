@@ -72,6 +72,17 @@ impl Harness {
     /// Join `name` from `ip` through the real event channel, like the
     /// connection layer does: address first, then the join.
     fn join(&mut self, name: &str, ip: IpAddr) -> (ConnectionId, InboundReceiver) {
+        self.join_profile(mc_network::auth::offline_profile(name), ip)
+    }
+
+    /// Join with an explicit profile — the shape online-mode auth produces,
+    /// where the uuid comes from `hasJoined` and is **not** the offline
+    /// derivation of the name (AUDIT-19 A-06).
+    fn join_profile(
+        &mut self,
+        profile: mc_network::auth::GameProfile,
+        ip: IpAddr,
+    ) -> (ConnectionId, InboundReceiver) {
         let id = self.ids.next_id();
         let (outbound, inbound) = OutboundSender::pair(id, 64);
         self.events
@@ -83,10 +94,7 @@ impl Harness {
         self.events
             .try_send(ClientEvent {
                 id,
-                kind: ClientEventKind::Joined {
-                    profile: mc_network::auth::offline_profile(name),
-                    outbound,
-                },
+                kind: ClientEventKind::Joined { profile, outbound },
             })
             .expect("join queued");
         self.game.tick().expect("tick");
@@ -203,6 +211,42 @@ fn expired_row_admits() {
     );
 }
 
+/// AUDIT-19 G-02/G-03: one damaged row must not void the ban file, so the
+/// intact row still refuses at the join gate. The audit reproduced the
+/// opposite — a damaged `banned-players.json` read as "banning nobody" and a
+/// permanently banned player walked in. The fixture also spells the permanent
+/// ban `"FOREVER"`, which Vanilla reads case-insensitively.
+#[test]
+fn a_damaged_row_does_not_lift_the_rest_of_the_ban_file() {
+    let dir = TempDir::new("bans-damaged-row");
+    let listed = mc_network::auth::offline_profile("Griefer").id;
+    std::fs::write(
+        dir.path().join(BANNED_PLAYERS_FILE_NAME),
+        format!(
+            r#"[{{"uuid": "{listed}", "name": "Griefer", "created": "2023-11-14 22:13:20 +0000",
+                 "source": "Chief", "expires": "FOREVER", "reason": "griefing"}},
+                {{"uuid": "11111111-1111-1111-1111-111111111111", "name": "Damaged",
+                 "created": "not a date", "source": "Chief", "expires": "forever",
+                 "reason": "griefing"}}]"#
+        ),
+    )
+    .expect("player ban file");
+    let bans = BanList::load(dir.path()).expect("a damaged row must not void the table");
+    assert_eq!(bans.player_count(), 1, "the intact row loads");
+
+    let mut harness = Harness::new("bans-damaged-row-game", OperatorList::new(), bans);
+    let (id, mut inbound) = harness.join("Griefer", test_ip(20));
+    assert!(
+        !harness.game.has_player(id),
+        "the intact ban row still refuses the join"
+    );
+    assert_eq!(
+        Harness::disconnect_reason(&mut inbound).as_deref(),
+        Some("You are banned from this server.\nReason: griefing"),
+        "the ban screen names the reason from the intact row"
+    );
+}
+
 #[test]
 fn ban_disconnects_the_live_session_and_persists() {
     let mut harness = Harness::new("bans-live", ops_for("Chief", 4), BanList::new());
@@ -235,6 +279,67 @@ fn ban_disconnects_the_live_session_and_persists() {
     assert!(
         !harness.game.has_player(again),
         "the recorded ban refuses the rejoin"
+    );
+}
+
+/// AUDIT-19 A-06: under online-mode auth the join gate compares the **Mojang**
+/// uuid from `hasJoined`, and the session carries it. `/ban` used to derive the
+/// offline uuid from the name whatever the mode, so `/ban <live player>` wrote a
+/// row nothing would ever compare against and never kicked anybody — while the
+/// reply still said `Banned X`. The file row and the kick must name the
+/// session's own uuid, and that is the row the rejoin is judged by.
+#[test]
+fn ban_uses_the_online_players_own_uuid_and_kicks_them() {
+    let mut harness = Harness::new("bans-online-uuid", ops_for("Chief", 4), BanList::new());
+    let (chief, mut chief_in) = harness.join("Chief", test_ip(30));
+    // What online-mode produces: a uuid from `hasJoined`, unrelated to the
+    // name's offline derivation.
+    let online = mc_network::auth::GameProfile {
+        id: uuid::Uuid::parse_str("7ab8a1f2-1111-4c4c-9a0e-0d1c2b3a4f50").expect("uuid"),
+        name: "Real".to_owned(),
+        properties: Vec::new(),
+    };
+    let (victim, mut victim_in) = harness.join_profile(online.clone(), test_ip(31));
+    assert!(harness.game.has_player(victim), "the online profile joins");
+
+    let lines = harness.command(chief, &mut chief_in, "ban Real cheating");
+    assert!(
+        lines.iter().any(|line| line.contains("Banned Real")),
+        "ban confirms: {lines:?}"
+    );
+    harness.game.tick().expect("tick drops the banned session");
+    assert!(
+        !harness.game.has_player(victim),
+        "banning a live online player disconnects them"
+    );
+    assert_eq!(
+        Harness::disconnect_reason(&mut victim_in).as_deref(),
+        Some("You are banned from this server.\nReason: cheating"),
+        "the kicked client sees the ban screen"
+    );
+
+    let text = std::fs::read_to_string(harness.dir.path().join(BANNED_PLAYERS_FILE_NAME))
+        .expect("player ban file written");
+    assert!(
+        text.contains("7ab8a1f2-1111-4c4c-9a0e-0d1c2b3a4f50"),
+        "the file carries the Mojang uuid the gate compares, saw {text}"
+    );
+    let derived = mc_network::auth::offline_profile("Real").id.to_string();
+    assert!(
+        !text.contains(&derived),
+        "and not the offline derivation, which would never match a login"
+    );
+
+    // The row is the one the gate reads: the same online profile is refused.
+    let (again, mut again_in) = harness.join_profile(online, test_ip(31));
+    assert!(
+        !harness.game.has_player(again),
+        "the recorded ban refuses the online rejoin"
+    );
+    assert_eq!(
+        Harness::disconnect_reason(&mut again_in).as_deref(),
+        Some("You are banned from this server.\nReason: cheating"),
+        "the refusal comes from the row /ban wrote"
     );
 }
 

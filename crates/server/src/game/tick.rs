@@ -3000,12 +3000,30 @@ impl Game {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one ordered per-kind sequence (timers, physics, knockback, effects, move, ground, fall damage); splitting it would hide the vanilla ordering this function exists to state"
+    )]
     fn tick_entity(&mut self, id: EntityId) -> bool {
         let Some(entity) = self.entities.get(id) else {
             return false;
         };
         // An entity already flagged for removal is left alone until the sweep.
-        if entity.removed || entity.kind() == EntityKind::Player {
+        if entity.removed {
+            return false;
+        }
+        // A player projection owns no motion here (the client drives it and
+        // `project_player_entities` publishes position), but its hurt window is
+        // a real timer on the same schedule as a mob's (AUDIT-19 A-01). Before
+        // this, the early return below skipped it, so the projection's
+        // `invulnerable_ticks` never decayed and the first hit left the player
+        // permanently immune to the swing path's `connects` gate. Only the
+        // window is ticked: `tick_timers` would also age `effects`, which the
+        // session owns (`tick_session_vitals`) and would double-tick.
+        if entity.kind() == EntityKind::Player {
+            if let Some(entity) = self.entities.get_mut(id) {
+                entity.invulnerable_ticks = entity.invulnerable_ticks.saturating_sub(1);
+            }
             return false;
         }
         let start_y = entity.position.y;
@@ -3224,6 +3242,14 @@ impl Game {
     /// drives armour bypass and knockback (P16-01); `attacker` carries the
     /// knockback direction. Mobs wear no armour; a player-body victim reads the
     /// owning session's worn set, because projections carry no inventory.
+    ///
+    /// A **player-body victim** is the one case this function does not finish
+    /// itself: the health that matters is `Session::player.health`, not the
+    /// projection's (AUDIT-19 A-01), so the mitigated amount is handed to
+    /// [`Self::damage_player_authoritative`], which writes the session, mirrors
+    /// the projection, pushes the vitals and reaches the death path. The
+    /// projection is never removed for a player: death is a state the client
+    /// sees until it respawns, not a missing entity.
     pub(crate) fn damage_entity(
         &mut self,
         id: EntityId,
@@ -3289,25 +3315,19 @@ impl Game {
             entity.invulnerable_ticks = INVULNERABLE_TICKS;
             return false;
         }
+        let is_player = matches!(&entity.body, EntityBody::Player);
+        if is_player {
+            // The projection borrow ends here; everything below this line for a
+            // player belongs to the session (see the helper's docs).
+            let _ = &*entity;
+            return self.damage_player_authoritative(id, amount, source, attacker);
+        }
         entity.health = (entity.health - amount).max(0.0);
         entity.invulnerable_ticks = INVULNERABLE_TICKS;
-        let is_player = matches!(&entity.body, EntityBody::Player);
         let died = entity.health <= 0.0;
-        // End the entity borrow before touching sessions (`wear_armor_on_hit`
-        // needs `&mut self`).
+        // End the entity borrow before touching sessions (`broadcast_hurt_animation`
+        // needs `&self` and the death path below needs `&mut self`).
         let _ = &*entity;
-        // P18-01b: a landed hit costs each worn armour piece one durability
-        // (vanilla `hurtArmor`). The player-body victim owns the inventory.
-        if !source.bypasses_armor() && is_player {
-            let session_id = self
-                .sessions
-                .iter()
-                .find(|(_, session)| session.entity == id)
-                .map(|(sid, _)| *sid);
-            if let Some(session_id) = session_id {
-                self.wear_armor_on_hit(session_id);
-            }
-        }
         self.broadcast_hurt_animation(id, attacker);
         if !died {
             return false;
@@ -3359,6 +3379,90 @@ impl Game {
             }
         }
         true
+    }
+
+    /// Land one already-mitigated hit on the session that owns a player
+    /// projection (AUDIT-19 A-01).
+    ///
+    /// `amount` has had armour, Protection and Resistance applied by
+    /// [`Self::damage_entity`] in that order, so the authoritative model is
+    /// asked to apply it with **no** armour: `armor_absorb(damage, 0.0, 0.0)`
+    /// and `damage_after_protection(damage, 0.0)` are both the identity, so
+    /// mitigation runs exactly once. What the model still owns is everything
+    /// the projection cannot know: the creative/spectator exemption, "a dead
+    /// player takes no more damage" and the floor at zero.
+    ///
+    /// Returns whether this hit killed the player. The projection is **not**
+    /// removed: the client keeps rendering the body until the respawn
+    /// request, which is the existing death path.
+    fn damage_player_authoritative(
+        &mut self,
+        id: EntityId,
+        amount: f32,
+        source: DamageSource,
+        attacker: Option<Attacker>,
+    ) -> bool {
+        let Some(session_id) = self
+            .sessions
+            .values()
+            .find(|session| session.entity == id)
+            .map(|session| session.id)
+        else {
+            // No session owns this body. There is no authoritative health to
+            // write, and writing the projection alone is the defect A-01
+            // names, so the hit is refused rather than half-applied.
+            debug!(%id, "player projection has no owning session; hit dropped");
+            return false;
+        };
+        // The session's own 10-tick window is the authority every other
+        // player-damage path checks (arrows, mob melee). The projection's
+        // window is a mirror on the same schedule; both can hold it, and
+        // either refusing is the same answer.
+        if self
+            .sessions
+            .get(&session_id)
+            .is_some_and(|session| session.hurt_invuln_ticks > 0)
+        {
+            return false;
+        }
+        let outcome = self.sessions.get_mut(&session_id).map(|session| {
+            session.hurt_invuln_ticks = INVULNERABLE_TICKS;
+            // Armour/Protection already ran on the entity side against this
+            // session's worn set, so `ZERO` here is "do not absorb twice",
+            // not "the victim is naked".
+            session
+                .player
+                .apply_damage(amount, source, &CombatStats::ZERO)
+        });
+        let Some(outcome) = outcome else {
+            return false;
+        };
+        if !outcome.applied {
+            // Creative, spectator or already dead: no health moved, so no
+            // window, no vitals and no hurt flash — the same answer the other
+            // player-damage paths give.
+            return false;
+        }
+        // Mirror the authoritative result, so a same-tick reader (the swing's
+        // hurt-window check, mob targeting through `is_alive`) sees the truth
+        // rather than a projection that only ever grows stale. The window
+        // rides along, or the projection would gate the *next* swing while
+        // the session had already opened it.
+        if let Some(entity) = self.entities.get_mut(id) {
+            entity.health = outcome.health;
+            entity.invulnerable_ticks = INVULNERABLE_TICKS;
+        }
+        // P18-01b: a landed hit costs each worn armour piece one durability
+        // (vanilla `hurtArmor`).
+        if !source.bypasses_armor() {
+            self.wear_armor_on_hit(session_id);
+        }
+        self.broadcast_hurt_animation(id, attacker);
+        // Pushes `SetHealth` and, when this hit was lethal, runs the death
+        // path: inventory and XP drop, the death message, and the
+        // `last_death_location` the later respawn reports.
+        self.after_damage(session_id, outcome);
+        outcome.died
     }
 
     /// Phase 4: apply the queued intents in arrival order, then tick players.
@@ -3553,6 +3657,10 @@ impl Game {
     /// loaded cannot happen to: the parser rejects a table with gaps.
     ///
     /// [`ServerError::Protocol`] when the packet cannot be framed, which for these field types means never.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the per-body announcement table (registry type id, then the body packet) is one list; each body's wire shape belongs beside the id it is announced with"
+    )]
     fn broadcast_entity_spawns(&mut self, report: &mut TickReport) -> ServerResult<()> {
         let pending = std::mem::take(&mut self.pending_entity_spawns);
         if pending.is_empty() {
@@ -3586,10 +3694,18 @@ impl Game {
                     }
                     mc_entity::ProjectileKind::Snowball => item,
                 },
-                mc_entity::EntityBody::Item(_) | mc_entity::EntityBody::Player => item,
+                // A player body announces as `minecraft:player` (155), not as the
+                // item fallback: falling back made every other player a
+                // dropped-stack shape on the wire, which is why no real client
+                // ever drew a second player (AUDIT-19 A-02).
+                mc_entity::EntityBody::Player => {
+                    self.registries.entities.id(mc_registry::entities::PLAYER)?
+                }
+                mc_entity::EntityBody::Item(_) => item,
             };
             let position = entity.position;
             let (yaw, pitch) = (entity.yaw, entity.pitch);
+            let is_player = matches!(entity.body, mc_entity::EntityBody::Player);
             let packet = mc_protocol::packets::play::AddEntity {
                 entity_id: id.get(),
                 uuid,
@@ -3611,7 +3727,20 @@ impl Game {
                 movement: (entity.velocity.x, entity.velocity.y, entity.velocity.z),
             }
             .to_raw()?;
-            if self.broadcast_chunk(chunk_of(position.x, position.z), &packet, report) > 0 {
+            // A player's own announcement must not reach the player it names:
+            // that client's self entity id comes from `JoinGame`, and a second
+            // identity for the same id is a contradiction, not a duplicate.
+            let seen = if is_player {
+                self.broadcast_chunk_except(
+                    chunk_of(position.x, position.z),
+                    Some(id),
+                    &packet,
+                    report,
+                )
+            } else {
+                self.broadcast_chunk(chunk_of(position.x, position.z), &packet, report)
+            };
+            if seen > 0 {
                 report.entities_spawned += 1;
             }
             // **The stack, as a second packet**, which is how a capture shows a real server doing it: a drop is
@@ -3746,11 +3875,19 @@ impl Game {
                 report.block_entities_changed += 1;
                 // Viewers of the broken block get their window closed and their
                 // player menu restored: the block half they were transacting
-                // against no longer exists.
+                // against no longer exists. **A viewer on the surviving half of
+                // a broken double gets the same treatment** (AUDIT-19 B19-1b):
+                // their 54-slot window spans a half that is gone, and leaving it
+                // open meant a menu silently disagreeing with the world until
+                // they closed it. The partner half is the one recorded at open,
+                // because the world has already stopped answering it.
                 let viewers: Vec<(ConnectionId, i32)> = self
                     .sessions
                     .iter()
-                    .filter(|(_, s)| s.open_block == Some(pos))
+                    .filter(|(_, s)| {
+                        s.open_block == Some(pos)
+                            || s.open_double.is_some_and(|(partner, _)| partner == pos)
+                    })
                     .map(|(id, s)| (*id, i32::from(s.menu.window_id())))
                     .collect();
                 for (id, window) in viewers {
@@ -3772,6 +3909,9 @@ impl Game {
                                 menu.set_creative(session.player.game_mode.is_creative());
                                 session.menu = menu;
                                 session.open_block = None;
+                                // The half map belonged to the window that just
+                                // went away with the break.
+                                session.open_double = None;
                             }
                         }
                         Err(error) => {
@@ -4264,14 +4404,20 @@ impl Game {
             // P11-08/P11-10: entities already in the streamed chunk are
             // announced to **this** player —the pending-spawn path only
             // reaches players who held the chunk at spawn time, so a joining
-            // player would otherwise never learn what lives here.
+            // player would otherwise never learn what lives here. **Players
+            // included** (AUDIT-19 A-02): excluding `EntityKind::Player` here
+            // was the second half of "players are invisible to each other",
+            // because the spawn broadcast only reaches chunk holders. The
+            // receiving player's own body is skipped — its id came with
+            // `JoinGame`.
+            let own_entity = self.sessions.get(&id).map(|session| session.entity);
             let residents: Vec<EntityId> = self
                 .entities
                 .ids()
-                .filter(|entity| {
-                    self.entities.get(*entity).is_some_and(|entity| {
+                .filter(|candidate| {
+                    self.entities.get(*candidate).is_some_and(|entity| {
                         !entity.removed
-                            && entity.kind() != EntityKind::Player
+                            && Some(*candidate) != own_entity
                             && chunk_of(entity.position.x, entity.position.z) == pos
                     })
                 })
@@ -4322,7 +4468,19 @@ impl Game {
                     self.registries.entities.id(mc_registry::entities::ITEM)?
                 }
             },
-            _ => self.registries.entities.id(mc_registry::entities::ITEM)?,
+            // A player body announces as `minecraft:player` here too. This is
+            // the *second* mapping site (the chunk-stream announcement, used
+            // when a joining player learns about whoever already stands in the
+            // chunk they were just sent): leaving it on the `_` fallback sent
+            // 71, so a fresh joiner drew every existing player as a dropped
+            // stack while the spawn broadcast drew them correctly (AUDIT-19
+            // A-02, found by the test that reads both paths).
+            mc_entity::EntityBody::Player => {
+                self.registries.entities.id(mc_registry::entities::PLAYER)?
+            }
+            mc_entity::EntityBody::Item(_) => {
+                self.registries.entities.id(mc_registry::entities::ITEM)?
+            }
         };
         let position = entity.position;
         let (yaw, pitch) = (entity.yaw, entity.pitch);

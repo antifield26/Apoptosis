@@ -22,8 +22,12 @@
 //!   the list never disagree about who is an operator.
 //! - **A missing file is not an error.** Vanilla creates one on first run; a server with no
 //!   operators is a normal server.
-//! - **A malformed file is an error from [`OperatorList::load`], and the *caller*
-//!   decides.** The load itself refuses to guess: it names the file and the problem
+//! - **A damaged row does not void the table, and a damaged file is an error from
+//!   [`OperatorList::load`] whose *caller* decides.** A row that cannot be parsed is skipped
+//!   with a `warn!` naming the file and the row, and its siblings still load (AUDIT-19
+//!   G-02/G-03); a file that is not a JSON array, or whose every row is damaged, is an error
+//!   rather than an empty list, because "no operators" and "nothing could be read" must not
+//!   look alike. The load itself refuses to guess: it names the file and the problem
 //!   and returns an error rather than returning a half-parsed list. What the server
 //!   does with that error is a separate decision, made at the call site
 //!   ([`crate::lifecycle`]): it logs the error at `error!` and boots with **no
@@ -33,6 +37,12 @@
 //!   which contradicted the call site (AUDIT-09 C-04); Vanilla's
 //!   `StoredUserList.load()` likewise propagates and leaves the choice to its
 //!   caller (`javap -c`: it declares `throws IOException` and catches nothing).
+//! - **The file is replaced atomically.** A sibling temp file is written, fsynced and renamed
+//!   over the target — the repository's `mc_persistence::save::write_atomic` protocol, the
+//!   same one `level.dat` uses. `std::fs::write` truncated the live file, so a crash inside
+//!   the write window left `ops.json` empty or half-written, which reads as "nobody is an
+//!   operator" (AUDIT-19 G-02/G-03). A failed write leaves the previous file live, so the
+//!   rollback above cannot diverge from it.
 //! - **A uuid is the identity, a name is not.** Names change; the file's `name` field is
 //!   carried for messages and matching is by uuid. An entry with a valid uuid and a stale
 //!   name still grants — which is Vanilla's behaviour and the reason the uuid is the key.
@@ -48,6 +58,7 @@
 use mc_command::PermissionLevel;
 use mc_core::error::{ServerError, ServerResult};
 use mc_data::json::{Limits, read_json};
+use mc_persistence::save::write_atomic;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -101,11 +112,13 @@ impl OperatorList {
 
     /// Load `ops.json` from a directory.
     ///
-    /// A missing file yields an empty list, which is a normal server. A **malformed** file is
-    /// an error, and this function returns it rather than a partial list — the *policy* for
-    /// what to do about that error belongs to the caller, and `crate::lifecycle` logs it and
-    /// boots with no operators. The module documentation states both halves and why they are
-    /// separate (AUDIT-09 C-04: this doc and the call site disagreed about which it was).
+    /// A missing file yields an empty list, which is a normal server. A damaged **row** is
+    /// skipped and logged, its siblings still load; a **file** that is not a JSON array, or
+    /// whose every row is damaged, is an error, and this function returns it rather than an
+    /// empty list — the *policy* for what to do about that error belongs to the caller, and
+    /// `crate::lifecycle` logs it and boots with no operators. The module documentation
+    /// states both halves and why they are separate (AUDIT-09 C-04: this doc and the call
+    /// site disagreed about which it was).
     ///
     /// # Errors
     ///
@@ -141,9 +154,14 @@ impl OperatorList {
 
     /// Build a list from an already-parsed JSON value.
     ///
+    /// A damaged row is skipped and logged, its siblings still load; a file whose every row
+    /// is damaged is an error (the first row's problem) rather than an empty list, because
+    /// "no operators" and "nothing could be read" must not look alike.
+    ///
     /// # Errors
     ///
-    /// [`ServerError::CorruptData`] naming the file and the problem.
+    /// [`ServerError::CorruptData`] naming the file and the problem when the value is not an
+    /// array, when no row could be read, or when a uuid repeats.
     pub fn from_value(value: &Value, path: &Path) -> ServerResult<Self> {
         let Some(entries) = value.as_array() else {
             return Err(ServerError::CorruptData(format!(
@@ -154,8 +172,26 @@ impl OperatorList {
         };
 
         let mut list = Self::new();
+        let mut first_problem: Option<ServerError> = None;
         for (index, entry) in entries.iter().enumerate() {
-            let operator = parse_entry(entry, path, index)?;
+            let operator = match parse_entry(entry, path, index) {
+                Ok(operator) => operator,
+                Err(error) => {
+                    // One damaged row must not void the table: the siblings still load. The
+                    // line names the file and the row, so a skipped entry is never silent
+                    // (AUDIT-19 G-02/G-03).
+                    tracing::warn!(
+                        path = %path.display(),
+                        row = index,
+                        %error,
+                        "skipping a damaged operator row"
+                    );
+                    if first_problem.is_none() {
+                        first_problem = Some(error);
+                    }
+                    continue;
+                }
+            };
             // A duplicated uuid is a file that cannot mean what it says, so it is refused
             // rather than resolved by last-wins: the two entries could name different levels
             // and the authority granted would depend on file order.
@@ -169,6 +205,15 @@ impl OperatorList {
                 )));
             }
             list.by_uuid.insert(operator.uuid.clone(), operator);
+        }
+        if list.is_empty() && !entries.is_empty() {
+            return Err(first_problem.unwrap_or_else(|| {
+                ServerError::CorruptData(format!(
+                    "{}: none of the {} entries could be read",
+                    path.display(),
+                    entries.len()
+                ))
+            }));
         }
         Ok(list)
     }
@@ -223,6 +268,12 @@ impl OperatorList {
     /// that goes wrong is an error the caller reports rather than a grant
     /// the caller pretends happened.
     ///
+    /// The replacement is **atomic** (AUDIT-19 G-02/G-03): a sibling temp file, fsynced, then
+    /// renamed over the target by [`mc_persistence::save::write_atomic`] — the protocol
+    /// `level.dat` already uses. Before this, `std::fs::write` truncated the live file, so a
+    /// crash inside the write window left `ops.json` empty or half-written, which reads as
+    /// "nobody is an operator". A failed write now leaves the previous file byte-identical.
+    ///
     /// # Errors
     ///
     /// [`ServerError::Operational`] when the directory cannot be created or
@@ -252,7 +303,7 @@ impl OperatorList {
                 directory.display()
             ))
         })?;
-        std::fs::write(directory.join(OPS_FILE_NAME), text).map_err(|error| {
+        write_atomic(&directory.join(OPS_FILE_NAME), text.as_bytes(), false).map_err(|error| {
             ServerError::Operational(format!(
                 "{}: cannot write {OPS_FILE_NAME}: {error}",
                 directory.display()

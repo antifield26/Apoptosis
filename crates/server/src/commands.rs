@@ -128,6 +128,39 @@ fn fill_volume_accepted(volume: i64) -> bool {
     volume <= MAX_FILL_VOLUME
 }
 
+/// Chunks a `/fill` region spans, horizontally (AUDIT-19 A-09).
+///
+/// `/fill` reads (or generates) the chunk under **every** cell before writing
+/// it — the load-before-write ordering P19-08 installed, without which a fill
+/// into an unloaded chunk overwrites the stored terrain with an all-air
+/// placeholder. The volume cap does not bound that cost: a `32768×1×1` bar is
+/// 32 768 blocks and **2048 distinct chunks**, all read on the tick thread
+/// while `persist.rs` claims reads stop at [`CHUNKS_PER_TICK`] per tick.
+/// Only X/Z matter: a column lives in one chunk however tall it is.
+fn fill_chunk_span(min_x: i32, max_x: i32, min_z: i32, max_z: i32) -> i64 {
+    let width = i64::from((max_x >> 4) - (min_x >> 4) + 1);
+    let depth = i64::from((max_z >> 4) - (min_z >> 4) + 1);
+    width * depth
+}
+
+/// The `/fill` chunk budget: the per-tick chunk budget
+/// ([`CHUNKS_PER_TICK`]), because a command runs inside one tick.
+///
+/// A region spanning more chunks than a tick is allowed to read is refused by
+/// name rather than silently spending the whole tick budget (or more) in one
+/// command. Vanilla bounds `/fill` by blocks alone and pays the chunk loads in
+/// the same tick; this server states the limit instead of hiding it.
+#[allow(
+    clippy::cast_possible_wrap,
+    reason = "the budget is the compile-time `CHUNKS_PER_TICK` (64); a wrap needs a usize wider than i64"
+)]
+pub const MAX_FILL_CHUNKS: i64 = crate::game::CHUNKS_PER_TICK as i64;
+
+/// Whether a `/fill` region's chunk span is within the budget.
+fn fill_chunk_span_accepted(chunks: i64) -> bool {
+    chunks <= MAX_FILL_CHUNKS
+}
+
 /// Enchantment names this build stores on a held stack (P18-02 store + P18-01b
 /// effects for four of them).
 ///
@@ -919,23 +952,39 @@ impl Game {
     ///
     /// Administrator like Vanilla's level 3. `on|off` toggles enforcement
     /// live (a restart restores the config value — stated, not hidden);
-    /// `add|remove` name online or offline players (offline names resolve
-    /// by derivation, like bans) and persist `whitelist.json`
-    /// with the same rollback contract as `/op`; `list` names the listed
-    /// profiles; `reload` re-reads the file, replacing the live list.
+    /// `add|remove` name online or offline players (an online player's own
+    /// uuid is used, A-06) and persist `whitelist.json` with the same
+    /// rollback contract as `/op`; `list` names the listed profiles;
+    /// `reload` re-reads the file, replacing the live list.
+    ///
+    /// **A revocation takes effect now** (AUDIT-19 A-12): enforcement turning
+    /// on disconnects every online player the gate would now refuse, and
+    /// `remove` disconnects the player it just unlisted. Vanilla's gate is
+    /// checked at login only, so without this a player kept full access until
+    /// they happened to reconnect. Operators keep their bypass at both points,
+    /// exactly as they do at the gate.
     fn command_whitelist(
         &mut self,
         _id: mc_network::bridge::ConnectionId,
         parsed: &mc_command::dispatch::ParsedCommand,
     ) -> CommandResult {
         const USAGE: &str = "Usage: /whitelist <on|off|list|add|remove|reload> [player]";
+        /// Vanilla's white-list kick, word for word the join gate's refusal.
+        const UNLISTED_KICK: &str = "You are not white-listed on this server!";
         let Some(action) = parsed.string(0) else {
             return CommandResult::message(USAGE);
         };
         match action {
             "on" => {
                 self.set_whitelist_enforced(true);
-                CommandResult::message("Whitelist is now enforced")
+                let kicked = self.kick_unlisted_players(UNLISTED_KICK);
+                if kicked == 0 {
+                    CommandResult::message("Whitelist is now enforced")
+                } else {
+                    CommandResult::message(format!(
+                        "Whitelist is now enforced; disconnected {kicked} player(s) not on it"
+                    ))
+                }
             }
             "off" => {
                 self.set_whitelist_enforced(false);
@@ -987,6 +1036,20 @@ impl Game {
                         "Nothing changed: {name} is not whitelisted"
                     )),
                     Ok(Some(unlisted)) => {
+                        // The player who just lost access goes now, not at
+                        // their next login — but only when they *did* lose
+                        // it: with enforcement off nobody is refused, so
+                        // kicking would punish a player the file no longer
+                        // mentions while the gate is open (AUDIT-19 A-12).
+                        if let Some(target) = self.session_id_by_name(&unlisted) {
+                            let denied = self
+                                .sessions
+                                .get(&target)
+                                .is_some_and(|session| self.whitelist_denies(&session.uuid));
+                            if denied {
+                                self.kick_player(target, UNLISTED_KICK.to_owned());
+                            }
+                        }
                         CommandResult::message(format!("Removed {unlisted} from the whitelist"))
                     }
                 }
@@ -1008,13 +1071,38 @@ impl Game {
 
     /// Resolve a ban/pardon/whitelist name to the uuid the server would see.
     ///
-    /// Offline-mode derivation (`OfflinePlayer:<name>`), which is exactly
-    /// the identity an offline server joins with — so this resolves online
-    /// and offline profiles alike *while offline*. Under online-mode auth
-    /// (P19-05) names map to Mojang uuids instead, and this stays a named
-    /// gap: naming by name there must wait for the usercache.
+    /// The **live session's** uuid when the named player is online, and
+    /// offline-mode derivation (`OfflinePlayer:<name>`) otherwise.
+    /// `OfflinePlayer:<name>` is exactly the identity an **offline** server
+    /// joins with, so the fallback is right there. Under online-mode auth
+    /// (P19-05) a session carries the **Mojang** uuid from `hasJoined`, which
+    /// the join gate compares and which is what a ban or whitelist row must
+    /// carry to match (AUDIT-19 A-06: deriving offline for a live player wrote
+    /// a row nothing would ever compare against, so `/ban <online>` reported
+    /// `Banned X` while neither kicking nor banning).
+    ///
+    /// A name that is **not** online still derives offline, and under
+    /// online-mode that is a named gap: the Mojang uuid of an absent player is
+    /// only knowable from a usercache, which this build does not keep.
     pub(crate) fn ban_uuid_for(name: &str) -> String {
         mc_network::auth::offline_profile(name).id.to_string()
+    }
+
+    /// The uuid and canonical name a ban/whitelist entry should carry for
+    /// `name`, taking the live session when there is one.
+    ///
+    /// Split out of [`Self::ban_uuid_for`] so the *command* paths that name a
+    /// player can prefer the authenticated identity, while the pure offline
+    /// derivation stays available for callers with no session map (and for
+    /// tests of the offline shape).
+    pub(crate) fn ban_identity_for(&self, name: &str) -> (String, String) {
+        match self.session_id_by_name(name) {
+            Some(target) => match self.sessions.get(&target) {
+                Some(session) => (session.uuid.clone(), session.name.clone()),
+                None => (Self::ban_uuid_for(name), name.to_owned()),
+            },
+            None => (Self::ban_uuid_for(name), name.to_owned()),
+        }
     }
 
     /// Parse a `/ban-ip` address: a bare IP or an `ip:port` pair.
@@ -1033,7 +1121,10 @@ impl Game {
     ///
     /// The write lands before the kick: a failed save never kicks without
     /// recording. Banning can target an offline profile (the uuid derives
-    /// from the name); only the disconnect needs a live session.
+    /// from the name); only the disconnect needs a live session. **An online
+    /// player's own uuid is used** — the join gate compares that identity, so
+    /// deriving one offline would file a row that never matches (AUDIT-19
+    /// A-06, where `/ban <live player>` neither kicked nor banned).
     fn command_ban(
         &mut self,
         _id: mc_network::bridge::ConnectionId,
@@ -1043,16 +1134,15 @@ impl Game {
             return CommandResult::message("Usage: /ban <player> [reason]");
         };
         let reason = parsed.string(1).unwrap_or("").to_owned();
-        let uuid = Self::ban_uuid_for(name);
+        // The live session's uuid when the name is online (AUDIT-19 A-06):
+        // the file row and the kick must name the identity the join gate
+        // compares, which under online-mode is the Mojang uuid.
+        let (uuid, listed) = self.ban_identity_for(name);
         let source = parsed.source.name.clone();
-        let target = self
-            .sessions
-            .values()
-            .find(|session| session.uuid == uuid)
-            .map(|session| session.id);
+        let target = self.session_id_by_name(name);
         let ban = crate::bans::PlayerBan {
             uuid: uuid.clone(),
-            name: name.to_owned(),
+            name: listed.clone(),
             created: std::time::SystemTime::now(),
             source,
             expires: None,
@@ -1859,9 +1949,11 @@ impl Game {
 
     /// `/fill <from> <to> <block> [replace|destroy|keep]` (P18-02).
     ///
-    /// Volume is capped at [`MAX_FILL_VOLUME`] — the named red
-    /// `fill_volume_over_the_named_cap_is_refused` goes red if that cap is
-    /// zeroed or removed.
+    /// Two named reds bound the work, in this order: the volume cap
+    /// ([`MAX_FILL_VOLUME`]) and the chunk budget ([`MAX_FILL_CHUNKS`],
+    /// AUDIT-19 A-09). The first alone let a `32768×1×1` bar load 2048 chunks
+    /// on the tick thread while `persist.rs` promised reads stop at
+    /// [`CHUNKS_PER_TICK`]. Both refusals name their limit.
     fn command_fill(&mut self, parsed: &mc_command::dispatch::ParsedCommand) -> CommandResult {
         let Some(mc_command::ArgumentValue::BlockPos {
             x: x0,
@@ -1899,6 +1991,15 @@ impl Game {
         if !fill_volume_accepted(volume) {
             return CommandResult::message(format!(
                 "The region is {volume} blocks, above the {MAX_FILL_VOLUME}-block limit"
+            ));
+        }
+        // The block cap does not bound the chunk reads beneath it (A-09): a
+        // `32768 0 0 → 32768 0 0` bar is one block tall and 2048 chunks wide.
+        let chunks = fill_chunk_span(min_x, max_x, min_z, max_z);
+        if !fill_chunk_span_accepted(chunks) {
+            return CommandResult::message(format!(
+                "The region spans {chunks} chunks, above the {MAX_FILL_CHUNKS}-chunk limit \
+                 for a single fill (every cell's chunk is read before it is written)"
             ));
         }
         let name = format!("{block}");
@@ -2109,8 +2210,10 @@ impl BlockWriteMode {
     ///
     /// Cost: a wide `/fill` loads every chunk it spans, one read or generation
     /// each, on the tick thread — the same on-demand load Vanilla's command
-    /// performs, bounded by [`MAX_FILL_VOLUME`] (the worst case, a
-    /// 32 768 × 1 × 1 bar, is one chunk per 16 blocks of length).
+    /// performs. **The span is budgeted by the caller** ([`MAX_FILL_CHUNKS`],
+    /// AUDIT-19 A-09), so this per-cell load can no longer exceed what one
+    /// tick's chunk reads are allowed to cost; the block cap alone would have
+    /// allowed 2048 chunk reads from a 32 768-block bar.
     fn apply(self, game: &mut Game, x: i32, y: i32, z: i32, state: i32) -> Result<bool, String> {
         game.load_or_create_chunk(ChunkPos::new(x >> 4, z >> 4));
         let current = game.world().get_block_loaded(x, y, z);
@@ -2155,7 +2258,10 @@ pub const fn may_run_commands(kind: SourceKind) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_FILL_VOLUME, fill_volume, fill_volume_accepted};
+    use super::{
+        MAX_FILL_CHUNKS, MAX_FILL_VOLUME, fill_chunk_span, fill_chunk_span_accepted, fill_volume,
+        fill_volume_accepted,
+    };
 
     #[test]
     fn fill_boundary_accepts_at_cap_and_refuses_above() {
@@ -2166,5 +2272,25 @@ mod tests {
         assert!(fill_volume_accepted(MAX_FILL_VOLUME));
         assert!(fill_volume_accepted(0));
         assert!(!fill_volume_accepted(MAX_FILL_VOLUME + 1));
+    }
+
+    #[test]
+    fn fill_chunk_span_counts_the_chunks_the_volume_hides() {
+        // AUDIT-19 A-09: the volume cap and the chunk cost are different
+        // questions. A one-block-tall bar across 4096 blocks is 4097 blocks
+        // (well inside the volume cap) and 257 chunks (well outside the
+        // per-tick budget this server promises).
+        assert_eq!(fill_chunk_span(0, 0, 0, 0), 1);
+        assert_eq!(fill_chunk_span(0, 15, 0, 15), 1);
+        assert_eq!(fill_chunk_span(0, 16, 0, 0), 2);
+        assert_eq!(fill_chunk_span(0, 4096, 0, 0), 257);
+        assert!(fill_volume_accepted(fill_volume(0, 4096, 0, 0, 0, 0)));
+        assert!(!fill_chunk_span_accepted(fill_chunk_span(0, 4096, 0, 0)));
+
+        // The boundary itself, like the volume cap's: at the budget passes,
+        // one chunk more is refused. Zeroing the budget fails the first arm;
+        // flipping to `>=` fails it too; removing the check fails the second.
+        assert!(fill_chunk_span_accepted(MAX_FILL_CHUNKS));
+        assert!(!fill_chunk_span_accepted(MAX_FILL_CHUNKS + 1));
     }
 }

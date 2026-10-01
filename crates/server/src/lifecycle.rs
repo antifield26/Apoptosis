@@ -402,21 +402,34 @@ impl<H: TickHook> Server<H> {
     /// [`ServerError::CorruptData`] when the existing `level.dat` cannot be
     /// interpreted.
     pub fn open_world(&mut self) -> ServerResult<()> {
-        let world = crate::storage::WorldService::open(&self.config.storage)?;
+        let mut world = crate::storage::WorldService::open(&self.config.storage)?;
         let (events_tx, events_rx) = mc_network::bridge::game_channel(EVENT_QUEUE);
-        // The game takes ownership of the open world so its Broadcast phase can
-        // load a chunk from disk before creating an all-air placeholder for it;
-        // `Server` therefore drives saving through the game and never closes the
-        // handle itself (see `Game`'s threading notes).
-        // World seed (AUDIT-18 F-H1): a stored seed always wins (opening a
-        // vanilla world must not fork its terrain), then the configured seed
-        // for fresh worlds, then the historical seed-0 default.
-        let stored_seed = world.storage().level().and_then(|level| level.seed);
-        let seed = resolve_seed(self.config.storage.seed, stored_seed);
+        // World seed (AUDIT-18 F-H1, AUDIT-19 D-19-H1): a seed the world
+        // records always wins (opening a vanilla world must not fork its
+        // terrain), then the configured seed for fresh worlds, then the
+        // historical seed-0 default.
+        //
+        // "Records" is the whole of D-19-H1: a real 26.1.2 `level.dat` has no
+        // seed key at all, so `recorded_seed` also reads the world-gen settings
+        // document the version moved generation into. Reading only `level.dat`
+        // made every vanilla world generate seed-0 terrain.
+        let stored_seed = world.recorded_seed()?;
+        let seed = crate::storage::resolve_seed(self.config.storage.seed, stored_seed);
+        // AUDIT-19 D-19-M1: write the resolved seed back, so a `seed = N` added
+        // to the config later changes nothing for a world that already exists
+        // (and removing one does not flip it back to the default). A world this
+        // build created already recorded it in `WorldService::open`; this
+        // covers a world that records none anywhere.
+        world.record_seed(seed)?;
         if stored_seed.is_some() {
             tracing::info!(seed, "generating from the world's recorded seed");
         } else if self.config.storage.seed.is_some() {
             tracing::info!(seed, "generating from the configured seed");
+        } else {
+            tracing::info!(
+                seed,
+                "recording the default seed for a world that names none"
+            );
         }
         // The game takes ownership of the open world so its Broadcast phase can
         // load a chunk from disk before creating an all-air placeholder for it;
@@ -863,21 +876,13 @@ impl<H: TickHook> Server<H> {
 
 /// Resolve the world-generation seed for a boot (AUDIT-18 F-H1).
 ///
-/// A stored seed always wins: opening a world that records one (vanilla or
-/// a previous boot with a configured seed) must generate from it, or new
-/// chunks fork the terrain. Otherwise the configured seed applies (fresh
-/// worlds), else the historical seed-0 default.
-fn resolve_seed(configured: Option<i64>, stored: Option<i64>) -> i64 {
-    stored
-        .or(configured)
-        .unwrap_or(crate::game::DEFAULT_RANDOM_SEED)
-}
-
+/// Moved to `crate::storage` with AUDIT-19 D-19-M1: recording the resolved seed
+/// is part of opening a world, so the policy lives beside the storage that
+/// writes it (and its unit test lives there too).
 #[cfg(test)]
 mod tests {
     use super::{
         LifecycleState, NoopHook, Server, ShutdownHandle, TickHook, exposure_warning_needed,
-        resolve_seed,
     };
     use mc_core::error::{ServerError, ServerResult};
     use mc_core::tick::Tick;
@@ -894,18 +899,6 @@ mod tests {
             self.ticks.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
-    }
-
-    #[test]
-    fn seed_resolution_prefers_stored_then_configured_then_zero() {
-        // A world that records a seed keeps it no matter the config: opening
-        // a vanilla world must not fork its terrain (F-H1).
-        assert_eq!(resolve_seed(Some(7), Some(1_361_882_806)), 1_361_882_806);
-        assert_eq!(resolve_seed(None, Some(1_361_882_806)), 1_361_882_806);
-        // Fresh worlds take the configured seed; unset means the
-        // historical seed-0 default, stated not hidden.
-        assert_eq!(resolve_seed(Some(42), None), 42);
-        assert_eq!(resolve_seed(None, None), crate::game::DEFAULT_RANDOM_SEED);
     }
 
     #[test]

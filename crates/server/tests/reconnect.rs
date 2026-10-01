@@ -248,6 +248,14 @@ fn rejoin_restores_where_the_player_left() {
         "rejoin keeps exhaustion (no free hunger refund), got {}",
         player.exhaustion
     );
+    // AUDIT-19 P-1: the partial bar is its own cell, and it was **unpinned** —
+    // deleting the `player.experience = former.experience;` restore left this
+    // test green, because nothing here read it. It is read now.
+    assert!(
+        (player.experience - 0.5).abs() < f32::EPSILON,
+        "rejoin keeps the partial experience bar, got {}",
+        player.experience
+    );
 }
 
 /// A restart restores the player from `playerdata/<uuid>.dat` (P14-10 walk):

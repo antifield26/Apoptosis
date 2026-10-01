@@ -2129,6 +2129,33 @@ impl Game {
         sent
     }
 
+    /// [`Game::broadcast_chunk`] minus the player who owns one entity.
+    ///
+    /// A **player** spawn is the one announcement whose audience must exclude
+    /// the client it names (AUDIT-19 A-02): that client already has its own
+    /// entity id from `JoinGame`, so an `add_entity` naming it would be a
+    /// second identity for the same id rather than a duplicate announcement.
+    /// `None` is the plain broadcast with the same return.
+    fn broadcast_chunk_except(
+        &self,
+        pos: ChunkPos,
+        except: Option<EntityId>,
+        raw: &RawPacket,
+        report: &mut TickReport,
+    ) -> usize {
+        let mut sent = 0;
+        for session in self.sessions.values() {
+            if except.is_some_and(|entity| session.entity == entity) {
+                continue;
+            }
+            if session.sent_chunks.contains(&pos) {
+                self.send_raw(session.id, raw.clone(), report);
+                sent += 1;
+            }
+        }
+        sent
+    }
+
     fn broadcast_all(&self, raw: &RawPacket, report: &mut TickReport) {
         for session in self.sessions.values() {
             if session.ready {

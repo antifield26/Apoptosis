@@ -24,9 +24,10 @@
 //! accepts both shapes so worlds written by tools targeting the older schema
 //! still load; the writer always emits the 26.1 shape.
 
-use crate::dimension::{Dimension, OVERWORLD_KEY};
+use crate::dimension::{Dimension, DimensionLayout, OVERWORLD_KEY};
 use mc_core::error::{ServerError, ServerResult};
 use mc_nbt::{Limits, NbtTag};
+use std::path::{Path, PathBuf};
 
 /// `DataVersion` written by 26.1.2 (measured: `level.dat`, every chunk and every
 /// `data/minecraft/*.dat` in a vanilla 26.1.2 world carry this value).
@@ -47,6 +48,84 @@ pub const VERSION_SERIES: &str = "main";
 /// shape, different chunk fields); we refuse rather than guess, because we ship
 /// no datafixers.
 pub const MIN_READABLE_DATA_VERSION: i32 = 4435;
+
+/// File name of the 26.1 world-generation settings document.
+///
+/// 26.1 moved world generation out of `level.dat` into this file (module docs
+/// above). It matters beyond bookkeeping: a real 26.1.2 `level.dat` carries
+/// **no** seed key at all, so this document is the only place a vanilla world
+/// records the seed its terrain was generated from (AUDIT-19 D-19-H1).
+pub const WORLD_GEN_SETTINGS_FILE: &str = "world_gen_settings.dat";
+
+/// Paths a 26.1 world may keep [`WORLD_GEN_SETTINGS_FILE`] at, most likely
+/// first.
+///
+/// Two placements are documented in-tree and **neither is verified against a
+/// real 26.1.2 world**: the repository holds no fixture for this file
+/// (AUDIT-19 section 9). The reader tries both rather than betting on one:
+///
+/// 1. `<world>/data/minecraft/world_gen_settings.dat` — the "global data"
+///    sibling of `level.dat` in this crate's layout notes and the group
+///    `docs/research/protocol-baseline.md` section 2 lists
+///    (`data/minecraft/{world_gen_settings,game_rules,weather,world_clocks}.dat`);
+/// 2. `<world>/dimensions/minecraft/overworld/data/minecraft/world_gen_settings.dat`
+///    — the overworld's own 26.1 tree, i.e. [`DimensionLayout::data_dir`].
+///
+/// Only one of them has to be right for a vanilla world to keep its terrain,
+/// and a world that keeps the document somewhere else still loads (it just
+/// generates from the caller's fallback seed, as before this reader existed).
+#[must_use]
+pub fn world_gen_settings_paths(world_root: &Path) -> [PathBuf; 2] {
+    [
+        world_root
+            .join("data")
+            .join("minecraft")
+            .join(WORLD_GEN_SETTINGS_FILE),
+        DimensionLayout::modern(world_root, &Dimension::Overworld)
+            .data_dir()
+            .join(WORLD_GEN_SETTINGS_FILE),
+    ]
+}
+
+/// Read a world's 26.1 world-gen settings document, if it has one.
+///
+/// The seed inside it is *not* interpreted here: which key path holds it is
+/// `mc-worldgen`'s question (`WorldSeed::from_level_dat` walks the candidates),
+/// and this crate owns only the file and its NBT.
+///
+/// Returns `Ok(None)` when neither candidate path exists — a world with no such
+/// document records no seed there, which is not an error: the caller decides
+/// the fallback (configured seed, else the documented default). When both exist
+/// the first candidate wins: two documents cannot both be current, the other
+/// one is stale, and guessing which is the stale one is not this reader's job.
+///
+/// # Errors
+///
+/// [`ServerError::Operational`] when a document exists but cannot be read, and
+/// [`ServerError::CorruptData`] when it is not a gzip NBT document. A present
+/// but unreadable document is deliberately **not** reported as "no seed":
+/// falling back to a different seed is exactly the fork AUDIT-19 D-19-H1 is
+/// about, and a loud refusal is recoverable by the operator while silently
+/// generated terrain is not.
+pub fn read_world_gen_settings(world_root: &Path) -> ServerResult<Option<NbtTag>> {
+    for path in world_gen_settings_paths(world_root) {
+        if !path.is_file() {
+            continue;
+        }
+        let bytes = std::fs::read(&path).map_err(|e| {
+            ServerError::Operational(format!("cannot read {}: {e}", path.display()))
+        })?;
+        let document = crate::save::decode_gzip_nbt(&bytes).map_err(|e| match e {
+            ServerError::CorruptData(message) => ServerError::CorruptData(format!(
+                "{} is not a readable world-gen document: {message}",
+                path.display()
+            )),
+            other => other,
+        })?;
+        return Ok(Some(document));
+    }
+    Ok(None)
+}
 
 /// Game difficulty.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -205,6 +284,10 @@ pub struct LevelDat {
     /// seed": the caller decides (config seed, fresh default), never this
     /// parser, because an invented seed generates terrain that matches
     /// neither the stored chunks nor anything the operator chose.
+    ///
+    /// `None` is the ordinary case for a **26.1** world, not an anomaly: its
+    /// `level.dat` has no seed key at all and the seed lives in the world-gen
+    /// settings document instead (see [`read_world_gen_settings`]).
     pub seed: Option<i64>,
     /// Uninterpreted `Data` entries, preserved verbatim.
     pub extra: Vec<(String, NbtTag)>,
@@ -645,9 +728,14 @@ impl LevelDat {
 
 #[cfg(test)]
 mod tests {
-    use super::{DATA_VERSION_26_1_2, Difficulty, LEVEL_VERSION_26_1_2, LevelDat, SpawnPoint};
+    use super::{
+        DATA_VERSION_26_1_2, Difficulty, LEVEL_VERSION_26_1_2, LevelDat, SpawnPoint,
+        read_world_gen_settings, world_gen_settings_paths,
+    };
     use mc_core::error::ServerError;
     use mc_nbt::NbtTag;
+    use mc_test_support::fixtures::TempDir;
+    use std::path::Path;
 
     fn sample() -> LevelDat {
         let mut level = LevelDat::new("test world", 1_700_000_000_000);
@@ -840,5 +928,94 @@ mod tests {
         }
         assert_eq!(Difficulty::from_key("nightmare"), None);
         assert_eq!(Difficulty::from_legacy_id(9), None);
+    }
+
+    /// A synthetic world-gen settings document, in the shape the tree records
+    /// for it (`docs/research/protocol-baseline.md` section 2: "each wrapped in
+    /// `{DataVersion, data}`").
+    ///
+    /// Synthetic on purpose: the repository holds no jar-derived fixture for
+    /// this file (AUDIT-19 section 9). The seed key path is not part of what
+    /// this crate tests — `mc-worldgen` owns that question.
+    fn sample_world_gen_settings() -> NbtTag {
+        NbtTag::compound([
+            ("DataVersion".to_owned(), NbtTag::Int(DATA_VERSION_26_1_2)),
+            (
+                "data".to_owned(),
+                NbtTag::compound([(
+                    "dimensions".to_owned(),
+                    NbtTag::compound([(
+                        "minecraft:overworld".to_owned(),
+                        NbtTag::compound([(
+                            "generator".to_owned(),
+                            NbtTag::compound([("seed".to_owned(), NbtTag::Long(1_361_882_806))]),
+                        )]),
+                    )]),
+                )]),
+            ),
+        ])
+    }
+
+    #[test]
+    fn world_gen_settings_is_readable_at_both_documented_26_1_placements() {
+        // The two candidate paths, in the documented order, and nothing else.
+        let root = Path::new("world");
+        let paths = world_gen_settings_paths(root);
+        assert!(
+            paths[0].ends_with("data/minecraft/world_gen_settings.dat"),
+            "{:?}",
+            paths[0]
+        );
+        assert!(!paths[0].to_string_lossy().contains("dimensions"));
+        assert!(
+            paths[1]
+                .ends_with("dimensions/minecraft/overworld/data/minecraft/world_gen_settings.dat"),
+            "{:?}",
+            paths[1]
+        );
+
+        // Neither file present: a world with no 26.1 document, not an error.
+        let dir = TempDir::new("world-gen-settings-none");
+        let world = dir.path().join("world");
+        std::fs::create_dir_all(&world).expect("mkdir");
+        assert!(
+            read_world_gen_settings(&world)
+                .expect("no document is not a failure")
+                .is_none()
+        );
+
+        // Each placement on its own is found by the public reader.
+        let encoded =
+            crate::save::encode_gzip_nbt("", &sample_world_gen_settings()).expect("encodes");
+        for (index, path) in world_gen_settings_paths(&world).into_iter().enumerate() {
+            let parent = path.parent().expect("parent");
+            std::fs::create_dir_all(parent).expect("mkdir");
+            std::fs::write(&path, &encoded).expect("write document");
+            assert_eq!(
+                read_world_gen_settings(&world).expect("reads"),
+                Some(sample_world_gen_settings()),
+                "placement {index} ({}) must be read",
+                path.display()
+            );
+            std::fs::remove_file(&path).expect("cleanup");
+        }
+    }
+
+    #[test]
+    fn a_present_but_unreadable_world_gen_settings_document_is_refused() {
+        // Not "no seed": treating it as absent would silently generate the
+        // world with a different seed, which is the fork AUDIT-19 D-19-H1 is
+        // about. The operator gets an error instead.
+        let dir = TempDir::new("world-gen-settings-broken");
+        let world = dir.path().join("world");
+        let path = world_gen_settings_paths(&world)[0].clone();
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&path, b"not gzip nbt").expect("write");
+        let error = read_world_gen_settings(&world).expect_err("must refuse");
+        assert!(matches!(error, ServerError::CorruptData(_)), "{error:?}");
+        assert!(
+            format!("{error}").contains("world_gen_settings.dat"),
+            "the error must name the file: {error}"
+        );
     }
 }
