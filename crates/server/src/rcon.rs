@@ -10,12 +10,29 @@
 //!
 //! What this module owns: the codec (with a hard length cap — a hostile
 //! length prefix drops the connection before any allocation), the password
-//! check (fixed-time comparison, never early-out), and the request channel
-//! into the tick loop. What it does not own: sockets and auth throttle
-//! (the binary's listener, `apps/server/src/rcon.rs`), and the world
-//! itself (commands run through `Game::dispatch_console`).
+//! check (fixed-time comparison, never early-out), the request channel
+//! into the tick loop, and the listener's admission budgets (AUDIT-19
+//! A-05/C19-M1/C19-M2: concurrent sockets reuse the game listener's
+//! [`ConnectionGate`], bad logins accumulate per address so reconnecting
+//! cannot reset the throttle). What it does not own: sockets and the
+//! accept loop (the binary's listener, `apps/server/src/rcon.rs`), and the
+//! world itself (commands run through `Game::dispatch_console`).
 
 use mc_core::error::{ServerError, ServerResult};
+use std::collections::HashMap;
+use std::net::IpAddr;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
+
+/// The game listener's admission gate and its refusal reason, re-exported so
+/// the RCON listener in the binary can reuse the one limiter instead of
+/// growing a second one.
+///
+/// AUDIT-19 A-05/C19-M1 found the admin port accepting unbounded sockets: the
+/// game listener had a gate, RCON had none. Re-exporting the types (the binary
+/// does not depend on `mc-network` directly) keeps a single implementation of
+/// "how many sockets may this address hold", so the two listeners cannot drift.
+pub use mc_network::limits::{ConnectionGate, LimitError};
 
 /// Login packet type.
 pub const TYPE_LOGIN: i32 = 3;
@@ -160,6 +177,165 @@ pub fn auth_delay(failures: u32) -> std::time::Duration {
     std::time::Duration::from_millis(100 * (1 << shift))
 }
 
+/// Concurrent RCON sockets admitted across every client (AUDIT-19 A-05).
+///
+/// RCON is an admin surface, not a game port: a normal load is one operator
+/// session plus the odd reconnect, so the socket budget is single-digit. The
+/// cap is a budget, not a promise — the surplus is refused at `accept` instead
+/// of becoming an unbounded task.
+pub const LISTENER_MAX_CONNECTIONS: u32 = 8;
+
+/// Most concurrent RCON sockets one address may hold (AUDIT-19 A-05).
+///
+/// Four matches an operator running a handful of admin tools from one host
+/// while stopping one address from owning the whole global budget.
+pub const LISTENER_MAX_CONNECTIONS_PER_IP: u32 = 4;
+
+/// Time to regain one reconnect token after the per-address burst is spent.
+///
+/// Deliberately slower than the game listener's 250 ms: RCON clients have no
+/// legitimate reconnect churn (a stock client opens one socket, runs its
+/// commands and closes), so after the burst an address is throttled to one
+/// socket per second instead of four.
+pub const LISTENER_RECONNECT_REFILL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Bad logins one address may accumulate before the listener refuses it.
+///
+/// The per-connection budget (`MAX_AUTH_FAILURES` in the listener) closes a
+/// socket after five wrong passwords, but a reconnecting client starts from
+/// zero — AUDIT-19 C19-M2. This budget is the shared one: twenty failures per
+/// address per [`AUTH_BLOCK_WINDOW`], regardless of how many sockets they were
+/// spread over. With the backoff schedule that is a few guesses per minute,
+/// not fifty.
+pub const AUTH_FAILURE_BUDGET: u32 = 20;
+
+/// How long a spent [`AUTH_FAILURE_BUDGET`] keeps an address refused.
+///
+/// Measured from the first failure of the run, so a blocked address cannot
+/// extend its own block by reconnecting; once the window elapses the count
+/// resets and the address is served again.
+pub const AUTH_BLOCK_WINDOW: Duration = Duration::from_secs(300);
+
+/// Build the RCON listener's admission gate with the numbers above.
+///
+/// This is the game listener's [`ConnectionGate`], not a second limiter: same
+/// global semaphore, same per-IP token bucket, same release-on-drop guard. The
+/// constructor lives here because this crate owns RCON's rules and already
+/// depends on `mc-network`, while the binary owns only the sockets.
+#[must_use]
+pub fn listener_gate() -> Arc<ConnectionGate> {
+    Arc::new(ConnectionGate::new(
+        LISTENER_MAX_CONNECTIONS,
+        LISTENER_MAX_CONNECTIONS_PER_IP,
+        LISTENER_RECONNECT_REFILL_INTERVAL,
+    ))
+}
+
+/// Bad-login budget shared by every connection from one address (AUDIT-19
+/// C19-M2).
+///
+/// A per-connection counter is not a throttle: the attacker reconnects and it
+/// is back to zero. This one outlives connections — failures accumulate per
+/// source address, and once `budget` of them land inside `window` the address
+/// is refused at `accept` until the window that started at its first failure
+/// has elapsed. Time is injected so tests are deterministic; production passes
+/// [`Instant::now`].
+#[derive(Debug)]
+pub struct AuthBudget {
+    budget: u32,
+    window: Duration,
+    failures: Mutex<HashMap<IpAddr, FailureWindow>>,
+}
+
+/// Failures counted for one address inside the current window.
+#[derive(Debug, Clone, Copy)]
+struct FailureWindow {
+    /// When the current window started (the first failure of the run).
+    first: Instant,
+    /// Failures recorded since `first`.
+    count: u32,
+}
+
+impl AuthBudget {
+    /// A budget of `budget` failures (at least one) per `window`.
+    #[must_use]
+    pub fn new(budget: u32, window: Duration) -> Self {
+        Self {
+            budget: budget.max(1),
+            window,
+            failures: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Record one bad login from `ip`; returns the address's running count.
+    pub fn record_failure(&self, ip: IpAddr, now: Instant) -> u32 {
+        let mut failures = self.lock();
+        let entry = failures.entry(ip).or_insert(FailureWindow {
+            first: now,
+            count: 0,
+        });
+        if now.saturating_duration_since(entry.first) >= self.window {
+            entry.first = now;
+            entry.count = 0;
+        }
+        entry.count += 1;
+        let count = entry.count;
+        // Bound map growth under address spraying, like the game gate does:
+        // once the table is large, forget windows that have already expired.
+        if failures.len() > 4096 {
+            let window = self.window;
+            failures.retain(|_, entry| now.saturating_duration_since(entry.first) < window);
+        }
+        count
+    }
+
+    /// Whether `ip` has spent its budget and is still inside the window.
+    #[must_use]
+    pub fn is_blocked(&self, ip: IpAddr, now: Instant) -> bool {
+        let mut failures = self.lock();
+        let expired = failures
+            .get(&ip)
+            .is_some_and(|entry| now.saturating_duration_since(entry.first) >= self.window);
+        if expired {
+            failures.remove(&ip);
+            return false;
+        }
+        failures
+            .get(&ip)
+            .is_some_and(|entry| entry.count >= self.budget)
+    }
+
+    /// Forget an address's failures (called after a successful login).
+    pub fn clear(&self, ip: IpAddr) {
+        self.lock().remove(&ip);
+    }
+
+    /// Addresses currently tracked (diagnostics/tests).
+    #[must_use]
+    pub fn tracked_ips(&self) -> usize {
+        self.lock().len()
+    }
+
+    /// Lock the table, recovering from a poisoned mutex.
+    ///
+    /// The guarded state is a counter map, so a recovered lock is still
+    /// consistent enough to decide an admission; a panic elsewhere must not
+    /// turn every later login into a process-wide panic (same rule as
+    /// [`ConnectionGate`]).
+    fn lock(&self) -> MutexGuard<'_, HashMap<IpAddr, FailureWindow>> {
+        self.failures.lock().unwrap_or_else(|poisoned| {
+            tracing::error!("rcon auth budget mutex was poisoned; continuing with recovered state");
+            poisoned.into_inner()
+        })
+    }
+}
+
+impl Default for AuthBudget {
+    fn default() -> Self {
+        Self::new(AUTH_FAILURE_BUDGET, AUTH_BLOCK_WINDOW)
+    }
+}
+
 /// A command for the tick loop, with its way back.
 pub struct RconRequest {
     /// Command text, without a leading slash.
@@ -171,10 +347,14 @@ pub struct RconRequest {
 #[cfg(test)]
 mod tests {
     use super::{
-        AUTH_FAILURE_ID, MAX_PACKET_LEN, MAX_RESPONSE_BODY, TYPE_COMMAND, TYPE_LOGIN,
-        TYPE_RESPONSE, auth_delay, check_password, decode_body, encode_login, encode_packet,
-        encode_response,
+        AUTH_BLOCK_WINDOW, AUTH_FAILURE_BUDGET, AUTH_FAILURE_ID, AuthBudget,
+        LISTENER_MAX_CONNECTIONS, LISTENER_MAX_CONNECTIONS_PER_IP, MAX_PACKET_LEN,
+        MAX_RESPONSE_BODY, TYPE_COMMAND, TYPE_LOGIN, TYPE_RESPONSE, auth_delay, check_password,
+        decode_body, encode_login, encode_packet, encode_response, listener_gate,
     };
+    use std::net::{IpAddr, Ipv4Addr};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn login_round_trips_with_padding() {
@@ -255,5 +435,68 @@ mod tests {
         let packet = decode_body(&bytes[4..]).expect("decodes");
         assert_eq!((packet.id, packet.kind), (11, TYPE_COMMAND));
         assert_eq!(packet.payload, b"list");
+    }
+
+    #[test]
+    fn bad_logins_accumulate_per_address_across_connections() {
+        // AUDIT-19 C19-M2: the budget must be a property of the *address*,
+        // not of a connection, so N failures spread over N "connections" trip
+        // it exactly like N failures on one.
+        let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let other = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
+        let budget = AuthBudget::new(3, Duration::from_secs(60));
+        let start = Instant::now();
+        assert_eq!(budget.record_failure(ip, start), 1);
+        // Another address keeps its own count from the same instant.
+        assert_eq!(budget.record_failure(other, start), 1);
+        assert!(!budget.is_blocked(ip, start));
+        // A second connection does not reset the count.
+        assert_eq!(budget.record_failure(ip, start + Duration::from_secs(1)), 2);
+        assert!(!budget.is_blocked(ip, start + Duration::from_secs(1)));
+        assert_eq!(budget.record_failure(ip, start + Duration::from_secs(2)), 3);
+        assert!(budget.is_blocked(ip, start + Duration::from_secs(2)));
+        // Other addresses keep their own budget.
+        assert!(!budget.is_blocked(other, start));
+        // A successful login forgets the address's failures.
+        budget.clear(ip);
+        assert!(!budget.is_blocked(ip, start + Duration::from_secs(3)));
+        assert_eq!(budget.tracked_ips(), 1, "only the culprit was forgotten");
+        // The block is a window, not a permanent ban.
+        let late = start + Duration::from_secs(61);
+        budget.record_failure(ip, late);
+        budget.record_failure(ip, late);
+        budget.record_failure(ip, late);
+        assert!(budget.is_blocked(ip, late));
+        assert!(
+            !budget.is_blocked(ip, late + Duration::from_secs(60)),
+            "an expired window releases the address"
+        );
+    }
+
+    #[test]
+    fn listener_gate_uses_the_documented_budgets() {
+        let gate = listener_gate();
+        let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let now = Instant::now();
+        // Exactly the per-IP cap is admitted; the next one is refused.
+        let held: Vec<_> = (0..LISTENER_MAX_CONNECTIONS_PER_IP)
+            .map(|_| {
+                Arc::clone(&gate)
+                    .try_acquire(ip, now)
+                    .expect("within the per-IP cap")
+            })
+            .collect();
+        assert_eq!(gate.concurrent_for(ip), LISTENER_MAX_CONNECTIONS_PER_IP);
+        assert_eq!(
+            Arc::clone(&gate).try_acquire(ip, now).err(),
+            Some(super::LimitError::PerIpConcurrent)
+        );
+        drop(held);
+        assert_eq!(gate.concurrent_for(ip), 0);
+        // The global budget is the documented one and never below the per-IP
+        // one, or the per-IP cap would be unreachable.
+        const { assert!(LISTENER_MAX_CONNECTIONS >= LISTENER_MAX_CONNECTIONS_PER_IP) };
+        assert_eq!(AUTH_FAILURE_BUDGET, 20);
+        assert_eq!(AUTH_BLOCK_WINDOW, Duration::from_secs(300));
     }
 }

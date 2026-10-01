@@ -140,6 +140,12 @@ impl Session {
                 server_id: String::new(),
                 public_key: identity.public_der.clone(),
                 verify_token: token.to_vec(),
+                // Jar: `ServerLoginPacketListenerImpl.handleHello` builds
+                // `ClientboundHelloPacket("", key, challenge, true)` — the
+                // trailing `shouldAuthenticate` is `iconst_1` on the only
+                // path that sends this packet (online mode; the offline
+                // path never reaches it).
+                should_authenticate: true,
             },
         )
         .await?;
@@ -169,7 +175,10 @@ impl Session {
             return Ok(None);
         }
         let hash = server_id_hash("", &secret, &identity.public_der);
-        let profile = match auth.authenticate(name, &hash).await {
+        let profile = match auth
+            .authenticate_from(name, &hash, Some(self.peer_ip))
+            .await
+        {
             Ok(profile) => profile,
             Err(ServerError::InvalidAction(_)) => {
                 self.kick(writer, ConnectionState::Login, "Failed to verify username!")
@@ -1052,6 +1061,10 @@ mod tests {
         let request = EncryptionRequest::decode(&body).expect("decodes");
         assert!(request.server_id.is_empty());
         assert!(!request.public_key.is_empty() && request.verify_token.len() == 4);
+        assert!(
+            request.should_authenticate,
+            "the online path must send shouldAuthenticate=true, as vanilla's handleHello does"
+        );
 
         // Answer like a stock client: RSA-encrypt secret and token.
         let secret = *b"0123456789abcdef";

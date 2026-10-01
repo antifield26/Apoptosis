@@ -87,6 +87,12 @@ fn write_blob(writer: &mut crate::wire::PacketWriter, bytes: &[u8]) -> ServerRes
 
 /// `minecraft:login_hello` / `EncryptionRequest` (clientbound 1, online
 /// mode only).
+///
+/// The field order — and the trailing boolean in particular — is the jar's,
+/// not ours: 26.1.2 `ClientboundHelloPacket(String, byte[], byte[], boolean)`
+/// writes `writeUtf → writeByteArray → writeByteArray → writeBoolean` and
+/// reads `readUtf(20) → readByteArray → readByteArray → readBoolean`, so
+/// `shouldAuthenticate` is the **last** field on the wire.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncryptionRequest {
     /// Server id, conventionally empty (it feeds the session hash on the
@@ -96,6 +102,11 @@ pub struct EncryptionRequest {
     pub public_key: Vec<u8>,
     /// Random verify token (4 bytes from a CSPRNG).
     pub verify_token: Vec<u8>,
+    /// The jar's `shouldAuthenticate` (accessor `shouldAuthenticate()`,
+    /// field `shouldAuthenticate`). Vanilla's only construction site,
+    /// `ServerLoginPacketListenerImpl.handleHello`, sends `true` (the packet
+    /// is not sent at all on the offline path); we mirror that.
+    pub should_authenticate: bool,
 }
 
 impl Packet for EncryptionRequest {
@@ -106,6 +117,8 @@ impl Packet for EncryptionRequest {
         let server_id = reader.read_string(64)?;
         let public_key = read_blob(&mut reader)?;
         let verify_token = read_blob(&mut reader)?;
+        // Jar order: the boolean trails the two byte arrays (readBoolean).
+        let should_authenticate = reader.read_bool()?;
         if !reader.is_empty() {
             return Err(mc_core::error::ServerError::Protocol(format!(
                 "encryption_request has {} trailing bytes",
@@ -116,6 +129,7 @@ impl Packet for EncryptionRequest {
             server_id,
             public_key,
             verify_token,
+            should_authenticate,
         })
     }
 
@@ -124,6 +138,8 @@ impl Packet for EncryptionRequest {
         writer.write_string(&self.server_id)?;
         write_blob(&mut writer, &self.public_key)?;
         write_blob(&mut writer, &self.verify_token)?;
+        // Jar order: writeBoolean(shouldAuthenticate) comes last.
+        writer.write_bool(self.should_authenticate);
         Ok(writer.finish())
     }
 }
@@ -290,10 +306,31 @@ impl Packet for LoginDisconnect {
 #[cfg(test)]
 mod tests {
     use super::{
-        LoginAcknowledged, LoginDisconnect, LoginStart, LoginSuccess, ProfileProperty,
-        SetCompression,
+        EncryptionRequest, LoginAcknowledged, LoginDisconnect, LoginStart, LoginSuccess,
+        ProfileProperty, SetCompression,
     };
     use crate::packets::Packet;
+
+    #[test]
+    fn encryption_request_round_trip() {
+        // Both polarities: the boolean is a real field, not an assumed
+        // constant (the wire shape itself is pinned by
+        // `tests/hello_wire_shape.rs` against the jar bytecode).
+        for should_authenticate in [true, false] {
+            let packet = EncryptionRequest {
+                server_id: String::new(),
+                public_key: vec![0x30, 0x82, 0x01, 0x02],
+                verify_token: vec![0xDE, 0xAD, 0xBE, 0xEF],
+                should_authenticate,
+            };
+            let bytes = packet.encode().expect("encodes");
+            assert_eq!(
+                EncryptionRequest::decode(&bytes).expect("decodes"),
+                packet,
+                "round trip with should_authenticate={should_authenticate}"
+            );
+        }
+    }
 
     #[test]
     fn login_start_round_trip() {

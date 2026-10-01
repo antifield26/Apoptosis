@@ -1,7 +1,9 @@
 //! Online-mode login cryptography and session-server checks (P19-05, ADR-0008).
 //!
 //! The vanilla handshake, in order: the server sends `EncryptionRequest`
-//! (empty server id, RSA public key, random verify token); the client
+//! (empty server id, RSA public key, random verify token, and the trailing
+//! `shouldAuthenticate=true` the jar's `ClientboundHelloPacket` writes last);
+//! the client
 //! answers `EncryptionResponse` (shared secret + token, RSA-encrypted);
 //! the server decrypts, checks the token, derives the session hash, asks
 //! Mojang's session server (`hasJoined`), and — on success — enables
@@ -22,6 +24,7 @@
 
 use mc_core::error::{ServerError, ServerResult};
 use mc_protocol::packets::login::ProfileProperty;
+use std::net::IpAddr;
 use uuid::Uuid;
 
 /// RSA key size in bits (vanilla: 1024).
@@ -207,7 +210,14 @@ impl MojangClient {
         }
     }
 
-    /// Ask whether `username` joined with `server_hash`.
+    /// Ask whether `username` joined with `server_hash` from `ip`.
+    ///
+    /// Vanilla (and authlib) always send the joining address as a trailing
+    /// `ip=` parameter, which is what binds the session to the address the
+    /// player is joining from — AUDIT-19 C19-M3: without it a stolen session
+    /// answer is replayable from anywhere. `None` omits the parameter (the
+    /// pre-fix shape) and exists only for callers that genuinely have no
+    /// address to bind.
     ///
     /// Blocking HTTPS: the caller runs it off the async runtime
     /// (`spawn_blocking`). Every failure maps to [`SessionRefusal`] — a
@@ -223,11 +233,15 @@ impl MojangClient {
         &self,
         username: &str,
         server_hash: &str,
+        ip: Option<IpAddr>,
     ) -> Result<SessionProfile, SessionRefusal> {
         // Usernames are `[A-Za-z0-9_]` (validated at login) and hashes are
-        // hex-or-minus, so neither needs percent-encoding in the query.
+        // hex-or-minus, so neither needs percent-encoding in the query. The
+        // address is a bare host address, exactly what vanilla appends
+        // (`InetAddress.getHostAddress()`; IPv6 stays unbracketed).
+        let ip = ip.map_or_else(String::new, |address| format!("&ip={address}"));
         let url = format!(
-            "{}/session/minecraft/hasJoined?username={username}&serverId={server_hash}",
+            "{}/session/minecraft/hasJoined?username={username}&serverId={server_hash}{ip}",
             self.base_url
         );
         let agent = ureq::Agent::new_with_config(
@@ -292,6 +306,16 @@ impl crate::auth::OnlineAuthProvider for MojangSessionAuth {
         name: &'a str,
         server_hash: &'a str,
     ) -> crate::auth::AuthFuture<'a> {
+        // No address to bind: the caller did not have one (AUDIT-19 C19-M3).
+        self.authenticate_from(name, server_hash, None)
+    }
+
+    fn authenticate_from<'a>(
+        &'a self,
+        name: &'a str,
+        server_hash: &'a str,
+        peer: Option<std::net::IpAddr>,
+    ) -> crate::auth::AuthFuture<'a> {
         Box::pin(async move {
             let client = self.client.clone();
             let name = name.to_owned();
@@ -299,8 +323,11 @@ impl crate::auth::OnlineAuthProvider for MojangSessionAuth {
             // Blocking HTTPS must not stall the connection task: run it on
             // the blocking pool. A panicking or cancelled blocker is our
             // failure, never a default-accept.
+            // The join address rides `authenticate_from` and becomes Vanilla's
+            // `&ip=` on the request, so the session is bound to where it came
+            // from (AUDIT-19 C19-M3; wired at `connection.rs`'s login path).
             let checked =
-                tokio::task::spawn_blocking(move || client.has_joined(&name, &server_hash))
+                tokio::task::spawn_blocking(move || client.has_joined(&name, &server_hash, peer))
                     .await
                     .map_err(|e| ServerError::Operational(format!("session check failed: {e}")))?;
             match checked {
@@ -552,7 +579,7 @@ mod tests {
         let body = r#"{"id":"069a79f444e94726a5bef4a7b64ac909","name":"Notch","properties":[{"name":"textures","value":"abc","signature":"sig"}]}"#;
         let (base, path_rx) = stub_once("200 OK", body);
         let profile = MojangClient::at_base(&base)
-            .has_joined("Notch", "hash")
+            .has_joined("Notch", "hash", None)
             .expect("200 parses");
         assert_eq!(profile.name, "Notch");
         assert_eq!(
@@ -566,6 +593,34 @@ mod tests {
             path.contains("username=Notch") && path.contains("serverId=hash"),
             "query carries both values: {path}"
         );
+        assert!(
+            !path.contains("ip="),
+            "no address available means no ip= parameter: {path}"
+        );
+    }
+
+    #[test]
+    fn has_joined_binds_the_join_address() {
+        // AUDIT-19 C19-M3: vanilla and authlib always append the joining
+        // address, so a caller that knows it must put it on the wire.
+        let body = r#"{"id":"069a79f444e94726a5bef4a7b64ac909","name":"Notch"}"#;
+        let (base, path_rx) = stub_once("200 OK", body);
+        MojangClient::at_base(&base)
+            .has_joined(
+                "Notch",
+                "hash",
+                Some("203.0.113.7".parse().expect("test address")),
+            )
+            .expect("200 parses");
+        let path = path_rx.recv_timeout(Duration::from_secs(5)).expect("path");
+        assert!(
+            path.contains("username=Notch") && path.contains("serverId=hash"),
+            "the address is an addition, not a replacement: {path}"
+        );
+        assert!(
+            path.ends_with("&ip=203.0.113.7"),
+            "the query ends with the joining address, like vanilla: {path}"
+        );
     }
 
     #[test]
@@ -573,18 +628,18 @@ mod tests {
         // Unknown user (vanilla answers 404 with an error body).
         let (base, _) = stub_once("404 Not Found", r#"{"error":"Not found"}"#);
         assert_eq!(
-            MojangClient::at_base(&base).has_joined("Nobody", "hash"),
+            MojangClient::at_base(&base).has_joined("Nobody", "hash", None),
             Err(SessionRefusal::Unknown)
         );
         // Malformed 200 body is a refusal, not a default profile.
         let (base, _) = stub_once("200 OK", "not json");
         assert!(matches!(
-            MojangClient::at_base(&base).has_joined("Notch", "hash"),
+            MojangClient::at_base(&base).has_joined("Notch", "hash", None),
             Err(SessionRefusal::Malformed(_))
         ));
         // Unreachable host is transport, never accept.
         assert!(matches!(
-            MojangClient::at_base("http://127.0.0.1:1").has_joined("Notch", "hash"),
+            MojangClient::at_base("http://127.0.0.1:1").has_joined("Notch", "hash", None),
             Err(SessionRefusal::Transport(_))
         ));
     }

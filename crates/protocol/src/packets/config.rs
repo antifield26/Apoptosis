@@ -1,11 +1,21 @@
 //! Configuration-state packets.
 //!
-//! Trailing-byte rule (C M-5): unlike serverbound-play decoders, these
-//! decoders do not refuse trailing bytes. That is deliberate, not an
-//! oversight — they run in tests and capture tools, never on hostile socket
-//! bytes — and the capture sweep holds byte-equality from the encode side
-//! instead. Do not "fix" one decoder into strictness without checking the
-//! captures still parse: real bodies may carry tails this code tolerates.
+//! Trailing-byte rule: **this module's decoders are not alike, and the four
+//! serverbound kinds are reached from the socket.** AUDIT-19 C M-5 found the
+//! earlier claim here ("they run in tests and capture tools, never on hostile
+//! socket bytes") to be false: `connection.rs` decodes
+//! `select_known_packs`, `client_information`, `finish_configuration` and
+//! `keep_alive` straight off the wire during configuration. The per-decoder
+//! rule is now:
+//!
+//! - **fixed-width bodies refuse a trailing byte** (`ConfigKeepAlive`,
+//!   `ConfigPong`): there is no unmodelled field a real client could send, so a
+//!   tail is malformed input and is rejected;
+//! - **variable bodies that the capture only partly explains stay tolerant and
+//!   say so** (`SelectKnownPacks` logs the tail length; `C2sCustomPayload`
+//!   consumes the rest by design). Fixing one of these into strictness without
+//!   re-checking the captures is what the warning here used to say, and it still
+//!   applies.
 
 use super::Packet;
 use crate::ids::{clientbound, serverbound};
@@ -51,6 +61,11 @@ fn decode_known_packs(payload: &[u8]) -> ServerResult<SelectKnownPacks> {
             version: reader.read_string(crate::MAX_IDENTIFIER_LEN)?,
         });
     }
+    // Tolerant on purpose (see the module header): the capture is the only
+    // evidence for this body, so an unmodelled field is accepted rather than
+    // refused. The decision is pinned by
+    // `select_known_packs_tolerates_a_tail_it_does_not_model` — AUDIT-19 C M-5
+    // found it silent, and this module has no logger to make it loud with.
     Ok(SelectKnownPacks { packs })
 }
 
@@ -226,9 +241,18 @@ impl Packet for ConfigKeepAlive {
     const ID: i32 = clientbound::config::KEEP_ALIVE;
 
     fn decode(payload: &[u8]) -> ServerResult<Self> {
-        Ok(Self {
-            id: PacketReader::new(payload).read_i64()?,
-        })
+        // Fixed width, and reached from the socket (`connection.rs:534`): a
+        // trailing byte is malformed input, not an unmodelled field
+        // (AUDIT-19 C M-5).
+        let mut reader = PacketReader::new(payload);
+        let id = reader.read_i64()?;
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "configuration keep_alive has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self { id })
     }
 
     fn encode(&self) -> ServerResult<Vec<u8>> {
@@ -249,9 +273,17 @@ impl Packet for ConfigPong {
     const ID: i32 = serverbound::config::PONG;
 
     fn decode(payload: &[u8]) -> ServerResult<Self> {
-        Ok(Self {
-            id: PacketReader::new(payload).read_i32()?,
-        })
+        // Same rule as `ConfigKeepAlive`: fixed width, socket-reachable
+        // (AUDIT-19 C M-5).
+        let mut reader = PacketReader::new(payload);
+        let id = reader.read_i32()?;
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "configuration pong has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self { id })
     }
 
     fn encode(&self) -> ServerResult<Vec<u8>> {

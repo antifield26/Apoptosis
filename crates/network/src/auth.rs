@@ -61,6 +61,24 @@ pub trait OnlineAuthProvider: Send + Sync {
     /// [`ServerError::InvalidAction`] when the session server rejects the
     /// player.
     fn authenticate<'a>(&'a self, name: &'a str, server_hash: &'a str) -> AuthFuture<'a>;
+
+    /// Authenticate `name` for `server_hash`, carrying the address the login
+    /// arrived from.
+    ///
+    /// Vanilla's session check binds the request to that address (`&ip=`), so a
+    /// provider that can use it should. Defaulted to the address-less call so
+    /// providers without one keep working: AUDIT-19 C19-M3 found the address was
+    /// built into the URL but never threaded here, which left every online-mode
+    /// session unbound to its join address.
+    fn authenticate_from<'a>(
+        &'a self,
+        name: &'a str,
+        server_hash: &'a str,
+        peer: Option<std::net::IpAddr>,
+    ) -> AuthFuture<'a> {
+        let _ = peer;
+        self.authenticate(name, server_hash)
+    }
 }
 
 /// Provider used when `online_mode = false` (default). Should never be called;
