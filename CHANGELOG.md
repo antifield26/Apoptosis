@@ -89,6 +89,29 @@ its mechanism is neutralised, restored byte-exact afterwards.
   paths, plus the `/fill` chunk-budget question (A-09), are covered by the same
   batch: `whitelist_revocation` (4) and `double_chest` (10).
 
+**The last queue item and the two gaps the fix round itself found.**
+
+- **A-04, the feature half.** The phase claim that skins travel via
+  \player_info_update\ was corrected earlier (the packet did not exist); the
+  packet is now implemented: \player_info_update\ (play 70) and
+  \player_info_remove\ (69) with the jar's shape — a one-byte action bitset over
+  the action ordinals, then a VarInt count and per-entry writers in ordinal order
+  — carrying \ADD_PLAYER | UPDATE_GAME_MODE | UPDATE_LISTED | UPDATE_HAT\ with the
+  profile's name and property list (skins), broadcast to every ready session on
+  join and removed on leave, which is Vanilla's \roadcastAll\ rather than the
+  chunk-scoped audience the player *entities* use. Ten wire-shape tests assert
+  hand-built and real captured bodies; the ordinal ordering is pinned by bytes
+  because a round-trip stays green even when encoder and decoder agree on the
+  wrong order.
+- A player who **logged out dead** rejoined as Survival regardless of their
+  stored mode; the stored mode now survives the death state, matching Vanilla's
+  estoreFrom\.
+- \/fill\ now scans the whole region for stored-but-unreadable chunks **before**
+  the first write, so a refusal means nothing was written (and the residual
+  in-loop error reports the count if one is ever reached).
+- \/ban <player>\ without a reason works — Vanilla's reason is optional, and the
+  default was previously unreachable from chat because the parser demanded one.
+
 **Audit findings about the pins themselves (P1-10).** Two tests the audit proved
 could not fail now can: the rejoin test asserts the partial experience bar it had
 only set, and the `save-off` test gained an anti-vacuity leg that requires the
