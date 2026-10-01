@@ -12,6 +12,41 @@ entry is the release candidate matching the workspace version at the time
 with built artifacts. The current workspace version is `0.3.0`, published as
 tag `v0.3.0` (see below).
 
+## [Unreleased] — Phase 20 (The Living World)
+
+**P20-00 — the world ticking model ([ADR-0009](docs/adr/ADR-0009-world-ticking.md),
+accepted).** The phase's own rule is that no code lands before this: the overworld
+is inert today (no fluid producers, nothing samples sections for growth, weather
+does not advance), and where that work sits decides what the next eight tasks can
+be. The jar settled the shape
+(`javap` on `ServerLevel`): `blockTicks` and `fluidTicks` are **two independent
+`LevelTicks` queues**, random ticks are a per-chunk sweep (`tickChunk(LevelChunk,
+int)`), and the level's own order is time → block ticks → fluid ticks → chunk
+sweep → entities → block entities.
+
+The decision: `PHASE_ORDER` grows from six phases to eight — `FluidTicks` and
+`RandomTicks` are inserted between `ScheduledTicks` and `Entities`, mirroring the
+jar's order and giving the P20 exit gate the *separate* fluid and random-tick
+costs it asks for; world time and weather advance at the head of
+`ScheduledTicks`, where the jar puts `tickTime()`. Budgets are numbers with spill
+rather than drops — 4 096 fluid ticks per tick, random ticks bounded by
+construction (`ticking_sections × randomTickSpeed`, so the radius *is* the
+budget) — and the radius is P19-06's `simulation_distance` (default 8), with the
+boundary that we can only tick chunks we have loaded, so the effective radius is
+`min(simulation_distance, view_distance)`.
+
+The estimate P20-07 will check is stated as a number: ~29 000 sweep samples per
+tick at the workload (10 players, radius 8, `randomTickSpeed` 3) →
+**≤ 1.5 ms/tick** for `RandomTicks`, **≤ 0.5 ms/tick** for `FluidTicks` at the
+cap, **≤ 2.0 ms/tick** combined on **p99** — 4 % of the 50 ms budget. Exceeding it
+means the early-out is wrong, not that the estimate was low; raising it needs a
+new ADR revision. The five P20-01 differential scenario names are frozen in the
+ADR before the fixture's first run, and §3 is the interface note P21-00a must
+align with (per-dimension queues, shared phase slots, per-dimension radius).
+
+No code in this entry: the ADR is the deliverable, and P20-01 is the first task
+allowed to touch `PHASE_ORDER`.
+
 ## [Unreleased] — AUDIT-19 fix round
 
 The first half of the audit's fix queue (`docs/audits/AUDIT-19.md` §8), landed
