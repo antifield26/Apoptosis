@@ -48,6 +48,19 @@ the fix and inverted: a `/setblock` into the same unloaded chunk now leaves the
 diamond, the second write and the generated terrain at y=0 intact, while a
 control cell that really is air still writes.
 
+**CI.** The head of `main` that carries this (`4ee7bcb`) is **green on all five
+jobs** — run `36734685340`, 28m46s: fmt/clippy/tests on Windows and Linux, the
+aarch64 cross-check, cargo-deny, and the documentation audit. It is the first
+green run since P19-04's follow-up, because two jobs had been red since P19-05
+and the local quick gate cannot see either (it skips them): cargo-deny rejected
+`webpki-roots` (`CDLA-Permissive-2.0`, now allowed and recorded) and the
+aarch64 cross-check died in `cc-rs` for `ring`'s C build script without a cross
+compiler (now installed in that job). A third failure was this push's own: the
+documentation audit read a quoted escape for the byte-order mark in the session
+record as an unrendered template placeholder — it passed locally only because the
+file was still untracked when the gate ran, which is exactly the gap the
+same-commit CI clause exists to close.
+
 **Residual, named rather than assumed away:** the other writers in the tick loop
 read first with `let Some(…) = world.get_block_loaded(…) else { return }`
 (`tick.rs:494`, `mod.rs:1651` and the `session.rs` gameplay writers), so an
