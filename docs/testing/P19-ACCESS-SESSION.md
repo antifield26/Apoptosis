@@ -305,6 +305,13 @@ and P19-08's load-before-read fixes it with the F3 change.
 | Clean join after the offline listing | `target/p19-session/item3-whitelist-join-client.png` |
 | Landmark rendered after a restart | `target/p19-session/item4-inworld-landmark-client.png` |
 | Landmark destroyed by the F3 write | `target/p19-session/item4-clobber-verdict-client.png` |
-| Server logs (5 runs) | `target/p19-session/session.log`, `session2.log` … `session6.log` |
-| Client logs, one per step | `target/p19-session/evidence/*.log` |
+| Server logs (6 runs) | `target/p19-session/session.log`, `session2.log` … `session6.log` |
+| Client logs — 6 Minecraft client logs, not one per step | `target/p19-session/evidence/*.log` (item 1, item 2 twice, item 3, item 4 twice; `evidence/item5-rcon-client.log` is a Minecraft client log too, not the mcrcon transcript) |
 | Session config, and its restart copy | `target/p19-session/config.toml`, `config-restart.toml` |
+
+**What is not in this artifact set.** The mcrcon transcript for item 5 was never captured, so the
+`list`/`stop` run has **no client-side artifact at all** — it rests on the server log lines in
+`session5.log` and `session6.log` quoted above. The 6 client logs are also not one per step: there is
+no client log for the pardon-rejoin step of item 2 or for the landmark step of item 4 (both have
+server-log evidence instead), and `evidence/item5-rcon-client.log` is the client log of the session
+that was up during the RCON step, not a record of the RCON client.

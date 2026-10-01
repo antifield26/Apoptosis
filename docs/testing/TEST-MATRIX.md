@@ -5,9 +5,12 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 844 passed, 0 failed, 41 ignored** across **148 suites**, re-derived from
+Totals: **1 885 passed, 0 failed, 41 ignored** across **151 suites**, re-derived from
 `python tools/gates/run.py --quick` on the current tree (every gate passed).
-The +56 over the **1 788** figure is the AUDIT-19 fix round: new suites
+The +97 over the **1 788** figure is the AUDIT-19 fix round, in two waves: the
+second wave adds \p19_persistence_standards\, \p19_write_pins\ and
+\udit19_gate_pins\ and grows the command/chunk-streaming suites the G-09
+permission tightening moved to an operator fixture. The first wave: new suites
 \pvp_authority\ (5), \whitelist_revocation\ (4), \ccess_files_atomic\ (9),
 \execute_permission\ (1), \hello_wire_shape\ (4), \config_wire_tails\ (3),
 \has_joined_query\ (4) plus new pins inside \double_chest\, \p18_commands\,
@@ -269,7 +272,11 @@ Several of these differ from the figures this sentence used to carry
 `mc-world` 44, `mc-persistence` 74, `mc-worldgen` 81, `mc-registry` 21,
 `mc-network` 18, `mc-nbt` 16) — they had gone stale unnoticed across
 landings, which is Audit 07's lesson re-applied rather than a new
-method. The 5 doc-tests and the named suites complete the total; the
+method. The doc-tests and the named suites complete the total — re-derived
+with `cargo test --workspace --doc`, which reports one `Doc-tests` line per
+crate and they sum to **4** (three in `mc_entity`, one compile-only in
+`mc_nbt`; every other crate reports 0), not to the 5 this sentence carried
+before; the
 named-suite arithmetic below is still derived rather than counted, and a
 full per-suite re-measure is still outstanding as noted next. Both Audit
 07's method and its lesson still apply: the figures must be re-measured

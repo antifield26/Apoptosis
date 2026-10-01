@@ -133,7 +133,13 @@ P-1/P-2 的**绿是证明钉子弱**（有意证明），对应修复队列 P1-5
 
 ### LOW / INFO（摘要）
 
-C19-L1（"vanilla 4 KiB 上限"失实，实为 ≤1460 且长度须精确）、C19-L2（分块回复无 vanilla 先例且无客户端证据）、C19-L4（accept 持续错误热旋无日志）、C19-L5（online 模块文档仍称"deferred"）、C19-L7/L8（文案用英文字面量而非可翻译键；5xx/429 一律报"Failed to verify username!"）、C19-L9/G-07（F5：失败 RCON 登录无日志，本轮再次实机复现）、G-05（缺 `block_hardness.tsv` 会连碰撞形状一起跳过，潜在）、G-08（节流预算仅每连接，约 3.0 s/连接）、G-09（level-0 默认可达 `/tp`、`/time`，vanilla 为 level 2）、G-10（`uuid` 字段不做格式校验，错字条目静默永不匹配）、G-11（console 行无上限，2 MiB 才被拒）、G-12（拒绝后的断连被记成 `socket write failed (os error 10053)`）、A-07（`default_gamemode` 装机但 join 硬编码 Survival；`/defaultgamemode` 不存在）、A-08（三处 "documented no-op / deferred" 已为 live）、A-10（写入"读不出的区块"的改动重启即失效但回执仍报成功）、D-19-L1/L2/L3（`from_level_dat` 零生产调用；skip 警告归因错误；非命令 writer 的 read-first 守卫无钉）、F-19-05..F-19-08/F-19-10（F1 行未转义竖线、会话产物计数 5 vs 6、KD-87 只是叙述端点而非行、doc-tests 4 vs 5）。
+C19-L1（"vanilla 4 KiB 上限"失实，实为 ≤1460 且长度须精确；**代码与文档已按 jar 更正**，见下）、C19-L2（分块回复**经 jar 复核实为 vanilla 既有行为**：`sendCmdResponse` 按 4096 字符切分；残余是我们按字节切 4000 且无第三方客户端重组证据，已在代码注释与本文件写明）、C19-L4（accept 持续错误热旋无日志）、C19-L5（online 模块文档仍称"deferred"）、C19-L7/L8（文案用英文字面量而非可翻译键；5xx/429 一律报"Failed to verify username!"）、C19-L9/G-07（F5：失败 RCON 登录无日志，本轮再次实机复现）、G-05（缺 `block_hardness.tsv` 会连碰撞形状一起跳过，潜在）、G-08（节流预算仅每连接，约 3.0 s/连接）、G-09（level-0 默认可达 `/tp`、`/time`，vanilla 为 level 2）、G-10（`uuid` 字段不做格式校验，错字条目静默永不匹配）、G-11（console 行无上限，2 MiB 才被拒）、G-12（拒绝后的断连被记成 `socket write failed (os error 10053)`）、A-07（`default_gamemode` 装机但 join 硬编码 Survival；`/defaultgamemode` 不存在）、A-08（三处 "documented no-op / deferred" 已为 live）、A-10（写入"读不出的区块"的改动重启即失效但回执仍报成功）、D-19-L1/L2/L3（`from_level_dat` 零生产调用；skip 警告归因错误；非命令 writer 的 read-first 守卫无钉）、F-19-05..F-19-08/F-19-10（F1 行未转义竖线、会话产物计数 5 vs 6、KD-87 只是叙述端点而非行、doc-tests 4 vs 5）。
+
+> **C19-L1/L2 的 jar 复核（本轮修复时重跑，`javap -p -c … rcon.thread.RconClient`）**：
+> 请求方向 vanilla 用 `sipush 1460` 的读缓冲，并要求 `declared_length == read - 4`——**长度必须精确**，跨 read 的包直接关连接；jar 里唯一的 4096 在
+> `sendCmdResponse`，且是**回复**每包 4096 **字符**的切分上限（`ByteArrayOutputStream(1248)`），所以"C19-L2 无 vanilla 先例"一句是错的，已在
+> `crates/server/src/rcon.rs` 的 `VANILLA_MAX_REQUEST_BODY`/`MAX_PACKET_LEN`/`encode_response` 与 RUNBOOK 中改写；我们的 4096 是我们自己的读上限（并在 `length_accepted` 之前于分配前生效），
+> 且我们**重组**跨 read 的包——这是与 vanilla 不同的健壮性选择，由 `a_body_split_across_reads_is_reassembled_not_refused` 钉住。分块回复的残余风险（按字节切分、无第三方客户端证据）写在 `encode_response` 的注释里，不再伪装成"stock reassembly"。
 
 ---
 

@@ -1,5 +1,16 @@
 ﻿# Atomic Task DAG
 
+> **Later, dated (2026-10-01): this header is the snapshot the v0.3.0 round closed on, not the
+> current phase.** What has moved since: **P19 was closed** (commit `2d1d66b`; see `CHANGELOG.md`
+> "Phase 19 closed"), the repair task **P19-08** was added for the F3/F4 data-loss fix the owner
+> access session found, and `main` has since carried the AUDIT-19 fix round. The body below is left
+> as the record it is — the P18 header, the P19 rows still listed as planned, and the baseline
+> commit are what the tree said on 2026-09-23 and are not rewritten to match today. The living task
+> index is the local prompt pack on the machine that drives these phases (a local input, never a
+> repository file, so it is not linked here); the tracked record of what has actually landed is
+> `CHANGELOG.md` plus the per-phase reviews under `../testing/`. The parity identifiers this file
+> cites are those of `../vanilla-parity/PARITY-MATRIX.md`.
+
 **Current phase: P18** (v0.3.0 round closer). This header is the single owner
 of "which phase is current" — README, MASTER-PROMPT and EXECUTION-LOOP point
 here instead of restating it. Update it at every phase transition.

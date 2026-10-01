@@ -25,8 +25,14 @@ all code independently written. No GPL copy; new dependencies are all
   PKCS#1 v1.5) → decrypt → fixed-time token compare → session hash →
   `hasJoined` → enable AES-128/CFB8 both ways → `LoginSuccess` with the
   verified profile **including properties**. Refusals kick with Vanilla's
-  messages (`Failed to verify username!`, `Authentication servers are
-  unavailable`); clean EOF mid-handshake ends quietly.
+  *translation keys* — `multiplayer.disconnect.unverified_username` and
+  `multiplayer.disconnect.authservers_down` (`TextComponent::translatable`,
+  AUDIT-19 C19-L7), with the English sentence as the component's fallback, so
+  the client renders the message in the player's own language while the log
+  line still reads as before. Only a **404** from `hasJoined` is a refused
+  session; every other status (5xx/429) is a service failure and gets the
+  `authservers_down` key plus a WARN in the log (AUDIT-19 C19-L8). Clean EOF
+  mid-handshake ends quietly.
 - **RSA**: 1024-bit, X.509 DER, generated once per boot (not per
   connection). PKCS#1 v1.5 decrypt failures are login failures, never boot
   failures.
@@ -37,8 +43,10 @@ all code independently written. No GPL copy; new dependencies are all
 - **Session check**: blocking HTTPS (`ureq`) with a 10 s global timeout,
   run off the async runtime (`spawn_blocking`). Every failure maps to a
   typed refusal (`Unknown` / `Timeout` / `Transport` / `Malformed`) —
-  never a hang, never a default-accept. Base URL is a field so tests pin
-  offline against a loopback stub.
+  never a hang, never a default-accept. `Unknown` is **404 only**: a 5xx/429
+  is `Transport`, so the player is told the authentication servers are down
+  rather than that their session failed (AUDIT-19 C19-L8). Base URL is a
+  field so tests pin offline against a loopback stub.
 - **Cipher**: AES-128/CFB8, key and IV both the secret (Vanilla). The mode
   is hand-rolled over audited `aes` block encryption (16-byte shift
   register + XOR) because the `cfb8` crate's streaming API is one-shot by
@@ -69,9 +77,18 @@ P20-00 checks against.
 - `online_login_completes_through_the_cipher` (stock-client RSA + cipher
   + verified profile with skin property over loopback) +
   `online_login_refusals_kick` (bad token + refused session kick with
-  Vanilla's message); token-skip probe goes red.
+  Vanilla's translation key); token-skip probe goes red.
 - `has_joined_parses_profile_and_properties` + `has_joined_refusal_vectors`
-  (200/refusal/malformed/unreachable via loopback stub, clock-free).
+  (200/refusal/malformed/unreachable via loopback stub, clock-free) +
+  `a_session_server_outage_is_not_an_unknown_user` (5xx/429 are transport,
+  404 is the refusal) +
+  `provider_maps_an_outage_to_operational_and_a_refusal_to_invalid_action`
+  (the typed refusal the login flow keys its kick message on);
+  flipping the 404 arm to catch-all goes red (AUDIT-19 C19-L8).
+- `an_auth_outage_kicks_differently_from_a_refusal` (the two keys a client
+  decodes over the wire) + `a_client_that_hangs_up_on_a_refusal_is_not_a_write_failure`
+  (a hang-up after a kick is a client leave, not a write fault; AUDIT-19
+  C19-L7/G-12).
 - (b) A real Mojang account joining with its skin is owner-run and named
   NOT RUN in the row; it does not block P19-07 when (a) is green.
 
