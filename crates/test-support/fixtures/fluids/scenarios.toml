@@ -1,0 +1,241 @@
+# Fluid differential scenario set (P20-01).
+#
+# **Read by both sides.** `tools/fluid-differential/capture.py` turns each scenario
+# into console commands for the real 26.1.2 server and dumps the resulting chunk
+# cells; `crates/server/tests/fluid_differential.rs` builds the same world from the
+# same rows in our `Game`, ticks it, saves and compares cell by cell. One file, so
+# the two sides cannot drift.
+#
+# The five names are **frozen** in `docs/adr/ADR-0009-world-ticking.md` section 2.6
+# (and in `mc-rust-agent-prompts/prompts/PHASE-20.md`): `spring_flow`,
+# `falling_column`, `lava_meets_water`, `waterlogged_stairs`, `bucket_place`, in
+# that order, compared 5 / skipped 0. Do not rename, swap or add one.
+#
+# ## The world and the box
+#
+# The vanilla side runs a superflat world whose only layer is bedrock, with
+# structures off, so everything above `y = -64` starts as air; the Rust side uses
+# its own generated world but the first frame op clears the box to air, so both
+# sides start from identical cells inside the box whatever the terrain outside it
+# looks like. The box is a closed bedrock shell (floor, four walls and a lid), so
+# no fluid can leave it: the comparison over the box is complete for the scenario.
+#
+# ## Jar-stated fluid numbers (26.1.2, read from the jar's bytecode)
+#
+# `javap -p -c -classpath target/vanilla-26.1.2/server-26.1.2.jar` on
+# `net.minecraft.world.level.material.WaterFluid` and `...LavaFluid`:
+#
+# * water `getTickDelay` = **5** ticks; `getDropOff` = 1; `getSlopeFindDistance` = 4.
+# * lava `getTickDelay` = **30** ticks in the overworld, **10** where `isFastLava`
+#   (an ultra-warm dimension, i.e. the Nether); `getDropOff` = 2 (1 when fast).
+# * lava's `getSpreadDelay` may multiply that by 4 (with probability 3/4) when both
+#   the old and the new state are non-empty, neither is `FALLING`, and the new
+#   state's height exceeds the old one's. Every scenario below spreads into **empty**
+#   cells, which returns the base delay before that branch (`oldState.isEmpty()`),
+#   so the lava rows are deterministic rather than seed-dependent.
+# * a `LiquidBlock` (water/lava) adjacent to the *other* fluid converts **itself**:
+#   a source becomes obsidian, a flowing block becomes cobblestone
+#   (`LiquidBlock.shouldSpreadLiquid`). It converts when placed or when a neighbour
+#   changes, which is why every scenario below keeps lava and water apart at setup
+#   and lets the contact happen under tick control.
+#
+# `N = 40 ticks` for all five rows, per ADR-0009 section 2.6: no scenario needs a
+# longer window. The delays are recorded per row anyway, because the ADR requires
+# them jar-sourced per row rather than asserted once.
+
+version = 1
+
+# The box every scenario is built inside and compared over: x0 y0 z0 x1 y1 z1,
+# inclusive. 12 x 8 x 9 = 864 cells per scenario, all of them compared.
+box = [2, 100, 4, 13, 107, 12]
+
+[vanilla]
+# The real server jar (Mojang's, not committed: `docs/legal/third-party.md`).
+jar = "target/vanilla-26.1.2/server-26.1.2.jar"
+sha1 = "83eb1106f12f24c9127ce22070d71853157af127"
+libraries = "target/vanilla-26.1.2/vanilla-world-26.1.2/libraries"
+main_class = "net.minecraft.server.Main"
+
+[world]
+# Superflat with a single bedrock layer and no structures: the scenario builds
+# everything it needs, and nothing else is in the world to tick.
+level_type = "minecraft:flat"
+generator_settings = '{"layers":[{"block":"minecraft:bedrock","height":1}],"biome":"minecraft:plains","structure_overrides":[]}'
+seed = 0
+# Only the compared chunk is loaded and ticked; `forceload` is what keeps it
+# loaded with no player online.
+forceload = [0, 0, 15, 15]
+chunk = [0, 0]
+# The 26.1.2 rule names, read from the jar (`GameRules`' name constants) — **not** the
+# wiki names, which this version rejects: `randomTickSpeed` and `doMobSpawning` are
+# parse errors here, `random_tick_speed` and `spawn_mobs` are the rules. The capture
+# fails the run when the server rejects a command, so a stale name cannot quietly
+# leave the default in place.
+gamerules = [
+    "random_tick_speed 0",
+    "spawn_mobs false",
+    "spawn_monsters false",
+    "advance_time false",
+    "advance_weather false",
+    "fire_spread_radius_around_player 0",
+]
+
+# What every scenario is built inside, applied before its own ops: the box is
+# cleared to air and then sealed with bedrock on all six faces.
+[[frame]]
+block = "minecraft:air"
+fill = [2, 100, 4, 13, 107, 12]
+
+[[frame]]
+block = "minecraft:bedrock"
+fill = [2, 100, 4, 13, 100, 12] # floor
+
+[[frame]]
+block = "minecraft:bedrock"
+fill = [2, 101, 4, 2, 107, 12] # west wall
+
+[[frame]]
+block = "minecraft:bedrock"
+fill = [13, 101, 4, 13, 107, 12] # east wall
+
+[[frame]]
+block = "minecraft:bedrock"
+fill = [2, 101, 4, 13, 107, 4] # north wall
+
+[[frame]]
+block = "minecraft:bedrock"
+fill = [2, 101, 12, 13, 107, 12] # south wall
+
+[[frame]]
+block = "minecraft:bedrock"
+fill = [2, 107, 4, 13, 107, 12] # lid
+
+# ---------------------------------------------------------------- 1. spring_flow
+[[scenario]]
+name = "spring_flow"
+ticks = 40
+water_delay = 5
+lava_delay = 30
+exercises = """A source in a rock face (the spring) feeds a 1-wide stone channel that steps
+down two blocks half way along. Water levels 1..7 on the flat run, the falling state at the
+step, and downhill spread on the lower floor — the states a level-only implementation gets
+wrong. Single lane, so every event is water-scheduled."""
+[[scenario.setup]]
+block = "minecraft:stone"
+fill = [3, 101, 7, 12, 104, 7] # channel wall, north side
+[[scenario.setup]]
+block = "minecraft:stone"
+fill = [3, 101, 9, 12, 104, 9] # channel wall, south side
+[[scenario.setup]]
+block = "minecraft:stone"
+fill = [3, 101, 8, 3, 104, 8] # the rock face the spring comes out of
+[[scenario.setup]]
+block = "minecraft:stone"
+fill = [4, 102, 8, 7, 102, 8] # upper channel floor (fluid sits at y = 103)
+[[scenario.setup]]
+block = "minecraft:water[level=0]"
+set = [4, 103, 8] # the spring: water source, one way out (east)
+
+# ------------------------------------------------------------ 2. falling_column
+[[scenario]]
+name = "falling_column"
+ticks = 40
+water_delay = 5
+lava_delay = 30
+exercises = """A source at the top of a 1 x 1 shaft four blocks above an open floor. The
+column is `minecraft:water[level=8]` (the falling state) the whole way down, then lands and
+spreads radially on the floor: fall, landing and radial spread in one scenario."""
+[[scenario.setup]]
+block = "minecraft:stone"
+fill = [7, 103, 7, 9, 106, 9] # the rock the shaft is cut through
+[[scenario.setup]]
+block = "minecraft:air"
+fill = [8, 103, 8, 8, 106, 8] # the shaft itself
+[[scenario.setup]]
+block = "minecraft:water[level=0]"
+set = [8, 106, 8] # the source at the top of the shaft
+
+# ----------------------------------------------------------- 3. lava_meets_water
+[[scenario]]
+name = "lava_meets_water"
+ticks = 40
+water_delay = 5
+lava_delay = 30
+exercises = """Two independent lanes. Lane A (z = 6): water flows east towards a lava
+source five cells away and reaches the cell next to it at tick 20, which is when the lava
+converts itself (source -> obsidian, `LiquidBlock.shouldSpreadLiquid`). Lane B (z = 10):
+lava alone, whose only spread inside the window is the tick-30 one that the 30-tick delay
+allows, and which shows lava's larger drop-off. The two lanes never touch."""
+[[scenario.setup]]
+block = "minecraft:stone"
+fill = [3, 101, 6, 12, 101, 6] # lane A floor
+[[scenario.setup]]
+block = "minecraft:stone"
+fill = [3, 101, 5, 12, 103, 5] # lane A wall
+[[scenario.setup]]
+block = "minecraft:stone"
+fill = [3, 101, 7, 12, 103, 7] # lane A wall
+[[scenario.setup]]
+block = "minecraft:water[level=0]"
+set = [3, 102, 6] # lane A: the water
+[[scenario.setup]]
+block = "minecraft:lava[level=0]"
+set = [8, 102, 6] # lane A: the lava it flows towards
+[[scenario.setup]]
+block = "minecraft:stone"
+fill = [3, 101, 10, 12, 101, 10] # lane B floor
+[[scenario.setup]]
+block = "minecraft:stone"
+fill = [3, 101, 9, 12, 103, 9] # lane B wall
+[[scenario.setup]]
+block = "minecraft:stone"
+fill = [3, 101, 11, 12, 103, 11] # lane B wall
+[[scenario.setup]]
+block = "minecraft:lava[level=0]"
+set = [3, 102, 10] # lane B: lava on its own, first spread at tick 30
+
+# -------------------------------------------------------- 4. waterlogged_stairs
+[[scenario]]
+name = "waterlogged_stairs"
+ticks = 40
+water_delay = 5
+lava_delay = 30
+exercises = """A waterlogged oak stairs in a 1-wide channel, with a water source three
+cells to its west and another two cells to its east. What a waterlogged block does with its
+own fluid, and what flowing water does when the cell it would spread into is occupied by a
+waterlogged block: both sides of the block are covered."""
+[[scenario.setup]]
+block = "minecraft:stone"
+fill = [3, 101, 8, 12, 101, 8] # channel floor
+[[scenario.setup]]
+block = "minecraft:stone"
+fill = [3, 101, 7, 12, 103, 7] # channel wall
+[[scenario.setup]]
+block = "minecraft:stone"
+fill = [3, 101, 9, 12, 103, 9] # channel wall
+[[scenario.setup]]
+block = "minecraft:oak_stairs[facing=north,half=bottom,shape=straight,waterlogged=true]"
+set = [7, 102, 8] # the waterlogged block
+[[scenario.setup]]
+block = "minecraft:water[level=0]"
+set = [3, 102, 8] # water flowing towards it from the west
+[[scenario.setup]]
+block = "minecraft:water[level=0]"
+set = [10, 102, 8] # and from the east
+
+# ---------------------------------------------------------------- 5. bucket_place
+[[scenario]]
+name = "bucket_place"
+ticks = 40
+water_delay = 5
+lava_delay = 30
+exercises = """The cell a water bucket leaves behind when a player empties it onto the top
+face of a stone pillar: a source in mid-air, one block above the pillar and three above the
+floor. It flows off all four sides at once and falls in four columns — the placement
+geometry a bucket produces and a spring does not."""
+[[scenario.setup]]
+block = "minecraft:stone"
+fill = [8, 101, 8, 8, 102, 8] # the pillar
+[[scenario.setup]]
+block = "minecraft:water[level=0]"
+set = [8, 103, 8] # what the bucket empties: a source on top of it

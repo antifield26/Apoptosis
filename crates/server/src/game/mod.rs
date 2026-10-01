@@ -3,16 +3,18 @@
 //!
 //! One [`Game`] owns the world, the connected players, the entity store and the
 //! receiving end of the network bridge. [`crate::lifecycle::Server::run`] drives
-//! it: each tick runs the six phases of [`mc_simulation::PHASE_ORDER`] through
+//! it: each tick runs the eight phases of [`mc_simulation::PHASE_ORDER`] through
 //! [`mc_simulation::Scheduler`], which times each phase and folds the result into
 //! [`mc_simulation::TickMetrics`].
 //!
-//! ## The six phases, and what each one does here
+//! ## The eight phases, and what each one does here
 //!
 //! | Phase | This crate's work | Status |
 //! |---|---|---|
 //! | [`TickPhase::Network`] | drain the inbound channel (bounded) and *queue* the work: player intents go to a pending buffer, joins/leaves apply inline | implemented |
-//! | [`TickPhase::ScheduledTicks`] | drain due block scheduled ticks from the redstone update queue (P13-01; fluids out of scope, no producers yet) | implemented (queue wired) |
+//! | [`TickPhase::ScheduledTicks`] | drain due block scheduled ticks from the redstone update queue (P13-01) | implemented (queue wired) |
+//! | [`TickPhase::FluidTicks`] | drain due fluid ticks from the game's own [`mc_simulation::FluidQueue`] and run the jar's flow rules (P20-01) | implemented |
+//! | [`TickPhase::RandomTicks`] | sweep the ticking radius at the `randomTickSpeed` rate (P20-01; the growth handlers are P20-02) | **skeleton: samples only, applies nothing** |
 //! | [`TickPhase::Entities`] | the natural spawn cycle, then per-entity AI, despawn, timers, gravity + swept collision, landing/fall damage | implemented (AI live as of P11-02) |
 //! | [`TickPhase::Players`] | apply the queued intents in arrival order, then player timers and physics | implemented |
 //! | [`TickPhase::BlockEntities`] | furnaces cook (`container_set_data`), hoppers transfer on the 8-tick cooldown, viewers resync | implemented (P12-03/04) |
@@ -186,13 +188,14 @@ use mc_protocol::packets::Packet;
 use mc_protocol::packets::play::{PlayDisconnect, PlayIntent, SetExperience, SetHealth};
 use mc_protocol::text::TextComponent;
 use mc_registry::Registries;
-use mc_simulation::{Scheduler, TickMetrics};
+use mc_simulation::{FluidQueue, Scheduler, TickMetrics};
 use mc_world::light::LightArray;
 use mc_world::{Vec3, World};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
 
+mod fluids;
 mod persist;
 mod session;
 mod tick;
@@ -787,6 +790,27 @@ pub struct TickReport {
     pub scheduled_ticks_fired: usize,
     /// Scheduled ticks still queued for later ticks after this tick's drain.
     pub scheduled_ticks_pending: usize,
+    /// Fluid ticks that came due this tick (P20-01, ADR-0009 §5).
+    pub fluid_ticks_fired: usize,
+    /// Fluid ticks still queued after this tick's drain.
+    ///
+    /// The lateness counter ADR-0009 §2.3 asks for: with the cap spilling rather
+    /// than dropping, this number is the only place a starved fluid queue is
+    /// visible.
+    pub fluid_ticks_pending: usize,
+    /// Blocks this tick's fluid work wrote (spread placements and conversions).
+    pub fluid_blocks_written: usize,
+    /// Random-tick samples drawn this tick (P20-01).
+    ///
+    /// Counted because the sweep's cost is `ticking_sections × randomTickSpeed`
+    /// and a phase that stops sampling is silent (ADR-0009 §2.3).
+    pub random_tick_samples: usize,
+    /// Random-tick samples that changed a block (P20-01).
+    ///
+    /// **Zero by construction until P20-02**: this phase has no growth handlers
+    /// yet, and a non-zero value here would mean someone added one without
+    /// saying so.
+    pub random_ticks_applied: usize,
 }
 
 /// The simulation.
@@ -844,7 +868,7 @@ pub struct Game {
     /// generation over them is refused, because a clean generated chunk plus
     /// one edit would replace real terrain at the next autosave.
     unreadable_chunks: BTreeSet<ChunkPos>,
-    /// Runs and times the six phases of a tick.
+    /// Runs and times the eight phases of a tick.
     scheduler: Scheduler,
     /// Intents drained this tick, applied by the Players phase in arrival order.
     pending_intents: Vec<(ConnectionId, PlayIntent)>,
@@ -1021,6 +1045,13 @@ pub struct Game {
     /// mechanism reactions: due ticks prepare neighbours, `propagate` runs, and
     /// live wires reschedule (see `tick_scheduled`).
     scheduled_ticks: mc_redstone::UpdateQueue,
+    /// Due fluid ticks, in their own queue (P20-01, ADR-0009 §1/§2.3).
+    ///
+    /// The jar's `ServerLevel` owns a `LevelTicks<Fluid>` beside its
+    /// `LevelTicks<Block>`; this is that second object. `schedule_block_tick`'s
+    /// counterpart is [`Game::schedule_fluid_tick`], and the `FluidTicks` phase
+    /// drains it with [`mc_simulation::MAX_FLUID_TICKS_PER_TICK`] as the cap.
+    fluid_ticks: FluidQueue,
     /// Chunks that became placeholders while this game could not read storage.
     ///
     /// A game with a borrowed `WorldService` cannot tell "nothing stored" from "I
@@ -1269,6 +1300,7 @@ impl Game {
             saving_enabled: true,
             block_entities: mc_container::BlockEntityStore::new(),
             scheduled_ticks: mc_redstone::UpdateQueue::new(),
+            fluid_ticks: FluidQueue::new(),
             placeholder_without_storage: BTreeSet::new(),
         })
     }
@@ -1611,6 +1643,134 @@ impl Game {
         mc_redstone::EmitterTable::new(&self.registries.blocks)
     }
 
+    /// Feed a block change into every model that watches neighbours (P20-01).
+    ///
+    /// Redstone and fluids both care that a block changed, and they care at
+    /// different times: the redstone feed queues a neighbour recomputation,
+    /// the fluid feed schedules scheduled ticks. Keeping one entry point means
+    /// a new block-editing path cannot remember one and forget the other.
+    fn block_feed(&mut self, x: i32, y: i32, z: i32, changed_id: i32) {
+        self.redstone_feed(x, y, z, changed_id);
+        self.fluid_feed(x, y, z);
+    }
+
+    /// Schedule a fluid tick for a fluid block that changed or was placed
+    /// (P20-01).
+    ///
+    /// The jar's two post-write effects run first, in the flow engine's own code
+    /// ([`fluids::notify_block_written`]): `LiquidBlock.onPlace` on the written
+    /// cell and `updateNeighborsAt` over its six neighbours. A write that converts
+    /// a lava cell — water placed beside it — is therefore complete before
+    /// anything is scheduled, and the converted cell is not scheduled.
+    ///
+    /// The changed cell and its six neighbours are candidates, because a fluid
+    /// flows into a hole a neighbour's change just made — breaking a block beside
+    /// still water is exactly how a player starts a flow. Only cells that hold a
+    /// **fluid block** are scheduled: a waterlogged block holds a water *source*
+    /// that neither re-levels nor spreads out of its container, which is why
+    /// vanilla does not tick one either.
+    fn fluid_feed(&mut self, x: i32, y: i32, z: i32) {
+        const OFFSETS: [(i32, i32, i32); 7] = [
+            (0, 0, 0),
+            (0, -1, 0),
+            (0, 1, 0),
+            (0, 0, -1),
+            (0, 0, 1),
+            (-1, 0, 0),
+            (1, 0, 0),
+        ];
+        // The jar's `Level.setBlock(pos, state, 3)` does two things besides the
+        // chunk write — `BlockState.onPlace` on the written cell and
+        // `updateNeighborsAt` over the six faces in `NeighborUpdater.UPDATE_ORDER`
+        // — and both are the flow engine's rules, not this module's. Running them
+        // here is what makes a *player's* water (bucket or `/setblock`) convert a
+        // lava source beside it in the tick it lands, instead of thirty ticks
+        // later when the lava's own scheduled tick comes due. The rules and the
+        // order stay in `mc-simulation`; this is a call, not a second copy.
+        fluids::notify_block_written(
+            &mut self.world,
+            &self.registries.blocks,
+            mc_simulation::fluid::Pos::new(x, y, z),
+        );
+        let now = self.tick;
+        for (dx, dy, dz) in OFFSETS {
+            let (cx, cy, cz) = (x + dx, y + dy, z + dz);
+            let Some(id) = self.world.get_block_loaded(cx, cy, cz) else {
+                continue;
+            };
+            let Ok(name) = self.registries.blocks.block_name(id) else {
+                continue;
+            };
+            let kind = match name {
+                "minecraft:water" => mc_simulation::FluidKind::Water,
+                "minecraft:lava" => mc_simulation::FluidKind::Lava,
+                _ => continue,
+            };
+            let delay = fluids::world_fluid_rules(kind).tick_delay();
+            self.fluid_ticks
+                .schedule(now, mc_simulation::fluid::Pos::new(cx, cy, cz), delay);
+        }
+    }
+
+    /// Schedule a fluid tick for `(x, y, z)`, `delay` ticks from now (P20-01).
+    ///
+    /// The scheduling half of the queue the `FluidTicks` phase drains. The delay
+    /// is clamped rather than refused: a caller passing a corrupt value must not
+    /// fail a tick, and the queue counts the clamp.
+    pub fn schedule_fluid_tick(
+        &mut self,
+        x: i32,
+        y: i32,
+        z: i32,
+        delay: u32,
+    ) -> mc_simulation::FluidScheduled {
+        let now = self.tick;
+        self.fluid_ticks
+            .schedule(now, mc_simulation::fluid::Pos::new(x, y, z), delay)
+    }
+
+    /// Queued fluid ticks still waiting (test hook, P20-01).
+    #[must_use]
+    pub fn fluid_pending(&self) -> usize {
+        self.fluid_ticks.pending()
+    }
+
+    /// Read-only access to one entity, for tests that observe a rule's effect on
+    /// health or timers rather than on blocks (P20-01's drowning and lava paths).
+    #[must_use]
+    pub fn entity(&self, id: EntityId) -> Option<&mc_entity::Entity> {
+        self.entities.get(id)
+    }
+
+    /// Feed a block change through the models that watch neighbours (P20-01).
+    ///
+    /// The public entry point for a caller outside this module — a test, or a
+    /// future generator — that wrote a block directly. Inside the module every
+    /// editing path calls [`Game::block_feed`]; this is the same call with the
+    /// block's current id looked up, and it is what makes a hand-placed water
+    /// source schedule its first fluid tick at the jar's delay.
+    pub fn feed_block_change(&mut self, x: i32, y: i32, z: i32) {
+        let id = self
+            .world
+            .get_block_loaded(x, y, z)
+            .unwrap_or_else(|| self.registries.blocks.air_id());
+        self.block_feed(x, y, z, id);
+    }
+
+    /// The fluid a block carries at `(x, y, z)`, or `Empty` when none.
+    ///
+    /// Reads through the same rule as the flow engine
+    /// ([`fluids::fluid_state_of`]), so "is the player in water?" and "does water
+    /// flow here?" cannot disagree. An unloaded chunk is `Empty`, not water: an
+    /// entity standing in an unloaded chunk must not drown.
+    pub(crate) fn fluid_state_at(&self, x: i32, y: i32, z: i32) -> mc_simulation::FluidState {
+        let Some(id) = self.world.get_block_loaded(x, y, z) else {
+            return mc_simulation::FluidState::Empty;
+        };
+        let properties = self.registries.blocks.properties_of(id).unwrap_or_default();
+        fluids::fluid_state_of(&self.registries.blocks, id, &properties)
+    }
+
     /// Feed a block change at `(x, y, z)` into the redstone model (P13-02).
     ///
     /// Queues neighbour updates for the six neighbours plus the position
@@ -1732,7 +1892,7 @@ impl Game {
             return;
         }
         debug!(id = %id, x, y, z, powered = on, "lever/button flipped");
-        self.redstone_feed(x, y, z, new_id);
+        self.block_feed(x, y, z, new_id);
         // Buttons unpress after their hold time (vanilla: stone 20, wood 30).
         if is_button && on == "true" {
             let hold = if name == "minecraft:stone_button"

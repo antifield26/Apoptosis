@@ -160,7 +160,10 @@ pub use wear::{
 };
 
 pub use effect::ActiveEffect;
-pub use entity::{AIR_TICKS, Entity, EntityBody, EntityId, EntityKind, EntityStore, MAX_ENTITIES};
+pub use entity::{
+    AIR_TICKS, DROWN_DAMAGE, DROWN_DAMAGE_INTERVAL, Entity, EntityBody, EntityId, EntityKind,
+    EntityStore, LAVA_DAMAGE, LAVA_FIRE_TICKS, MAX_ENTITIES,
+};
 pub use inventory::{
     CONTAINER_SLOT_COUNT, CRAFTING_RESULT_SLOT, CRAFTING_START, Hand, OFFHAND_SLOT,
     PLAYER_WINDOW_ID, PlayerInventory, inventory_for_registry,

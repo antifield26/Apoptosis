@@ -17,14 +17,19 @@
 //!
 //! 1. [`TickPhase::Network`] — drain inbound events and apply player intents.
 //!    First, because everything else must see this tick's input.
-//! 2. [`TickPhase::ScheduledTicks`] — block/fluid/entity ticks that fell due.
-//!    Before entities, because a scheduled tick can move or destroy a block an
-//!    entity is about to collide with.
-//! 3. [`TickPhase::Entities`] — entity AI and physics, in ascending entity id.
-//! 4. [`TickPhase::Players`] — player physics and actions. After entities, so a
+//! 2. [`TickPhase::ScheduledTicks`] — the world clock, then **block** scheduled
+//!    ticks that fell due. Before entities, because a scheduled tick can move or
+//!    destroy a block an entity is about to collide with.
+//! 3. [`TickPhase::FluidTicks`] — due **fluid** scheduled ticks, drained from
+//!    their own queue ([`fluid::FluidQueue`]) because the jar's `ServerLevel`
+//!    owns a separate `LevelTicks<Fluid>` (ADR-0009 §1/§2.1).
+//! 4. [`TickPhase::RandomTicks`] — the per-section random-tick sweep of the
+//!    ticking radius; a sweep, not a queue, as the jar's `tickChunk` is.
+//! 5. [`TickPhase::Entities`] — entity AI and physics, in ascending entity id.
+//! 6. [`TickPhase::Players`] — player physics and actions. After entities, so a
 //!    player resolves against the world this tick's entities left behind.
-//! 5. [`TickPhase::BlockEntities`] — block-entity behaviour (furnaces, hoppers).
-//! 6. [`TickPhase::Broadcast`] — flush outbound packets. Last, so a client sees a
+//! 7. [`TickPhase::BlockEntities`] — block-entity behaviour (furnaces, hoppers).
+//! 8. [`TickPhase::Broadcast`] — flush outbound packets. Last, so a client sees a
 //!    tick's complete result rather than a partial one.
 //!
 //! Determinism also needs a controllable source of randomness, since mob spawning
@@ -51,10 +56,15 @@
     clippy::cast_lossless
 )]
 
+pub mod fluid;
 pub mod metrics;
 pub mod phase;
 pub mod scheduler;
 
+pub use fluid::{
+    FluidBudget, FluidDrain, FluidKind, FluidQueue, FluidScheduled, FluidState,
+    MAX_FLUID_TICKS_PER_TICK,
+};
 pub use metrics::{TickMetrics, TickStats};
 pub use phase::{PHASE_COUNT, PHASE_ORDER, TickPhase};
 pub use scheduler::{PhaseRunner, Scheduler, TickOutcome};

@@ -1,6 +1,6 @@
 //! The tick scheduler (P05-01).
 //!
-//! [`Scheduler`] runs the six phases in the fixed order of [`PHASE_ORDER`],
+//! [`Scheduler`] runs the eight phases in the fixed order of [`PHASE_ORDER`],
 //! timing each one and recording the result in [`TickMetrics`]. It owns no
 //! gameplay state: the caller supplies a [`PhaseRunner`], which is how
 //! `mc-server`'s game loop plugs in without this crate depending on it.
@@ -271,6 +271,8 @@ mod tests {
             vec![
                 TickPhase::Network,
                 TickPhase::ScheduledTicks,
+                TickPhase::FluidTicks,
+                TickPhase::RandomTicks,
                 TickPhase::Entities
             ]
         );

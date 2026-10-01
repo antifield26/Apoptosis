@@ -399,7 +399,7 @@ fn an_entity_falls_under_gravity_and_lands_on_a_solid_floor() {
 }
 
 #[test]
-fn the_six_phases_run_and_the_metrics_show_their_cost() {
+fn the_eight_phases_run_and_the_metrics_show_their_cost() {
     let mut harness = Harness::new("p05-phases", 4);
     let (sx, sy, sz) = harness.build_floor();
     harness.join("Phased");
@@ -485,10 +485,12 @@ fn the_six_phases_run_and_the_metrics_show_their_cost() {
     );
     // The documented no-op phase (ScheduledTicks) is still *run and timed* —
     // its mean may legitimately round to zero, which is why it is not asserted
-    // non-zero here. (BlockEntities ticks furnaces/hoppers since P12-03/04.) What is asserted is that every phase's
-    // mean is within the whole-tick mean times six plus a tick, i.e. no phase is
-    // reporting a fabricated cost.
-    let budget = metrics.mean().saturating_mul(6) + Duration::from_millis(1);
+    // non-zero here. (BlockEntities ticks furnaces/hoppers since P12-03/04;
+    // FluidTicks and RandomTicks joined the tick in P20-01.) What is asserted is
+    // that every phase's mean is within the whole-tick mean times the phase count
+    // plus a tick, i.e. no phase is reporting a fabricated cost.
+    let phases = u32::try_from(TickPhase::all().len()).expect("eight phases fit");
+    let budget = metrics.mean().saturating_mul(phases) + Duration::from_millis(1);
     for phase in TickPhase::all() {
         assert!(
             metrics.phase_mean(*phase) <= budget,

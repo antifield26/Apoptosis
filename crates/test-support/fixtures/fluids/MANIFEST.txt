@@ -1,0 +1,238 @@
+Fluid differential baselines (P20-01) — provenance
+==================================================
+
+Produced by tools/fluid-differential/capture.py, which starts the official
+Minecraft Java 26.1.2 server and drives it entirely through console commands.
+Every state in the dumps below was read out of the region file that server wrote.
+
+generator      : python tools/fluid-differential/capture.py --repro
+captured       : 2026-10-01T13:45:28Z
+server jar     : target/vanilla-26.1.2/server-26.1.2.jar
+server jar sha1: 83eb1106f12f24c9127ce22070d71853157af127
+java           : openjdk version "25.0.4" 2026-07-21 LTS
+spec           : crates/test-support/fixtures/fluids/scenarios.toml (version 1)
+world          : level-type=minecraft:flat generator-settings={"layers":[{"block":"minecraft:bedrock","height":1}],"biome":"minecraft:plains","structure_overrides":[]} seed=0
+gamerules      : random_tick_speed 0; spawn_mobs false; spawn_monsters false; advance_time false; advance_weather false; fire_spread_radius_around_player 0
+forceload      : [0, 0, 15, 15] (block coords, so chunk [0, 0])
+box            : x 2..13, y 100..107, z 4..12 (inclusive)
+
+reproducibility: every scenario was captured twice, in two freshly generated
+worlds, and the committed dumps are the first run. Cells differing between the
+two runs of the same scenario:
+  spring_flow: 0
+  falling_column: 0
+  lava_meets_water: 0
+  waterlogged_stairs: 0
+  bucket_place: 0
+
+Per scenario, the console script that produced it. `save-all flush` writes the
+region file; `initial.txt` is the dump taken right after the first save and
+`baseline.txt` the one taken after `/tick step N`, both from the same run.
+
+--- spring_flow (ticks 40) ---
+world dir      : target/fluid-differential/server-home/spring_flow-run1/world-spring_flow
+  ticks: 40
+  game time: 10 at tick 0, 50 at tick 40
+  box: x 2..13, y 100..107, z 4..12 (inclusive)
+  chunk: (0, 0)  region: r.0.0.mca
+  region sha256 at tick 0: 32d1febf05a325c4ca93cc18350dc8a3be073e72a2e60d19a7d9e10a35dfe49b
+  region sha256 at tick 40: 6e0f4a85bc10513c10c093f700b0c7c7d2bb74bcbd983e51d22ff423fad011c9
+console script:
+  say RIG-BOOT
+  gamerule random_tick_speed 0
+  gamerule spawn_mobs false
+  gamerule spawn_monsters false
+  gamerule advance_time false
+  gamerule advance_weather false
+  gamerule fire_spread_radius_around_player 0
+  difficulty peaceful
+  forceload add 0 0 15 15
+  say RIG-FORCELOADED
+  tick freeze
+  say RIG-FROZEN
+  fill 2 100 4 13 107 12 minecraft:air replace
+  fill 2 100 4 13 100 12 minecraft:bedrock replace
+  fill 2 101 4 2 107 12 minecraft:bedrock replace
+  fill 13 101 4 13 107 12 minecraft:bedrock replace
+  fill 2 101 4 13 107 4 minecraft:bedrock replace
+  fill 2 101 12 13 107 12 minecraft:bedrock replace
+  fill 2 107 4 13 107 12 minecraft:bedrock replace
+  fill 3 101 7 12 104 7 minecraft:stone replace
+  fill 3 101 9 12 104 9 minecraft:stone replace
+  fill 3 101 8 3 104 8 minecraft:stone replace
+  fill 4 102 8 7 102 8 minecraft:stone replace
+  setblock 4 103 8 minecraft:water[level=0] replace
+  say RIG-SETUP-APPLIED
+  save-all flush
+  say RIG-INITIAL-SAVED
+  tick step 40
+  save-all flush
+  say RIG-FINAL-SAVED
+  stop
+
+--- falling_column (ticks 40) ---
+world dir      : target/fluid-differential/server-home/falling_column-run1/world-falling_column
+  ticks: 40
+  game time: 9 at tick 0, 49 at tick 40
+  box: x 2..13, y 100..107, z 4..12 (inclusive)
+  chunk: (0, 0)  region: r.0.0.mca
+  region sha256 at tick 0: 47db7b22e679ebced1b96d918ddd5e1a8ee5c72d2b2c73f0dec06841ebbcc788
+  region sha256 at tick 40: 2949ee961f362ae8648f137a7e7f93d7427523a1c1a11871796b16ac531f7f53
+console script:
+  say RIG-BOOT
+  gamerule random_tick_speed 0
+  gamerule spawn_mobs false
+  gamerule spawn_monsters false
+  gamerule advance_time false
+  gamerule advance_weather false
+  gamerule fire_spread_radius_around_player 0
+  difficulty peaceful
+  forceload add 0 0 15 15
+  say RIG-FORCELOADED
+  tick freeze
+  say RIG-FROZEN
+  fill 2 100 4 13 107 12 minecraft:air replace
+  fill 2 100 4 13 100 12 minecraft:bedrock replace
+  fill 2 101 4 2 107 12 minecraft:bedrock replace
+  fill 13 101 4 13 107 12 minecraft:bedrock replace
+  fill 2 101 4 13 107 4 minecraft:bedrock replace
+  fill 2 101 12 13 107 12 minecraft:bedrock replace
+  fill 2 107 4 13 107 12 minecraft:bedrock replace
+  fill 7 103 7 9 106 9 minecraft:stone replace
+  fill 8 103 8 8 106 8 minecraft:air replace
+  setblock 8 106 8 minecraft:water[level=0] replace
+  say RIG-SETUP-APPLIED
+  save-all flush
+  say RIG-INITIAL-SAVED
+  tick step 40
+  save-all flush
+  say RIG-FINAL-SAVED
+  stop
+
+--- lava_meets_water (ticks 40) ---
+world dir      : target/fluid-differential/server-home/lava_meets_water-run1/world-lava_meets_water
+  ticks: 40
+  game time: 7 at tick 0, 47 at tick 40
+  box: x 2..13, y 100..107, z 4..12 (inclusive)
+  chunk: (0, 0)  region: r.0.0.mca
+  region sha256 at tick 0: fa2d2c4307af7d5a4534ebc73d99607e572ec0ef7def64fcd8b16eee74167b48
+  region sha256 at tick 40: 84fc7fbeb5e2a6c8505bbad0cdf1b53f368c9b95a8910328c5254cfae26e548c
+console script:
+  say RIG-BOOT
+  gamerule random_tick_speed 0
+  gamerule spawn_mobs false
+  gamerule spawn_monsters false
+  gamerule advance_time false
+  gamerule advance_weather false
+  gamerule fire_spread_radius_around_player 0
+  difficulty peaceful
+  forceload add 0 0 15 15
+  say RIG-FORCELOADED
+  tick freeze
+  say RIG-FROZEN
+  fill 2 100 4 13 107 12 minecraft:air replace
+  fill 2 100 4 13 100 12 minecraft:bedrock replace
+  fill 2 101 4 2 107 12 minecraft:bedrock replace
+  fill 13 101 4 13 107 12 minecraft:bedrock replace
+  fill 2 101 4 13 107 4 minecraft:bedrock replace
+  fill 2 101 12 13 107 12 minecraft:bedrock replace
+  fill 2 107 4 13 107 12 minecraft:bedrock replace
+  fill 3 101 6 12 101 6 minecraft:stone replace
+  fill 3 101 5 12 103 5 minecraft:stone replace
+  fill 3 101 7 12 103 7 minecraft:stone replace
+  setblock 3 102 6 minecraft:water[level=0] replace
+  setblock 8 102 6 minecraft:lava[level=0] replace
+  fill 3 101 10 12 101 10 minecraft:stone replace
+  fill 3 101 9 12 103 9 minecraft:stone replace
+  fill 3 101 11 12 103 11 minecraft:stone replace
+  setblock 3 102 10 minecraft:lava[level=0] replace
+  say RIG-SETUP-APPLIED
+  save-all flush
+  say RIG-INITIAL-SAVED
+  tick step 40
+  save-all flush
+  say RIG-FINAL-SAVED
+  stop
+
+--- waterlogged_stairs (ticks 40) ---
+world dir      : target/fluid-differential/server-home/waterlogged_stairs-run1/world-waterlogged_stairs
+  ticks: 40
+  game time: 9 at tick 0, 49 at tick 40
+  box: x 2..13, y 100..107, z 4..12 (inclusive)
+  chunk: (0, 0)  region: r.0.0.mca
+  region sha256 at tick 0: 8674b2a4dd5366ba5d23e7cc242a9634ace70a468a08ab0a3fceec1f9c9103dc
+  region sha256 at tick 40: b69a12313cb9672c4888ec82ec2b0b006a53d9d2ed65ba48227e2ff2ed6439fd
+console script:
+  say RIG-BOOT
+  gamerule random_tick_speed 0
+  gamerule spawn_mobs false
+  gamerule spawn_monsters false
+  gamerule advance_time false
+  gamerule advance_weather false
+  gamerule fire_spread_radius_around_player 0
+  difficulty peaceful
+  forceload add 0 0 15 15
+  say RIG-FORCELOADED
+  tick freeze
+  say RIG-FROZEN
+  fill 2 100 4 13 107 12 minecraft:air replace
+  fill 2 100 4 13 100 12 minecraft:bedrock replace
+  fill 2 101 4 2 107 12 minecraft:bedrock replace
+  fill 13 101 4 13 107 12 minecraft:bedrock replace
+  fill 2 101 4 13 107 4 minecraft:bedrock replace
+  fill 2 101 12 13 107 12 minecraft:bedrock replace
+  fill 2 107 4 13 107 12 minecraft:bedrock replace
+  fill 3 101 8 12 101 8 minecraft:stone replace
+  fill 3 101 7 12 103 7 minecraft:stone replace
+  fill 3 101 9 12 103 9 minecraft:stone replace
+  setblock 7 102 8 minecraft:oak_stairs[facing=north,half=bottom,shape=straight,waterlogged=true] replace
+  setblock 3 102 8 minecraft:water[level=0] replace
+  setblock 10 102 8 minecraft:water[level=0] replace
+  say RIG-SETUP-APPLIED
+  save-all flush
+  say RIG-INITIAL-SAVED
+  tick step 40
+  save-all flush
+  say RIG-FINAL-SAVED
+  stop
+
+--- bucket_place (ticks 40) ---
+world dir      : target/fluid-differential/server-home/bucket_place-run1/world-bucket_place
+  ticks: 40
+  game time: 7 at tick 0, 47 at tick 40
+  box: x 2..13, y 100..107, z 4..12 (inclusive)
+  chunk: (0, 0)  region: r.0.0.mca
+  region sha256 at tick 0: 66cf846791db5db620a219d255ea72281070f6b60ce4be21e307714ddcf432cf
+  region sha256 at tick 40: 632ff95996ff0adc311572264403c69129f21a5d54b97ed7a697d09d9396a285
+console script:
+  say RIG-BOOT
+  gamerule random_tick_speed 0
+  gamerule spawn_mobs false
+  gamerule spawn_monsters false
+  gamerule advance_time false
+  gamerule advance_weather false
+  gamerule fire_spread_radius_around_player 0
+  difficulty peaceful
+  forceload add 0 0 15 15
+  say RIG-FORCELOADED
+  tick freeze
+  say RIG-FROZEN
+  fill 2 100 4 13 107 12 minecraft:air replace
+  fill 2 100 4 13 100 12 minecraft:bedrock replace
+  fill 2 101 4 2 107 12 minecraft:bedrock replace
+  fill 13 101 4 13 107 12 minecraft:bedrock replace
+  fill 2 101 4 13 107 4 minecraft:bedrock replace
+  fill 2 101 12 13 107 12 minecraft:bedrock replace
+  fill 2 107 4 13 107 12 minecraft:bedrock replace
+  fill 8 101 8 8 102 8 minecraft:stone replace
+  setblock 8 103 8 minecraft:water[level=0] replace
+  say RIG-SETUP-APPLIED
+  save-all flush
+  say RIG-INITIAL-SAVED
+  tick step 40
+  save-all flush
+  say RIG-FINAL-SAVED
+  stop
+
+Cell rows are `y` outer, then `z`; each line lists every `x` in the box as a
+palette index. The Rust differential test parses exactly this format.

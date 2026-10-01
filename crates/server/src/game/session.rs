@@ -3870,7 +3870,7 @@ impl Game {
         }
         // P13-02: breaking a component — or a block next to one — wakes
         // the model with the *removed* id, so dust re-evaluates.
-        self.redstone_feed(target.x, target.y, target.z, target.block);
+        self.block_feed(target.x, target.y, target.z, target.block);
         if !creative && harvest {
             // P11-04: the loot table is the drop authority in survival.
             self.spawn_block_drops(target.block, target.x, target.y, target.z, harvest);
@@ -3902,7 +3902,7 @@ impl Game {
                     .set_block(target.x, other_y, target.z, air)
                     .is_ok()
             {
-                self.redstone_feed(target.x, other_y, target.z, other);
+                self.block_feed(target.x, other_y, target.z, other);
             }
         }
         // P17-02 Step B: breaking one chest half singles the other (pumpkin
@@ -3942,7 +3942,7 @@ impl Game {
                         self.oriented_state(name, &[("facing", facing), ("type", "single")])
                     && self.world.set_block(nx, target.y, nz, single).is_ok()
                 {
-                    self.redstone_feed(nx, target.y, nz, single);
+                    self.block_feed(nx, target.y, nz, single);
                 }
             }
         }
@@ -4158,7 +4158,7 @@ impl Game {
         if self.world.set_block(x, y, z, new_id).is_err() {
             return false;
         }
-        self.redstone_feed(x, y, z, new_id);
+        self.block_feed(x, y, z, new_id);
         // Doors flip both halves (pumpkin `toggle_door`); the lone half
         // still flips when its partner is missing rather than refusing.
         if mc_redstone::blocks::is_door(name) {
@@ -4185,7 +4185,7 @@ impl Game {
                     && other_id != other
                     && self.world.set_block(ox, oy, oz, other_id).is_ok()
                 {
-                    self.redstone_feed(ox, oy, oz, other_id);
+                    self.block_feed(ox, oy, oz, other_id);
                 }
             }
             // A double-door pair (same facing, opposite hinge) opens together
@@ -4281,7 +4281,7 @@ impl Game {
                         .set_block(x + dx, lower_y + dy, z + dz, other_id)
                         .is_ok()
                 {
-                    self.redstone_feed(x + dx, lower_y + dy, z + dz, other_id);
+                    self.block_feed(x + dx, lower_y + dy, z + dz, other_id);
                 }
             }
         }
@@ -4446,8 +4446,8 @@ impl Game {
             debug!(id = %id, "door placement was refused");
             return;
         }
-        self.redstone_feed(x, y, z, lower);
-        self.redstone_feed(x, y + 1, z, upper);
+        self.block_feed(x, y, z, lower);
+        self.block_feed(x, y + 1, z, upper);
         self.consume_held(id, hand, report);
         debug!(id = %id, block = %block, x, y, z, facing, hinge, "door placed");
     }
@@ -4751,10 +4751,10 @@ impl Game {
             if let Some(other) = self.oriented_state(block, &[("facing", facing), ("type", want)])
                 && self.world.set_block(nx, ny, nz, other).is_ok()
             {
-                self.redstone_feed(nx, ny, nz, other);
+                self.block_feed(nx, ny, nz, other);
             }
         }
-        self.redstone_feed(x, y, z, state);
+        self.block_feed(x, y, z, state);
         self.consume_held(id, hand, report);
         debug!(id = %id, block = %block, x, y, z, facing, kind, "chest placed");
     }
@@ -5018,7 +5018,253 @@ impl Game {
             }
         }
         let hand = Hand::from_id(u8::try_from(hand).unwrap_or(0)).unwrap_or(Hand::Main);
+        // A bucket acts instead of placing (P20-01): the three bucket items are
+        // not blocks, and vanilla's `BucketItem.useOn` returns before the block
+        // placement path gets a chance to refuse them.
+        if self.apply_bucket(id, (x, y, z), face, hand, report) {
+            return;
+        }
         self.place_held_block(id, (x, y, z), face, hand, cursor, report);
+    }
+
+    /// Bucket fill and empty through `UseItemOn` (P20-01).
+    ///
+    /// Mirrors the two halves of vanilla's `BucketItem`: `useOn` picks the cell
+    /// to act on — the clicked block when it is a `LiquidBlockContainer` and the
+    /// content is water, the cell across the clicked face otherwise — and
+    /// `emptyContents` / `pickupBlock` do the work. Returns whether the bucket
+    /// acted, in which case the block-placement path is skipped.
+    ///
+    /// What is implemented, and what is refused rather than approximated:
+    ///
+    /// - an **empty bucket** takes a source (`level == 0`) water or lava block, or
+    ///   the water out of a waterlogged block; flowing fluid (`level > 0`) is
+    ///   refused, as vanilla refuses it;
+    /// - a **filled bucket** places its fluid into a replaceable cell — air, an
+    ///   existing fluid, or a dry waterloggable block for water — and waterlogs a
+    ///   waterloggable block it is aimed at;
+    /// - the held stack is exchanged for its counterpart in the same slot.
+    ///
+    /// Not implemented: **`BucketItem.use`** — filling a bucket by using it in
+    /// the world, which the jar implements as a `SOURCE_ONLY` ray cast to a fluid
+    /// source (verified with `javap -p BucketItem`, 2026-10-01: `use(Level,
+    /// Player, InteractionHand)` exists and calls `emptyContents`). Our `UseItem`
+    /// arm routes to `start_eat` only, so a bucket used at nothing does nothing
+    /// here. Also missing: the sound/`bucket_entity_data` feedback, and
+    /// dispensers using buckets (a dispenser behaviour, not a flow rule).
+    fn apply_bucket(
+        &mut self,
+        id: ConnectionId,
+        (x, y, z): (i32, i32, i32),
+        face: i32,
+        hand: Hand,
+        report: &mut TickReport,
+    ) -> bool {
+        let Some(held) = self.held_item_name(id) else {
+            return false;
+        };
+        match held.as_str() {
+            "minecraft:bucket" => self.fill_bucket(id, (x, y, z), hand, report),
+            "minecraft:water_bucket" => self.empty_bucket(
+                id,
+                (x, y, z),
+                face,
+                hand,
+                mc_simulation::FluidKind::Water,
+                report,
+            ),
+            "minecraft:lava_bucket" => self.empty_bucket(
+                id,
+                (x, y, z),
+                face,
+                hand,
+                mc_simulation::FluidKind::Lava,
+                report,
+            ),
+            _ => false,
+        }
+    }
+
+    /// The fill half of [`Game::apply_bucket`].
+    fn fill_bucket(
+        &mut self,
+        id: ConnectionId,
+        (x, y, z): (i32, i32, i32),
+        hand: Hand,
+        report: &mut TickReport,
+    ) -> bool {
+        let Some(block_id) = self.world.get_block_loaded(x, y, z) else {
+            return false;
+        };
+        let Ok(name) = self.registries.blocks.block_name(block_id) else {
+            return false;
+        };
+        let name = name.to_owned();
+        let properties = self
+            .registries
+            .blocks
+            .properties_of(block_id)
+            .unwrap_or_default();
+        let kind = match name.as_str() {
+            "minecraft:water" => Some(mc_simulation::FluidKind::Water),
+            "minecraft:lava" => Some(mc_simulation::FluidKind::Lava),
+            _ => None,
+        };
+        if let Some(kind) = kind {
+            // `LiquidBlock.pickupBlock` takes a source and refuses flowing fluid:
+            // a bucket cannot be filled from a stream, only from the block the
+            // stream came from.
+            let level = properties
+                .iter()
+                .find(|(key, _)| key == "level")
+                .and_then(|(_, value)| value.parse::<u8>().ok())
+                .unwrap_or(0);
+            if level != 0 {
+                return false;
+            }
+            let air = self.registries.blocks.air_id();
+            if self.world.set_block(x, y, z, air).is_err() {
+                return false;
+            }
+            let item = match kind {
+                mc_simulation::FluidKind::Water => "minecraft:water_bucket",
+                mc_simulation::FluidKind::Lava => "minecraft:lava_bucket",
+            };
+            self.exchange_held(id, hand, item, report);
+            self.block_feed(x, y, z, air);
+            return true;
+        }
+        // `LiquidBlockContainer.pickupBlock`: a waterlogged block yields its water
+        // and keeps its block.
+        let waterlogged = properties
+            .iter()
+            .any(|(key, value)| key == "waterlogged" && value == "true");
+        if !waterlogged {
+            return false;
+        }
+        let mut rewritten = properties.clone();
+        if let Some(entry) = rewritten.iter_mut().find(|(key, _)| key == "waterlogged") {
+            "false".clone_into(&mut entry.1);
+        }
+        let Ok(new_id) = self.registries.blocks.state_id(&name, &rewritten) else {
+            return false;
+        };
+        if self.world.set_block(x, y, z, new_id).is_err() {
+            return false;
+        }
+        self.exchange_held(id, hand, "minecraft:water_bucket", report);
+        self.block_feed(x, y, z, new_id);
+        true
+    }
+
+    /// The empty half of [`Game::apply_bucket`].
+    fn empty_bucket(
+        &mut self,
+        id: ConnectionId,
+        (x, y, z): (i32, i32, i32),
+        face: i32,
+        hand: Hand,
+        kind: mc_simulation::FluidKind,
+        report: &mut TickReport,
+    ) -> bool {
+        // A water bucket aimed at a waterloggable block fills that block;
+        // anything else goes into the cell across the clicked face.
+        let target = if kind == mc_simulation::FluidKind::Water && self.is_water_container(x, y, z)
+        {
+            (x, y, z)
+        } else {
+            match face {
+                0 => (x, y - 1, z),
+                1 => (x, y + 1, z),
+                2 => (x, y, z - 1),
+                3 => (x, y, z + 1),
+                4 => (x - 1, y, z),
+                5 => (x + 1, y, z),
+                _ => return false,
+            }
+        };
+        let Some(block_id) = self.world.get_block_loaded(target.0, target.1, target.2) else {
+            return false;
+        };
+        let Ok(target_name) = self.registries.blocks.block_name(block_id) else {
+            return false;
+        };
+        let target_name = target_name.to_owned();
+        let properties = self
+            .registries
+            .blocks
+            .properties_of(block_id)
+            .unwrap_or_default();
+        let air = self.registries.blocks.is_empty(block_id);
+        let existing_fluid = matches!(target_name.as_str(), "minecraft:water" | "minecraft:lava");
+        let dry_container = kind == mc_simulation::FluidKind::Water
+            && properties
+                .iter()
+                .any(|(key, value)| key == "waterlogged" && value == "false");
+        if !(air || existing_fluid || dry_container) {
+            // `emptyContents` refuses a non-replaceable cell; the bucket stays
+            // full and the client's prediction is reverted by the ack path.
+            return false;
+        }
+        let new_id = if dry_container {
+            let mut rewritten = properties.clone();
+            if let Some(entry) = rewritten.iter_mut().find(|(key, _)| key == "waterlogged") {
+                "true".clone_into(&mut entry.1);
+            }
+            match self.registries.blocks.state_id(&target_name, &rewritten) {
+                Ok(new_id) => new_id,
+                Err(_) => return false,
+            }
+        } else {
+            let level = vec![("level".to_owned(), "0".to_owned())];
+            match self.registries.blocks.state_id(kind.block_name(), &level) {
+                Ok(new_id) => new_id,
+                Err(_) => return false,
+            }
+        };
+        if self
+            .world
+            .set_block(target.0, target.1, target.2, new_id)
+            .is_err()
+        {
+            return false;
+        }
+        self.exchange_held(id, hand, "minecraft:bucket", report);
+        // The placed fluid is fed like any other change: the source schedules its
+        // own tick and every neighbouring fluid reacts (`LiquidBlock.onPlace`).
+        self.block_feed(target.0, target.1, target.2, new_id);
+        true
+    }
+
+    /// Replace the held stack with one item of `name`, in the same slot.
+    fn exchange_held(&mut self, id: ConnectionId, hand: Hand, name: &str, report: &mut TickReport) {
+        let Ok(item) = self.registries.items.id(name) else {
+            return;
+        };
+        let Ok(stack) = mc_entity::stack::ItemStack::new(item, 1) else {
+            return;
+        };
+        {
+            let Some(session) = self.sessions.get_mut(&id) else {
+                return;
+            };
+            // Vanilla consumes the bucket and gives back its counterpart, so the
+            // slot keeps one item and its position in the hotbar.
+            let _ = session.player.inventory.take_held(hand);
+            let _ = session.player.inventory.replace_held(hand, stack);
+        }
+        self.sync_menu_from_inventory(id, report);
+    }
+
+    /// Whether the block at `(x, y, z)` has a `WATERLOGGED` property.
+    fn is_water_container(&self, x: i32, y: i32, z: i32) -> bool {
+        let Some(block_id) = self.world.get_block_loaded(x, y, z) else {
+            return false;
+        };
+        self.registries
+            .blocks
+            .properties_of(block_id)
+            .is_ok_and(|properties| properties.iter().any(|(key, _)| key == "waterlogged"))
     }
 
     /// Place the held block item against the clicked face (P17-01 split).
@@ -5203,7 +5449,7 @@ impl Game {
         // change and must wake neighbours (owner A2 must not skip the feed;
         // skipping it left `redstone_pending` at 0 and broke
         // `redstone_edits_feed_the_queue_and_dirt_does_not`).
-        self.redstone_feed(tx, ty, tz, block_id);
+        self.block_feed(tx, ty, tz, block_id);
         self.consume_held(id, hand, report);
         debug!(id = %id, block = %block, x = tx, y = ty, z = tz, "block placed");
     }

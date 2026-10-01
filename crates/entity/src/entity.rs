@@ -187,6 +187,15 @@ pub struct Entity {
     pub fire_ticks: u32,
     /// Ticks of air remaining before drowning damage starts.
     pub air_ticks: u32,
+    /// Ticks spent with the air supply already at zero (P20-01).
+    ///
+    /// Vanilla lets the air counter run 20 *below* zero before it hurts
+    /// (`LivingEntity.decreaseAirSupply` returns true at `air <= -20`), which is
+    /// what makes drowning damage land once per 20 ticks rather than once per
+    /// tick. `air_ticks` is unsigned here, so the depth below zero is this
+    /// separate counter: it advances only while `air_ticks == 0`, and the hit
+    /// lands when it reaches [`DROWN_DAMAGE_INTERVAL`].
+    pub drown_ticks: u32,
     /// Active status effects, keyed by effect id (ascending, deterministic).
     pub effects: BTreeMap<i32, crate::effect::ActiveEffect>,
     /// Set when the entity should be removed at the end of the tick.
@@ -218,6 +227,7 @@ impl Entity {
             invulnerable_ticks: 0,
             fire_ticks: 0,
             air_ticks: AIR_TICKS,
+            drown_ticks: 0,
             effects: BTreeMap::new(),
             removed: false,
         }
@@ -349,11 +359,17 @@ impl Entity {
     }
 
     /// Ticks down the per-entity timers by one.
+    ///
+    /// **The air supply is not one of them** since P20-01: vanilla refills and
+    /// drains it from `LivingEntity.baseTick` according to whether the entity's
+    /// eye is in water, so a timer that always decremented it drowned every
+    /// entity on dry land after 15 seconds. The drowning rule lives in the
+    /// server's Entities phase; this method owns only the counters that always
+    /// run down.
     pub fn tick_timers(&mut self) {
         self.age = self.age.saturating_add(1);
         self.invulnerable_ticks = self.invulnerable_ticks.saturating_sub(1);
         self.fire_ticks = self.fire_ticks.saturating_sub(1);
-        self.air_ticks = self.air_ticks.saturating_sub(1);
         self.effects.retain(|_, effect| {
             effect.duration = effect.duration.saturating_sub(1);
             effect.duration > 0
@@ -363,6 +379,22 @@ impl Entity {
 
 /// Ticks of breath a fresh entity starts with (Vanilla: 300 = 15 s).
 pub const AIR_TICKS: u32 = 300;
+
+/// Ticks at zero air before drowning damage lands, and between hits thereafter.
+///
+/// Vanilla's `LivingEntity.decreaseAirSupply` hurts when the counter it has been
+/// decrementing passes `-20` and then resets it to 0, which is 20 ticks between
+/// hits; this is that 20, as the depth [`Entity::drown_ticks`] measures.
+pub const DROWN_DAMAGE_INTERVAL: u32 = 20;
+
+/// Damage one drowning hit deals (`LivingEntity` DROWN: `2.0F`).
+pub const DROWN_DAMAGE: f32 = 2.0;
+
+/// Damage one lava tick deals (vanilla `Entity.lavaHurt`: `4.0F`).
+pub const LAVA_DAMAGE: f32 = 4.0;
+
+/// Ticks of fire lava sets on the entity it hurts (vanilla `setSecondsOnFire(15)`).
+pub const LAVA_FIRE_TICKS: u32 = 15 * 20;
 
 /// Largest velocity component an impulse may produce (blocks per tick).
 ///
@@ -824,7 +856,10 @@ mod tests {
         assert_eq!(entity.age, 1);
         assert_eq!(entity.invulnerable_ticks, 1);
         assert_eq!(entity.fire_ticks, 0);
-        assert_eq!(entity.air_ticks, 0);
+        assert_eq!(
+            entity.air_ticks, 1,
+            "the air supply is the drowning rule's, not a timer (P20-01)"
+        );
         assert_eq!(entity.effects.len(), 1);
         store.get_mut(id).expect("entity").tick_timers();
         assert!(

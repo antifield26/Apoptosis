@@ -1,9 +1,17 @@
-//! The in-tick phase order (P05-02).
+//! The in-tick phase order (P05-02, extended by P20-01).
 //!
 //! See the crate docs for why this order and not another. The important property
 //! for tests is that [`PHASE_ORDER`] is a `const` array: the order cannot be
 //! changed at runtime, so a future refactor that reorders phases has to change
 //! this one visible place and will break the ordering test.
+//!
+//! The two fluid/random-tick phases and their position between the block queue
+//! and the entities are fixed by
+//! [ADR-0009 §2.1](../../../docs/adr/ADR-0009-world-ticking.md), which mirrors
+//! the order the 26.1.2 jar's `ServerLevel.tick` calls its subsystems in
+//! (`tickTime` → `blockTicks.tick` → `fluidTicks.tick` → `tickChunk` →
+//! `entityTickList.forEach` → `tickBlockEntities`), verified with `javap` on
+//! 2026-10-01.
 
 /// One step of a tick.
 ///
@@ -14,8 +22,27 @@ pub enum TickPhase {
     ///
     /// First: every later phase must observe this tick's input.
     Network,
-    /// Run scheduled block, fluid and entity ticks that came due.
+    /// Advance the world clock, then run due **block** scheduled ticks.
+    ///
+    /// The world time and weather timers move here because the jar puts
+    /// `tickTime()` before both tick queues (ADR-0009 §2.2). Fluid ticks are
+    /// **not** drained here since P20-01: they have their own queue and their
+    /// own phase, exactly as the jar's `ServerLevel` owns a separate
+    /// `LevelTicks<Fluid>`.
     ScheduledTicks,
+    /// Run due **fluid** scheduled ticks (P20-01).
+    ///
+    /// After the block queue and before the random-tick sweep, which is the
+    /// jar's verified order (ADR-0009 §2.1).
+    FluidTicks,
+    /// Sweep the ticking radius for random ticks (P20-01 skeleton, P20-02 growth).
+    ///
+    /// A **sweep**, not a queue: the jar's `ServerLevel.tickChunk(LevelChunk, int)`
+    /// samples each section at the `randomTickSpeed` game rule's rate. P20-01
+    /// installs the phase, the radius and the counters; the per-block growth
+    /// handlers are P20-02's deliverable, so this phase currently samples and
+    /// applies nothing (see `crates/server/src/game/tick.rs::phase_random_ticks`).
+    RandomTicks,
     /// Entity AI and physics, in ascending entity id.
     Entities,
     /// Player physics and actions.
@@ -29,12 +56,14 @@ pub enum TickPhase {
 }
 
 /// Number of phases, for fixed-size timing arrays.
-pub const PHASE_COUNT: usize = 6;
+pub const PHASE_COUNT: usize = 8;
 
 /// The authoritative execution order.
 pub const PHASE_ORDER: [TickPhase; PHASE_COUNT] = [
     TickPhase::Network,
     TickPhase::ScheduledTicks,
+    TickPhase::FluidTicks,
+    TickPhase::RandomTicks,
     TickPhase::Entities,
     TickPhase::Players,
     TickPhase::BlockEntities,
@@ -48,10 +77,12 @@ impl TickPhase {
         match self {
             Self::Network => 0,
             Self::ScheduledTicks => 1,
-            Self::Entities => 2,
-            Self::Players => 3,
-            Self::BlockEntities => 4,
-            Self::Broadcast => 5,
+            Self::FluidTicks => 2,
+            Self::RandomTicks => 3,
+            Self::Entities => 4,
+            Self::Players => 5,
+            Self::BlockEntities => 6,
+            Self::Broadcast => 7,
         }
     }
 
@@ -61,6 +92,8 @@ impl TickPhase {
         match self {
             Self::Network => "network",
             Self::ScheduledTicks => "scheduled_ticks",
+            Self::FluidTicks => "fluid_ticks",
+            Self::RandomTicks => "random_ticks",
             Self::Entities => "entities",
             Self::Players => "players",
             Self::BlockEntities => "block_entities",
@@ -88,18 +121,36 @@ mod tests {
     #[test]
     fn the_order_is_the_documented_one() {
         // Changing this list changes observable behaviour; the assertion exists so
-        // that change is deliberate and reviewed rather than incidental.
+        // that change is deliberate and reviewed rather than incidental. This is
+        // the ADR-0009 §2.1 order, widened from six phases to eight by P20-01.
         assert_eq!(
             PHASE_ORDER,
             [
                 TickPhase::Network,
                 TickPhase::ScheduledTicks,
+                TickPhase::FluidTicks,
+                TickPhase::RandomTicks,
                 TickPhase::Entities,
                 TickPhase::Players,
                 TickPhase::BlockEntities,
                 TickPhase::Broadcast,
             ]
         );
+    }
+
+    #[test]
+    fn the_fluid_and_random_tick_phases_sit_where_adr_0009_puts_them() {
+        // The jar's order is time → block ticks → fluid ticks → random ticks →
+        // entities → block entities (ADR-0009 §1). Pinning it as positions, not
+        // just membership, is what makes a reorder a red test rather than a
+        // silent behaviour change.
+        assert_eq!(TickPhase::FluidTicks.index(), 2);
+        assert_eq!(TickPhase::RandomTicks.index(), 3);
+        assert!(TickPhase::ScheduledTicks < TickPhase::FluidTicks);
+        assert!(TickPhase::FluidTicks < TickPhase::RandomTicks);
+        assert!(TickPhase::RandomTicks < TickPhase::Entities);
+        assert_eq!(TickPhase::FluidTicks.name(), "fluid_ticks");
+        assert_eq!(TickPhase::RandomTicks.name(), "random_ticks");
     }
 
     #[test]

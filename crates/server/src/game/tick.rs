@@ -31,6 +31,7 @@ use mc_protocol::packets::play::{
     block_position,
 };
 use mc_protocol::text::TextComponent;
+use mc_simulation::fluid::FluidWorld as _;
 use mc_simulation::{PhaseRunner, TickPhase};
 use mc_world::Vec3;
 use mc_world::World;
@@ -244,7 +245,7 @@ fn tick_session_dig(
 }
 
 impl Game {
-    /// Run one tick: the six phases, in order, each timed.
+    /// Run one tick: the eight phases, in order, each timed.
     ///
     /// # Errors
     ///
@@ -280,6 +281,14 @@ impl Game {
             TickPhase::Network => self.phase_network(report),
             TickPhase::ScheduledTicks => {
                 self.tick_scheduled(tick, report);
+                Ok(())
+            }
+            TickPhase::FluidTicks => {
+                self.phase_fluid_ticks(tick, report);
+                Ok(())
+            }
+            TickPhase::RandomTicks => {
+                self.phase_random_ticks(report);
                 Ok(())
             }
             TickPhase::Entities => {
@@ -453,6 +462,178 @@ impl Game {
         }
     }
 
+    /// Phase 3: drain due fluid ticks and run the jar's flow rules (P20-01).
+    ///
+    /// The queue is the game's own [`mc_simulation::FluidQueue`] — the jar's
+    /// `LevelTicks<Fluid>` beside its `LevelTicks<Block>` (ADR-0009 §1) — drained
+    /// under [`mc_simulation::MAX_FLUID_TICKS_PER_TICK`]. Work over the cap stays
+    /// queued and is reported as `fluid_ticks_pending`; nothing is dropped.
+    ///
+    /// Each due position is re-read before its rules run, exactly as the jar's
+    /// `LevelTicks` hands the *current* fluid state to `FlowingFluid.tick`: a
+    /// position a player has since mined is a no-op, not a stale write.
+    fn phase_fluid_ticks(&mut self, tick: Tick, report: &mut TickReport) {
+        let budget = mc_simulation::FluidBudget::nominal();
+        let drain = self.fluid_ticks.drain_due(tick, budget);
+        report.fluid_ticks_fired = drain.len();
+        let mut written = 0usize;
+        for pos in drain.due {
+            // Disjoint field borrows: the adapter owns `world` and reads
+            // `registries`, while `fluid_ticks` and `random` are borrowed by the
+            // engine. No lock and no clone is involved.
+            let mut world =
+                super::fluids::WorldFluids::new(&mut self.world, &self.registries.blocks);
+            let Some(kind) = world.facts(pos).and_then(|facts| facts.fluid.kind()) else {
+                continue;
+            };
+            let rules = super::fluids::world_fluid_rules(kind);
+            let outcome = mc_simulation::fluid::tick(
+                &mut world,
+                rules,
+                pos,
+                tick,
+                &mut self.fluid_ticks,
+                &mut self.random,
+            );
+            written += outcome.spread_writes;
+        }
+        report.fluid_blocks_written = written;
+        // Read *after* the work, not from the drain: the cells this tick's
+        // spreads wrote are scheduled for later ticks, and a lateness counter that
+        // ignored them would report an idle queue while a flow was still moving.
+        report.fluid_ticks_pending = self.fluid_ticks.pending();
+    }
+
+    /// Phase 4: the random-tick sweep of the ticking radius (**P20-01 skeleton**).
+    ///
+    /// **This phase samples and applies nothing.** It walks the shape the jar's
+    /// `ServerLevel.tickChunk(LevelChunk, int)` walks — every loaded chunk inside
+    /// the ticking radius, every section of it, `randomTickSpeed` sample slots per
+    /// section — and counts the samples that shape implies. It does **not** draw a
+    /// position, look up a block, or grow anything: those are P20-02's deliverable,
+    /// and `random_ticks_applied` is zero by construction until then. The counter
+    /// exists now because the phase's cost is `ticking_sections × randomTickSpeed`
+    /// (ADR-0009 §2.3) and P20-07 compares that against the ADR's estimate.
+    ///
+    /// Two things are deliberately *not* done here yet, and both are named rather
+    /// than implied:
+    ///
+    /// - **No RNG is drawn.** A draw with no consumer would burn the game's seeded
+    ///   entropy — the same source mob AI and loot use — and change their outcomes
+    ///   for no behaviour at all. P20-02 adds the draw together with the lookup it
+    ///   feeds.
+    /// - **The radius is the view distance.** ADR-0009 §2.4 makes
+    ///   `simulation_distance` the ticking radius and records the boundary that
+    ///   this server loads by `view_distance`, so the effective radius is
+    ///   `min(simulation_distance, view_distance)`; until P20-05 stores the game
+    ///   rules there is one number, and it is the loader's.
+    fn phase_random_ticks(&mut self, report: &mut TickReport) {
+        // The jar's `random_tick_speed` game rule: `javap -c GameRules` registers
+        // it as `registerInteger("random_tick_speed", UPDATES, 3, 0)`. P20-05
+        // stores it; until then the default is the honest value. First in the
+        // body because an item declares itself from the start of its scope.
+        const RANDOM_TICK_SPEED: usize = 3;
+        let radius = self.view_distance.clamp(2, 16);
+        let mut centres: Vec<ChunkPos> = self
+            .entity_ids
+            .values()
+            .filter_map(|id| self.entities.get(*id).map(|entity| entity.position))
+            .map(|position| chunk_of(position.x, position.z))
+            .collect();
+        centres.sort_unstable();
+        centres.dedup();
+        let mut chunks: BTreeSet<ChunkPos> = BTreeSet::new();
+        for centre in centres {
+            for dx in -radius..=radius {
+                for dz in -radius..=radius {
+                    let pos = ChunkPos::new(centre.x + dx, centre.z + dz);
+                    if self.world.is_loaded(pos) {
+                        chunks.insert(pos);
+                    }
+                }
+            }
+        }
+        let sections = self.world.section_count();
+        report.random_tick_samples = chunks.len() * sections * RANDOM_TICK_SPEED;
+        report.random_ticks_applied = 0;
+    }
+
+    /// Water and lava effects on one entity (P20-01).
+    ///
+    /// Vanilla applies these in `LivingEntity.baseTick`, before the entity's own
+    /// tick; the entity loop calls this in that position. Both rules read the
+    /// world through [`Game::fluid_state_at`], the same reading the flow engine
+    /// uses, so "the player is in water" and "the water flows here" cannot
+    /// disagree.
+    ///
+    /// - **Drowning.** `isEyeInFluid(WATER)` drains the air supply one tick at a
+    ///   time; at zero, vanilla keeps counting to `-20` and then deals
+    ///   `2.0F` and resets, which is one hit per 20 ticks. Out of water the supply
+    ///   refills 4 a tick up to [`mc_entity::AIR_TICKS`] (300 = 15 s).
+    /// - **Lava.** Any part of the entity in lava deals `4.0F` lava damage and
+    ///   sets 15 seconds of fire; the damage path's own 10-tick invulnerability
+    ///   window gives vanilla's half-second cadence.
+    ///
+    /// **Not implemented, and named rather than implied:** the water-breathing and
+    /// respiration effects do not gate the drain (the effect table exists, but no
+    /// code path grants them yet), fire-immune mob kinds are not flagged, and a
+    /// non-living entity (an item) takes no lava damage — vanilla destroys the item
+    /// instead, which is an item-entity behaviour with no caller here.
+    fn apply_fluid_effects(&mut self, id: EntityId) {
+        let Some(entity) = self.entities.get(id) else {
+            return;
+        };
+        if !entity.kind().is_living() || !entity.is_alive() {
+            return;
+        }
+        let (x, y, z) = (
+            floor_to_i32(entity.position.x),
+            floor_to_i32(entity.position.y),
+            floor_to_i32(entity.position.z),
+        );
+        let eye_y = floor_to_i32(entity.position.y + EYE_HEIGHT);
+        let body = self.fluid_state_at(x, y, z);
+        let eyes = self.fluid_state_at(x, eye_y, z);
+        let lava = mc_simulation::FluidKind::Lava;
+        let water = mc_simulation::FluidKind::Water;
+        if body.kind() == Some(lava) || eyes.kind() == Some(lava) {
+            if let Some(entity) = self.entities.get_mut(id) {
+                entity.fire_ticks = entity.fire_ticks.max(mc_entity::LAVA_FIRE_TICKS);
+            }
+            self.damage_entity(id, mc_entity::LAVA_DAMAGE, DamageSource::Lava, None);
+            return;
+        }
+        let eye_in_water = eyes.kind() == Some(water);
+        let hit = {
+            let Some(entity) = self.entities.get_mut(id) else {
+                return;
+            };
+            if eye_in_water {
+                if entity.air_ticks > 0 {
+                    entity.air_ticks -= 1;
+                    false
+                } else {
+                    entity.drown_ticks = entity.drown_ticks.saturating_add(1);
+                    if entity.drown_ticks >= mc_entity::DROWN_DAMAGE_INTERVAL {
+                        entity.drown_ticks = 0;
+                        true
+                    } else {
+                        false
+                    }
+                }
+            } else {
+                entity.drown_ticks = 0;
+                if entity.air_ticks < mc_entity::AIR_TICKS {
+                    entity.air_ticks = (entity.air_ticks + 4).min(mc_entity::AIR_TICKS);
+                }
+                false
+            }
+        };
+        if hit {
+            self.damage_entity(id, mc_entity::DROWN_DAMAGE, DamageSource::Drowning, None);
+        }
+    }
+
     /// Schedule a block tick for `(x, y, z)`, `delay` ticks from now (P13-01).
     ///
     /// The scheduling half of the queue the `ScheduledTicks` phase drains; the
@@ -515,7 +696,7 @@ impl Game {
         if self.world.set_block(x, y, z, new_id).is_err() {
             return false;
         }
-        self.redstone_feed(x, y, z, new_id);
+        self.block_feed(x, y, z, new_id);
         true
     }
 
@@ -1377,6 +1558,10 @@ impl Game {
             // `tick_entity_ai` for what it decides and resolves.
             self.tick_entity_ai(id);
             self.tick_mob_despawn(id);
+            // Fluid effects sit where vanilla's `LivingEntity.baseTick` does:
+            // before the entity's own tick, so a drowning hit lands on the tick
+            // the air ran out rather than a tick later.
+            self.apply_fluid_effects(id);
             if self.tick_entity(id) {
                 report.entities_ticked += 1;
             }

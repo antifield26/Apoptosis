@@ -16,7 +16,9 @@
 //! the bow and the creeper fuse as production callers.
 
 /// What dealt the damage. Only sources with a production caller exist here:
-/// fire/drowning/void/magic sources have no callers in the tree at all.
+/// fire/void/magic sources have no callers in the tree at all. P20-01 added
+/// [`DamageSource::Drowning`] and [`DamageSource::Lava`], whose callers are the
+/// fluid effects in the Entities phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DamageSource {
     /// A player's melee swing.
@@ -36,30 +38,52 @@ pub enum DamageSource {
     /// A creeper explosion (`explosion` tag: armour applies, but the hurt
     /// path carries no knockback — vanilla flings separately).
     Explosion,
+    /// Running out of air under water (`drown`).
+    ///
+    /// The jar's `data/minecraft/damage_type/drown.json` names no `bypasses_armor`
+    /// tag of its own, but the tag's own file lists `minecraft:drown`, so armour
+    /// does **not** reduce it — read from `tags/damage_type/bypasses_armor.json`
+    /// in the 26.1.2 jar on 2026-10-01.
+    Drowning,
+    /// Standing in lava (`lava`).
+    ///
+    /// `data/minecraft/damage_type/lava.json` is `is_fire` (it is listed in
+    /// `tags/damage_type/is_fire.json`) and is **not** in `bypasses_armor`, so
+    /// armour does reduce it.
+    Lava,
 }
 
 impl DamageSource {
     /// Whether armour (and toughness) reduce this damage. From the vanilla
-    /// `bypasses_armor` tag: fall, starvation and their kin bypass; melee and
-    /// projectiles do not.
+    /// `bypasses_armor` tag: fall, starvation and their kin bypass; melee,
+    /// projectiles and lava do not.
     #[must_use]
     pub const fn bypasses_armor(self) -> bool {
         match self {
-            Self::PlayerAttack | Self::MobAttack | Self::Poison | Self::Arrow | Self::Explosion => {
-                false
-            }
-            Self::Fall | Self::Starvation | Self::Wither => true,
+            Self::PlayerAttack
+            | Self::MobAttack
+            | Self::Poison
+            | Self::Arrow
+            | Self::Explosion
+            | Self::Lava => false,
+            Self::Fall | Self::Starvation | Self::Wither | Self::Drowning => true,
         }
     }
 
     /// Whether the hit shoves the victim. Melee and arrows carry vanilla's
-    /// base knockback; falls, starvation, effect ticks and explosions have no
-    /// source direction (explosions fling separately) to shove from.
+    /// base knockback; falls, starvation, effect ticks, explosions and the two
+    /// fluid sources have no source direction to shove from.
     #[must_use]
     pub const fn applies_knockback(self) -> bool {
         match self {
             Self::PlayerAttack | Self::MobAttack | Self::Arrow => true,
-            Self::Fall | Self::Starvation | Self::Poison | Self::Wither | Self::Explosion => false,
+            Self::Fall
+            | Self::Starvation
+            | Self::Poison
+            | Self::Wither
+            | Self::Explosion
+            | Self::Drowning
+            | Self::Lava => false,
         }
     }
 }
@@ -346,6 +370,14 @@ mod tests {
         assert!(DamageSource::Fall.bypasses_armor());
         assert!(DamageSource::Starvation.bypasses_armor());
         assert!(DamageSource::Wither.bypasses_armor());
+        // The two fluid sources, from the jar's damage-type tags (P20-01).
+        assert!(
+            DamageSource::Drowning.bypasses_armor(),
+            "drown is in bypasses_armor"
+        );
+        assert!(!DamageSource::Lava.bypasses_armor(), "lava is not");
+        assert!(!DamageSource::Lava.applies_knockback());
+        assert!(!DamageSource::Drowning.applies_knockback());
         assert!(DamageSource::PlayerAttack.applies_knockback());
         assert!(DamageSource::MobAttack.applies_knockback());
         assert!(DamageSource::Arrow.applies_knockback());
