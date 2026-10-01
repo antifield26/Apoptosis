@@ -414,3 +414,58 @@ fn corrupt_playerdata_rejoins_fresh() {
         "a corrupt file restores full health"
     );
 }
+
+/// A player who logs out **dead** comes back respawned — and in the game mode
+/// they logged out with (AUDIT-19 A-07 follow-up).
+///
+/// The defect: the stored-death arm of `Game::join` built a fresh
+/// [`Player::new`](mc_entity::player::Player::new), whose game mode is hardcoded
+/// Survival, and threw the loaded player away with the rest of the dead state. A
+/// creative (or spectator) player who died and disconnected therefore came back
+/// in Survival even though the file's `playerGameType` had been read — the mode
+/// key was never the problem, this arm was.
+///
+/// Vanilla's semantics: death costs health, position and drops, and it is
+/// *respawn* that restores them, while the game mode is persisted and carried
+/// across (`ServerPlayer.restoreFrom` copies it; the join default only applies to
+/// a player with no stored data at all).
+///
+/// Falsified by dropping the `respawned.game_mode = loaded.game_mode` line in
+/// `session.rs`, which puts this back to Survival.
+#[test]
+fn a_player_who_logged_out_dead_rejoins_in_their_stored_game_mode() {
+    let mut harness = Harness::new_owned("a07-dead-rejoin");
+    let (id, _out) = harness.join("Corpse");
+    {
+        let player = harness.game.player_mut(id).expect("player");
+        player.game_mode = mc_entity::player::GameMode::Creative;
+        // Logged out dead: the file carries health 0 **and** the mode above.
+        player.health = 0.0;
+    }
+    harness.leave(id);
+
+    let profile = mc_network::auth::offline_profile("Corpse");
+    let dat = harness
+        .dir
+        .path()
+        .join("world")
+        .join("playerdata")
+        .join(format!("{}.dat", profile.id));
+    assert!(
+        dat.is_file(),
+        "the death must reach the file, missing {dat:?}"
+    );
+
+    let (id2, _out2) = harness.join("Corpse");
+    let player = harness.game.player(id2).expect("the rejoin is a session");
+    assert!(
+        player.health > 0.0,
+        "a stored death rejoins respawned, got health {}",
+        player.health
+    );
+    assert_eq!(
+        player.game_mode,
+        mc_entity::player::GameMode::Creative,
+        "the stored game mode survives the death; it is not part of dying"
+    );
+}

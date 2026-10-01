@@ -41,8 +41,8 @@ use mc_protocol::packets::login::{LoginAcknowledged, LoginStart, LoginSuccess, S
 use mc_protocol::packets::play::{
     AddEntity, BlockUpdate, ChunkBatchFinished, ChunkBatchStart, ContainerSetContent, GameEvent,
     JoinGame, KeepAlive, LevelChunkWithLight, MoveEntityPos, MoveEntityPosRot, MoveEntityRot,
-    PlayIntent, PlayerPosition, RemoveEntities, SetChunkCacheCenter, SetDefaultSpawnPosition,
-    SetEntityData, SetExperience, SetHealth, SetHeldSlot, SetTime,
+    PlayIntent, PlayerInfoUpdate, PlayerPosition, RemoveEntities, SetChunkCacheCenter,
+    SetDefaultSpawnPosition, SetEntityData, SetExperience, SetHealth, SetHeldSlot, SetTime,
 };
 use mc_protocol::wire::{PacketReader, PacketWriter};
 use std::collections::BTreeMap;
@@ -143,6 +143,7 @@ fn check_body(state: &str, dirn: &str, id: i32, body: &[u8]) -> Outcome {
         ("play", "s2c", 53) => roundtrip::<MoveEntityPos>(body),
         ("play", "s2c", 54) => roundtrip::<MoveEntityPosRot>(body),
         ("play", "s2c", 56) => roundtrip::<MoveEntityRot>(body),
+        ("play", "s2c", 70) => roundtrip::<PlayerInfoUpdate>(body),
         ("play", "s2c", 72) => roundtrip::<PlayerPosition>(body),
         ("play", "s2c", 77) => roundtrip::<RemoveEntities>(body),
         ("play", "s2c", 94) => roundtrip::<SetChunkCacheCenter>(body),
@@ -168,7 +169,6 @@ const UNMODELLED: &[(&str, &str, i32, &str)] = &[
     ("play", "s2c", 43, "initialize_border"),
     ("play", "s2c", 46, "level_event"),
     ("play", "s2c", 64, "player_abilities"),
-    ("play", "s2c", 70, "player_info_update"),
     ("play", "s2c", 74, "recipe_book_add"),
     ("play", "s2c", 76, "recipe_book_settings"),
     ("play", "s2c", 83, "rotate_head"),

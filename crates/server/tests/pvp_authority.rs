@@ -337,9 +337,9 @@ fn players_are_announced_to_each_other_as_players() {
     // The identity on the wire is the entity store's own derivation
     // (`entity_uuid(seed, id)`), which is what every other announcement
     // carries. The *profile* uuid reaches a client through
-    // `player_info_update`, which this build does not send at all (AUDIT-19
-    // A-04) — recorded here rather than implied by a uuid assert that would
-    // pass for the wrong reason.
+    // `player_info_update`, which since AUDIT-19 A-04 the join sends to every
+    // client (`player_info_tab_list.rs` pins that); the two are different
+    // identities on purpose, so this assert stays about the store's.
     assert_eq!(
         for_alpha.uuid,
         harness

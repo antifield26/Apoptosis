@@ -35,6 +35,7 @@
 use super::Packet;
 use crate::ids::{clientbound, serverbound};
 use crate::nbt::Nbt;
+use crate::packets::login::ProfileProperty;
 use crate::text::TextComponent;
 use crate::wire::{PacketReader, PacketWriter};
 use mc_core::error::{ServerError, ServerResult};
@@ -1768,6 +1769,599 @@ impl Packet for BlockEntityData {
         let mut bytes = Vec::new();
         self.data.write_network(&mut bytes)?;
         writer.write_bytes(&bytes);
+        Ok(writer.finish())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Player list: `player_info_update` / `player_info_remove` (AUDIT-19 A-04)
+// ---------------------------------------------------------------------------
+//
+// The shapes below are read off the jar, not from a sibling version:
+// `javap -p -c -classpath target/vanilla-26.1.2/client.jar
+// net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket` plus its
+// `$Entry`, `$Action` and `$EntryBuilder` types. In that bytecode:
+//
+// * `write` calls `writeEnumSet(actions, Action.class)` and then
+//   `writeCollection(entries, this::lambda$write$0)`;
+// * `FriendlyByteBuf.writeEnumSet` builds a `BitSet` over `Action.values()` in
+//   **ordinal order** and calls `writeFixedBitSet(bits, values.length)`, which
+//   emits `Mth.positiveCeilDiv(8, 8) == 1` byte in `BitSet.toByteArray` order —
+//   bit `i` (LSB first) is `Action.values()[i]`;
+// * `writeCollection` writes `writeVarInt(size)` and then one element each;
+// * `lambda$write$0` writes `writeUUID(entry.profileId())` (most-significant
+//   `long` first) and then, **for each action in `EnumSet` iteration order**
+//   (ordinals ascending), `action.writer.write(buf, entry)`;
+// * the `Action` static initialiser fixes those ordinals: `ADD_PLAYER` 0,
+//   `INITIALIZE_CHAT` 1, `UPDATE_GAME_MODE` 2, `UPDATE_LISTED` 3,
+//   `UPDATE_LATENCY` 4, `UPDATE_DISPLAY_NAME` 5, `UPDATE_LIST_ORDER` 6,
+//   `UPDATE_HAT` 7. **This 26.1.2 order is not the 1.20.x order**, so a field
+//   table copied from an older protocol would mis-encode every packet with more
+//   than one action;
+// * `ADD_PLAYER` writes `ByteBufCodecs.PLAYER_NAME` (which the same class
+//   defines as `stringUtf8(16)`) and then `ByteBufCodecs.GAME_PROFILE_PROPERTIES`
+//   (`ByteBufCodecs$32`), whose encoder is
+//   `writeCount(size, 16)` followed by, per property, name (`Utf8String`, 64),
+//   value (`Utf8String`, 32767) and a `writeNullable` signature
+//   (`Utf8String`, 1024). The `textures` value **is** the skin.
+//
+// A real captured server packet pins all of it byte for byte in
+// `crates/protocol/tests/player_info_wire_shape.rs`.
+
+/// Longest profile name on this wire: `ByteBufCodecs.PLAYER_NAME` is
+/// `stringUtf8(16)` (jar: `bipush 16` before the `putstatic`).
+pub const PLAYER_NAME_MAX_CHARS: usize = 16;
+
+/// Longest profile property *name*: `Utf8String.write(buf, name, 64)` in
+/// `ByteBufCodecs$32.encode`.
+pub const PROFILE_PROPERTY_NAME_MAX_CHARS: usize = 64;
+
+/// Longest profile property *value* — the base64 `textures` blob:
+/// `Utf8String.write(buf, value, 32767)` in the same encoder.
+pub const PROFILE_PROPERTY_VALUE_MAX_CHARS: usize = 32_767;
+
+/// Longest profile property signature: `Utf8String.write(buf, signature, 1024)`
+/// in `ByteBufCodecs$32.encode` (and `read(…, 1024)` on the way in).
+pub const PROFILE_PROPERTY_SIGNATURE_MAX_CHARS: usize = 1_024;
+
+/// Highest number of profile properties one entry may carry.
+///
+/// **Vanilla's cap, not ours**: `ByteBufCodecs$32.encode` opens with
+/// `writeCount(size, 16)`, and `writeCount` throws when the count exceeds the
+/// max, so a 17-property entry is a packet the sending server refuses to
+/// produce and the receiving client refuses to read.
+pub const MAX_PROFILE_PROPERTIES: usize = 16;
+
+/// Highest number of entries one update may carry.
+///
+/// **Our bound, not Vanilla's** — the jar's `writeCollection` has no cap at all.
+/// It exists because a hostile count must be range-checked before it becomes a
+/// `Vec::with_capacity`, which is this crate's rule for every counted list; it is
+/// far above any real player list.
+pub const MAX_PLAYER_INFO_ENTRIES: usize = 4_096;
+
+/// One action of `ClientboundPlayerInfoUpdatePacket$Action`.
+///
+/// The discriminants **are** the wire bit indexes (`Action.values()` ordinals in
+/// the jar), so they must not be reordered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PlayerInfoAction {
+    /// `ADD_PLAYER` (bit 0): profile name, then the profile properties (skins).
+    AddPlayer = 0,
+    /// `INITIALIZE_CHAT` (bit 1): the player's chat session, written nullable.
+    InitializeChat = 1,
+    /// `UPDATE_GAME_MODE` (bit 2): `GameType.getId()` as a `VarInt`.
+    UpdateGameMode = 2,
+    /// `UPDATE_LISTED` (bit 3): whether the entry shows in the tab list.
+    UpdateListed = 3,
+    /// `UPDATE_LATENCY` (bit 4): ping in milliseconds as a `VarInt`.
+    UpdateLatency = 4,
+    /// `UPDATE_DISPLAY_NAME` (bit 5): a component, written nullable as network NBT.
+    UpdateDisplayName = 5,
+    /// `UPDATE_LIST_ORDER` (bit 6): tab-list ordering as a `VarInt`.
+    UpdateListOrder = 6,
+    /// `UPDATE_HAT` (bit 7): the hat model part, a boolean.
+    UpdateHat = 7,
+}
+
+impl PlayerInfoAction {
+    /// Every action, in wire (ordinal) order.
+    pub const ALL: [Self; 8] = [
+        Self::AddPlayer,
+        Self::InitializeChat,
+        Self::UpdateGameMode,
+        Self::UpdateListed,
+        Self::UpdateLatency,
+        Self::UpdateDisplayName,
+        Self::UpdateListOrder,
+        Self::UpdateHat,
+    ];
+
+    /// The bit this action occupies in the packet's bitset.
+    #[must_use]
+    pub const fn bit(self) -> u8 {
+        self as u8
+    }
+
+    /// The bitset mask for this action.
+    #[must_use]
+    pub const fn mask(self) -> u8 {
+        1 << self.bit()
+    }
+}
+
+/// A set of [`PlayerInfoAction`]s: the leading bitset of `player_info_update`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PlayerInfoActions(u8);
+
+impl PlayerInfoActions {
+    /// No actions: legal on the wire (the entry list carries only uuids), and
+    /// meaningless to send — it tells a client nothing.
+    pub const NONE: Self = Self(0);
+
+    /// Wrap the raw bitset byte.
+    ///
+    /// Every one of the eight bits is a defined action in protocol 775, so any
+    /// byte is representable; a *ninth* action would widen this field, which is
+    /// why the byte count is not read as a loop bound.
+    #[must_use]
+    pub const fn from_bits(bits: u8) -> Self {
+        Self(bits)
+    }
+
+    /// The raw bitset byte.
+    #[must_use]
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
+
+    /// Whether `action` is in the set.
+    #[must_use]
+    pub const fn contains(self, action: PlayerInfoAction) -> bool {
+        self.0 & action.mask() != 0
+    }
+
+    /// Whether no action is set.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    /// Add one action.
+    pub fn insert(&mut self, action: PlayerInfoAction) {
+        self.0 |= action.mask();
+    }
+
+    /// The actions in the set, in wire (ordinal) order.
+    pub fn iter(self) -> impl Iterator<Item = PlayerInfoAction> {
+        PlayerInfoAction::ALL
+            .into_iter()
+            .filter(move |action| self.contains(*action))
+    }
+}
+
+impl From<PlayerInfoAction> for PlayerInfoActions {
+    fn from(action: PlayerInfoAction) -> Self {
+        Self(action.mask())
+    }
+}
+
+impl core::ops::BitOr for PlayerInfoActions {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl core::ops::BitOrAssign for PlayerInfoActions {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
+}
+
+/// One action slot's value on one entry.
+///
+/// The distinction the wire makes and a plain `Option` cannot: an action whose
+/// bit is **clear** writes no bytes at all ([`PlayerInfoField::Absent`]), while
+/// the two nullable actions write `writeNullable`, so a present-but-null value
+/// ([`PlayerInfoField::Null`]) is a different, legal state.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum PlayerInfoField<T> {
+    /// The action is not in the packet's bitset.
+    #[default]
+    Absent,
+    /// The action is set and its `writeNullable` value is null.
+    Null,
+    /// The action is set with a value.
+    Value(T),
+}
+
+/// The `ADD_PLAYER` payload: the profile name and its property list.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PlayerInfoProfile {
+    /// The player's name (at most [`PLAYER_NAME_MAX_CHARS`] characters).
+    pub name: String,
+    /// The profile properties — for an online-mode join, the signed `textures`
+    /// property the skin is read from.
+    pub properties: Vec<ProfileProperty>,
+}
+
+/// The `INITIALIZE_CHAT` payload (`RemoteChatSession.Data`).
+///
+/// Modelled from the jar's `RemoteChatSession$Data.read`/`write` (session id,
+/// `readInstant`/`writeInstant`, `readPublicKey`/`writePublicKey` — a byte array
+/// capped at 512 — and `readByteArray(4096)` for the key signature). This server
+/// establishes no chat sessions, so it only ever *writes* `Null`; the value arm
+/// exists so the fields can be decoded rather than silently truncated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatSession {
+    /// The session's UUID.
+    pub session_id: uuid::Uuid,
+    /// Expiry as epoch milliseconds (`writeInstant` → `writeLong`).
+    pub expires_at: i64,
+    /// The X.509-encoded public key (≤512 bytes on the wire).
+    pub public_key: Vec<u8>,
+    /// Mojang's signature over the key (≤4096 bytes on the wire).
+    pub key_signature: Vec<u8>,
+}
+
+/// One `Entry` of `player_info_update`.
+///
+/// Every field is a [`PlayerInfoField`]: the packet's actions bitset decides
+/// which slots are on the wire, and the slots are written in ordinal order.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PlayerInfoEntry {
+    /// `profileId`, always written, 16 bytes, most-significant `long` first.
+    pub uuid: uuid::Uuid,
+    /// `ADD_PLAYER`.
+    pub profile: PlayerInfoField<PlayerInfoProfile>,
+    /// `INITIALIZE_CHAT`.
+    pub chat_session: PlayerInfoField<ChatSession>,
+    /// `UPDATE_GAME_MODE` (`VarInt`).
+    pub game_mode: PlayerInfoField<i32>,
+    /// `UPDATE_LISTED`.
+    pub listed: PlayerInfoField<bool>,
+    /// `UPDATE_LATENCY` (`VarInt`).
+    pub latency: PlayerInfoField<i32>,
+    /// `UPDATE_DISPLAY_NAME`, as a network-NBT component.
+    pub display_name: PlayerInfoField<Nbt>,
+    /// `UPDATE_LIST_ORDER` (`VarInt`).
+    pub list_order: PlayerInfoField<i32>,
+    /// `UPDATE_HAT`.
+    pub show_hat: PlayerInfoField<bool>,
+}
+
+/// `minecraft:player_info_update` (clientbound play 70).
+///
+/// The tab list's only source: a client builds its entries from this packet
+/// alone, and the `ADD_PLAYER` action is the only place another player's profile
+/// properties (the signed `textures` value behind a skin) reach it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlayerInfoUpdate {
+    /// Which actions the entries carry, as the leading bitset.
+    pub actions: PlayerInfoActions,
+    /// One entry per listed player.
+    pub entries: Vec<PlayerInfoEntry>,
+}
+
+/// Write one action's field, refusing a bitset that disagrees with the entry.
+///
+/// The refusals are the point: an action in the bitset with no value would emit
+/// a body shorter than the client's decoder expects for that bitset, which a real
+/// client rejects — worse than sending fewer actions, which it accepts.
+fn write_player_info_action(
+    writer: &mut PacketWriter,
+    action: PlayerInfoAction,
+    entry: &PlayerInfoEntry,
+) -> ServerResult<()> {
+    // Two ways a bitset and an entry can disagree — the field is `Absent`
+    // although the action is set, or it is `Null` on one of the six actions that
+    // are not `writeNullable`. Both are our own bug, both are refused here (a
+    // body that is short for its own bitset is one a real client rejects), and
+    // one message covers both because the fix is the same.
+    let missing = |action: PlayerInfoAction| {
+        ServerError::Invariant(format!(
+            "player_info_update: action {action:?} is in the bitset but its entry field is not a Value"
+        ))
+    };
+    match action {
+        PlayerInfoAction::AddPlayer => match &entry.profile {
+            PlayerInfoField::Value(profile) => {
+                if profile.name.chars().count() > PLAYER_NAME_MAX_CHARS {
+                    return Err(ServerError::Invariant(format!(
+                        "player_info_update: name {:?} exceeds the {PLAYER_NAME_MAX_CHARS}-char wire cap",
+                        profile.name
+                    )));
+                }
+                writer.write_string(&profile.name)?;
+                if profile.properties.len() > MAX_PROFILE_PROPERTIES {
+                    return Err(ServerError::Invariant(format!(
+                        "player_info_update: {} profile properties exceed Vanilla's cap of {MAX_PROFILE_PROPERTIES}",
+                        profile.properties.len()
+                    )));
+                }
+                writer.write_varint(packed_len(profile.properties.len())?);
+                for property in &profile.properties {
+                    write_profile_property(writer, property)?;
+                }
+                Ok(())
+            }
+            _ => Err(missing(action)),
+        },
+        PlayerInfoAction::InitializeChat => match &entry.chat_session {
+            PlayerInfoField::Null => {
+                writer.write_bool(false);
+                Ok(())
+            }
+            PlayerInfoField::Value(session) => {
+                writer.write_bool(true);
+                writer.write_uuid(&session.session_id);
+                writer.write_i64(session.expires_at);
+                write_blob(writer, &session.public_key)?;
+                write_blob(writer, &session.key_signature)?;
+                Ok(())
+            }
+            PlayerInfoField::Absent => Err(missing(action)),
+        },
+        PlayerInfoAction::UpdateGameMode => match entry.game_mode {
+            PlayerInfoField::Value(mode) => {
+                writer.write_varint(mode);
+                Ok(())
+            }
+            _ => Err(missing(action)),
+        },
+        PlayerInfoAction::UpdateListed => match entry.listed {
+            PlayerInfoField::Value(listed) => {
+                writer.write_bool(listed);
+                Ok(())
+            }
+            _ => Err(missing(action)),
+        },
+        PlayerInfoAction::UpdateLatency => match entry.latency {
+            PlayerInfoField::Value(latency) => {
+                writer.write_varint(latency);
+                Ok(())
+            }
+            _ => Err(missing(action)),
+        },
+        PlayerInfoAction::UpdateDisplayName => match &entry.display_name {
+            PlayerInfoField::Null => {
+                writer.write_bool(false);
+                Ok(())
+            }
+            PlayerInfoField::Value(component) => {
+                writer.write_bool(true);
+                let mut bytes = Vec::new();
+                component.write_network(&mut bytes)?;
+                writer.write_bytes(&bytes);
+                Ok(())
+            }
+            PlayerInfoField::Absent => Err(missing(action)),
+        },
+        PlayerInfoAction::UpdateListOrder => match entry.list_order {
+            PlayerInfoField::Value(order) => {
+                writer.write_varint(order);
+                Ok(())
+            }
+            _ => Err(missing(action)),
+        },
+        PlayerInfoAction::UpdateHat => match entry.show_hat {
+            PlayerInfoField::Value(shown) => {
+                writer.write_bool(shown);
+                Ok(())
+            }
+            _ => Err(missing(action)),
+        },
+    }
+}
+
+/// Read one action's field into `entry`.
+fn read_player_info_action(
+    reader: &mut PacketReader<'_>,
+    action: PlayerInfoAction,
+    entry: &mut PlayerInfoEntry,
+) -> ServerResult<()> {
+    match action {
+        PlayerInfoAction::AddPlayer => {
+            let name = reader.read_string(PLAYER_NAME_MAX_CHARS)?;
+            let count = read_count(reader, "profile property", MAX_PROFILE_PROPERTIES)?;
+            let mut properties = Vec::with_capacity(count);
+            for _ in 0..count {
+                let name = reader.read_string(PROFILE_PROPERTY_NAME_MAX_CHARS)?;
+                let value = reader.read_string(PROFILE_PROPERTY_VALUE_MAX_CHARS)?;
+                let signature = if reader.read_bool()? {
+                    Some(reader.read_string(PROFILE_PROPERTY_SIGNATURE_MAX_CHARS)?)
+                } else {
+                    None
+                };
+                properties.push(ProfileProperty {
+                    name,
+                    value,
+                    signature,
+                });
+            }
+            entry.profile = PlayerInfoField::Value(PlayerInfoProfile { name, properties });
+        }
+        PlayerInfoAction::InitializeChat => {
+            entry.chat_session = if reader.read_bool()? {
+                PlayerInfoField::Value(ChatSession {
+                    session_id: reader.read_uuid()?,
+                    expires_at: reader.read_i64()?,
+                    public_key: read_blob(reader, 512)?,
+                    key_signature: read_blob(reader, 4_096)?,
+                })
+            } else {
+                PlayerInfoField::Null
+            };
+        }
+        PlayerInfoAction::UpdateGameMode => {
+            entry.game_mode = PlayerInfoField::Value(reader.read_varint()?);
+        }
+        PlayerInfoAction::UpdateListed => {
+            entry.listed = PlayerInfoField::Value(reader.read_bool()?);
+        }
+        PlayerInfoAction::UpdateLatency => {
+            entry.latency = PlayerInfoField::Value(reader.read_varint()?);
+        }
+        PlayerInfoAction::UpdateDisplayName => {
+            entry.display_name = if reader.read_bool()? {
+                // The component is a network NBT tag with no length prefix, so it
+                // is read from the remaining bytes and the reader is advanced by
+                // exactly what the tag consumed — `UPDATE_DISPLAY_NAME` is not
+                // necessarily the last action in the bitset.
+                let mut rest = reader.remaining_slice();
+                let component = Nbt::read_network(&mut rest)?;
+                let consumed = reader.remaining() - rest.len();
+                reader.advance(consumed)?;
+                PlayerInfoField::Value(component)
+            } else {
+                PlayerInfoField::Null
+            };
+        }
+        PlayerInfoAction::UpdateListOrder => {
+            entry.list_order = PlayerInfoField::Value(reader.read_varint()?);
+        }
+        PlayerInfoAction::UpdateHat => {
+            entry.show_hat = PlayerInfoField::Value(reader.read_bool()?);
+        }
+    }
+    Ok(())
+}
+
+/// Write one `writeCount(size, 16)`-capped, three-field profile property.
+fn write_profile_property(
+    writer: &mut PacketWriter,
+    property: &ProfileProperty,
+) -> ServerResult<()> {
+    if property.name.chars().count() > PROFILE_PROPERTY_NAME_MAX_CHARS {
+        return Err(ServerError::Invariant(format!(
+            "player_info_update: property name {:?} exceeds the {PROFILE_PROPERTY_NAME_MAX_CHARS}-char wire cap",
+            property.name
+        )));
+    }
+    if property.value.chars().count() > PROFILE_PROPERTY_VALUE_MAX_CHARS {
+        return Err(ServerError::Invariant(format!(
+            "player_info_update: property {:?} value exceeds the {PROFILE_PROPERTY_VALUE_MAX_CHARS}-char wire cap",
+            property.name
+        )));
+    }
+    writer.write_string(&property.name)?;
+    writer.write_string(&property.value)?;
+    match &property.signature {
+        Some(signature) => {
+            if signature.chars().count() > PROFILE_PROPERTY_SIGNATURE_MAX_CHARS {
+                return Err(ServerError::Invariant(format!(
+                    "player_info_update: property {:?} signature exceeds the {PROFILE_PROPERTY_SIGNATURE_MAX_CHARS}-char wire cap",
+                    property.name
+                )));
+            }
+            writer.write_bool(true);
+            writer.write_string(signature)?;
+        }
+        None => writer.write_bool(false),
+    }
+    Ok(())
+}
+
+/// Write a `writeByteArray` blob: a `VarInt` length and the bytes.
+fn write_blob(writer: &mut PacketWriter, bytes: &[u8]) -> ServerResult<()> {
+    writer.write_varint(packed_len(bytes.len())?);
+    writer.write_bytes(bytes);
+    Ok(())
+}
+
+/// Read a `readByteArray(max)` blob, capped before it is allocated.
+fn read_blob(reader: &mut PacketReader<'_>, max: usize) -> ServerResult<Vec<u8>> {
+    let len = read_count(reader, "byte array", max)?;
+    Ok(reader.read_bytes(len)?.to_vec())
+}
+
+impl Packet for PlayerInfoUpdate {
+    const ID: i32 = clientbound::play::PLAYER_INFO_UPDATE;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let actions = PlayerInfoActions::from_bits(reader.read_u8()?);
+        let count = read_count(
+            &mut reader,
+            "player_info_update entry",
+            MAX_PLAYER_INFO_ENTRIES,
+        )?;
+        let mut entries = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut entry = PlayerInfoEntry {
+                uuid: reader.read_uuid()?,
+                ..PlayerInfoEntry::default()
+            };
+            for action in actions.iter() {
+                read_player_info_action(&mut reader, action, &mut entry)?;
+            }
+            entries.push(entry);
+        }
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "player_info_update has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self { actions, entries })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_u8(self.actions.bits());
+        writer.write_varint(packed_len(self.entries.len())?);
+        for entry in &self.entries {
+            writer.write_uuid(&entry.uuid);
+            for action in self.actions.iter() {
+                write_player_info_action(&mut writer, action, entry)?;
+            }
+        }
+        Ok(writer.finish())
+    }
+}
+
+/// `minecraft:player_info_remove` (clientbound play 69).
+///
+/// The other half of the tab list: vanilla drops a departing player's entry with
+/// this packet (`PlayerList.remove` builds it from `List.of(uuid)` and broadcasts
+/// it), not with an `UPDATE_LISTED == false` update.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlayerInfoRemove {
+    /// The profile ids to drop.
+    pub profile_ids: Vec<uuid::Uuid>,
+}
+
+impl Packet for PlayerInfoRemove {
+    const ID: i32 = clientbound::play::PLAYER_INFO_REMOVE;
+
+    fn decode(payload: &[u8]) -> ServerResult<Self> {
+        let mut reader = PacketReader::new(payload);
+        let count = read_count(
+            &mut reader,
+            "player_info_remove id",
+            MAX_PLAYER_INFO_ENTRIES,
+        )?;
+        let mut profile_ids = Vec::with_capacity(count);
+        for _ in 0..count {
+            profile_ids.push(reader.read_uuid()?);
+        }
+        if !reader.is_empty() {
+            return Err(ServerError::Protocol(format!(
+                "player_info_remove has {} trailing bytes",
+                reader.remaining()
+            )));
+        }
+        Ok(Self { profile_ids })
+    }
+
+    fn encode(&self) -> ServerResult<Vec<u8>> {
+        let mut writer = PacketWriter::new();
+        writer.write_varint(packed_len(self.profile_ids.len())?);
+        for id in &self.profile_ids {
+            writer.write_uuid(id);
+        }
         Ok(writer.finish())
     }
 }

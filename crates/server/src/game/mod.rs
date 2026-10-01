@@ -698,6 +698,29 @@ pub const PLAINS_BIOME_ID: u32 = 40;
 /// that keeps this from being another unverified constant.
 pub const CHAT_TYPE_CHAT: i32 = 1;
 
+/// One queued tab-list change (AUDIT-19 A-04).
+///
+/// The wire packets are `player_info_update` (id 70) and `player_info_remove`
+/// (id 69); this is only the intent, because the entries themselves are read from
+/// the live sessions when the Broadcast phase flushes the queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PendingPlayerInfo {
+    /// This connection joined: announce its entry to every client, and hand that
+    /// client the entries of everyone already listed.
+    Join {
+        /// The joining connection.
+        id: ConnectionId,
+    },
+    /// This profile left: drop its entry from every client's tab list.
+    ///
+    /// Carries the uuid rather than the connection because `leave` has already
+    /// removed the session by the time the queue is flushed.
+    Leave {
+        /// The departing player's profile uuid.
+        profile_id: uuid::Uuid,
+    },
+}
+
 /// Result of one tick (tests and telemetry).
 ///
 /// This is a **single tick's** delta, not a running total: every counter starts at
@@ -837,6 +860,15 @@ pub struct Game {
     /// `broadcast_chunk` needs one -- the same deferral `pending_light` performs. Until this existed a
     /// dropped item was real on the server and invisible to every client.
     pending_entity_spawns: Vec<EntityId>,
+    /// Tab-list changes this tick, queued for the Broadcast phase (AUDIT-19 A-04).
+    ///
+    /// Queued rather than sent where they happen, for the same two reasons
+    /// `pending_entity_spawns` is queued: `leave` runs without a `TickReport` (it
+    /// sends nothing at all today), and a departure should produce one batch
+    /// rather than a packet per event. Entries are built at flush time from the
+    /// live sessions, so a player who joins and leaves inside one tick is
+    /// announced and removed in that order instead of never being removed.
+    pending_player_info: Vec<PendingPlayerInfo>,
     /// This tick's counters, shared by every phase while it runs.
     report: TickReport,
     tick: u64,
@@ -1204,6 +1236,7 @@ impl Game {
             pending_intents: Vec::new(),
             pending_light: BTreeSet::new(),
             pending_entity_spawns: Vec::new(),
+            pending_player_info: Vec::new(),
             report: TickReport::default(),
             tick: 0,
             overflowed: Vec::new(),

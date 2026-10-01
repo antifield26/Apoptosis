@@ -26,7 +26,9 @@ use mc_protocol::packets::play::{
     BIOMES_PER_SECTION, BlockChangedAck, BlockUpdate, ChunkSection, ContainerSetContent,
     ContainerSetData, ForgetLevelChunk, HEIGHTMAP_WORLD_SURFACE, Heightmap, HurtAnimation,
     LevelChunkWithLight, LightUpdate, NETWORK_BIOME_MIN_BITS, PalettedContainer as WireContainer,
-    SetChunkCacheCenter, SetChunkCacheRadius, SetTime, block_position,
+    PlayerInfoAction, PlayerInfoActions, PlayerInfoEntry, PlayerInfoField, PlayerInfoProfile,
+    PlayerInfoRemove, PlayerInfoUpdate, SetChunkCacheCenter, SetChunkCacheRadius, SetTime,
+    block_position,
 };
 use mc_protocol::text::TextComponent;
 use mc_simulation::{PhaseRunner, TickPhase};
@@ -42,9 +44,9 @@ use super::{
     FOOD_TICK_INTERVAL, Game, GroundItem, INVULNERABLE_TICKS, ITEM_MERGE_RADIUS_SQR,
     ITEM_PICKUP_RADIUS_SQR, LIGHT_UPDATES_PER_TICK, MOB_LOOKAHEAD_BLOCKS, NO_BLOCK_CHANGE_SEQUENCE,
     ORB_FOLLOW_ACCEL, ORB_FOLLOW_RADIUS_SQR, OpenKind, PENDING_INTENT_BUDGET, PLAINS_BIOME_ID,
-    REST_EPSILON, TickReport, UNLOAD_MARGIN_CHUNKS, block_reach, chunk_of, floor_to_i32,
-    is_container_block, light_fields, mark_block_dirty, mirror_inventory, open_kind_for,
-    wire_angle, wire_stack,
+    PendingPlayerInfo, REST_EPSILON, Session, TickReport, UNLOAD_MARGIN_CHUNKS, block_reach,
+    chunk_of, floor_to_i32, is_container_block, light_fields, mark_block_dirty, mirror_inventory,
+    open_kind_for, wire_angle, wire_stack,
 };
 
 /// The live world as a pathfinding view: solidity is movement-blocking
@@ -3484,6 +3486,7 @@ impl Game {
 
     /// Phase 6: flush everything a client should see about this tick.
     fn phase_broadcast(&mut self, report: &mut TickReport, tick: Tick) -> ServerResult<()> {
+        self.broadcast_player_info(report)?;
         self.broadcast_block_changes(report)?;
         self.broadcast_light_updates(report)?;
         self.broadcast_entity_spawns(report)?;
@@ -3492,6 +3495,135 @@ impl Game {
         self.send_world_time(report, tick)?;
         self.sweep_entity_removals(report)?;
         self.unload_distant_chunks(report)?;
+        Ok(())
+    }
+
+    /// The action set every tab-list entry this server sends carries
+    /// (AUDIT-19 A-04): jar ordinals 0 (`ADD_PLAYER`), 2 (`UPDATE_GAME_MODE`),
+    /// 3 (`UPDATE_LISTED`) and 7 (`UPDATE_HAT`).
+    fn player_list_actions() -> PlayerInfoActions {
+        PlayerInfoActions::from(PlayerInfoAction::AddPlayer)
+            | PlayerInfoActions::from(PlayerInfoAction::UpdateGameMode)
+            | PlayerInfoActions::from(PlayerInfoAction::UpdateListed)
+            | PlayerInfoActions::from(PlayerInfoAction::UpdateHat)
+    }
+
+    /// The tab-list entry for one session (AUDIT-19 A-04).
+    ///
+    /// Why each action is here rather than left out:
+    ///
+    /// * `ADD_PLAYER` carries the name and the profile properties. The
+    ///   properties are the point of the whole packet: their `textures` value is
+    ///   the signed blob a client resolves into the player's skin and cape, the
+    ///   joining client's own copy arrives in `login_finished`, and nothing else
+    ///   ever tells anyone else what a player looks like.
+    /// * `UPDATE_GAME_MODE`: the client's `EntryBuilder` defaults the slot to
+    ///   `GameType.DEFAULT_MODE` (Survival), so omitting it relabels every
+    ///   creative and spectator player in the tab list.
+    /// * `UPDATE_LISTED`: that same constructor leaves `listed` **false** (it
+    ///   initialises only `gameMode`), and an unlisted entry is one the client
+    ///   does not draw — without this action the packet would arrive and the tab
+    ///   list would stay empty.
+    /// * `UPDATE_HAT`: also `false` by default, and that flag *is* the hat layer
+    ///   on the player's model, so leaving it out hides part of every skin.
+    ///
+    /// The other four actions are deliberately not sent: this server has no chat
+    /// sessions (`INITIALIZE_CHAT`), does not measure latency (`UPDATE_LATENCY`,
+    /// and the client's default of 0 is already what we know), and sets no
+    /// display names or list order. Each would be extra bytes that then have to
+    /// be right.
+    fn player_list_entry(session: &Session) -> PlayerInfoEntry {
+        PlayerInfoEntry {
+            uuid: session.profile_id,
+            profile: PlayerInfoField::Value(PlayerInfoProfile {
+                name: session.name.clone(),
+                properties: session.properties.clone(),
+            }),
+            game_mode: PlayerInfoField::Value(i32::from(session.player.game_mode.id())),
+            listed: PlayerInfoField::Value(true),
+            show_hat: PlayerInfoField::Value(true),
+            ..PlayerInfoEntry::default()
+        }
+    }
+
+    /// Announce queued tab-list changes (AUDIT-19 A-04).
+    ///
+    /// The two packets are `player_info_update` (the entries) and
+    /// `player_info_remove` (a departure). Before this existed the server sent
+    /// neither: every client's tab list stayed empty and no client was ever told
+    /// another player's profile properties, which is where the skin comes from.
+    ///
+    /// # Audience
+    ///
+    /// Every ready session — **not** the chunk-scoped audience
+    /// [`Game::broadcast_entity_spawns`] uses, and the subject is not skipped
+    /// either. The difference is deliberate and is what vanilla does: a client
+    /// holds entities only for the chunks it has, so a player *entity* is
+    /// announced to the players holding that chunk, but the tab list is global
+    /// (`PlayerList.placeNewPlayer` ends by broadcasting the new entry to all
+    /// players, and `PlayerList.remove` broadcasts the removal). An entry that
+    /// only reached nearby players would leave everyone distant invisible in the
+    /// tab list — the very state this fixes — and vanilla includes the player in
+    /// their own announcement, so skipping the owner would drop a player's own
+    /// name from their tab list.
+    ///
+    /// Entries are read from the live sessions here rather than carried in the
+    /// queue, so a player who changed game mode earlier in the tick is announced
+    /// with the mode they have.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::Invariant`] if an entry cannot be encoded, which for these
+    /// field types means the session carries a name or property longer than the
+    /// wire cap — a server-side bug, not client input.
+    fn broadcast_player_info(&mut self, report: &mut TickReport) -> ServerResult<()> {
+        let pending = std::mem::take(&mut self.pending_player_info);
+        if pending.is_empty() {
+            return Ok(());
+        }
+        for change in pending {
+            match change {
+                PendingPlayerInfo::Join { id } => {
+                    // The order mirrors vanilla's two sends: the newcomer is
+                    // handed the entries of everyone already listed, and then the
+                    // newcomer's own entry goes to everyone (itself included).
+                    let existing: Vec<PlayerInfoEntry> = self
+                        .sessions
+                        .values()
+                        .filter(|session| session.id != id)
+                        .map(Self::player_list_entry)
+                        .collect();
+                    if !existing.is_empty() {
+                        let packet = PlayerInfoUpdate {
+                            actions: Self::player_list_actions(),
+                            entries: existing,
+                        }
+                        .to_raw()?;
+                        self.send_raw(id, packet, report);
+                    }
+                    // Gone again before this flush (a disconnect in the same
+                    // tick): its removal is queued behind this entry, so the
+                    // client is told about it by the removal alone rather than
+                    // being handed a player who is already gone.
+                    let Some(entry) = self.sessions.get(&id).map(Self::player_list_entry) else {
+                        continue;
+                    };
+                    let packet = PlayerInfoUpdate {
+                        actions: Self::player_list_actions(),
+                        entries: vec![entry],
+                    }
+                    .to_raw()?;
+                    self.broadcast_all(&packet, report);
+                }
+                PendingPlayerInfo::Leave { profile_id } => {
+                    let packet = PlayerInfoRemove {
+                        profile_ids: vec![profile_id],
+                    }
+                    .to_raw()?;
+                    self.broadcast_all(&packet, report);
+                }
+            }
+        }
         Ok(())
     }
 

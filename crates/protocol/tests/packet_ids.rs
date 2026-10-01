@@ -561,6 +561,21 @@ fn every_constant_we_use_matches_the_vanilla_jar() {
         "player_position",
         clientbound::play::PLAYER_POSITION,
     );
+    // AUDIT-19 A-04: the two tab-list ids. The table's row names are the capture's
+    // (`player_info_update` / `player_info_remove`), and the surrounding ids pin
+    // the neighbourhood: 64 = player_abilities, 72 = player_position.
+    check(
+        "game",
+        "clientbound",
+        "player_info_update",
+        clientbound::play::PLAYER_INFO_UPDATE,
+    );
+    check(
+        "game",
+        "clientbound",
+        "player_info_remove",
+        clientbound::play::PLAYER_INFO_REMOVE,
+    );
     check(
         "game",
         "clientbound",

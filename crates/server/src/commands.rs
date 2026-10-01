@@ -12,7 +12,7 @@
 //! | `op` | player name, administrator-only | grants operator status at level 4 and persists `ops.json` |
 //! | `deop` | player name, administrator-only | revokes operator status and persists `ops.json` |
 //! | `whitelist` | action + optional player, administrator-only | manages the login whitelist: `on`/`off` toggles enforcement live, `add`/`remove` persist `whitelist.json`, `list` names entries, `reload` re-reads the file |
-//! | `ban` | player + greedy reason, administrator-only | bans a profile (offline-resolvable) and disconnects their live session, persisting `banned-players.json` |
+//! | `ban` | player + optional greedy reason, administrator-only | bans a profile (offline-resolvable) and disconnects their live session, persisting `banned-players.json`; no reason files `DEFAULT_BAN_REASON`, Vanilla's optional-reason shape |
 //! | `ban-ip` | address + greedy reason, administrator-only | bans an address and disconnects every live session holding it, persisting `banned-ips.json` |
 //! | `pardon` | player, administrator-only | removes a profile ban row, persisting `banned-players.json` |
 //! | `pardon-ip` | address, administrator-only | removes an address ban row, persisting `banned-ips.json` |
@@ -362,9 +362,15 @@ impl Game {
             .with_argument(Argument::optional("target", ArgumentKind::PlayerName))
             .requiring(PermissionLevel::Administrator));
         // P19-02: bans and kicks. Administrator like Vanilla's level 3.
+        // AUDIT-19 fix round: `reason` is **optional** greedy, which is
+        // Vanilla's `/ban <player> [reason]` shape. Declared required greedy it
+        // was rejected by the parser before the handler ran, so
+        // `command_ban`'s default-reason branch could only be reached by a
+        // caller that passed no arguments at all. Pinned from the chat path by
+        // `ban_without_a_reason_files_the_default_reason`.
         add(Command::new("ban", "Ban a profile and disconnect them")
             .with_argument(Argument::required("target", ArgumentKind::PlayerName))
-            .with_argument(Argument::greedy("reason"))
+            .with_argument(Argument::optional("reason", ArgumentKind::GreedyString))
             .requiring(PermissionLevel::Administrator));
         add(
             Command::new("ban-ip", "Ban an address and disconnect its players")
@@ -1144,6 +1150,15 @@ impl Game {
     /// player's own uuid is used** — the join gate compares that identity, so
     /// deriving one offline would file a row that never matches (AUDIT-19
     /// A-06, where `/ban <live player>` neither kicked nor banned).
+    ///
+    /// The reason is **optional**, Vanilla's `/ban <player> [reason]`: with
+    /// none, both the filed row and the ban screen carry
+    /// [`crate::bans::DEFAULT_BAN_REASON`]. The tree declares it optional
+    /// greedy (AUDIT-19 fix round) — while it was required greedy, a bare
+    /// `/ban <player>` died in the parser, so this default was unreachable
+    /// from chat. The pin is
+    /// `ban_without_a_reason_files_the_default_reason`, which runs the chat
+    /// path and not this function.
     fn command_ban(
         &mut self,
         _id: mc_network::bridge::ConnectionId,
@@ -1152,7 +1167,14 @@ impl Game {
         let Some(name) = parsed.string(0) else {
             return CommandResult::message("Usage: /ban <player> [reason]");
         };
-        let reason = parsed.string(1).unwrap_or("").to_owned();
+        // One binding, so the row and the ban screen cannot disagree about the
+        // reason they carry.
+        let reason = parsed.string(1).unwrap_or("");
+        let reason = if reason.is_empty() {
+            crate::bans::DEFAULT_BAN_REASON
+        } else {
+            reason
+        };
         // The live session's uuid when the name is online (AUDIT-19 A-06):
         // the file row and the kick must name the identity the join gate
         // compares, which under online-mode is the Mojang uuid.
@@ -1165,11 +1187,7 @@ impl Game {
             created: std::time::SystemTime::now(),
             source,
             expires: None,
-            reason: if reason.is_empty() {
-                crate::bans::DEFAULT_BAN_REASON.to_owned()
-            } else {
-                reason.clone()
-            },
+            reason: reason.to_owned(),
         };
         match self.file_player_ban(ban) {
             Err(error) => CommandResult::message(format!(
@@ -1182,14 +1200,7 @@ impl Game {
                 if let Some(target) = target {
                     self.kick_player(
                         target,
-                        format!(
-                            "You are banned from this server.\nReason: {}",
-                            if reason.is_empty() {
-                                crate::bans::DEFAULT_BAN_REASON
-                            } else {
-                                reason.as_str()
-                            }
-                        ),
+                        format!("You are banned from this server.\nReason: {reason}"),
                     );
                 }
                 CommandResult::message(format!("Banned {name}"))
@@ -1966,6 +1977,39 @@ impl Game {
         }
     }
 
+    /// The first chunk a `/fill` region spans that is **stored but
+    /// unreadable**, in the order the write loop below would reach it
+    /// (z-major, then x), or `None` when every chunk in the span reads.
+    ///
+    /// AUDIT-19's fix round (A-11): A-10 taught the per-cell write to refuse
+    /// such a chunk, but that refusal fired **inside** the loop, so the cells
+    /// before the bad chunk were already applied while the reply read as a
+    /// refusal of the whole fill. Checking the region first is what makes the
+    /// reply true — either every cell is written or none is. The load is the
+    /// load-before-write ordering P19-08 installed (only a read can learn that
+    /// a stored chunk is unreadable), pulled ahead of the first write; the
+    /// loop's own [`Game::load_or_create_chunk`] calls then find each chunk
+    /// loaded, and the span is already bounded by [`MAX_FILL_CHUNKS`]. The pin
+    /// is `fill_into_a_region_with_an_unreadable_chunk_writes_nothing`.
+    fn first_unreadable_chunk_in(
+        &mut self,
+        min_x: i32,
+        max_x: i32,
+        min_z: i32,
+        max_z: i32,
+    ) -> Option<ChunkPos> {
+        for cz in (min_z >> 4)..=(max_z >> 4) {
+            for cx in (min_x >> 4)..=(max_x >> 4) {
+                let chunk = ChunkPos::new(cx, cz);
+                self.load_or_create_chunk(chunk);
+                if self.chunk_is_unreadable(chunk) {
+                    return Some(chunk);
+                }
+            }
+        }
+        None
+    }
+
     /// `/fill <from> <to> <block> [replace|destroy|keep]` (P18-02).
     ///
     /// Two named reds bound the work, in this order: the volume cap
@@ -1973,6 +2017,11 @@ impl Game {
     /// AUDIT-19 A-09). The first alone let a `32768×1×1` bar load 2048 chunks
     /// on the tick thread while `persist.rs` promised reads stop at
     /// [`CHUNKS_PER_TICK`]. Both refusals name their limit.
+    ///
+    /// A third refusal — a chunk in the region that is **stored but
+    /// unreadable** (AUDIT-19 A-10) — is checked for the whole region
+    /// **before the first write** (A-11, [`Self::first_unreadable_chunk_in`]),
+    /// so its "nothing was written" is a fact rather than an assumption.
     fn command_fill(&mut self, parsed: &mc_command::dispatch::ParsedCommand) -> CommandResult {
         let Some(mc_command::ArgumentValue::BlockPos {
             x: x0,
@@ -2030,6 +2079,19 @@ impl Game {
                 "Cannot fill outside the world's build range.".to_owned(),
             );
         }
+        // A-11: the region is checked **before the first write**, so the
+        // refusal is true of the whole fill. The A-10 check inside
+        // [`BlockWriteMode::apply`] stays — `setblock` needs it, and it is the
+        // second line here for a chunk that somehow turns unreadable after
+        // this scan — but a fill that reached it used to have applied the
+        // cells before the bad chunk while the reply spoke as if nothing had.
+        if let Some(chunk) = self.first_unreadable_chunk_in(min_x, max_x, min_z, max_z) {
+            return CommandResult::message(format!(
+                "Cannot fill the region: chunk {} {} is stored but unreadable, so nothing was \
+                 written",
+                chunk.x, chunk.z
+            ));
+        }
         let mut changed = 0i32;
         for y in min_y..=max_y {
             for z in min_z..=max_z {
@@ -2037,7 +2099,16 @@ impl Game {
                     match mode.apply(self, x, y, z, state) {
                         Ok(true) => changed += 1,
                         Ok(false) => {}
-                        Err(reason) => return CommandResult::message(reason),
+                        // Unreachable while the scan above holds — every chunk
+                        // in the span is loaded and readable before the first
+                        // write, with nothing running in between — and phrased
+                        // so that it stays truthful if it ever is reached: the
+                        // count is what was actually applied.
+                        Err(reason) => {
+                            return CommandResult::message(format!(
+                                "Wrote {changed} block(s) before the fill was refused: {reason}"
+                            ));
+                        }
                     }
                 }
             }

@@ -288,9 +288,12 @@ fn bans_and_kicks_exempt_no_operator_however_listed() {
     let mut others = vec![("Rookie", rookie, rookie_in), ("Newbie", newbie, newbie_in)];
     for (name, id, inbound) in &mut others {
         let name = *name;
-        // A reason is spelled out because the tree's `reason` is a required
-        // greedy argument: bare `/ban <player>` is a parse error, so the
-        // handler's default-reason path is not reachable from chat.
+        // A reason is spelled out because this test asserts the ban screen and
+        // the row carry *this* reason. The no-reason chat path — `/ban Name`
+        // reaching the handler's `DEFAULT_BAN_REASON` — is pinned separately by
+        // `bans_e2e::ban_without_a_reason_files_the_default_reason`; the tree's
+        // `reason` used to be required greedy, which made a bare `/ban` a parse
+        // error and the default unreachable from chat.
         let reason = format!("{name} cheated");
         let lines = harness.command(chief, &mut chief_in, &format!("ban {name} {reason}"));
         assert!(

@@ -1063,3 +1063,72 @@ fn setblock_into_an_unreadable_chunk_is_refused_by_name() {
     );
     reopened.close().expect("closes");
 }
+
+/// AUDIT-19 fix round (A-11): the `/fill` refusal for a stored-but-unreadable
+/// chunk must be true of the **whole** fill, not of the cells after the bad
+/// chunk.
+///
+/// A-10 put the refusal inside `BlockWriteMode::apply`, i.e. per cell: with the
+/// unreadable chunk second in the loop's own order, the eight cells of the
+/// first chunk were already applied when the reply refused the region — the
+/// world and the message disagreed in the other direction this time. The region
+/// is now scanned before the first write, so "nothing was written" is a fact.
+/// The cell asserted below is the **first** one the loop writes, in the chunk
+/// that reads fine, and it holds a stored diamond marker: a fill that still
+/// writes cell-by-cell turns it to stone and goes red here whatever the reply
+/// says.
+#[test]
+fn fill_into_a_region_with_an_unreadable_chunk_writes_nothing() {
+    let dir = TempDir::new("p19-a11-unreadable-fill");
+    let registries = Registries::vanilla().expect("registry");
+    let diamond = registries
+        .blocks
+        .default_state("minecraft:diamond_block")
+        .expect("diamond block");
+    // A 17-block bar along x at a height the terrain does not reach: x 4000..4015
+    // fall in the first chunk and x 4016 is the second chunk's only cell, which
+    // is where the unreadable chunk is planted — so the loop's own order (x
+    // fastest) meets it only after the 16 cells it would have written.
+    let (bx, by, bz) = (4_000, 200, 4_000);
+    let first = ChunkPos::new(bx >> 4, bz >> 4);
+    let second = ChunkPos::new((bx >> 4) + 1, bz >> 4);
+    assert_eq!(
+        second,
+        ChunkPos::new(4_016 >> 4, 4_000 >> 4),
+        "the region must extend into the second chunk or the loop order cannot matter"
+    );
+    store_diamond_marker(&dir, first, bx, by, bz, diamond, &registries);
+    plant_unreadable_chunk(&dir, second);
+
+    let mut harness = Harness::over(dir, ops_for("Builder", 4));
+    let (id, mut out) = harness.join("Builder");
+    assert!(
+        !harness.game.world().is_loaded(first) && !harness.game.world().is_loaded(second),
+        "the join view must not have streamed chunks 4 000 blocks away"
+    );
+
+    let lines = harness.command(
+        id,
+        &mut out,
+        &format!("fill {bx} {by} {bz} 4016 {by} {bz} minecraft:stone"),
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains("Filled")),
+        "a refused fill must not report a fill, saw {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| {
+            line.contains("stored but unreadable")
+                && line.contains(&format!("chunk {} {}", second.x, second.z))
+                && line.contains("nothing was written")
+        }),
+        "the refusal must name the unreadable chunk and say nothing was written, saw {lines:?}"
+    );
+    // Only a write can overwrite the marker, so a diamond here is proof the
+    // cells before the unreadable chunk were left alone.
+    assert_eq!(
+        harness.game.world().get_block_loaded(bx, by, bz),
+        Some(diamond),
+        "a refused fill must not have written the cells before the unreadable chunk"
+    );
+}

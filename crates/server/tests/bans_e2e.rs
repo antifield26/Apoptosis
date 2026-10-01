@@ -18,7 +18,9 @@ use mc_network::bridge::{
 use mc_protocol::ids::clientbound;
 use mc_protocol::packets::Packet as _;
 use mc_protocol::packets::play::{PlayDisconnect, SystemChat};
-use mc_server::bans::{BANNED_IPS_FILE_NAME, BANNED_PLAYERS_FILE_NAME, BanList};
+use mc_server::bans::{
+    BANNED_IPS_FILE_NAME, BANNED_PLAYERS_FILE_NAME, BanList, DEFAULT_BAN_REASON,
+};
 use mc_server::game::{Game, TickReport};
 use mc_server::ops::{OPS_FILE_NAME, OperatorList};
 use mc_server::storage::WorldService;
@@ -84,7 +86,11 @@ impl Harness {
         ip: IpAddr,
     ) -> (ConnectionId, InboundReceiver) {
         let id = self.ids.next_id();
-        let (outbound, inbound) = OutboundSender::pair(id, 64);
+        // Deep enough for the per-join traffic a real session now produces:
+        // AUDIT-19 A-04's player-list entry is broadcast to every ready session,
+        // so a join fills far more than the 64 packets this fixture used to
+        // hold, and a dropped packet made the later reply look missing.
+        let (outbound, inbound) = OutboundSender::pair(id, 8192);
         self.events
             .try_send(ClientEvent {
                 id,
@@ -366,6 +372,62 @@ fn ban_files_an_offline_profile() {
     assert!(
         !harness.game.has_player(id),
         "the offline ban refuses the first join"
+    );
+}
+
+/// AUDIT-19 fix round: Vanilla's `/ban <player> [reason]` has an **optional**
+/// reason, and this tree declared it required greedy — so a bare `/ban Name`
+/// was rejected by the parser ("expected a value for `<reason>`") and
+/// `command_ban`'s `DEFAULT_BAN_REASON` branch was unreachable from chat: the
+/// only caller that could reach it was one that passed no arguments at all.
+/// This goes through the chat path a client's line actually meets (dispatcher
+/// parse + handler), not the function directly, so it is the grammar being
+/// pinned as well as the default.
+#[test]
+fn ban_without_a_reason_files_the_default_reason() {
+    let mut harness = Harness::new("bans-default-reason", ops_for("Chief", 4), BanList::new());
+    let (chief, mut chief_in) = harness.join("Chief", test_ip(7));
+    let (victim, mut victim_in) = harness.join("Victim", test_ip(8));
+    assert!(harness.game.has_player(victim));
+    let screen = format!("You are banned from this server.\nReason: {DEFAULT_BAN_REASON}");
+
+    let lines = harness.command(chief, &mut chief_in, "ban Victim");
+    assert!(
+        lines.iter().any(|line| line.contains("Banned Victim")),
+        "a bare /ban must be accepted and confirm the ban, saw {lines:?}"
+    );
+    harness.game.tick().expect("tick drops the banned session");
+    assert!(
+        !harness.game.has_player(victim),
+        "the ban still disconnects the live session"
+    );
+    assert_eq!(
+        Harness::disconnect_reason(&mut victim_in).as_deref(),
+        Some(screen.as_str()),
+        "the kicked client sees the ban screen with the default reason"
+    );
+
+    // The filed row — not just the reply — carries the default, and it is the
+    // row the join gate judges by.
+    let text = std::fs::read_to_string(harness.dir.path().join(BANNED_PLAYERS_FILE_NAME))
+        .expect("player ban file written");
+    assert!(
+        text.contains(DEFAULT_BAN_REASON),
+        "the filed row carries the default reason, saw {text}"
+    );
+    assert!(
+        text.contains(&mc_network::auth::offline_profile("Victim").id.to_string()),
+        "and the uuid the offline derivation gives, saw {text}"
+    );
+    let (again, mut again_in) = harness.join("Victim", test_ip(8));
+    assert!(
+        !harness.game.has_player(again),
+        "the default-reason ban refuses the rejoin"
+    );
+    assert_eq!(
+        Harness::disconnect_reason(&mut again_in).as_deref(),
+        Some(screen.as_str()),
+        "the refusal is the ban screen naming the default reason"
     );
 }
 

@@ -33,8 +33,8 @@ use super::{
     ACTION_FINISH_DESTROY_BLOCK, ACTION_RELEASE_USE_ITEM, ACTION_START_DESTROY_BLOCK,
     ACTION_SWAP_ITEM_WITH_OFFHAND, CHAT_TYPE_CHAT, CLIENT_COMMAND_RESPAWN, ChestHalves, EYE_HEIGHT,
     FALL_DAMAGE_THRESHOLD, GAME_EVENT_CHANGE_GAME_MODE, GAME_EVENT_LEVEL_CHUNKS_LOAD_START, Game,
-    NO_BLOCK_CHANGE_SEQUENCE, OpenKind, TickReport, block_reach, block_slots_of, chest_title,
-    chunk_of, clockwise, counter_clockwise, entity_reach, face_offset, floor_to_i32,
+    NO_BLOCK_CHANGE_SEQUENCE, OpenKind, PendingPlayerInfo, TickReport, block_reach, block_slots_of,
+    chest_title, chunk_of, clockwise, counter_clockwise, entity_reach, face_offset, floor_to_i32,
     horizontal_offset, is_chest_family, is_container_block, mark_block_dirty, mirror_inventory,
     open_kind_for, recompute_crafting_result, refuse_join, take_craft_result, targets_a_block,
     wire_stack, write_back_block_slots, write_back_double_half, write_back_inventory,
@@ -106,6 +106,22 @@ pub(crate) struct Session {
     /// Matching operators by name would let anyone take an operator's identity
     /// by taking their name, so grants resolve through this instead.
     pub(crate) uuid: String,
+    /// The same profile uuid in its wire form (AUDIT-19 A-04).
+    ///
+    /// `player_info_update` writes 16 raw bytes (`writeUUID`: most-significant
+    /// `long` first), so the tab-list entry needs the value itself, not the
+    /// hyphenated string the access lists key on. Kept rather than re-parsed on
+    /// every join: the string came from this `Uuid`, and a parse that can fail
+    /// on the tick thread would be a new error path for no gain.
+    pub(crate) profile_id: uuid::Uuid,
+    /// The profile's properties, straight off the authenticated profile.
+    ///
+    /// **This is the skin.** The `textures` property's value is what a client
+    /// resolves into the player's skin and cape, and `player_info_update`'s
+    /// `ADD_PLAYER` action is the only packet that carries it: the properties in
+    /// `login_finished` reach the player's *own* client, so without this copy
+    /// nobody else could ever be told what anyone looks like (AUDIT-19 A-04).
+    pub(crate) properties: Vec<mc_protocol::packets::login::ProfileProperty>,
     /// The container window this player has open.
     ///
     /// Window 0 is always the player inventory; opening a chest, furnace or
@@ -434,6 +450,15 @@ impl Game {
         if let Some(entity) = self.entities.get_mut(session.entity) {
             entity.removed = true;
         }
+        // The other half of the tab list (AUDIT-19 A-04): a client is told a
+        // player left by `player_info_remove`, and an entry that is never removed
+        // stays in the tab list as a ghost that can even be "messaged". Queued for
+        // the same Broadcast phase that sweeps the entity above; the session is
+        // already gone from `self.sessions`, so the flush's audience is exactly
+        // the players who remain.
+        self.pending_player_info.push(PendingPlayerInfo::Leave {
+            profile_id: session.profile_id,
+        });
         self.entity_ids.remove(&id);
         // Remember the live state for a rejoin within this run (P14-09 walk:
         // disconnects put the player back at spawn). The cursor merge above
@@ -578,14 +603,26 @@ impl Game {
                     &self.registries.items,
                 ) {
                     Ok(loaded) if loaded.health > 0.0 => loaded,
-                    Ok(_) => {
+                    Ok(loaded) => {
                         debug!(id = %id, "stored death rejoins fresh at spawn");
-                        Player::new(
+                        // A stored death respawns the player — full health, at
+                        // spawn, inventory as stored — but **the game mode is not
+                        // part of "dead"**. Vanilla persists it
+                        // (`playerGameType`) and carries it across a respawn, so a
+                        // creative or spectator player who died and disconnected
+                        // came back in Survival here, because this arm threw the
+                        // loaded mode away with the rest of the dead state. The
+                        // fresh player is built first and then given the stored
+                        // mode, so `health == 0` is the only thing the file's
+                        // death discards.
+                        let mut respawned = Player::new(
                             prepared.profile,
                             entity_id,
                             "minecraft:overworld",
                             prepared.inventory,
-                        )
+                        );
+                        respawned.game_mode = loaded.game_mode;
+                        respawned
                     }
                     Err(error) => {
                         warn!(id = %id, %error, "playerdata decode failed; starting fresh");
@@ -692,6 +729,11 @@ impl Game {
                 permission: self.operators.level_for(&profile.id.to_string()),
                 name: profile.name.clone(),
                 uuid: profile.id.to_string(),
+                profile_id: profile.id,
+                // The authenticated profile's properties, kept for the tab list
+                // (AUDIT-19 A-04): this is the only copy of the `textures`
+                // property outside the joining client's own `login_finished`.
+                properties: profile.properties.clone(),
                 view_distance: self.view_distance,
                 menu,
                 next_window: 1,
@@ -888,6 +930,15 @@ impl Game {
         if let Some(session) = self.sessions.get_mut(&id) {
             session.ready = true;
         }
+        // The tab list (AUDIT-19 A-04). Vanilla does this in two sends at exactly
+        // this point in the join (`PlayerList.placeNewPlayer`): the newcomer is
+        // handed one `createPlayerInitializing` packet listing everyone already
+        // in the list, and then the newcomer's own entry is broadcast to
+        // everyone. Queued for the Broadcast phase, which is where the audience
+        // (every ready session) is known and where a departure in the same tick
+        // is ordered after it.
+        self.pending_player_info
+            .push(PendingPlayerInfo::Join { id });
         self.send(
             id,
             &mc_protocol::packets::play::DisguisedChat {

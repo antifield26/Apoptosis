@@ -304,6 +304,22 @@ pub mod clientbound {
         pub const PING: i32 = 61;
         /// `minecraft:pong_response`
         pub const PONG_RESPONSE: i32 = 62;
+        /// `minecraft:player_info_remove` — drop profile ids from the tab list.
+        ///
+        /// The tab list has **two** packets, not one: vanilla removes entries with this dedicated
+        /// packet (`PlayerList.remove` broadcasts it) rather than by re-listing them with
+        /// `UPDATE_LISTED == false`, so a client that is never sent it keeps a ghost entry.
+        pub const PLAYER_INFO_REMOVE: i32 = 69;
+        /// `minecraft:player_info_update` — the tab list's only source, and the only
+        /// packet that carries another player's profile properties (the skin).
+        ///
+        /// **Omitting it is not a cosmetic loss.** A client's tab list is built
+        /// *exclusively* from these entries and the `ADD_PLAYER` action's property
+        /// list is where the signed `textures` blob comes from, so a server that
+        /// never sends one shows an empty tab list and texture-less players
+        /// (AUDIT-19 A-04). The id is from `docs/protocol/packet-ids-775.tsv`
+        /// (`game clientbound 70`), asserted in `crates/protocol/tests/packet_ids.rs`.
+        pub const PLAYER_INFO_UPDATE: i32 = 70;
         /// `minecraft:player_position` (teleport)
         pub const PLAYER_POSITION: i32 = 72;
         /// `minecraft:respawn`
