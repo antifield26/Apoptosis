@@ -12,6 +12,37 @@ entry is the release candidate matching the workspace version at the time
 with built artifacts. The current workspace version is `0.3.0`, published as
 tag `v0.3.0` (see below).
 
+## [Unreleased] — Phase 19 closed (Access Control & the Operator Surface)
+
+P19 is the first round of v0.4.0 "operable survival": a small community can run a
+persistent world, and the operator can admin it without a developer. Eight tasks
+landed — P19-01 whitelist, P19-02 bans/kick, P19-03 console + save control,
+P19-04 RCON, P19-05 online-mode auth, P19-06 gameplay properties, P19-07 the
+adversarial review + owner access session, P19-08 the F3/F4 data-loss fix.
+
+**Exit gate satisfied on `2d1d66b`** (`gates/EXIT-GATES.md` §P19), clause by
+clause:
+
+| Gate clause | Evidence |
+|---|---|
+| Whitelist, bans and kick enforced at login and live; the files interoperate with a vanilla server | `whitelist_e2e` (11) + `bans_e2e` (9), each pin proven red; Vanilla's shapes in `whitelist.json` / `banned-players.json`; the owner session's items 1–3 on a real client |
+| Console and RCON reach the dispatcher at their permission levels; RCON off, loopback and password-gated by default and through the hostile-input suite | P19-03 console pins (`console_save_e2e`), P19-04 codec/auth/throttle/hostile suites, and the owner session's item 5 with a third-party client (`list`, `stop`) |
+| Online mode ON: encryption and `hasJoined` vectors pinned; a real-account join owner-run and, if NOT RUN, not blocking | P19-05's automated pins (cipher KAT, session hash, refusal vectors); the real-account half is **withdrawn by the 2026-09-30 no-online-mode decision**, so KD-01 rests at partial and the P22-08 verdict must say so |
+| A non-loopback, offline, un-whitelisted configuration warns at boot | P19-06's exposure matrix (pure predicate + single call site) |
+
+Gate evidence for the whole phase: `python tools/gates/run.py --quick` →
+**every gate passed, 1 788 passed / 0 failed / 41 ignored / 141 suites** on this
+tree, and the same commit's CI is green — run `36803950975` (five jobs, 39m11s),
+with `36734685340` green on the commit that fixed the two long-red jobs. The two
+defects the phase's own acceptance found are pinned: P19-07's F1/F2
+(`whitelist_e2e` +3, `bans_e2e` +1) and P19-08's F3/F4 (two named reds, each
+proven by deleting the `load_or_create_chunk` call and restored byte-exact).
+
+**Named open, not hidden:** F5 (a normal shutdown and a normal RCON close are
+logged as errors, and a failed RCON password logs nothing) — a log-severity tidy
+with no owner; and the online-mode real-account join, withdrawn by decision
+rather than deferred.
+
 ## [Unreleased] — P19-08 F3/F4: a command write must load its chunk
 
 A command names coordinates, not players, so `/setblock` and `/fill` routinely

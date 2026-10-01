@@ -94,3 +94,13 @@ Run 2026-09-30; verdicts below, evidence per item in
 4. Console `save-all flush` / `save-off` / `save-on` round trip on a live server — **PASS** (region file held at 0 bytes while held, 12 288 bytes after the flush; the edit survives a restart).
 5. Stock RCON client runs `list` from another host (passworded, loopback refused) — **PASS for `list` and `stop`** with a third-party client on the same host; cross-host deferred (the bind is loopback, so the refusal is structural).
 6. ~~Online-mode join with skin~~ — WITHDRAWN by the no-online-mode decision.
+
+## Phase verdict
+
+**P19 is closed on `2d1d66b`** (`gates/EXIT-GATES.md` §P19, universal
+phase-close clause). The phase's own evidence: this review's 16 claim rows, the
+owner session above, and P19-08's two pins. The gate evidence: `run.py --quick`
+every gate passed (1 788 / 0 / 41 / 141) and CI run `36803950975` green on the
+same commit. Named open at closure: **F5** (log severity, no owner) and the
+online-mode real-account join (withdrawn by decision, so KD-01 stays partial and
+the v0.4.0 verdict at P22-08 must record it).
