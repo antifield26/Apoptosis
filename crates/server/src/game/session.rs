@@ -607,7 +607,14 @@ impl Game {
         };
         if !from_file {
             player.position = at;
-            player.game_mode = GameMode::Survival;
+            // AUDIT-19 A-07: the `[gameplay] default_gamemode` key, which
+            // used to be installed and never read because this line hardcoded
+            // Survival. It applies **only** here — a join with no stored
+            // playerdata file — because everything below is a returning
+            // player whose own mode has to win: `restored` (a reconnect
+            // inside one run) overwrites this a few lines down, and a stored
+            // file never reaches this block at all.
+            player.game_mode = self.default_gamemode().game_mode();
             if let Some(former) = restored {
                 // The menu below mirrors this inventory, and the position packet
                 // below reports `at`, so restoring here keeps every copy honest.
@@ -1411,20 +1418,31 @@ impl Game {
             // damaged/enchanted/renamed item arrives with its components
             // (B-H2). Fall back to plain exactly like `wire_stack` when the
             // patch will not convert.
-            item.to_typed_components()
-                .ok()
-                .and_then(|components| {
-                    mc_entity::stack::ItemStack::with_components(
-                        item.item_id,
-                        item.count,
-                        components,
-                    )
+            let patched = item.to_typed_components().ok().and_then(|components| {
+                mc_entity::stack::ItemStack::with_components(item.item_id, item.count, components)
                     .ok()
-                })
-                .or_else(|| mc_entity::stack::ItemStack::new(item.item_id, item.count).ok())
-                .ok_or_else(|| {
+            });
+            if let Some(stack) = patched {
+                stack
+            } else {
+                // Loud downgrade (AUDIT-19 B19-2): this arm used to log
+                // nothing, so a creative take whose patch will not decode
+                // (a truncated or unmodelled component payload) became a
+                // plain stack with no trace anywhere. `warn!` like
+                // `wire_stack`'s fallback, because an operator runs at the
+                // default `info` filter;
+                // `a_creative_take_whose_patch_cannot_be_decoded_warns_at_warn_level`
+                // pins the level.
+                warn!(
+                    id = %id,
+                    slot,
+                    item_id = item.item_id,
+                    "a creative take fell back to a component-free stack"
+                );
+                mc_entity::stack::ItemStack::new(item.item_id, item.count).map_err(|_| {
                     ServerError::Protocol(format!("creative stack refused: id {}", item.item_id))
                 })?
+            }
         };
         {
             let session = self.sessions.get_mut(&id).expect("session checked above");
@@ -3212,10 +3230,26 @@ impl Game {
                     // differs (e.g. watching a single while the pair formed)
                     // is skipped; their next open resyncs. Same-slot
                     // concurrent writes stay last-writer-wins by design.
+                    //
+                    // **Either half's anchor counts** (AUDIT-19 A-03): two
+                    // viewers of one double chest can hold *different*
+                    // `open_block` anchors — whoever clicked the right half
+                    // and whoever clicked the left — while both menus show
+                    // the same 54 slots in the same order. Filtering on the
+                    // exact anchor gave those two no push at all and left the
+                    // second one on its open-screen snapshot. `open_double`
+                    // records the partner at open, which is the identity that
+                    // survives the click being resolved from either side.
                     let viewers: Vec<ConnectionId> = self
                         .sessions
                         .values()
-                        .filter(|session| session.id != id && session.open_block == Some(pos))
+                        .filter(|session| {
+                            session.id != id
+                                && (session.open_block == Some(pos)
+                                    || session
+                                        .open_double
+                                        .is_some_and(|(partner, _)| partner == pos))
+                        })
                         .map(|session| session.id)
                         .collect();
                     if !viewers.is_empty() {

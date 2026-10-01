@@ -645,11 +645,11 @@ impl Packet for ConfigDisconnect {
     }
 }
 
-/// Extract a literal component from an NBT text tree.
+/// Extract a literal or translatable component from an NBT text tree.
 ///
 /// # Errors
 ///
-/// [`ServerError::Protocol`] when the shape is not a literal component.
+/// [`ServerError::Protocol`] when the shape is not a text component.
 pub fn text_from_nbt(nbt: &Nbt) -> ServerResult<TextComponent> {
     match nbt {
         Nbt::Compound(entries) => {
@@ -658,6 +658,26 @@ pub fn text_from_nbt(nbt: &Nbt) -> ServerResult<TextComponent> {
                     && let Nbt::String(text) = value
                 {
                     return Ok(TextComponent::literal(text.clone()));
+                }
+            }
+            // A translation key is the other shape that reaches a client as a
+            // disconnect reason (AUDIT-19 C19-L7). `fallback` is optional in
+            // Vanilla's codec, so its absence is the key itself rather than a
+            // refusal — a client without the key then shows the key, which is
+            // how Vanilla behaves.
+            for (name, value) in entries {
+                if name == "translate"
+                    && let Nbt::String(key) = value
+                {
+                    let fallback = entries
+                        .iter()
+                        .rev()
+                        .find_map(|(name, value)| match (name.as_str(), value) {
+                            ("fallback", Nbt::String(text)) => Some(text.clone()),
+                            _ => None,
+                        })
+                        .unwrap_or_else(|| key.clone());
+                    return Ok(TextComponent::translatable(key.clone(), fallback));
                 }
             }
             Ok(TextComponent::literal(String::new()))
@@ -674,6 +694,7 @@ mod tests {
     use super::{
         ClientInformation, ConfigDisconnect, ConfigKeepAlive, FeatureFlags, FinishConfiguration,
         RegistryData, RegistryEntry, SELECT_KNOWN_PACKS_CLIENTBOUND, SelectKnownPacks,
+        text_from_nbt,
     };
     use crate::ids::clientbound;
     use crate::nbt::Nbt;
@@ -789,6 +810,39 @@ mod tests {
         };
         let bytes = packet.encode().expect("encodes");
         assert_eq!(ConfigDisconnect::decode(&bytes).expect("decodes"), packet);
+    }
+
+    #[test]
+    fn a_translatable_disconnect_round_trips_with_its_key() {
+        // AUDIT-19 C19-L7: the disconnect reason the server sends for a refused
+        // login is a translation key. Pin the whole packet path, not just the
+        // component: a client decodes this NBT shape.
+        let packet = ConfigDisconnect {
+            reason: TextComponent::translatable(
+                "multiplayer.disconnect.unverified_username",
+                "Failed to verify username!",
+            ),
+        };
+        let bytes = packet.encode().expect("encodes");
+        let decoded = ConfigDisconnect::decode(&bytes).expect("decodes");
+        assert_eq!(decoded, packet);
+        assert_eq!(
+            decoded.reason.to_nbt().get("translate"),
+            Some(&Nbt::String(
+                "multiplayer.disconnect.unverified_username".to_owned()
+            ))
+        );
+        // A key without a fallback is the key, not a refusal to parse.
+        let bare = text_from_nbt(&Nbt::Compound(vec![(
+            "translate".to_owned(),
+            Nbt::String("multiplayer.disconnect.authservers_down".to_owned()),
+        )]))
+        .expect("a bare key is a component");
+        assert_eq!(
+            bare.as_plain(),
+            "multiplayer.disconnect.authservers_down",
+            "no fallback means the key is what a client without it shows"
+        );
     }
 
     #[test]

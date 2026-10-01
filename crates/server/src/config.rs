@@ -206,8 +206,8 @@ impl Default for AccessConfig {
 ///
 /// Config-side twin of `mc_entity::GameMode` with Vanilla's lowercase
 /// names: kept here (rather than deriving serde over there) so `mc-entity`
-/// gains no serialization dependency for one config key. P20 converts this
-/// to `GameMode` when applying it at join.
+/// gains no serialization dependency for one config key.
+/// [`DefaultGameMode::game_mode`] is the conversion the join uses.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum DefaultGameMode {
@@ -222,12 +222,31 @@ pub enum DefaultGameMode {
     Spectator,
 }
 
+impl DefaultGameMode {
+    /// The entity-layer game mode this key names.
+    ///
+    /// The two enums are the same four modes by construction; this is the
+    /// only place they meet, so a new variant on either side is a compile
+    /// error here rather than a silent fallback at join.
+    #[must_use]
+    pub const fn game_mode(self) -> mc_entity::GameMode {
+        match self {
+            Self::Survival => mc_entity::GameMode::Survival,
+            Self::Creative => mc_entity::GameMode::Creative,
+            Self::Adventure => mc_entity::GameMode::Adventure,
+            Self::Spectator => mc_entity::GameMode::Spectator,
+        }
+    }
+}
+
 /// Gameplay properties (P19-06; Vanilla `server.properties` analogues).
 ///
-/// Config + Game plumbing only: every key reads, writes, validates and has
-/// a Game accessor, but enforcement is P20-owned (named per key) — this
-/// release stores intent, it does not act on it. The one exception is the
-/// exposure warning, which is a startup log, not behaviour.
+/// Config + Game plumbing: every key reads, writes, validates and has a Game
+/// accessor. Enforcement is P20-owned (named per key) with one exception that
+/// is live: `default_gamemode`, applied to players who join **without** a
+/// stored `playerdata` file (see [`GameplayConfig::default_gamemode`]). The
+/// other exception is the exposure warning, which is a startup log, not
+/// behaviour.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct GameplayConfig {
@@ -246,8 +265,17 @@ pub struct GameplayConfig {
     /// ticking honours it in P20 (view distance stays the streaming
     /// radius until then).
     pub simulation_distance: u32,
-    /// Game mode for new players (Vanilla `gamemode`). Applied at join by
-    /// P20; until then joins use Survival.
+    /// Game mode for new players (Vanilla `gamemode`).
+    ///
+    /// **Scope (AUDIT-19 A-07).** Applied at join to a player with no stored
+    /// `playerdata` file and no in-memory state to restore — a genuinely new
+    /// player. A returning player's own mode wins: a stored file carries the
+    /// mode (the key is not consulted at all), and a reconnect inside one run
+    /// restores the mode the session had when it left. There is no
+    /// `/defaultgamemode` command in this build; changing the key means
+    /// editing the config and restarting, and it never touches players who
+    /// are already online (`/gamemode <mode>` changes the invoker's own mode
+    /// only).
     pub default_gamemode: DefaultGameMode,
     /// Whether the status response hides the player sample (Vanilla
     /// `hide-online-players`, default false). Wiring is P20-owned.

@@ -4,11 +4,17 @@
 //! UUID is derived exactly like vanilla's `UUID.nameUUIDFromBytes` over
 //! `OfflinePlayer:<name>` (MD5, version 3, IETF variant).
 //!
-//! Online mode is a **structural boundary** in Phase 02: the trait and call
-//! site exist, and enabling it without a configured provider fails startup
-//! loudly instead of silently degrading to offline auth. The actual Mojang
-//! session handshake (encryption request/response, RSA/AES, HTTP session
-//! verification) is deferred to its own task and tracked in the phase report.
+//! Online mode is live (P19-05, ADR-0008). The boundary trait and call site
+//! are still what `start_network` consults, but the flow behind them is
+//! implemented: `EncryptionRequest`/`EncryptionResponse` over a per-boot
+//! RSA-1024 key, fixed-time token compare, the SHA-1 session hash, a blocking
+//! `hasJoined` (timeout and refusals typed, never a default-accept) and
+//! AES-128/CFB8 both ways — see `mc_network::online`. Split (b) of KD-01, a
+//! real Mojang account joining with its skin, is dropped by the 2026-09-30
+//! no-online-mode deployment decision; the path stays code-complete and
+//! automated-pinned. `online_mode = true` selects the Mojang provider at
+//! startup (keypair generated once per boot, `crates/server/src/lifecycle.rs`);
+//! the default stays offline through [`OfflineOnlyAuth`].
 
 use mc_core::error::{ServerError, ServerResult};
 use md5::{Digest, Md5};
@@ -117,6 +123,37 @@ pub fn validate_username(name: &str) -> ServerResult<()> {
 #[cfg(test)]
 mod tests {
     use super::{offline_profile, validate_username};
+
+    /// AUDIT-19 C19-L5: the module header claimed online mode was a
+    /// "structural boundary" whose Mojang handshake was deferred to its own
+    /// task, long after P19-05 implemented it. The doc is the deliverable, so
+    /// the pin is a regression guard on the *false* claim, written with the
+    /// words split so that this guard cannot satisfy itself. The behaviour the
+    /// corrected header describes is pinned separately by
+    /// `connection::tests::online_login_completes_through_the_cipher` and
+    /// `online::tests::provider_maps_an_outage_to_operational_and_a_refusal_to_invalid_action`.
+    #[test]
+    fn the_module_docs_do_not_call_the_handshake_deferred() {
+        let docs = include_str!("auth.rs");
+        // Split so the needle is not a substring of this test's own source.
+        for stale in ["deferred to its own", "structural boundary in"] {
+            let needle = format!("{stale} task");
+            assert!(
+                !docs.contains(&needle),
+                "the online handshake is implemented (P19-05); see `crate::online`"
+            );
+        }
+        for expected in [
+            "Online mode is live",
+            "mc_network::online",
+            "`hasJoined` (timeout and refusals typed",
+        ] {
+            assert!(
+                docs.contains(expected),
+                "the header must keep naming what exists: {expected:?}"
+            );
+        }
+    }
 
     #[test]
     fn offline_profile_matches_vanilla_vector() {

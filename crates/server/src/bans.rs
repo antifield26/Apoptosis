@@ -151,7 +151,8 @@ impl BanList {
     /// A damaged row is skipped and logged, its siblings still load; a file
     /// whose every row is damaged is an error (the first row's problem)
     /// rather than an empty list, because "bans nobody" and "nobody could be
-    /// read" must not look alike.
+    /// read" must not look alike. A row's `uuid` must be a uuid (AUDIT-19
+    /// G-10): a typo would otherwise be a ban that is silently not in force.
     ///
     /// # Errors
     ///
@@ -426,9 +427,12 @@ impl BanList {
 }
 
 /// A uuid as this module keys on it: trimmed and lower-case.
+///
+/// The rule lives in [`crate::access_uuid::normalise`], shared with the
+/// operators and whitelist readers, so one profile is not three keys.
 #[must_use]
 fn normalise_uuid(uuid: &str) -> String {
-    uuid.trim().to_ascii_lowercase()
+    crate::access_uuid::normalise(uuid)
 }
 
 /// Parse one player-ban entry.
@@ -440,22 +444,11 @@ fn player_entry(entry: &Value, path: &Path, index: usize) -> ServerResult<Player
             json_type_name(entry)
         )));
     };
-    let uuid = object
-        .get("uuid")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| {
-            ServerError::CorruptData(format!(
-                "{p}: entry {index} has no string `uuid`",
-                p = path.display()
-            ))
-        })?;
-    let uuid = normalise_uuid(uuid);
-    if uuid.is_empty() {
-        return Err(ServerError::CorruptData(format!(
-            "{}: entry {index} has an empty `uuid`",
-            path.display()
-        )));
-    }
+    // AUDIT-19 G-10: a typo'd uuid used to load as a row that parses, lists in
+    // `/banlist` and then never matches a joining player — a ban that is not
+    // in force, found only when the player walks back in. Refused per row, so
+    // the `warn!` above names it and its siblings still load.
+    let uuid = crate::access_uuid::from_row(object, path, index, "banned profile")?;
     let name = object
         .get("name")
         .and_then(serde_json::Value::as_str)
@@ -898,5 +891,73 @@ mod tests {
             .is_err()
         );
         assert_eq!(EXPIRES_FOREVER, "forever");
+    }
+
+    #[test]
+    fn a_typoed_uuid_is_a_damaged_row_not_a_ban_that_never_applies() {
+        // AUDIT-19 G-10: a ban row whose uuid is a typo was accepted, listed by
+        // `/banlist`, saved back — and never matched anybody, so the ban was silently not
+        // in force. It is a damaged row now: named, skipped, siblings still load. (An
+        // *unreadable* file is the different, fail-open case G-02/G-03 owns.)
+        let good = serde_json::json!([{
+            "uuid": "069a79f4-44e9-4726-a5be-f4a7b64ac909",
+            "name": "Notch",
+            "created": "2023-11-14 22:13:20 +0000",
+            "source": "Chief",
+            "expires": "forever",
+            "reason": "griefing",
+        }]);
+        let players = BanList::players_from_value(&good, Path::new("banned-players.json"))
+            .expect("a well-formed row loads");
+        assert!(players.contains_key("069a79f4-44e9-4726-a5be-f4a7b64ac909"));
+
+        // One bad row beside a good one: the good one survives, the typo does not.
+        let mut value = good.as_array().expect("array").clone();
+        value.push(serde_json::json!({
+            "uuid": "069a79f4-44e9-4726-a5be-f4a7b64ac90",  // one digit short
+            "name": "Typo",
+            "created": "2023-11-14 22:13:20 +0000",
+            "source": "Chief",
+            "expires": "forever",
+            "reason": "griefing",
+        }));
+        let players = BanList::players_from_value(
+            &serde_json::Value::Array(value),
+            Path::new("banned-players.json"),
+        )
+        .expect("one damaged row does not void the table");
+        assert_eq!(players.len(), 1, "only the well-formed ban is in force");
+        assert!(!players.contains_key("069a79f4-44e9-4726-a5be-f4a7b64ac90"));
+
+        // Every row damaged is the file-level refusal, naming the file and the field.
+        let only_bad = serde_json::json!([{
+            "uuid": "not-a-uuid-at-all",
+            "created": "2023-11-14 22:13:20 +0000",
+            "expires": "forever",
+        }]);
+        let error = BanList::players_from_value(&only_bad, Path::new("banned-players.json"))
+            .expect_err("a file whose every row is damaged is refused");
+        let text = error.to_string();
+        assert!(text.contains("banned-players.json"), "{text}");
+        assert!(text.contains("not a uuid"), "{text}");
+
+        // The undashed shape a Mojang session answers with is a uuid too, so a row
+        // written from one is not a damaged row. It keeps its spelling (matching is
+        // exact-string, so normalising shapes is a separate change).
+        let undashed = serde_json::json!([{
+            "uuid": "069a79f444e94726a5bef4a7b64ac909",
+            "name": "Notch",
+            "created": "2023-11-14 22:13:20 +0000",
+            "source": "Chief",
+            "expires": "forever",
+            "reason": "griefing",
+        }]);
+        let players = BanList::players_from_value(&undashed, Path::new("banned-players.json"))
+            .expect("an undashed uuid is a uuid");
+        assert_eq!(
+            players.keys().collect::<Vec<_>>(),
+            vec!["069a79f444e94726a5bef4a7b64ac909"],
+            "the row loaded rather than being skipped"
+        );
     }
 }

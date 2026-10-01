@@ -14,6 +14,11 @@
 //!   the 10-byte header) closes the connection **before** any payload byte
 //!   is allocated or read;
 //! - a truncated body (EOF mid-packet) closes it;
+//! - a body that arrives in several reads is reassembled (`read_exact`), where
+//!   Vanilla closes on anything that is not the exact size of one 1460-byte
+//!   read — our bound is [`mc_server::rcon::MAX_PACKET_LEN`] and it is ours,
+//!   not the jar's (AUDIT-19 C19-L1; the divergence is spelled out at that
+//!   constant's documentation);
 //! - an unknown packet type closes it;
 //! - a wrong password answers id `-1`, sleeps the backoff, and after
 //!   [`MAX_AUTH_FAILURES`] consecutive failures the connection is closed;
@@ -303,8 +308,8 @@ async fn command_loop(
 mod tests {
     use super::{MAX_AUTH_FAILURES, PREAUTH_TIMEOUT, RconLimits, serve_connection, serve_listener};
     use mc_server::rcon::{
-        AUTH_FAILURE_ID, AuthBudget, RconRequest, TYPE_COMMAND, TYPE_LOGIN, decode_body,
-        encode_packet, listener_gate,
+        AUTH_FAILURE_ID, AuthBudget, RconRequest, TYPE_COMMAND, TYPE_LOGIN, TYPE_RESPONSE,
+        decode_body, encode_packet, listener_gate,
     };
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::Arc;
@@ -628,5 +633,83 @@ mod tests {
         );
         drop(held);
         assert_eq!(gate.concurrent_for(ip), 0);
+    }
+
+    /// A body spread over several reads is completed, not refused.
+    ///
+    /// AUDIT-19 C19-L1: Vanilla reads a request with one 1460-byte read and
+    /// closes the socket unless the declared length equals exactly what that
+    /// read returned, so a *split* packet is a dead connection. Our reader is
+    /// length-prefixed and reassembles; the declared length is still the only
+    /// thing believed, and it is capped before allocation. Neutralise
+    /// [`length_accepted`] (make it answer `true` always) and the tail of this
+    /// test goes red, because the oversized declaration is then read instead
+    /// of refused.
+    #[tokio::test]
+    async fn a_body_split_across_reads_is_reassembled_not_refused() {
+        let (client, server) = tokio::io::duplex(64 * 1024);
+        let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<mc_server::rcon::RconRequest>(16);
+        let limits = RconLimits::default();
+        let server_task = tokio::spawn(async move {
+            serve_connection(server, PEER, b"s3cret", &cmd_tx, &limits).await
+        });
+        let (mut reader, mut writer) = tokio::io::split(client);
+
+        // Login in three-byte writes with gaps between them: a reader that
+        // demanded one whole read would close here. Vanilla would.
+        let login = encode_packet(1, TYPE_LOGIN, b"s3cret");
+        for piece in login.chunks(3) {
+            writer.write_all(piece).await.expect("login piece");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let (id, kind, _) = read_packet(&mut reader).await;
+        assert_eq!(
+            (id, kind),
+            (1, TYPE_COMMAND),
+            "a fragmented login still authenticates"
+        );
+
+        // The same for a command body, and the forwarded text is whole.
+        let command = encode_packet(2, TYPE_COMMAND, b"list");
+        for piece in command.chunks(4) {
+            writer.write_all(piece).await.expect("command piece");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let request = tokio::time::timeout(Duration::from_secs(5), cmd_rx.recv())
+            .await
+            .expect("forwarded in time")
+            .expect("a request arrived");
+        assert_eq!(
+            request.command, "list",
+            "the reassembled body is the command"
+        );
+        request
+            .reply
+            .send("There are 0 players".to_owned())
+            .expect("reply");
+        let (id, kind, payload) = read_packet(&mut reader).await;
+        assert_eq!((id, kind), (2, TYPE_RESPONSE));
+        assert_eq!(payload, b"There are 0 players");
+
+        // An oversized declaration is still refused, not read: the
+        // reassembly tolerance above did not widen the cap.
+        writer
+            .write_all(&1_000_000i32.to_le_bytes())
+            .await
+            .expect("hostile prefix");
+        let mut probe = [0u8; 1];
+        let read = tokio::time::timeout(Duration::from_secs(2), reader.read(&mut probe)).await;
+        // EOF or a read error both mean the connection ended (as does the
+        // server never answering at all, which is the failure this asserts).
+        let closed = if let Ok(outcome) = read {
+            outcome.map_or(true, |bytes| bytes == 0)
+        } else {
+            panic!("the server answered a hostile prefix with silence");
+        };
+        assert!(
+            closed,
+            "a declaration above the cap still ends the connection"
+        );
+        server_task.abort();
     }
 }

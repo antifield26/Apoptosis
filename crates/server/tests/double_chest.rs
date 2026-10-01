@@ -53,10 +53,17 @@ impl Harness {
     }
 
     fn join(&mut self, name: &str) -> InboundReceiver {
-        let (outbound, out) = OutboundSender::pair(self.id, 8192);
+        let id = self.id;
+        self.join_as(id, name)
+    }
+
+    /// A named session on the same game, for the pins that need two viewers at
+    /// once (AUDIT-19 A-03). `join` is the single-session shorthand.
+    fn join_as(&mut self, id: ConnectionId, name: &str) -> InboundReceiver {
+        let (outbound, out) = OutboundSender::pair(id, 8192);
         self.events
             .try_send(ClientEvent {
-                id: self.id,
+                id,
                 kind: ClientEventKind::Joined {
                     profile: mc_network::auth::offline_profile(name),
                     outbound,
@@ -68,9 +75,15 @@ impl Harness {
     }
 
     fn intent(&mut self, intent: PlayIntent) {
+        let id = self.id;
+        self.intent_as(id, intent);
+    }
+
+    /// As [`Harness::intent`], but as an explicit session.
+    fn intent_as(&mut self, id: ConnectionId, intent: PlayIntent) {
         self.events
             .try_send(ClientEvent {
-                id: self.id,
+                id,
                 kind: ClientEventKind::Intent(intent),
             })
             .expect("intent queued");
@@ -753,4 +766,129 @@ fn copper_joins_copper_not_plain() {
         screens[0].title,
         mc_protocol::text::TextComponent::literal("Large Copper Chest")
     );
+}
+
+/// AUDIT-19 A-03: a click reaches the viewer holding the **other half**.
+///
+/// The co-viewer push (B-H3) filtered on `open_block == Some(clicked_pos)`
+/// exactly. Two players who between them hold one double chest open carry
+/// *different* anchors — the one who clicked the right half and the one who
+/// clicked the left — so a click by either produced **no** push to the other:
+/// the second client sat on its open-screen snapshot with no correction packet
+/// until it closed the window and reopened. Both menus are the same 54 slots
+/// in the same order (right half first, whichever half was clicked), so the
+/// identity that has to match is the pair, not the anchor.
+///
+/// The pin is the second viewer's own client packet and its server-side menu:
+/// with the anchor filter back, both go stale and this test is red.
+#[test]
+fn a_click_reaches_the_viewer_holding_the_other_half() {
+    let mut harness = Harness::new("p19-a03-cross-anchor");
+    let id_a = harness.id;
+    let id_b = ConnectionId(2);
+    let out_a = harness.join("Alice");
+    let mut out_b = harness.join_as(id_b, "Bob");
+    let (sx, sy, sz) = harness.game.spawn();
+    floor(&mut harness, sx, sy, sz);
+    harness.look(0.0);
+    let (ax, ay, az) = (sx + 1, sy, sz); // west, becomes LEFT
+    let (bx, by, bz) = (sx + 2, sy, sz); // east, becomes RIGHT
+    harness.place("minecraft:chest", ax, ay - 1, az, 1);
+    harness.place("minecraft:chest", bx, by - 1, bz, 1);
+    assert_eq!(harness.prop(ax, ay, az, "type"), "left");
+    assert_eq!(harness.prop(bx, by, bz, "type"), "right");
+
+    // Alice opens the LEFT half; Bob opens the RIGHT half. Two anchors, one
+    // shared 54-slot window each.
+    harness.empty_hand();
+    harness.click(ax, ay, az, 1);
+    let window_a = i32::from(harness.game.menu_window_id(id_a).expect("Alice's window"));
+    assert_ne!(window_a, 0, "the left half opened a block window");
+    harness.intent_as(
+        id_b,
+        PlayIntent::UseItemOn {
+            hand: 0,
+            position: block_position(bx, by, bz),
+            face: 1,
+            cursor_x: 0.5,
+            cursor_y: 0.5,
+            cursor_z: 0.5,
+            inside_block: false,
+            world_border_hit: false,
+            sequence: 0,
+        },
+    );
+    let window_b = i32::from(harness.game.menu_window_id(id_b).expect("Bob's window"));
+    assert_ne!(window_b, 0, "the right half opened a block window");
+    // Both menus are the shared 54-slot layout, right half first, whichever
+    // half each viewer clicked — that is what makes one snapshot valid for
+    // both of them.
+    assert_eq!(
+        harness.game.menu_slot(id_b, 0).expect("slot 0").item_id(),
+        None,
+        "the right half starts empty for both viewers"
+    );
+
+    // Alice moves 4 stone from her hotbar (menu slot 54 + 27 = 81) into chest
+    // menu slot 0 — which is the RIGHT half's own slot 0, Bob's anchor.
+    {
+        let stone = harness.item("minecraft:stone");
+        harness
+            .game
+            .player_mut(id_a)
+            .expect("Alice")
+            .inventory
+            .set_slot(
+                0,
+                mc_entity::stack::ItemStack::new(stone, 4).expect("stack"),
+            )
+            .expect("Alice's hotbar");
+    }
+    let state = harness.game.menu_state_id(id_a).expect("state");
+    harness.intent_as(
+        id_a,
+        PlayIntent::ContainerClick {
+            window_id: window_a,
+            state_id: state,
+            slot: 81,
+            button: 0,
+            click_type: 0,
+        },
+    );
+    let state = harness.game.menu_state_id(id_a).expect("state");
+    harness.intent_as(
+        id_a,
+        PlayIntent::ContainerClick {
+            window_id: window_a,
+            state_id: state,
+            slot: 0,
+            button: 0,
+            click_type: 0,
+        },
+    );
+
+    // Bob's *client* must have been pushed the slot, and Bob's server-side
+    // menu must agree with it — "no packet" and "stale menu" are the two
+    // halves of the same defect.
+    let stone = harness.item("minecraft:stone");
+    let pushed = std::iter::from_fn(|| out_b.try_recv())
+        .filter(|raw| raw.id == clientbound::play::CONTAINER_SET_SLOT)
+        .filter_map(|raw| mc_protocol::packets::play::ContainerSetSlot::decode(&raw.payload).ok())
+        .any(|packet| packet.slot == 0 && packet.item.item_id == stone);
+    assert!(
+        pushed,
+        "the viewer holding the other half must be pushed the slot update; its window is the \
+         same 54 slots, so nothing about the click is ambiguous"
+    );
+    let bob_slot = harness.game.menu_slot(id_b, 0).expect("Bob's menu slot 0");
+    assert_eq!(
+        bob_slot.item_id(),
+        Some(stone),
+        "and Bob's menu follows Alice's click instead of keeping the open-screen snapshot"
+    );
+    assert_eq!(bob_slot.count(), 4, "with the whole stack");
+    // The click really did land in the world (the right half's own slot 0), so
+    // the push above is not reporting a no-op.
+    assert_eq!(harness.entity_total(bx, by, bz), 4);
+    let _ = out_a;
 }

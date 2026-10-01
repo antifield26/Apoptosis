@@ -1444,6 +1444,19 @@ impl Game {
         self.placeholder_without_storage.len()
     }
 
+    /// Whether `pos` is a chunk this session found **stored but unreadable**
+    /// (AUDIT-09 B-01, exposed for AUDIT-19 A-10).
+    ///
+    /// Such a chunk lives as an all-air placeholder that is deliberately never
+    /// written back, so a write into it is real in memory and gone at the next
+    /// restart. Only the command path asks — it is the one writer that can name
+    /// a cell in a chunk no player has loaded, and it used to answer "Set the
+    /// block" for an edit that could not survive a restart.
+    #[must_use]
+    pub fn chunk_is_unreadable(&self, pos: ChunkPos) -> bool {
+        self.unreadable_chunks.contains(&pos)
+    }
+
     /// Spawn a dropped-item entity holding `stack`.
     ///
     /// This closes the Phase 04 gap where a dropped stack was taken out of the
@@ -2484,7 +2497,14 @@ fn wire_stack(stack: mc_entity::stack::ItemStack) -> mc_protocol::packets::play:
                 // than the server holds (today only a `Consumable` with
                 // non-empty `on_consume_effects` fails here). Silent would
                 // leave no trace of the divergence.
-                debug!(
+                //
+                // `warn!`, not `debug!` (AUDIT-19 B19-2): an operator runs at
+                // the default `info` filter, where a `debug!` here is
+                // invisible — the downgrade is a rendered difference from the
+                // authoritative stack, which is exactly what a warn is for.
+                // `a_stack_that_cannot_be_framed_warns_at_warn_level` pins the
+                // level.
+                warn!(
                     item_id = id,
                     "a stack fell back to a component-free wire form"
                 );

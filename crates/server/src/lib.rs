@@ -11,6 +11,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod access_uuid;
 pub mod backup;
 pub mod bans;
 pub mod commands;

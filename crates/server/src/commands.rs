@@ -117,6 +117,14 @@ use crate::game::{Game, TickReport};
 /// `fill_volume_over_the_named_cap_is_refused` all cite the same number.
 pub const MAX_FILL_VOLUME: i64 = 32_768;
 
+/// Longest command string the dispatcher accepts, re-exported from
+/// [`mc_command`].
+///
+/// It lives there; it is named here because the console reader in the binary
+/// bounds a *line* against it (AUDIT-19 G-11) and the binary depends on
+/// `mc-server`, not on `mc-command`.
+pub const MAX_COMMAND_CHARS: usize = mc_command::MAX_COMMAND_CHARS;
+
 /// Inclusive volume of a `/fill` region from its sorted bounds.
 fn fill_volume(min_x: i32, max_x: i32, min_y: i32, max_y: i32, min_z: i32, max_z: i32) -> i64 {
     i64::from(max_x - min_x + 1) * i64::from(max_y - min_y + 1) * i64::from(max_z - min_z + 1)
@@ -282,9 +290,18 @@ impl Game {
         add(Command::new("help", "List the commands you can use"));
         add(Command::new("list", "List the players online"));
         add(Command::new("say", "Broadcast a message").with_argument(Argument::greedy("message")));
+        // Vanilla gates `/time` at level 2 (`ServerLevel`'s clock is not a
+        // player-facing control), so it is operator-only here (AUDIT-19 G-09;
+        // it was reachable at level 0 and is named in the P07 verdict).
         add(Command::new("time", "Query or set the world time")
             .with_argument(Argument::optional("action", ArgumentKind::Word))
-            .with_argument(Argument::optional("value", ArgumentKind::Word)));
+            .with_argument(Argument::optional("value", ArgumentKind::Word))
+            .requiring(PermissionLevel::Operator));
+        // `/tp` is Vanilla level 2 (wiki: Commands/teleport), so level-0
+        // players cannot reach it — AUDIT-19 G-09 found the default `All`
+        // permission left it open. Recorded as a deliberate divergence from
+        // the "phase-19 surface" note: this is a tightening, not a new
+        // restriction.
         add(Command::new("tp", "Teleport to coordinates")
             .with_argument(Argument::word("target"))
             .with_argument(Argument::required("pos", ArgumentKind::BlockPos))
@@ -301,7 +318,8 @@ impl Game {
                     min: -90.0,
                     max: 90.0,
                 },
-            )));
+            ))
+            .requiring(PermissionLevel::Operator));
         // P18-02: `teleport` is Vanilla's alias of `tp` with the same full argument form.
         add(Command::new("teleport", "Teleport to coordinates")
             .with_argument(Argument::word("target"))
@@ -319,7 +337,8 @@ impl Game {
                     min: -90.0,
                     max: 90.0,
                 },
-            )));
+            ))
+            .requiring(PermissionLevel::Operator));
         // The whole chain is one greedy argument: `execute` is parsed by its own regular
         // grammar (see `mc_command::execute`), not by the tree, because its modifiers may
         // appear in any order and any number of times.
@@ -2214,8 +2233,25 @@ impl BlockWriteMode {
     /// AUDIT-19 A-09), so this per-cell load can no longer exceed what one
     /// tick's chunk reads are allowed to cost; the block cap alone would have
     /// allowed 2048 chunk reads from a 32 768-block bar.
+    ///
+    /// **A chunk that is stored but unreadable refuses the write** (AUDIT-19
+    /// A-10). `load_or_create_chunk` answers that case with an all-air
+    /// placeholder it deliberately never saves, so the write below would land,
+    /// report success and be gone at the next restart — the same silent
+    /// divergence from disk this doc's first paragraph is about, one step
+    /// further out. The refusal names the chunk, because "which chunk" is the
+    /// only part an operator can act on. The pin is
+    /// `setblock_into_an_unreadable_chunk_is_refused_by_name`.
     fn apply(self, game: &mut Game, x: i32, y: i32, z: i32, state: i32) -> Result<bool, String> {
-        game.load_or_create_chunk(ChunkPos::new(x >> 4, z >> 4));
+        let chunk = ChunkPos::new(x >> 4, z >> 4);
+        game.load_or_create_chunk(chunk);
+        if game.chunk_is_unreadable(chunk) {
+            return Err(format!(
+                "Cannot set the block at {x} {y} {z}: chunk {} {} is stored but unreadable, so \
+                 nothing written there would survive a restart",
+                chunk.x, chunk.z
+            ));
+        }
         let current = game.world().get_block_loaded(x, y, z);
         match self {
             Self::Keep => {

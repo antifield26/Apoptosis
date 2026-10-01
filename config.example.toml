@@ -52,7 +52,10 @@ idle_timeout_minutes = 0
 # view_distance). Stored now; ticking honours it in P20.
 simulation_distance = 8
 # Game mode for new players (Vanilla `gamemode`): "survival" (default),
-# "creative", "adventure" or "spectator". Applied at join by P20.
+# "creative", "adventure" or "spectator". Applied at join to a player with no
+# stored playerdata file and no in-memory state to restore (AUDIT-19 A-07); a
+# returning player's own game mode wins. There is no `/defaultgamemode`
+# command: change this and restart, and live players are not touched.
 default_gamemode = "survival"
 # Whether the status response hides the player sample (Vanilla
 # `hide-online-players`, default false). Wiring is P20-owned.

@@ -175,13 +175,21 @@ pub struct SessionProfile {
 }
 
 /// Why `hasJoined` refused.
+///
+/// The distinction that matters is **whose fault it is** (AUDIT-19 C19-L8):
+/// [`Unknown`] is a genuine session refusal ("no such login"), everything else
+/// is the session server or the link misbehaving. Collapsing the two told a
+/// player their credentials had failed while Mojang was down, and hid the
+/// outage behind a client-shaped error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionRefusal {
-    /// The session server has no such login (unknown user or wrong hash).
+    /// The session server has no such login (404/204 — unknown user or wrong
+    /// hash). The only refusal a player can act on.
     Unknown,
     /// The check did not answer in time.
     Timeout,
-    /// Transport or status failure carrying the detail.
+    /// Transport or status failure carrying the detail: a 5xx/429 from the
+    /// session server, an unreachable host, a TLS or HTTP fault.
     Transport(String),
     /// A 200 body that is not a session profile.
     Malformed(String),
@@ -224,11 +232,21 @@ impl MojangClient {
     /// refused login, never a hang (bounded by [`SESSION_TIMEOUT`]) and
     /// never a default-accept.
     ///
+    /// **Only a 404 is [`SessionRefusal::Unknown`]** (AUDIT-19 C19-L8).
+    /// Mojang answers 404 when the session server knows no such login, which
+    /// is the one refusal that means "your credentials did not check out".
+    /// Every other non-2xx — 500/502/503 during a session-server incident, 429
+    /// from rate limiting — is the *service* failing, and is reported as
+    /// [`SessionRefusal::Transport`] so the login flow can tell the player the
+    /// authentication servers are down instead of blaming them. Both still
+    /// fail closed; only the message and the log level differ.
+    ///
     /// # Errors
     ///
-    /// All `ureq` failures map to [`SessionRefusal`]: timeouts, status
-    /// refusals (404 unknown user included), transport errors and
-    /// malformed bodies. Nothing here hangs or default-accepts.
+    /// All `ureq` failures map to [`SessionRefusal`]: timeouts, `Unknown` for
+    /// a missing session, `Transport` for every other status and for transport
+    /// errors, and `Malformed` for a 200 body that is not a profile. Nothing
+    /// here hangs or default-accepts.
     pub fn has_joined(
         &self,
         username: &str,
@@ -251,10 +269,12 @@ impl MojangClient {
         );
         let mut response = agent.get(&url).call().map_err(|e| match e {
             ureq::Error::Timeout(_) => SessionRefusal::Timeout,
-            // Any status refusal (404 unknown user included) ends the
-            // login; the distinction between "unknown" and "broken" is
-            // a log line, not a second code path.
-            ureq::Error::StatusCode(_) => SessionRefusal::Unknown,
+            // 404 is the session server saying "no such login"; anything else
+            // is the service failing, and the detail names which (C19-L8).
+            ureq::Error::StatusCode(404) => SessionRefusal::Unknown,
+            ureq::Error::StatusCode(status) => {
+                SessionRefusal::Transport(format!("the session server answered HTTP {status}"))
+            }
             other => SessionRefusal::Transport(format!("{other}")),
         })?;
         let body = response
@@ -270,8 +290,11 @@ impl MojangClient {
 /// Implements [`crate::auth::OnlineAuthProvider`] over [`MojangClient`]:
 /// the blocking HTTPS call runs off the async runtime, and every refusal
 /// maps to a login refusal — unknown users as `InvalidAction` (a client
-/// problem, answered with a kick), transport/timeout/malformed as
-/// `Operational` (our problem, logged loudly).
+/// problem, answered with a kick), transport/timeout/malformed/other-status
+/// as `Operational` (the service or the link, logged loudly and answered
+/// with Vanilla's "authentication servers are down" kick — AUDIT-19
+/// C19-L8 keeps those two apart so a player is never told their
+/// credentials failed while Mojang is down).
 pub struct MojangSessionAuth {
     client: MojangClient,
 }
@@ -642,5 +665,63 @@ mod tests {
             MojangClient::at_base("http://127.0.0.1:1").has_joined("Notch", "hash", None),
             Err(SessionRefusal::Transport(_))
         ));
+    }
+
+    #[test]
+    fn a_session_server_outage_is_not_an_unknown_user() {
+        // AUDIT-19 C19-L8: 5xx/429 are the *service* failing. Folding them
+        // into `Unknown` made the login flow kick with "Failed to verify
+        // username!", which tells the player their credentials are bad while
+        // Mojang is down — and hides the outage behind a client-shaped error.
+        for status in [
+            "500 Internal Server Error",
+            "503 Service Unavailable",
+            "429 Too Many Requests",
+        ] {
+            let (base, _) = stub_once(status, r#"{"error":"boom"}"#);
+            let refusal = MojangClient::at_base(&base)
+                .has_joined("Notch", "hash", None)
+                .expect_err("an outage is not a profile");
+            match refusal {
+                SessionRefusal::Transport(detail) => assert!(
+                    detail.contains(status.split_whitespace().next().expect("status code")),
+                    "the detail names the status the service answered: {detail}"
+                ),
+                other => panic!("{status} must be transport, got {other:?}"),
+            }
+        }
+        // And the positive control: 404 is still the one `Unknown`.
+        let (base, _) = stub_once("404 Not Found", r#"{"error":"Not found"}"#);
+        assert_eq!(
+            MojangClient::at_base(&base).has_joined("Nobody", "hash", None),
+            Err(SessionRefusal::Unknown)
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_maps_an_outage_to_operational_and_a_refusal_to_invalid_action() {
+        // The mapping the login flow keys its kick message on (C19-L8):
+        // only a genuine refusal is an `InvalidAction`.
+        use crate::auth::OnlineAuthProvider as _;
+        let (base, _) = stub_once("503 Service Unavailable", "down");
+        let auth = super::MojangSessionAuth::at_base(&base);
+        let error = auth
+            .authenticate_from("Notch", "hash", None)
+            .await
+            .expect_err("503 is not a profile");
+        assert!(
+            matches!(error, mc_core::error::ServerError::Operational(_)),
+            "a session-server outage is our problem, not the player's: {error:?}"
+        );
+        let (base, _) = stub_once("404 Not Found", r#"{"error":"Not found"}"#);
+        let auth = super::MojangSessionAuth::at_base(&base);
+        let error = auth
+            .authenticate_from("Nobody", "hash", None)
+            .await
+            .expect_err("404 is not a profile");
+        assert!(
+            matches!(error, mc_core::error::ServerError::InvalidAction(_)),
+            "a genuine refusal answers the player's login: {error:?}"
+        );
     }
 }

@@ -17,6 +17,25 @@ use mc_test_support::client::TestClient;
 use mc_test_support::fixtures::TempDir;
 use std::time::Duration;
 
+/// An operator list naming every fixture this suite logs in.
+///
+/// AUDIT-19 G-09 moved `/tp`, `/teleport` and `/time` to Vanilla's level 2, so a
+/// suite that drives those through a real client has to join as an operator.
+fn ops_for(names: &[&str], level: u8) -> mc_server::ops::OperatorList {
+    let rows: Vec<String> = names
+        .iter()
+        .map(|name| {
+            let uuid = mc_network::auth::offline_profile(name).id;
+            format!(r#"{{"uuid": "{uuid}", "name": "{name}", "level": {level}}}"#)
+        })
+        .collect();
+    mc_server::ops::OperatorList::parse(
+        &format!("[{}]", rows.join(",")),
+        std::path::Path::new("ops.json"),
+    )
+    .expect("the fixture parses")
+}
+
 /// A server with a real socket and a logged-in client, plus the game loop.
 struct Harness {
     client: TestClient,
@@ -40,7 +59,19 @@ impl Harness {
         // protection, and the flood test's point is the per-tick *drain*
         // budget (256), not silent packet loss.
         let (event_tx, event_rx) = game_channel(1024);
-        let mut game = Game::new(&storage, 3, event_rx).expect("game builds");
+        // AUDIT-19 G-09 put `/tp`, `/teleport` and `/time` at Vanilla's level 2,
+        // and this suite drives them through a real client — so the client is an
+        // operator. `/stop` is console level, so the test that a player cannot
+        // stop the server still holds for a level-4 operator.
+        let mut game = Game::build_with_operators(
+            Some(&storage),
+            None,
+            3,
+            event_rx,
+            7,
+            ops_for(&["Commander", "Survivor"], 4),
+        )
+        .expect("game builds");
 
         let settings = mc_network::NetworkSettings {
             bind: "127.0.0.1:0".parse().expect("addr"),

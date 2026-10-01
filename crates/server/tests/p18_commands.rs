@@ -141,6 +141,13 @@ fn every_operator_command_denies_a_level_zero_player() {
         ("save-all", "save-all"),
         ("save-off", "save-off"),
         ("save-on", "save-on"),
+        // AUDIT-19 G-09: Vanilla keeps `/tp` (and its `teleport` alias) and
+        // `/time` at level 2, and this tree used to leave both at the default
+        // level 0. They are in this list because a level-0 player must not
+        // reach them — the named pin for the tightening.
+        ("tp", "tp Chief 1 64 1"),
+        ("teleport", "teleport Chief 1 64 1"),
+        ("time", "time query daytime"),
     ];
     for (name, text) in cases {
         let lines = harness.command(id, &mut out, text);
@@ -161,14 +168,6 @@ fn every_operator_command_denies_a_level_zero_player() {
             "{text:?} must not be a permission denial, saw {lines:?}"
         );
     }
-
-    // `teleport` is an alias of `tp`, which this build leaves at level 0
-    // (self-only authority gate). It must not deny.
-    let lines = harness.command(id, &mut out, "teleport Chief 1 64 1");
-    assert!(
-        !denied(&lines),
-        "teleport is level 0 like tp, saw {lines:?}"
-    );
 }
 
 #[test]
@@ -187,6 +186,11 @@ fn every_operator_command_runs_for_an_operator() {
         "fill 0 64 0 0 64 0 minecraft:stone",
         "summon zombie",
         "setworldspawn",
+        // AUDIT-19 G-09: now operator-gated like Vanilla's level 2, so an
+        // operator must still reach them.
+        "tp Chief 1 64 1",
+        "teleport Chief 1 64 1",
+        "time query daytime",
     ] {
         let lines = harness.command(id, &mut out, text);
         assert!(
@@ -485,17 +489,17 @@ fn msg_refuses_an_offline_target() {
 
 #[test]
 fn teleport_is_an_alias_of_tp_and_moves_the_source() {
-    let mut harness = Harness::new(
-        "p18-teleport",
-        OperatorList::parse("[]", Path::new("ops.json")).expect("empty"),
-    );
+    // The alias must behave exactly like `/tp`, including its permission:
+    // AUDIT-19 G-09 put both at Vanilla's level 2, so the harness joins an
+    // operator rather than a level-0 player.
+    let mut harness = Harness::new("p18-teleport", ops_for("Chief", 4));
     let (id, mut out) = harness.join("Chief");
     let before = harness.game.player(id).expect("player").position;
 
     let lines = harness.command(id, &mut out, "teleport Chief 40 80 -40");
     assert!(
         !denied(&lines),
-        "teleport is level 0 like tp, saw {lines:?}"
+        "teleport runs for an operator, saw {lines:?}"
     );
     let after = harness.game.player(id).expect("player").position;
     assert!(
@@ -958,4 +962,104 @@ fn keep_reads_the_stored_block_of_an_unloaded_chunk() {
         diamond,
         "a refused keep must leave the stored block untouched"
     );
+}
+
+/// A chunk that will refuse to read: the right position, a `DataVersion`
+/// outside the readable window (4435..=4790), one section so the file is
+/// non-trivial. The shape `unreadable_chunk.rs` plants for the AUDIT-09 B-01
+/// guard, planted here under a command.
+fn plant_unreadable_chunk(dir: &TempDir, pos: ChunkPos) {
+    let data = mc_persistence::chunk::ChunkData {
+        pos,
+        data_version: 5000, // above `DATA_VERSION_26_1_2` (4790)
+        status: "minecraft:full".to_owned(),
+        min_section_y: -4,
+        last_update: 0,
+        inhabited_time: 0,
+        light_correct: false,
+        sections: vec![mc_persistence::chunk::SectionData::filled(
+            4,
+            mc_persistence::chunk::BlockState::new("minecraft:stone"),
+            "minecraft:plains",
+        )],
+        heightmaps: Vec::new(),
+        block_entities: Vec::new(),
+        entities: Vec::new(),
+        block_ticks: Vec::new(),
+        fluid_ticks: Vec::new(),
+        post_processing: Vec::new(),
+        structures: None,
+        extra: vec![("_audit".to_owned(), mc_nbt::NbtTag::Byte(1))],
+    };
+    let mut storage = WorldService::open(&storage_config(dir)).expect("world opens");
+    storage
+        .storage_mut()
+        .queue_chunk_save(&Dimension::Overworld, &data)
+        .expect("the planted chunk queues");
+    storage.storage_mut().flush().expect("it is on disk");
+    storage.close().expect("the handle closes");
+}
+
+/// AUDIT-19 A-10: a command aimed at a chunk the server **could not read**
+/// must refuse and name the chunk.
+///
+/// `load_or_create_chunk` answers an unreadable chunk with an all-air
+/// placeholder it deliberately never saves (AUDIT-09 B-01), so the write used
+/// to land, report "Set the block at ..." and be gone at the next restart —
+/// the reply and the world disagreed and only a restart revealed it. The
+/// refusal names the chunk, which is the actionable part for an operator.
+#[test]
+fn setblock_into_an_unreadable_chunk_is_refused_by_name() {
+    let dir = TempDir::new("p19-a10-unreadable-setblock");
+    let (bx, by, bz) = (4_000, 64, 4_000);
+    let home = ChunkPos::new(bx >> 4, bz >> 4);
+    plant_unreadable_chunk(&dir, home);
+
+    let mut harness = Harness::over(dir, ops_for("Builder", 4));
+    let (id, mut out) = harness.join("Builder");
+    assert!(
+        !harness.game.world().is_loaded(home),
+        "the join view must not have streamed a chunk 4 000 blocks away"
+    );
+
+    let target = format!("{bx} {} {bz}", by - 1);
+    let lines = harness.command(id, &mut out, &format!("setblock {target} minecraft:stone"));
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains(&format!("Set the block at {target}"))),
+        "the reply must not claim an edit that cannot survive a restart, saw {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| {
+            line.contains("stored but unreadable")
+                && line.contains(&format!("chunk {} {}", home.x, home.z))
+        }),
+        "the refusal must name the chunk it could not read, saw {lines:?}"
+    );
+    // And the edit really did not happen: the placeholder cell is still air.
+    assert_eq!(
+        harness.game.world().get_block_loaded(bx, by - 1, bz),
+        Some(0),
+        "a refused setblock must not write into the placeholder"
+    );
+
+    // The stored file survives the attempt, which is the half a reply cannot
+    // show: the save must not replace an unreadable chunk with the placeholder.
+    harness.game.save_all_owned().expect("saves");
+    let storage = harness
+        .game
+        .into_storage()
+        .expect("the game owns the world");
+    storage.close().expect("closes");
+    let mut reopened = WorldService::open(&storage_config(&harness.dir)).expect("world reopens");
+    let read = reopened
+        .storage_mut()
+        .read_chunk(&Dimension::Overworld, home)
+        .map(|option| option.is_some());
+    assert!(
+        !matches!(read, Ok(true)),
+        "the planted chunk must still be unreadable: a refused command must not have replaced it"
+    );
+    reopened.close().expect("closes");
 }

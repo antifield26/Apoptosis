@@ -392,14 +392,6 @@ impl Game {
         Ok(())
     }
 
-    /// Phase 2: **documented no-op**.
-    ///
-    /// Scheduled block, fluid and entity ticks are P05-05 (fluids) and P05-06
-    /// (block ticks): a per-position due queue ordered by `(tick, position)` and
-    /// the redstone/`randomTick` hooks land there. Nothing here pretends to run
-    /// them: an empty tick list and a missing scheduler look identical from the
-    /// outside, so the absence is stated rather than stubbed with a placeholder
-    /// that would make [`Game::metrics`] look busy.
     /// Phase 2: drain due block ticks, then drive the redstone model (P13-01/03).
     ///
     /// The drain keeps P13-01's counting (fired/pending on the report). The
@@ -1379,8 +1371,8 @@ impl Game {
         // iterator. `ids()` is ascending because the store is a `BTreeMap`.
         let ids: Vec<EntityId> = self.entities.ids().collect();
         for id in ids {
-            // The AI hook runs first, as Vanilla orders `tick` before the move. It
-            // is a no-op today; see `tick_entity_ai`.
+            // The AI hook runs first, as Vanilla orders `tick` before the move; see
+            // `tick_entity_ai` for what it decides and resolves.
             self.tick_entity_ai(id);
             self.tick_mob_despawn(id);
             if self.tick_entity(id) {

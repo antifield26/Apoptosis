@@ -16,6 +16,27 @@ use tracing::{debug, warn};
 
 use super::{Game, chunk_of, nbt_int};
 
+/// The sentence `save_all` logs when it leaves placeholder chunks out
+/// (AUDIT-19 D-19-L2).
+///
+/// The skip set has **two** producers, and the log line is the operator's only
+/// statement of which one fired:
+///
+/// * the game has **no storage handle** (built with a borrow, or its handle was
+///   closed), so `read_stored_chunk` cannot tell "nothing is stored" from
+///   "there is nothing to look with"; and
+/// * the game **has** storage and the stored chunk failed to read or convert —
+///   the case the audit's E-5 probe hit — where `load_or_create_chunk` has
+///   already logged the position and the error.
+///
+/// The earlier wording asserted the first as the cause of every skip, which is
+/// false for the second. Naming both is what the fix is; the pin is
+/// `the_skip_warning_names_both_reasons_a_placeholder_is_not_saved`.
+const PLACEHOLDER_SKIP_WARNING: &str = "placeholder chunks were not saved: this server could \
+     not read the real chunk — either it has no storage handle at all, or the stored chunk \
+     failed to load (the per-chunk `chunk read failed` warning names the position and the \
+     cause)";
+
 impl Game {
     /// Give the owned world handle back (shutdown, or handing it to a save worker).
     ///
@@ -441,22 +462,24 @@ impl Game {
                     continue;
                 };
                 // P18-01a: restore the data-component patch when present.
+                // AUDIT-19 B19-5: one policy with the block-entity and
+                // playerdata readers — an unreadable patch keeps the stack and
+                // is reported, it does not discard the drop. Before this, the
+                // stack was kept here and refused in `playerdata`.
                 if let Some(components_tag) = item_fields
                     .iter()
                     .find(|(k, _)| k == "components")
                     .map(|(_, v)| v)
                 {
-                    match mc_entity::components::from_nbt(components_tag) {
-                        Ok(components) => {
-                            stack = mc_entity::stack::ItemStack::with_components(
-                                item_id, *count, components,
-                            )
-                            .unwrap_or(stack);
-                        }
-                        Err(error) => {
-                            warn!(%error, "a saved item's components are malformed; kept without them");
-                        }
+                    let (kept, unreadable) =
+                        mc_entity::components::attach_saved_components(stack, components_tag);
+                    if let Some(reason) = unreadable {
+                        warn!(
+                            %reason,
+                            "a saved item's component patch is unreadable; the stack is kept without it"
+                        );
                     }
+                    stack = kept;
                 }
                 if self.spawn_item(stack, position).is_err() {
                     warn!("a saved item could not be spawned");
@@ -687,17 +710,19 @@ impl Game {
                         continue;
                     };
                     // P18-01a: restore the data-component patch when present.
+                    // AUDIT-19 B19-5: the same policy as the playerdata and
+                    // dropped-item readers — keep the stack, report the reason,
+                    // never fail the load around it.
                     let stack = if let Some(components_tag) = find("components") {
-                        match mc_entity::components::from_nbt(components_tag) {
-                            Ok(components) => mc_entity::stack::ItemStack::with_components(
-                                item_id, count, components,
-                            )
-                            .unwrap_or(stack),
-                            Err(error) => {
-                                warn!(%error, "a saved block item's components are malformed; kept without them");
-                                stack
-                            }
+                        let (kept, unreadable) =
+                            mc_entity::components::attach_saved_components(stack, components_tag);
+                        if let Some(reason) = unreadable {
+                            warn!(
+                                %reason,
+                                "a saved block item's component patch is unreadable; the stack is kept without it"
+                            );
                         }
+                        kept
                     } else {
                         stack
                     };
@@ -848,11 +873,14 @@ impl Game {
             // Reported rather than silent: a save that deliberately left chunks out is
             // different from one that saved everything, and an operator should be able to
             // tell which happened.
-            warn!(
-                skipped,
-                "placeholder chunks were not saved: this game cannot read storage, so it \
-                 cannot tell an empty chunk from an unreadable one"
-            );
+            //
+            // AUDIT-19 D-19-L2: the skip set has **two** producers, and the old wording
+            // ("this game cannot read storage") named only the first. A chunk that is
+            // stored but failed to read lands in the same set with storage perfectly
+            // readable — the audit's own E-5 run hit exactly that path — so the sentence
+            // now names both and points at the per-chunk warning that says which one it
+            // was. Attribution is the whole content of an operator-facing log line.
+            warn!(skipped, "{PLACEHOLDER_SKIP_WARNING}");
         }
         let report = storage.storage_mut().flush()?;
         if report.is_clean() {

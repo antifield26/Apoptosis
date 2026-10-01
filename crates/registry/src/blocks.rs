@@ -206,9 +206,11 @@ impl BlockRegistry {
         apply_default_states(&mut registry.by_name, path);
         // **Mining tables**, same beside-file contract (P16-05): extracted
         // from pumpkin's vanilla-derived data by `target/extract_mining.py`.
-        // Absent files warn and leave the maps empty; the mining evaluation
-        // treats a missing entry with a documented fallback rather than
-        // refusing the dig (same degraded-mode reasoning as the defaults).
+        // Each absent file warns for itself and leaves **only its own** map
+        // empty — hardness, tool tags and collision shapes are independent
+        // inputs (AUDIT-19 G-05), and the mining evaluation treats a missing
+        // entry with a documented fallback rather than refusing the dig (same
+        // degraded-mode reasoning as the defaults).
         apply_mining_tables(&mut registry, path);
         Ok(registry)
     }
@@ -506,7 +508,9 @@ impl BlockRegistry {
     ///
     /// `Some(-1.0)` is unbreakable (bedrock and friends); `Some(0.0)` breaks
     /// the tick digging starts. Callers apply the documented fallback, never
-    /// a silent substitute: see [`apply_mining_tables`].
+    /// a silent substitute: a missing `block_hardness.tsv` warns at load and
+    /// leaves this map empty, and it leaves the other mining tables alone. In
+    /// particular collision shapes still load (AUDIT-19 G-05).
     #[must_use]
     pub fn hardness(&self, name: &str) -> Option<f32> {
         self.hardness.get(name).copied()
@@ -556,25 +560,28 @@ impl BlockRegistry {
     }
 }
 
-/// Load the three mining fixtures beside a `blocks.tsv` (P16-05).///
-/// Each file warns and leaves its map empty when absent (the
-/// `block_defaults.tsv` contract): a deployment without mining data still
-/// digs, at documented fallback rates, rather than refusing every break.
-/// Malformed rows warn per row and skip — one bad row must not discard the
-/// other thousand, and every skip is visible in the log.
+/// Load the three mining fixtures beside a `blocks.tsv` (P16-05).
+///
+/// Each table is loaded **independently** (AUDIT-19 G-05). They used to be
+/// chained — a missing `block_hardness.tsv` returned before
+/// [`apply_collision_shapes`] ran — so a deployment without hardness data also
+/// lost collision boxes, warned about the one file it noticed and said nothing
+/// about the one it skipped. That was a silent physics change waiting for the
+/// first consumer of [`BlockRegistry::collision_boxes`]. Now each missing file
+/// warns for itself and leaves only its own map empty: hardness falls back to
+/// the flat rate, tags and shapes still load.
 fn apply_mining_tables(registry: &mut BlockRegistry, blocks_path: &Path) {
     let Some(dir) = blocks_path.parent() else {
         return;
     };
+    apply_mining_tags(registry, dir);
+    apply_collision_shapes(registry, dir);
     let hardness_path = dir.join("block_hardness.tsv");
     let Ok(text) = std::fs::read_to_string(&hardness_path) else {
         tracing::warn!(
             path = %hardness_path.display(),
             "no block hardness table beside the block table; digs fall back to a flat rate"
         );
-        // The tag lists below degrade independently: they may still exist
-        // and are still worth loading for tool matching.
-        apply_mining_tags(registry, dir);
         return;
     };
     let mut applied = 0usize;
@@ -608,8 +615,6 @@ fn apply_mining_tables(registry: &mut BlockRegistry, blocks_path: &Path) {
         applied += 1;
     }
     tracing::debug!(applied, "block hardness loaded");
-    apply_mining_tags(registry, dir);
-    apply_collision_shapes(registry, dir);
 }
 
 /// Load the collision-shape fixture beside a `blocks.tsv` (P16-06).
@@ -843,6 +848,57 @@ mod tests {
         // Unknown states collide as full cubes (a predated fixture never
         // opens holes in the world).
         assert_eq!(blocks.collision_boxes(99_999), None);
+    }
+
+    /// **A missing hardness table must not disable collision** (AUDIT-19
+    /// G-05).
+    ///
+    /// The two tables are independent inputs that happened to share one
+    /// loader, and the loader chained them: `block_hardness.tsv` absent meant
+    /// `apply_collision_shapes` never ran, so a deployment lost every partial
+    /// collision box with a warning that named only the hardness file. That is
+    /// a silent physics change the moment anything reads
+    /// [`BlockRegistry::collision_boxes`]. Neutralise the fix (put the shapes
+    /// load back behind the hardness `return`) and this test goes red on the
+    /// slab box.
+    #[test]
+    fn a_missing_hardness_table_does_not_disable_collision_shapes() {
+        let dir = mc_test_support::fixtures::TempDir::new("registry-no-hardness");
+        // Three blocks, one of them with a partial shape: air, a full cube,
+        // and a slab whose two states are ids 2 and 3 (ids must be
+        // contiguous — `BlockRegistry::parse` refuses a gap).
+        std::fs::write(
+            dir.path().join("blocks.tsv"),
+            "minecraft:air\t0\t1\t-\n\
+             minecraft:stone\t1\t1\t-\n\
+             minecraft:test_slab\t2\t2\ttype=top|bottom\n",
+        )
+        .expect("blocks fixture");
+        std::fs::write(
+            dir.path().join("block_shapes.tsv"),
+            "0\tEMPTY\n2\t0,0.5,0,1,1,1\n3\t0,0,0,1,0.5,1\n",
+        )
+        .expect("shapes fixture");
+        // `block_hardness.tsv` is deliberately absent, and so is the mining
+        // tag list: each must degrade alone.
+        assert!(!dir.path().join("block_hardness.tsv").exists());
+
+        let blocks = BlockRegistry::load(&dir.path().join("blocks.tsv")).expect("loads");
+        assert_eq!(
+            blocks.collision_boxes(2),
+            Some([[0.0, 0.5, 0.0, 1.0, 1.0, 1.0]].as_slice()),
+            "collision shapes load without a hardness table"
+        );
+        assert_eq!(
+            blocks.collision_boxes(3),
+            Some([[0.0, 0.0, 0.0, 1.0, 0.5, 1.0]].as_slice())
+        );
+        assert_eq!(blocks.collision_boxes(0), Some([].as_slice()));
+        assert_eq!(
+            blocks.hardness("minecraft:stone"),
+            None,
+            "and hardness really is the table that is missing"
+        );
     }
 
     #[test]

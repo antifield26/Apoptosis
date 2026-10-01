@@ -25,10 +25,32 @@
 //! under the original name when a file supplied one). Re-encoding a decoded
 //! compound is byte-stable, which is what `unknown_component_survives_save_load`
 //! pins.
+//!
+//! ## Read rule (AUDIT-19 B19-4)
+//!
+//! The P18 strictness round made `food.saturation` and every `attack_range`
+//! field required. That was **backward-incompatible**: a save written before the
+//! round omitted nothing its own writer wrote, but it *could* omit a field that
+//! build read with a default — and a save format that stops loading its own
+//! history is not a save format. The rule, now applied to every modelled key:
+//!
+//! * **Absent** → the value this crate read before the strict round (the
+//!   historical default, reported at `debug` so a legacy file is visible in a
+//!   trace). Absence is a property of old files.
+//! * **Present but unreadable** → [`ServerError::CorruptData`] naming the
+//!   component, the field and the shape found (`minecraft:food.saturation is
+//!   TAG_String, expected a number`). A value the file did carry is never
+//!   replaced by a guess, and the message is never the wrong shape's name: the
+//!   earlier "minecraft:food is not a compound" was said about a compound.
+//!
+//! [`attach_saved_components`] is the one policy every caller of [`from_nbt`]
+//! shares for a patch that cannot be read (B19-5).
 
+use crate::stack::ItemStack;
 use mc_core::error::{ServerError, ServerResult};
 use mc_nbt::NbtTag;
 use std::fmt;
+use tracing::debug;
 
 /// `minecraft:max_damage` type id (26.1 registry order).
 pub const TYPE_MAX_DAMAGE: i32 = 2;
@@ -1272,39 +1294,98 @@ fn attack_range_to_nbt(range: &AttackRange) -> NbtTag {
     ])
 }
 
-fn attack_range_from_nbt(tag: &NbtTag) -> Option<AttackRange> {
-    // B-M4: every field required, like `food.nutrition`. Healing a partial
-    // compound with defaults loads a plausible range no file describes.
-    Some(AttackRange {
-        min_reach: tag
-            .get("min_reach")
-            .and_then(NbtTag::as_f64)
-            .map(|v| v as f32)?,
-        max_reach: tag
-            .get("max_reach")
-            .and_then(NbtTag::as_f64)
-            .map(|v| v as f32)?,
-        min_creative_reach: tag
-            .get("min_creative_reach")
-            .and_then(NbtTag::as_f64)
-            .map(|v| v as f32)?,
-        max_creative_reach: tag
-            .get("max_creative_reach")
-            .and_then(NbtTag::as_f64)
-            .map(|v| v as f32)?,
-        hitbox_margin: tag
-            .get("hitbox_margin")
-            .and_then(NbtTag::as_f64)
-            .map(|v| v as f32)?,
-        mob_factor: tag
-            .get("mob_factor")
-            .and_then(NbtTag::as_f64)
-            .map(|v| v as f32)?,
+fn attack_range_from_nbt(tag: &NbtTag) -> ServerResult<AttackRange> {
+    // B19-4: absent fields read the default this crate used before the strict
+    // round — the pre-fix writer could omit them, and a file that loaded then
+    // must still load. A field that *is* there but is not a number is corrupt.
+    let component = "minecraft:attack_range";
+    if tag.entries().is_none() {
+        return Err(ServerError::CorruptData(format!(
+            "{component} is {}, expected a compound",
+            tag.type_name()
+        )));
+    }
+    let default = AttackRange::default();
+    Ok(AttackRange {
+        min_reach: legacy_f32(tag, component, "min_reach", default.min_reach)?,
+        max_reach: legacy_f32(tag, component, "max_reach", default.max_reach)?,
+        min_creative_reach: legacy_f32(
+            tag,
+            component,
+            "min_creative_reach",
+            default.min_creative_reach,
+        )?,
+        max_creative_reach: legacy_f32(
+            tag,
+            component,
+            "max_creative_reach",
+            default.max_creative_reach,
+        )?,
+        hitbox_margin: legacy_f32(tag, component, "hitbox_margin", default.hitbox_margin)?,
+        mob_factor: legacy_f32(tag, component, "mob_factor", default.mob_factor)?,
     })
 }
 
-fn nbt_f32(tag: Option<&NbtTag>, default: f32) -> f32 {
-    tag.and_then(NbtTag::as_f64).map_or(default, |v| v as f32)
+/// A float field of a component compound, with the pre-strict default for an
+/// absent one (AUDIT-19 B19-4).
+///
+/// The default is not a guess: it is the value this crate read for that field
+/// before the P18 round made it required, so a save written by that build loads
+/// under the same numbers it was played with. The `debug` line is what keeps a
+/// legacy file from being silent — the read succeeded, but it was completed.
+fn legacy_f32(tag: &NbtTag, component: &str, field: &str, legacy: f32) -> ServerResult<f32> {
+    let Some(value) = tag.get(field) else {
+        debug!(
+            component,
+            field, legacy, "a saved component omits this field; using the pre-strict default"
+        );
+        return Ok(legacy);
+    };
+    value.as_f64().map(|v| v as f32).ok_or_else(|| {
+        ServerError::CorruptData(format!(
+            "{component}.{field} is {}, expected a number",
+            value.type_name()
+        ))
+    })
+}
+
+/// An integer field of a component compound that every writer has always
+/// written, so its absence is corruption rather than an old layout.
+fn required_component_i32(tag: &NbtTag, component: &str, field: &str) -> ServerResult<i32> {
+    let Some(value) = tag.get(field) else {
+        return Err(ServerError::CorruptData(format!(
+            "{component}.{field} is missing"
+        )));
+    };
+    value
+        .as_i64()
+        .and_then(|v| i32::try_from(v).ok())
+        .ok_or_else(|| {
+            ServerError::CorruptData(format!(
+                "{component}.{field} is {}, expected an integer",
+                value.type_name()
+            ))
+        })
+}
+
+/// A string field of a component compound that every writer has always written.
+fn required_component_str<'a>(
+    tag: &'a NbtTag,
+    component: &str,
+    field: &str,
+) -> ServerResult<&'a str> {
+    let Some(value) = tag.get(field) else {
+        return Err(ServerError::CorruptData(format!(
+            "{component}.{field} is missing"
+        )));
+    };
+    match value {
+        NbtTag::String(text) => Ok(text),
+        other => Err(ServerError::CorruptData(format!(
+            "{component}.{field} is {}, expected a string",
+            other.type_name()
+        ))),
+    }
 }
 
 fn food_to_nbt(food: &Food) -> NbtTag {
@@ -1318,15 +1399,20 @@ fn food_to_nbt(food: &Food) -> NbtTag {
     ])
 }
 
-fn food_from_nbt(tag: &NbtTag) -> Option<Food> {
-    Some(Food {
-        nutrition: tag.get_i32("nutrition")?,
-        // B-M4: required like nutrition — a food without saturation is
-        // corrupt, not zero-saturation food.
-        saturation: tag
-            .get("saturation")
-            .and_then(NbtTag::as_f64)
-            .map(|v| v as f32)?,
+fn food_from_nbt(tag: &NbtTag) -> ServerResult<Food> {
+    // B19-4: `nutrition` was required before the strict round too, so its
+    // absence is corruption; `saturation` was read with a default, so it stays
+    // optional and the message below can no longer claim a compound is not one.
+    let component = "minecraft:food";
+    if tag.entries().is_none() {
+        return Err(ServerError::CorruptData(format!(
+            "{component} is {}, expected a compound",
+            tag.type_name()
+        )));
+    }
+    Ok(Food {
+        nutrition: required_component_i32(tag, component, "nutrition")?,
+        saturation: legacy_f32(tag, component, "saturation", 0.0)?,
         can_always_eat: tag.get_bool("can_always_eat").unwrap_or(false),
     })
 }
@@ -1366,21 +1452,41 @@ fn consumable_to_nbt(consumable: &Consumable) -> NbtTag {
     NbtTag::Compound(entries)
 }
 
-fn consumable_from_nbt(tag: &NbtTag) -> Option<Consumable> {
-    let animation = ConsumeAnimation::from_name(tag.get_str("animation")?)?;
+fn consumable_from_nbt(tag: &NbtTag) -> ServerResult<Consumable> {
+    // Same read rule as `food`: `animation` and the sound have always been
+    // required; the rest carries its pre-strict default. The messages name the
+    // field, so "minecraft:consumable is not a compound" is no longer said
+    // about a compound that is merely missing one.
+    let component = "minecraft:consumable";
+    if tag.entries().is_none() {
+        return Err(ServerError::CorruptData(format!(
+            "{component} is {}, expected a compound",
+            tag.type_name()
+        )));
+    }
+    let animation_name = required_component_str(tag, component, "animation")?;
+    let animation = ConsumeAnimation::from_name(animation_name).ok_or_else(|| {
+        ServerError::CorruptData(format!(
+            "{component}.animation is {animation_name:?}, which is not a consume animation"
+        ))
+    })?;
     let sound = if let Some(id) = tag.get_i32("sound_id") {
         SoundRef::Id(id)
     } else {
-        SoundRef::Named {
-            name: tag.get_str("sound_name")?.to_owned(),
-            range: tag
-                .get("sound_range")
-                .and_then(NbtTag::as_f64)
-                .map(|v| v as f32),
-        }
+        let name = required_component_str(tag, component, "sound_name")?.to_owned();
+        let range = match tag.get("sound_range") {
+            None => None,
+            Some(value) => Some(value.as_f64().map(|v| v as f32).ok_or_else(|| {
+                ServerError::CorruptData(format!(
+                    "{component}.sound_range is {}, expected a number",
+                    value.type_name()
+                ))
+            })?),
+        };
+        SoundRef::Named { name, range }
     };
-    Some(Consumable {
-        consume_seconds: nbt_f32(tag.get("consume_seconds"), 1.6),
+    Ok(Consumable {
+        consume_seconds: legacy_f32(tag, component, "consume_seconds", 1.6)?,
         animation,
         sound,
         // B-M4: absent means vanilla-default true (what every encoder
@@ -1395,18 +1501,26 @@ fn consumable_from_nbt(tag: &NbtTag) -> Option<Consumable> {
 /// Unknown keys are preserved (name + value). `_wire/<type_id>` byte arrays
 /// attach the wire payload to the matching unknown so re-encode is lossless.
 ///
+/// The **read rule** is on this module: a field an older build could omit reads
+/// that build's default (so a pre-strict save still loads), and a field that is
+/// present but unreadable is refused with a message that names the component,
+/// the field and the shape found (AUDIT-19 B19-4).
+///
 /// # Errors
 ///
-/// [`ServerError::CorruptData`] when a modelled key carries the wrong shape.
+/// [`ServerError::CorruptData`] when a modelled key carries a value this build
+/// cannot read. The message names the key and the cause; a caller that must not
+/// fail a larger load over one patch uses [`attach_saved_components`].
 #[allow(
     clippy::too_many_lines,
     reason = "one match arm per component key; splitting it would scatter the key dispatch the strictness review (B-M4) reads as one table"
 )]
 pub fn from_nbt(tag: &NbtTag) -> ServerResult<ItemComponents> {
     let Some(entries) = tag.entries() else {
-        return Err(ServerError::CorruptData(
-            "item components root is not a compound".to_owned(),
-        ));
+        return Err(ServerError::CorruptData(format!(
+            "item components root is {}, expected a compound",
+            tag.type_name()
+        )));
     };
     let mut wire_payloads: Vec<(i32, Vec<u8>)> = Vec::new();
     let mut out: Vec<DataComponent> = Vec::new();
@@ -1471,24 +1585,13 @@ pub fn from_nbt(tag: &NbtTag) -> ServerResult<ItemComponents> {
                 }),
             },
             "minecraft:attack_range" => {
-                let range = attack_range_from_nbt(value).ok_or_else(|| {
-                    ServerError::CorruptData(
-                        "minecraft:attack_range is not a complete compound".to_owned(),
-                    )
-                })?;
-                out.push(DataComponent::AttackRange(range));
+                out.push(DataComponent::AttackRange(attack_range_from_nbt(value)?));
             }
             "minecraft:food" => {
-                let food = food_from_nbt(value).ok_or_else(|| {
-                    ServerError::CorruptData("minecraft:food is not a compound".to_owned())
-                })?;
-                out.push(DataComponent::Food(food));
+                out.push(DataComponent::Food(food_from_nbt(value)?));
             }
             "minecraft:consumable" => {
-                let consumable = consumable_from_nbt(value).ok_or_else(|| {
-                    ServerError::CorruptData("minecraft:consumable is not a compound".to_owned())
-                })?;
-                out.push(DataComponent::Consumable(consumable));
+                out.push(DataComponent::Consumable(consumable_from_nbt(value)?));
             }
             other => {
                 out.push(DataComponent::Unknown {
@@ -1550,11 +1653,47 @@ pub fn from_nbt(tag: &NbtTag) -> ServerResult<ItemComponents> {
     Ok(ItemComponents::from_entries(out))
 }
 
+/// Attach a saved `components` compound to a stack under the **one** policy
+/// every disk reader shares (AUDIT-19 B19-5).
+///
+/// A patch that cannot be read does not fail the load around it. The same
+/// [`from_nbt`] used to get two different answers: the player's inventory
+/// propagated the error, so one unreadable patch discarded the whole
+/// `playerdata` file, while a block entity warned and kept a component-free
+/// stack. Both keep the stack now — losing a slot's identity, count and every
+/// other component over one unreadable component is the larger loss — and both
+/// get the reason, which names the component and what was wrong with it, so the
+/// outcome and the message cannot drift apart again.
+///
+/// Returns the stack to keep and, when the patch could not be read, the reason
+/// the caller must report. `#[must_use]` on the tuple because dropping the
+/// reason silently is exactly the failure this replaced.
+#[must_use]
+pub fn attach_saved_components(
+    mut stack: ItemStack,
+    components_tag: &NbtTag,
+) -> (ItemStack, Option<ServerError>) {
+    match from_nbt(components_tag) {
+        Ok(components) => {
+            if !stack.is_empty() {
+                *stack.components_mut() = components;
+            }
+            (stack, None)
+        }
+        Err(reason) => (stack, Some(reason)),
+    }
+}
+
 fn nbt_component_i32(key: &str, value: &NbtTag) -> ServerResult<i32> {
     value
         .as_i64()
         .and_then(|v| i32::try_from(v).ok())
-        .ok_or_else(|| ServerError::CorruptData(format!("{key} is not an integer")))
+        .ok_or_else(|| {
+            ServerError::CorruptData(format!(
+                "{key} is {}, expected an integer",
+                value.type_name()
+            ))
+        })
 }
 
 impl fmt::Display for DataComponent {
@@ -1710,14 +1849,39 @@ mod tests {
             "the map survives as one unknown"
         );
         //
-        // 2. A partial attack_range is corrupt, not healed with defaults.
+        // 2. A partial attack_range is **not** the wrong-empty case: it is a
+        //    pre-strict save shape. Every missing field reads the default this
+        //    crate used before the P18 round; only a field that is present and
+        //    unreadable is refused. See
+        //    `a_save_written_before_the_strict_round_still_loads`.
         let partial = NbtTag::Compound(vec![(
             "minecraft:attack_range".to_owned(),
             NbtTag::Compound(vec![("max_reach".to_owned(), NbtTag::Float(5.0))]),
         )]);
+        let range = from_nbt(&partial)
+            .expect("a pre-strict attack_range still loads")
+            .attack_range()
+            .cloned()
+            .expect("attack_range");
+        assert_eq!(range.max_reach, 5.0);
+        assert_eq!(
+            range.min_reach,
+            AttackRange::default().min_reach,
+            "the absent fields read the pre-strict default, not a typed empty"
+        );
+        let unreadable = NbtTag::Compound(vec![(
+            "minecraft:attack_range".to_owned(),
+            NbtTag::Compound(vec![(
+                "max_reach".to_owned(),
+                NbtTag::String("far".to_owned()),
+            )]),
+        )]);
+        let error = from_nbt(&unreadable).expect_err("a string is not a reach");
         assert!(
-            from_nbt(&partial).is_err(),
-            "a partial attack_range must be refused"
+            error
+                .to_string()
+                .contains("minecraft:attack_range.max_reach"),
+            "{error}"
         );
         //
         // 3. A consumable without `consume_particles` reads the
@@ -1742,16 +1906,175 @@ mod tests {
             "absent particles flag reads true"
         );
         //
-        // 4. Food without saturation is corrupt, like food without
-        // nutrition — not zero-saturation food.
+        // 4. Food without saturation is a pre-strict save shape too: it loads
+        //    with the zero this crate read for it, and the B19-4 pin for the
+        //    other half of the rule is
+        //    `an_unreadable_component_names_the_component_and_the_cause`.
         let thin = NbtTag::Compound(vec![(
             "minecraft:food".to_owned(),
             NbtTag::Compound(vec![("nutrition".to_owned(), NbtTag::Int(5))]),
         )]);
-        assert!(
-            from_nbt(&thin).is_err(),
-            "food without saturation must be refused"
+        let food = from_nbt(&thin)
+            .expect("a pre-strict food still loads")
+            .food()
+            .cloned()
+            .expect("food");
+        assert_eq!(food.nutrition, 5);
+        assert_eq!(
+            food.saturation, 0.0,
+            "the saturation this crate read before it was made required"
         );
+        assert!(
+            from_nbt(&NbtTag::Compound(vec![(
+                "minecraft:food".to_owned(),
+                NbtTag::Compound(vec![(
+                    "nutrition".to_owned(),
+                    NbtTag::String("5".to_owned())
+                )]),
+            )]))
+            .is_err(),
+            "a nutrition that is not an integer is still corruption"
+        );
+    }
+
+    #[test]
+    fn a_save_written_before_the_strict_round_still_loads() {
+        // AUDIT-19 B19-4, the compatibility half. The P18 strictness round made
+        // `food.saturation` and all six `attack_range` fields required; a save
+        // written before it omits exactly those fields (the writer of the day
+        // wrote them, but the reader of the day defaulted them, which is what
+        // "an old save" means here). Requiring them refuses the server's own
+        // history, so the pre-strict default is the rule for an absent field.
+        let pre_fix_food = NbtTag::Compound(vec![(
+            "minecraft:food".to_owned(),
+            NbtTag::Compound(vec![
+                ("nutrition".to_owned(), NbtTag::Int(6)),
+                ("can_always_eat".to_owned(), NbtTag::Byte(1)),
+            ]),
+        )]);
+        let food = from_nbt(&pre_fix_food)
+            .expect("a food compound without saturation loads")
+            .food()
+            .cloned()
+            .expect("food");
+        assert_eq!(food.nutrition, 6);
+        assert_eq!(food.saturation, 0.0, "the pre-strict default");
+        assert!(food.can_always_eat);
+
+        let pre_fix_range = NbtTag::Compound(vec![(
+            "minecraft:attack_range".to_owned(),
+            NbtTag::Compound(vec![
+                ("max_reach".to_owned(), NbtTag::Float(4.5)),
+                ("mob_factor".to_owned(), NbtTag::Float(2.0)),
+            ]),
+        )]);
+        let range = from_nbt(&pre_fix_range)
+            .expect("a partial attack_range loads")
+            .attack_range()
+            .cloned()
+            .expect("attack_range");
+        assert_eq!(range.max_reach, 4.5);
+        assert_eq!(range.mob_factor, 2.0);
+        let default = AttackRange::default();
+        assert_eq!(range.min_reach, default.min_reach);
+        assert_eq!(range.min_creative_reach, default.min_creative_reach);
+        assert_eq!(range.max_creative_reach, default.max_creative_reach);
+        assert_eq!(range.hitbox_margin, default.hitbox_margin);
+    }
+
+    #[test]
+    fn an_unreadable_component_names_the_component_and_the_cause() {
+        // AUDIT-19 B19-4, the message half. "minecraft:food is not a compound"
+        // was said about a **compound** that was merely missing a field, so an
+        // operator reading the log was told the wrong shape. Every refusal now
+        // names the component, the field and what the file actually carried.
+        let missing_nutrition = NbtTag::Compound(vec![(
+            "minecraft:food".to_owned(),
+            NbtTag::Compound(vec![("saturation".to_owned(), NbtTag::Float(1.0))]),
+        )]);
+        let error = from_nbt(&missing_nutrition).expect_err("no nutrition");
+        assert!(
+            error
+                .to_string()
+                .contains("minecraft:food.nutrition is missing"),
+            "{error}"
+        );
+
+        let wrong_shape = NbtTag::Compound(vec![(
+            "minecraft:food".to_owned(),
+            NbtTag::Compound(vec![
+                ("nutrition".to_owned(), NbtTag::Int(5)),
+                ("saturation".to_owned(), NbtTag::String("lots".to_owned())),
+            ]),
+        )]);
+        let error = from_nbt(&wrong_shape).expect_err("saturation is a string");
+        let text = error.to_string();
+        assert!(text.contains("minecraft:food.saturation"), "{text}");
+        assert!(text.contains("TAG_String"), "names the shape: {text}");
+        assert!(text.contains("expected a number"), "{text}");
+
+        let not_a_compound = NbtTag::Compound(vec![(
+            "minecraft:food".to_owned(),
+            NbtTag::String("minecraft:bread".to_owned()),
+        )]);
+        let error = from_nbt(&not_a_compound).expect_err("food must be a compound");
+        let text = error.to_string();
+        assert!(text.contains("minecraft:food is TAG_String"), "{text}");
+        assert!(text.contains("expected a compound"), "{text}");
+
+        // `consumable` had the same false message for the same reason.
+        let consumable_missing_animation = NbtTag::Compound(vec![(
+            "minecraft:consumable".to_owned(),
+            NbtTag::Compound(vec![("consume_seconds".to_owned(), NbtTag::Float(1.6))]),
+        )]);
+        let error = from_nbt(&consumable_missing_animation).expect_err("no animation");
+        assert!(
+            error
+                .to_string()
+                .contains("minecraft:consumable.animation is missing"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_unreadable_patch_keeps_the_stack_and_reports_the_component() {
+        // AUDIT-19 B19-5, the shared policy. The player's inventory refused the
+        // whole file over one unreadable patch while a block entity warned and
+        // kept a component-free stack; both now keep the stack and get the
+        // reason, which names the component. Dropping the stack, or returning
+        // `None` for the reason, is what this test is for.
+        let diamond = 899;
+        let stack = ItemStack::new(diamond, 3).expect("three diamonds");
+        let unreadable = NbtTag::Compound(vec![(
+            "minecraft:food".to_owned(),
+            NbtTag::Compound(vec![
+                ("nutrition".to_owned(), NbtTag::Int(4)),
+                ("saturation".to_owned(), NbtTag::String("lots".to_owned())),
+            ]),
+        )]);
+        let (kept, reason) = attach_saved_components(stack.clone(), &unreadable);
+        assert_eq!(
+            kept.item_id(),
+            Some(diamond),
+            "the stack survives its patch"
+        );
+        assert_eq!(kept.count(), 3, "and keeps its count");
+        assert!(
+            kept.components().is_empty(),
+            "the unreadable patch is not half-applied"
+        );
+        let reason = reason.expect("the reason is the only signal that it was dropped");
+        assert!(
+            reason.to_string().contains("minecraft:food.saturation"),
+            "the reason names the component and the field: {reason}"
+        );
+
+        // The readable half: a patch that decodes still attaches, so the
+        // policy did not become "never read components".
+        let readable = NbtTag::Compound(vec![("minecraft:damage".to_owned(), NbtTag::Int(7))]);
+        let (patched, reason) = attach_saved_components(stack, &readable);
+        assert!(reason.is_none(), "a readable patch has nothing to report");
+        assert_eq!(patched.damage(), Some(7));
     }
 
     #[test]

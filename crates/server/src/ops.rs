@@ -363,11 +363,12 @@ impl OperatorList {
 
 /// A uuid as this module keys on it: trimmed and lower-case.
 ///
-/// A uuid is conventionally lower-case but files in the wild are not consistent, and a
-/// mismatch here is invisible — the operator simply appears not to be listed.
+/// The rule lives in [`crate::access_uuid::normalise`], shared with the
+/// whitelist and bans readers: a uuid is keyed one way in this tree or the
+/// same profile is three different keys.
 #[must_use]
 fn normalise_uuid(uuid: &str) -> String {
-    uuid.trim().to_ascii_lowercase()
+    crate::access_uuid::normalise(uuid)
 }
 
 /// The directory `ops.json` lives in: the world's **parent**, matching Vanilla.
@@ -397,23 +398,10 @@ fn parse_entry(entry: &Value, path: &Path, index: usize) -> ServerResult<Operato
         )));
     };
 
-    let uuid = object
-        .get("uuid")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| {
-            ServerError::CorruptData(format!(
-                "{}: entry {index} has no string `uuid`, which is the field that identifies \
-                 an operator",
-                path.display()
-            ))
-        })?;
-    let uuid = normalise_uuid(uuid);
-    if uuid.is_empty() {
-        return Err(ServerError::CorruptData(format!(
-            "{}: entry {index} has an empty `uuid`",
-            path.display()
-        )));
-    }
+    // AUDIT-19 G-10: the uuid is validated, not merely required to be a
+    // string. A typo used to load as an operator row that grants nothing and
+    // never matches — a permission change that silently did not happen.
+    let uuid = crate::access_uuid::from_row(object, path, index, "operator")?;
 
     // A name is optional in practice: Vanilla always writes one, but matching is by uuid, so
     // a missing name is a cosmetic loss rather than a reason to refuse the whole file.

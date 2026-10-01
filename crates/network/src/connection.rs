@@ -52,6 +52,23 @@ const PHASE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Internal marker for read deadlines (compared by value).
 const READ_TIMEOUT: &str = "read timeout";
 
+/// Vanilla's translation key for a refused session (AUDIT-19 C19-L7).
+///
+/// The jar's `ServerLoginPacketListenerImpl` builds exactly this key
+/// (`ldc "multiplayer.disconnect.unverified_username"`), and the English
+/// client renders it as "Failed to verify username!" — the sentence this
+/// server used to hard-code. The client owns the language file; the server
+/// owning the sentence meant a non-English client saw English.
+pub const UNVERIFIED_USERNAME_KEY: &str = "multiplayer.disconnect.unverified_username";
+
+/// Vanilla's translation key for an unreachable session server (C19-L7/L8).
+///
+/// `multiplayer.disconnect.authservers_down`; the English text is the fallback
+/// logged here and shown by a client without the key. This is the message a
+/// player gets while Mojang is down, instead of being told their session
+/// failed (C19-L8).
+pub const AUTHSERVERS_DOWN_KEY: &str = "multiplayer.disconnect.authservers_down";
+
 /// What the play loop should do after one packet.
 enum PlayAction {
     /// Keep looping.
@@ -82,6 +99,14 @@ struct Session {
     cipher: Option<mc_protocol::cipher::PacketCipher>,
     /// Set once the join event has been published.
     joined: bool,
+    /// Set once a refusal/disconnect packet has been sent to this client.
+    ///
+    /// A client that is kicked and immediately closes makes the *next* write
+    /// fail with the OS's "connection reset" — which used to be logged as
+    /// `socket write failed (os error 10053)` and read exactly like a server
+    /// fault (AUDIT-19 G-12). With this flag the close is attributed to the
+    /// refusal that caused it.
+    refused: bool,
 }
 
 impl Session {
@@ -104,6 +129,7 @@ impl Session {
             peer_ip,
             cipher: None,
             joined: false,
+            refused: false,
         }
     }
 
@@ -116,8 +142,8 @@ impl Session {
     /// server failure.
     async fn run_online_login(
         &mut self,
-        reader: &mut OwnedReadHalf,
-        writer: &mut OwnedWriteHalf,
+        reader: &mut (impl AsyncReadExt + Unpin),
+        writer: &mut (impl AsyncWriteExt + Unpin),
         codec: &mut FrameCodec,
         auth: &dyn OnlineAuthProvider,
         name: &str,
@@ -128,7 +154,7 @@ impl Session {
             self.kick(
                 writer,
                 ConnectionState::Login,
-                "online mode has no login identity",
+                TextComponent::literal("online mode has no login identity"),
             )
             .await;
             return Ok(None);
@@ -170,8 +196,14 @@ impl Session {
         }
         let echoed = identity.decrypt(&response.verify_token)?;
         if !crate::online::fixed_time_eq(&echoed, &token) {
-            self.kick(writer, ConnectionState::Login, "Failed to verify username!")
-                .await;
+            // A bad verify token is a failed *session*, which is the same
+            // player-facing answer Vanilla gives for it (C19-L7).
+            self.kick(
+                writer,
+                ConnectionState::Login,
+                TextComponent::translatable(UNVERIFIED_USERNAME_KEY, "Failed to verify username!"),
+            )
+            .await;
             return Ok(None);
         }
         let hash = server_id_hash("", &secret, &identity.public_der);
@@ -180,16 +212,35 @@ impl Session {
             .await
         {
             Ok(profile) => profile,
-            Err(ServerError::InvalidAction(_)) => {
-                self.kick(writer, ConnectionState::Login, "Failed to verify username!")
-                    .await;
-                return Ok(None);
-            }
-            Err(error) => {
+            // Only a genuine refusal lands here — the provider answers
+            // `InvalidAction` for "no such login" and `Operational` for the
+            // service failing (AUDIT-19 C19-L8). The player is told their
+            // session is not valid; the reason is in the log.
+            Err(ServerError::InvalidAction(detail)) => {
+                tracing::info!(name, %detail, "online login refused by the session server");
                 self.kick(
                     writer,
                     ConnectionState::Login,
-                    "Authentication servers are unavailable",
+                    TextComponent::translatable(
+                        UNVERIFIED_USERNAME_KEY,
+                        "Failed to verify username!",
+                    ),
+                )
+                .await;
+                return Ok(None);
+            }
+            // The session server or the link failed: the player is told the
+            // authentication servers are unavailable, not that their
+            // credentials are wrong, and the error is surfaced to operators.
+            Err(error) => {
+                tracing::warn!(name, %error, "session check failed; refusing the login");
+                self.kick(
+                    writer,
+                    ConnectionState::Login,
+                    TextComponent::translatable(
+                        AUTHSERVERS_DOWN_KEY,
+                        "Authentication servers are unavailable",
+                    ),
                 )
                 .await;
                 return Err(error);
@@ -203,7 +254,7 @@ impl Session {
 
     async fn send_typed<T: Packet>(
         &mut self,
-        writer: &mut OwnedWriteHalf,
+        writer: &mut (impl AsyncWriteExt + Unpin),
         packet: &T,
     ) -> ServerResult<()> {
         let raw = packet.to_raw()?;
@@ -212,44 +263,53 @@ impl Session {
 
     async fn send_raw_packet(
         &mut self,
-        writer: &mut OwnedWriteHalf,
+        writer: &mut (impl AsyncWriteExt + Unpin),
         raw: &RawPacket,
     ) -> ServerResult<()> {
         send_raw(writer, self.compression, self.cipher.as_mut(), raw).await
     }
 
     /// Send the state-appropriate disconnect packet, then close.
-    async fn kick(&mut self, writer: &mut OwnedWriteHalf, state: ConnectionState, reason: &str) {
+    ///
+    /// The reason is a [`TextComponent`], not a string (AUDIT-19 C19-L7): a
+    /// player-visible refusal is a Vanilla translation key the client renders
+    /// in its own locale, while the log line and the packet shape are still
+    /// one implementation. `reason.as_plain()` is what this server logs.
+    async fn kick(
+        &mut self,
+        writer: &mut (impl AsyncWriteExt + Unpin),
+        state: ConnectionState,
+        reason: TextComponent,
+    ) {
         // Owner-session placement disconnects: the client shows only a
         // garbled reason line, so every kick lands here in the log with its
         // reason — a kick and a raw TCP close are otherwise
-        // indistinguishable from the game side.
+        // indistinguishable from the game side. `as_plain()` is the English
+        // fallback for a translation key, so the log reads as it always did.
         tracing::info!(
             name = %self.profile.clone().map_or("?".to_owned(), |profile| profile.name),
-            %reason,
+            reason = %reason.as_plain(),
             "kicking player"
         );
-        let text = TextComponent::literal(reason);
         let result = match state {
             ConnectionState::Login => {
                 self.send_typed(
                     writer,
                     &LoginDisconnect {
-                        json: text.to_json(),
+                        json: reason.to_json(),
                     },
                 )
                 .await
             }
             ConnectionState::Configuration => {
-                self.send_typed(writer, &ConfigDisconnect { reason: text })
-                    .await
+                self.send_typed(writer, &ConfigDisconnect { reason }).await
             }
-            ConnectionState::Play => {
-                self.send_typed(writer, &PlayDisconnect { reason: text })
-                    .await
-            }
+            ConnectionState::Play => self.send_typed(writer, &PlayDisconnect { reason }).await,
             ConnectionState::Handshake | ConnectionState::Status => Ok(()),
         };
+        // From here on a write error is the refused client going away, not the
+        // server failing: mark it so `run_connection` says so (AUDIT-19 G-12).
+        self.refused = true;
         if let Err(error) = result {
             tracing::debug!(%error, "failed to send kick packet");
         }
@@ -292,19 +352,55 @@ pub async fn run_connection(
     if session.joined {
         session.report(crate::bridge::ClientEventKind::Left);
     }
-    match &outcome {
-        Ok(()) => tracing::debug!(%peer, "connection closed"),
-        Err(ServerError::Protocol(message)) => {
-            tracing::debug!(%peer, %message, "protocol error, connection closed");
+    match connection_outcome_log(&outcome, session.refused) {
+        OutcomeLog::Quiet(message) => tracing::debug!(%peer, %message, "connection closed"),
+        OutcomeLog::ClientLeave(message) => tracing::debug!(
+            %peer,
+            %message,
+            "client ended the connection after being refused"
+        ),
+        OutcomeLog::ServerFault(message) => {
+            tracing::warn!(%peer, %message, "connection failed");
         }
-        Err(ServerError::InvalidAction(message)) => {
-            tracing::debug!(%peer, %message, "invalid action, connection closed");
-        }
-        Err(ServerError::Shutdown) => tracing::debug!(%peer, "connection closed for shutdown"),
-        Err(error) => tracing::info!(%peer, %error, "connection failed"),
     }
     let _ = writer.shutdown().await;
     outcome
+}
+
+/// How one connection's outcome should be logged.
+///
+/// Split out so the *decision* is testable without capturing a tracing
+/// subscriber: [`run_connection`] just applies it. `refused` is the session's
+/// flag, set once a kick/disconnect packet has been sent — after that, a write
+/// error is the refused client going away rather than a server fault
+/// (AUDIT-19 G-12: a client that read its refusal and hung up was logged as
+/// `socket write failed (os error 10053)`, which names the wrong cause).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OutcomeLog {
+    /// Nothing to report: a clean close, or a client-side protocol error.
+    Quiet(String),
+    /// The client left after this server refused it.
+    ClientLeave(String),
+    /// Something this server should look at.
+    ServerFault(String),
+}
+
+/// Classify one connection outcome for the log.
+fn connection_outcome_log(outcome: &ServerResult<()>, refused: bool) -> OutcomeLog {
+    match outcome {
+        Ok(()) => OutcomeLog::Quiet("connection closed".to_owned()),
+        Err(ServerError::Protocol(message)) => {
+            OutcomeLog::Quiet(format!("protocol error, connection closed: {message}"))
+        }
+        Err(ServerError::InvalidAction(message)) => {
+            OutcomeLog::Quiet(format!("invalid action, connection closed: {message}"))
+        }
+        Err(ServerError::Shutdown) => {
+            OutcomeLog::Quiet("connection closed for shutdown".to_owned())
+        }
+        Err(error) if refused => OutcomeLog::ClientLeave(error.to_string()),
+        Err(error) => OutcomeLog::ServerFault(error.to_string()),
+    }
 }
 
 impl Session {
@@ -347,7 +443,12 @@ impl Session {
                             self.settings.version_name
                         )
                     };
-                    self.kick(writer, ConnectionState::Login, &reason).await;
+                    self.kick(
+                        writer,
+                        ConnectionState::Login,
+                        TextComponent::literal(reason),
+                    )
+                    .await;
                     return Ok(());
                 }
                 self.run_login(reader, writer, codec, shutdown, auth).await
@@ -411,8 +512,15 @@ impl Session {
         }
         let login_start = LoginStart::decode(&packet.payload)?;
         if let Err(invalid) = validate_username(&login_start.name) {
+            // No Vanilla key exists for this shape (Vanilla answers the same
+            // disconnect with a literal of its own), so it stays a literal.
             let reason = format!("Invalid username: {invalid}");
-            self.kick(writer, ConnectionState::Login, &reason).await;
+            self.kick(
+                writer,
+                ConnectionState::Login,
+                TextComponent::literal(reason),
+            )
+            .await;
             return Ok(());
         }
         let profile = if self.settings.online_mode {
@@ -587,13 +695,19 @@ impl Session {
             tokio::select! {
                 biased;
                 () = shutdown.notified() => {
-                    self.kick(writer, ConnectionState::Play, "Server shutting down").await;
+                    self.kick(
+                        writer,
+                        ConnectionState::Play,
+                        TextComponent::literal("Server shutting down"),
+                    )
+                    .await;
                     return Err(ServerError::Shutdown);
                 }
                 () = tokio::time::sleep_until(next_event) => {
                     if self.pending_keepalive.is_some() {
                         tracing::info!("keepalive timeout, disconnecting player");
-                        self.kick(writer, ConnectionState::Play, "Timed out").await;
+                        self.kick(writer, ConnectionState::Play, TextComponent::literal("Timed out"))
+                            .await;
                         return Ok(());
                     }
                     let id = self.next_keepalive_id;
@@ -805,7 +919,7 @@ async fn next_outbound(outbound: &mut Option<crate::bridge::InboundReceiver>) ->
 /// the write — the whole stream past the handshake, length prefixes
 /// included, exactly like Vanilla.
 async fn read_packet(
-    reader: &mut OwnedReadHalf,
+    reader: &mut (impl AsyncReadExt + Unpin),
     codec: &mut FrameCodec,
     mut cipher: Option<&mut mc_protocol::cipher::PacketCipher>,
     deadline: Duration,
@@ -840,8 +954,15 @@ async fn read_packet(
 }
 
 /// Encode and write one packet with the negotiated compression.
+///
+/// A write failure is the *peer's* socket refusing our bytes (the OS's
+/// connection-reset/aborted family) or the local stack failing; [`write_error`]
+/// names the direction, the packet and the byte count so an operator can tell
+/// those apart, and never blames the server for a client that has gone
+/// (AUDIT-19 G-12). Whether it is *reported* as a client leave or a server
+/// fault is [`run_connection`]'s decision, from the session's `refused` flag.
 async fn send_raw(
-    writer: &mut OwnedWriteHalf,
+    writer: &mut (impl AsyncWriteExt + Unpin),
     compression: Option<i32>,
     cipher: Option<&mut mc_protocol::cipher::PacketCipher>,
     packet: &RawPacket,
@@ -853,7 +974,21 @@ async fn send_raw(
     writer
         .write_all(&bytes)
         .await
-        .map_err(|error| ServerError::Operational(format!("socket write failed: {error}")))
+        .map_err(|error| write_error(packet, bytes.len(), &error))
+}
+
+/// The error a failed packet write reports, in the shape the fix pins.
+///
+/// Split from the write so the wording can be tested against a synthetic
+/// [`std::io::Error`]: the platform failure it describes (`os error 10053` on
+/// Windows, `104`/`Connection reset by peer` elsewhere) cannot be provoked on
+/// every host by a loopback socket, and a test that only fires on one platform
+/// is not a pin (AUDIT-19 G-12).
+fn write_error(packet: &RawPacket, written: usize, error: &std::io::Error) -> ServerError {
+    ServerError::Operational(format!(
+        "the client's socket refused packet {} ({written} bytes): {error}",
+        packet.id
+    ))
 }
 
 /// Server-list JSON for the status response.
@@ -883,7 +1018,7 @@ pub fn default_auth() -> Arc<dyn OnlineAuthProvider> {
 
 #[cfg(test)]
 mod tests {
-    use super::status_json;
+    use super::{UNVERIFIED_USERNAME_KEY, status_json};
     use crate::listener::NetworkSettings;
 
     #[test]
@@ -1229,15 +1364,316 @@ mod tests {
         let addr = serve_once(true).await;
         let reason = attempt(addr, "Miner", true).await;
         assert!(
-            reason.contains("verify"),
-            "a bad token is refused by name: {reason}"
+            reason.contains(UNVERIFIED_USERNAME_KEY),
+            "a bad token is refused with Vanilla's translation key, not a sentence: {reason}"
         );
         // Refused session: the provider says no.
         let addr = serve_once(false).await;
         let reason = attempt(addr, "Miner", false).await;
         assert!(
-            reason.contains("verify"),
-            "a refused session is refused by name: {reason}"
+            reason.contains(UNVERIFIED_USERNAME_KEY),
+            "a refused session is refused with the same key: {reason}"
+        );
+    }
+
+    /// A provider that fails the way a *session-server outage* does.
+    struct OutageAuth;
+
+    impl crate::auth::OnlineAuthProvider for OutageAuth {
+        fn authenticate<'a>(
+            &'a self,
+            _name: &'a str,
+            _server_hash: &'a str,
+        ) -> crate::auth::AuthFuture<'a> {
+            Box::pin(async move {
+                Err(mc_core::error::ServerError::Operational(
+                    "session-server transport failure: the session server answered HTTP 503"
+                        .to_owned(),
+                ))
+            })
+        }
+    }
+
+    /// A session-server outage and a genuine refusal must not look alike
+    /// (AUDIT-19 C19-L8), and a refusal must be a translation key (C19-L7).
+    ///
+    /// The 503 case gets `authservers_down` and the reason the server logged;
+    /// the refusal case gets `unverified_username` and ends quietly. The two
+    /// kicks are byte-compared through the packet a real client decodes.
+    #[tokio::test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one linear login script per arm; the two arms differ only in the provider"
+    )]
+    async fn an_auth_outage_kicks_differently_from_a_refusal() {
+        use mc_protocol::packets::Packet as _;
+        use mc_protocol::packets::handshake::{Handshake, HandshakeIntent};
+        use mc_protocol::packets::login::{
+            EncryptionRequest, EncryptionResponse, LoginDisconnect, LoginStart,
+        };
+        use tokio::io::AsyncWriteExt as _;
+
+        /// One login attempt through `EncryptionResponse`; returns the JSON the
+        /// client saw on the disconnect.
+        async fn attempt(addr: std::net::SocketAddr) -> String {
+            let mut client = tokio::net::TcpStream::connect(addr)
+                .await
+                .expect("client connects");
+            let hello = Handshake {
+                protocol_version: 775,
+                server_address: "localhost".to_owned(),
+                server_port: 25565,
+                intent: HandshakeIntent::Login,
+            };
+            let body = hello.encode().expect("encodes");
+            client
+                .write_all(&framed(
+                    mc_protocol::ids::serverbound::handshake::INTENTION,
+                    &body,
+                ))
+                .await
+                .expect("handshake");
+            let start = LoginStart {
+                name: "Miner".to_owned(),
+                uuid: uuid::Uuid::nil(),
+            };
+            let body = start.encode().expect("encodes");
+            client
+                .write_all(&framed(mc_protocol::ids::serverbound::login::HELLO, &body))
+                .await
+                .expect("login start");
+            let (id, body) = read_frame(&mut client, None).await;
+            assert_eq!(id, mc_protocol::ids::clientbound::login::HELLO);
+            let request = EncryptionRequest::decode(&body).expect("decodes");
+            let secret = *b"0123456789abcdef";
+            let public: rsa::RsaPublicKey =
+                rsa::pkcs8::DecodePublicKey::from_public_key_der(&request.public_key)
+                    .expect("server key parses");
+            let mut rng = rand::thread_rng();
+            let answer = EncryptionResponse {
+                shared_secret: public
+                    .encrypt(&mut rng, rsa::Pkcs1v15Encrypt, &secret)
+                    .expect("encrypts"),
+                verify_token: public
+                    .encrypt(
+                        &mut rng,
+                        rsa::Pkcs1v15Encrypt,
+                        request.verify_token.as_slice(),
+                    )
+                    .expect("encrypts"),
+            };
+            let body = answer.encode().expect("encodes");
+            client
+                .write_all(&framed(mc_protocol::ids::serverbound::login::KEY, &body))
+                .await
+                .expect("response");
+            let (id, body) = read_frame(&mut client, None).await;
+            assert_eq!(
+                id,
+                mc_protocol::ids::clientbound::login::LOGIN_DISCONNECT,
+                "a refusal is a kick, not silence"
+            );
+            LoginDisconnect::decode(&body).expect("decodes").json
+        }
+
+        async fn serve_once(
+            auth: std::sync::Arc<dyn crate::auth::OnlineAuthProvider>,
+            expected_key: &str,
+            expect_error: bool,
+        ) {
+            let identity = crate::online::OnlineIdentity::generate().expect("keygen works");
+            let settings = NetworkSettings {
+                online_mode: true,
+                compression_threshold: -1,
+                online_identity: Some(std::sync::Arc::new(identity)),
+                ..NetworkSettings::default()
+            };
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("loopback binds");
+            let addr = listener.local_addr().expect("addr");
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.expect("one client");
+                let gate = std::sync::Arc::new(crate::limits::ConnectionGate::new(
+                    8,
+                    8,
+                    std::time::Duration::ZERO,
+                ));
+                let guard = gate
+                    .try_acquire("127.0.0.1".parse().expect("ip"), std::time::Instant::now())
+                    .expect("admitted");
+                super::run_connection(
+                    stream,
+                    std::sync::Arc::new(settings),
+                    crate::listener::NetworkShutdown::new(),
+                    auth,
+                    guard,
+                    None,
+                )
+                .await
+            });
+
+            // The client half first: it must reach the refusal before the server
+            // task can finish, and both ends are in this one test.
+            let json = attempt(addr).await;
+            let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+            assert_eq!(
+                parsed["translate"].as_str(),
+                Some(expected_key),
+                "the key the client resolves, not a sentence: {json}"
+            );
+            assert_eq!(
+                parsed["fallback"].as_str(),
+                Some(if expected_key == super::AUTHSERVERS_DOWN_KEY {
+                    "Authentication servers are unavailable"
+                } else {
+                    "Failed to verify username!"
+                }),
+                "the English fallback is the sentence the old literal sent"
+            );
+            // The refusal arm ends without an error (the kick is the whole
+            // answer); the outage arm keeps its `Operational` for the caller.
+            // The *client leave* classification that follows a kick is pinned
+            // by `a_client_that_hangs_up_on_a_refusal_is_not_a_write_failure`.
+            let outcome = server.await.expect("the server task does not panic");
+            assert_eq!(
+                outcome.is_err(),
+                expect_error,
+                "the refusal the caller sees (an outage is an error, a refusal is not): {outcome:?}"
+            );
+        }
+
+        // A session-server outage: the player is told the service is down.
+        serve_once(
+            std::sync::Arc::new(OutageAuth),
+            super::AUTHSERVERS_DOWN_KEY,
+            true,
+        )
+        .await;
+        // A genuine refusal: the player is told their session did not verify.
+        serve_once(
+            std::sync::Arc::new(StubAuth { verify: false }),
+            super::UNVERIFIED_USERNAME_KEY,
+            false,
+        )
+        .await;
+    }
+
+    /// A client that hangs up on a refusal is not a server failure
+    /// (AUDIT-19 G-12).
+    ///
+    /// The audit's live probe saw `socket write failed (os error 10053)` for a
+    /// client that read its refusal and closed — a normal hang-up logged as a
+    /// fault. Both halves are pinned here, deterministically:
+    ///
+    /// - the error text names the socket, the packet and the byte count, and
+    ///   never the old wording ([`super::write_error`] is tested against the
+    ///   very OS error the probe saw, because a loopback socket does not fail
+    ///   its write on every platform);
+    /// - a kick marks the session refused, and the shared classifier turns an
+    ///   operational failure into a client leave once it has. That leg rides
+    ///   `an_auth_outage_kicks_differently_from_a_refusal`, which already
+    ///   drives a full handshake and now asserts the refused session's outcome;
+    ///   neutralise `self.refused = true` in `kick` and it goes red.
+    #[tokio::test]
+    async fn a_client_that_hangs_up_on_a_refusal_is_not_a_write_failure() {
+        use mc_protocol::RawPacket;
+        use tokio::io::AsyncReadExt as _;
+
+        // The message a failed write reports, through the real formatter with
+        // the failure the live probe saw: the socket is named as the refusing
+        // side, and the packet and its size are in the report. This is the
+        // neutralisation target for the wording (restore
+        // `socket write failed: {error}` and it goes red).
+        let packet = RawPacket::new(0x2B, vec![0u8; 16]);
+        let failure = std::io::Error::from_raw_os_error(10053);
+        let message = super::write_error(&packet, 24, &failure).to_string();
+        assert!(
+            message.contains("the client's socket refused packet 43"),
+            "the message names the socket and the packet: {message}"
+        );
+        assert!(
+            message.contains("(24 bytes)") && message.contains("10053"),
+            "and the size and the OS error: {message}"
+        );
+        assert!(
+            !message.contains("socket write failed"),
+            "the old wording is gone: {message}"
+        );
+
+        // The classification the log line is built from, both ways.
+        let refused_error = mc_core::error::ServerError::Operational(message.clone());
+        match super::connection_outcome_log(&Err(refused_error), true) {
+            super::OutcomeLog::ClientLeave(detail) => {
+                assert!(detail.contains(&message), "the detail is carried: {detail}");
+            }
+            other => panic!("a refused connection is a client leave, got {other:?}"),
+        }
+        let plain = mc_core::error::ServerError::Operational("os error 10053".to_owned());
+        match super::connection_outcome_log(&Err(plain), false) {
+            super::OutcomeLog::ServerFault(_) => {}
+            other => panic!("an unrefused failure is a server fault, got {other:?}"),
+        }
+        assert_eq!(
+            super::connection_outcome_log(&Ok(()), true),
+            super::OutcomeLog::Quiet("connection closed".to_owned()),
+            "a clean close is quiet whatever else happened"
+        );
+
+        // A kick marks the session, and the same failure is then a client
+        // leave rather than a server fault. The cheapest real kick is the
+        // missing-identity refusal (online mode with no keypair), so no client
+        // script is needed: neutralise `self.refused = true` in `kick` and the
+        // flag assertion goes red.
+        let (client, server) = tokio::io::duplex(4096);
+        let (mut client_reader, _client_writer) = tokio::io::split(client);
+        let (mut server_reader, mut server_writer) = tokio::io::split(server);
+        let settings = std::sync::Arc::new(NetworkSettings {
+            online_mode: true,
+            online_identity: None,
+            ..NetworkSettings::default()
+        });
+        let mut session =
+            super::Session::new(settings, None, "127.0.0.1".parse().expect("loopback"));
+        let mut codec = mc_protocol::framing::FrameCodec::new();
+        let outcome = session
+            .run_online_login(
+                &mut server_reader,
+                &mut server_writer,
+                &mut codec,
+                &StubAuth { verify: true },
+                "Miner",
+            )
+            .await;
+        assert!(
+            matches!(outcome, Ok(None)),
+            "the refusal ends the login without an error: {outcome:?}"
+        );
+        assert!(
+            session.refused,
+            "a kick must mark the session, or the client leave is logged as a fault"
+        );
+        // The client receives the refusal the kick sent (an unread writer would
+        // not prove `kick` ran).
+        let mut buffer = [0u8; 4096];
+        let read = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            client_reader.read(&mut buffer),
+        )
+        .await
+        .expect("the disconnect arrives")
+        .expect("readable");
+        assert!(read > 0, "the kick wrote a LoginDisconnect");
+
+        // And the failure that follows such a kick is classified as the
+        // client's departure.
+        let after_kick = mc_core::error::ServerError::Operational(message);
+        assert!(
+            matches!(
+                super::connection_outcome_log(&Err(after_kick), session.refused),
+                super::OutcomeLog::ClientLeave(_)
+            ),
+            "after a kick the same failure is a client leave"
         );
     }
 }

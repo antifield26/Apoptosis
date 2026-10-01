@@ -20,6 +20,25 @@ use mc_server::game::{Game, TickReport};
 use mc_server::storage::WorldService;
 use mc_test_support::fixtures::TempDir;
 
+/// An operator list naming every fixture this suite logs in.
+///
+/// AUDIT-19 G-09 moved `/tp`, `/teleport` and `/time` to Vanilla's level 2, so a
+/// suite that moves players with `/tp` has to join as an operator.
+fn ops_for(names: &[&str], level: u8) -> mc_server::ops::OperatorList {
+    let rows: Vec<String> = names
+        .iter()
+        .map(|name| {
+            let uuid = mc_network::auth::offline_profile(name).id;
+            format!(r#"{{"uuid": "{uuid}", "name": "{name}", "level": {level}}}"#)
+        })
+        .collect();
+    mc_server::ops::OperatorList::parse(
+        &format!("[{}]", rows.join(",")),
+        std::path::Path::new("ops.json"),
+    )
+    .expect("the fixture parses")
+}
+
 /// Everything a test needs: a live game on real terrain and the client's end
 /// of the channel.
 struct Harness {
@@ -40,7 +59,18 @@ impl Harness {
         };
         let storage = WorldService::open(&config).expect("world opens");
         let (tx, rx) = game_channel(256);
-        let game = Game::new(&storage, 4, rx).expect("game builds");
+        // AUDIT-19 G-09 put `/tp` at Vanilla's level 2; every test here moves the
+        // player with `/tp`, so the fixtures are operators. The subject of these
+        // tests is streaming, not permission.
+        let game = Game::build_with_operators(
+            Some(&storage),
+            None,
+            4,
+            rx,
+            mc_server::game::DEFAULT_RANDOM_SEED,
+            ops_for(&["Viewer", "Walker"], 4),
+        )
+        .expect("game builds");
         Self {
             game,
             events: tx,

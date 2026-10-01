@@ -26,6 +26,14 @@
 //! - **The file stays Vanilla-pure.** No extra keys are written, so a
 //!   Vanilla server boots on our file and keeps every entry (P19-01
 //!   acceptance) — enforcement state lives in config + memory, never here.
+//! - **The `uuid` field is a uuid.** A row whose uuid is a typo (or a name)
+//!   would load and then never match a joining player, silently: the listed
+//!   player would simply be refused, or a ban would never apply
+//!   (AUDIT-19 G-10). The format is validated on load through
+//!   [`crate::access_uuid`] and a bad row is skipped with the same
+//!   warning-names-the-row policy as every other damaged field. Both shapes
+//!   Vanilla reads are accepted: the canonical dashed uuid and the 32-digit
+//!   undashed one.
 //! - **Operators bypass the whitelist.** Vanilla exempts ops from the
 //!   check; the exemption is evaluated at the join gate, not stored here.
 
@@ -291,11 +299,13 @@ impl Whitelist {
 
 /// A uuid as this module keys on it: trimmed and lower-case.
 ///
-/// Files in the wild are not consistent about case, and a mismatch here is
-/// invisible — the profile simply appears not to be listed.
+/// The rule lives in [`crate::access_uuid::normalise`], shared with the
+/// operators and bans readers, because "how a uuid is keyed" must not be three
+/// answers: a mismatch here is invisible — the profile simply appears not to be
+/// listed.
 #[must_use]
 fn normalise_uuid(uuid: &str) -> String {
-    uuid.trim().to_ascii_lowercase()
+    crate::access_uuid::normalise(uuid)
 }
 
 /// Parse one array entry.
@@ -308,23 +318,10 @@ fn parse_entry(entry: &Value, path: &Path, index: usize) -> ServerResult<Whiteli
         )));
     };
 
-    let uuid = object
-        .get("uuid")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| {
-            ServerError::CorruptData(format!(
-                "{}: entry {index} has no string `uuid`, which is the field that identifies \
-                 a listed profile",
-                path.display()
-            ))
-        })?;
-    let uuid = normalise_uuid(uuid);
-    if uuid.is_empty() {
-        return Err(ServerError::CorruptData(format!(
-            "{}: entry {index} has an empty `uuid`",
-            path.display()
-        )));
-    }
+    // AUDIT-19 G-10: the uuid is validated, not merely required to be a
+    // string. A typo used to load as a row that parses, lists and then never
+    // matches anybody, with no warning anywhere.
+    let uuid = crate::access_uuid::from_row(object, path, index, "listed profile")?;
 
     // A name is optional in practice: Vanilla always writes one, but matching
     // is by uuid, so a missing name is a cosmetic loss rather than a reason
@@ -419,6 +416,50 @@ mod tests {
                 Whitelist::from_value(&value, Path::new("whitelist.json")).is_err(),
                 "refused: {value}"
             );
+        }
+    }
+
+    #[test]
+    fn a_typoed_uuid_is_a_damaged_row_not_a_row_that_never_matches() {
+        // AUDIT-19 G-10: `{"uuid": "not-a-uuid-at-all"}` used to be accepted
+        // into the list (the live probe loaded `listed=2`), where it could
+        // never match a joining player. It is now a damaged row: skipped with
+        // a warning that names the file and the row, siblings still load.
+        let value = serde_json::json!([
+            {"uuid": "069a79f4-44e9-4726-a5be-f4a7b64ac909", "name": "Notch"},
+            {"uuid": "not-a-uuid-at-all", "name": "Typo"},
+        ]);
+        let list = Whitelist::from_value(&value, Path::new("whitelist.json"))
+            .expect("one bad row does not void the table");
+        assert_eq!(list.len(), 1, "only the valid row is listed");
+        assert_eq!(list.names(), vec!["Notch"]);
+        assert!(
+            !list.contains("not-a-uuid-at-all"),
+            "the typo is not a live row"
+        );
+
+        // Every row damaged is still the file-level error path, naming the
+        // first row's problem rather than booting as "nobody is listed".
+        let only_bad = serde_json::json!([{"uuid": "oops", "name": "Typo"}]);
+        let error = Whitelist::from_value(&only_bad, Path::new("whitelist.json"))
+            .expect_err("a file whose every row is damaged is an error");
+        let text = error.to_string();
+        assert!(text.contains("whitelist.json"), "{text}");
+        assert!(text.contains("uuid"), "{text}");
+
+        // Both shapes a Vanilla file may carry still load, so the validation
+        // cannot lock out a legitimate file. The undashed form keeps its
+        // spelling (matching is exact-string, so normalising shapes is a
+        // separate change), which is why each case is looked up as written.
+        for uuid in [
+            "069a79f4-44e9-4726-a5be-f4a7b64ac909",
+            "069a79f444e94726a5bef4a7b64ac909",
+        ] {
+            let value = serde_json::json!([{"uuid": uuid, "name": "Notch"}]);
+            let list = Whitelist::from_value(&value, Path::new("whitelist.json"))
+                .unwrap_or_else(|error| panic!("{uuid} must load: {error}"));
+            assert_eq!(list.len(), 1, "{uuid} is a real uuid");
+            assert!(list.contains(uuid), "{uuid} is the row that loaded");
         }
     }
 

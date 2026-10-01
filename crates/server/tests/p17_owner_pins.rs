@@ -14,6 +14,8 @@ use mc_entity::stack::ItemStack as EntityStack;
 use mc_network::bridge::{
     ClientEvent, ClientEventKind, ConnectionId, InboundReceiver, OutboundSender, game_channel,
 };
+use mc_protocol::ids::clientbound;
+use mc_protocol::packets::Packet;
 use mc_protocol::packets::play::ItemStack as WireStack;
 use mc_protocol::packets::play::{PlayIntent, block_position};
 use mc_server::game::Game;
@@ -424,5 +426,224 @@ fn player_input_bit5_sneak_places_onto_a_chest_instead_of_opening() {
         harness.name(x, y + 1, z),
         "minecraft:stone",
         "without sneak nothing new lands on the chest"
+    );
+}
+
+// ----------------------------------------------------- AUDIT-19 B19-2 pins
+//
+// AUDIT-18 B-M2 called the two silent downgrades "loud": `wire_stack`'s
+// component-free fallback logged at `debug!` (invisible at the default `info`
+// filter an operator actually runs) and the creative fallback logged nothing
+// at all. Both are `warn!` now, and the two tests below are what keeps them
+// there — each drives the real code path on the real stack shape and reads the
+// `tracing` event back, so dropping either message below `warn!` (or deleting
+// it) goes red instead of quiet.
+
+/// One captured `tracing` event: its level and its `message` field.
+type Captured = Vec<(tracing::Level, String)>;
+
+/// A `tracing` subscriber that records every event raised on this thread.
+///
+/// Hand-rolled rather than a `tracing_subscriber` fmt layer: the assertion is
+/// about the **level** of one message, and a subscriber that keeps events as
+/// data says that directly instead of parsing formatted text back out.
+struct LevelSpy {
+    events: std::sync::Mutex<Captured>,
+}
+
+/// Pulls the `message` field out of a captured event.
+struct MessageVisitor(String);
+
+impl tracing::field::Visit for MessageVisitor {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            self.0 = format!("{value:?}");
+        }
+    }
+}
+
+impl tracing::Subscriber for LevelSpy {
+    fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        let mut message = MessageVisitor(String::new());
+        event.record(&mut message);
+        self.events
+            .lock()
+            .expect("the spy is not poisoned")
+            .push((*event.metadata().level(), message.0));
+    }
+
+    fn enter(&self, _span: &tracing::span::Id) {}
+
+    fn exit(&self, _span: &tracing::span::Id) {}
+}
+
+/// Run `body` with the spy installed as this thread's subscriber and return
+/// both its value and what it saw.
+///
+/// A thread-local default, which is why it works here: `Game::tick` and every
+/// `wire_stack` call a test makes run on the test's own thread.
+fn capture_events<T>(body: impl FnOnce() -> T) -> (T, Captured) {
+    let spy = std::sync::Arc::new(LevelSpy {
+        events: std::sync::Mutex::new(Vec::new()),
+    });
+    let seen = std::sync::Arc::clone(&spy);
+    let value = tracing::subscriber::with_default(spy, body);
+    let events = seen.events.lock().expect("the spy is not poisoned").clone();
+    (value, events)
+}
+
+/// Assert some event carries `needle` at `warn!` or above.
+///
+/// `Level`'s order runs ERROR < WARN < INFO < DEBUG < TRACE, so "at least as
+/// severe as warn" is `<= WARN` — the comparison an operator's filter makes.
+fn assert_warned(events: &Captured, needle: &str) {
+    assert!(
+        events
+            .iter()
+            .any(|(level, message)| *level <= tracing::Level::WARN && message.contains(needle)),
+        "no warn-or-above event contained {needle:?}; the downgrade is invisible at the default \
+         `info` filter. Saw {events:?}"
+    );
+}
+
+/// AUDIT-19 B19-2 (arm 1): `wire_stack`'s fallback is a `warn!`.
+///
+/// The trigger is the one shape that cannot be reframed on the wire — a
+/// `Consumable` carrying `on_consume_effects` — sitting in a chest the player
+/// then opens, so the stack really does go through `wire_stack` on its way to
+/// `container_set_content`.
+#[test]
+fn a_stack_that_cannot_be_framed_warns_at_warn_level() {
+    use mc_entity::components::{
+        Consumable, ConsumeAnimation, DataComponent, ItemComponents, SoundRef,
+    };
+
+    let mut harness = Harness::new("p19-b19-2-wire-stack");
+    let mut out = harness.join("Packer");
+    let (sx, sy, sz) = harness.game.spawn();
+    floor(&mut harness, sx, sy, sz);
+    harness.look(0.0);
+    let (cx, cy, cz) = (sx + 1, sy, sz);
+    harness.set_block(cx, cy, cz, "minecraft:chest");
+    let pos = mc_container::BlockPos::new(cx, cy, cz);
+    harness
+        .game
+        .block_entities_mut()
+        .insert(mc_container::BlockEntity::new(
+            pos,
+            mc_container::BlockEntityKind::Container,
+        ));
+
+    // The stack `mc-protocol`'s own `consumable_effects_refuse_wire_framing`
+    // test pins as unframeable, placed where a client would have to be told
+    // about it.
+    let mut components = ItemComponents::new();
+    components.set(DataComponent::Consumable(Consumable {
+        consume_seconds: 1.6,
+        animation: ConsumeAnimation::Eat,
+        sound: SoundRef::Named {
+            name: "minecraft:entity.generic.eat".to_owned(),
+            range: None,
+        },
+        consume_particles: true,
+        on_consume_effects: vec![mc_nbt::NbtTag::Int(1)],
+    }));
+    let stick = harness.item_id("minecraft:stick");
+    let poisoned = EntityStack::with_components(stick, 3, components).expect("a legal stack");
+    harness
+        .game
+        .block_entities_mut()
+        .get_mut(pos)
+        .expect("the chest entity exists")
+        .data
+        .items_mut()
+        .expect("a chest has slots")[0] = poisoned;
+
+    harness.empty_hand();
+    // Drop the join burst so the packet below can only be the open's.
+    while out.try_recv().is_some() {}
+    let ((), events) = capture_events(|| harness.click(cx, cy, cz, 1));
+
+    assert_warned(&events, "a stack fell back to a component-free wire form");
+    // And the fallback still does its job: the window the client is sent has
+    // the item, minus the components the wire cannot frame. Read from the
+    // packet rather than the menu, because the menu keeps the typed patch —
+    // the downgrade only exists on the wire, which is exactly why it needs a
+    // trace.
+    let shown = std::iter::from_fn(|| out.try_recv())
+        .filter(|raw| raw.id == clientbound::play::CONTAINER_SET_CONTENT)
+        .find_map(|raw| mc_protocol::packets::play::ContainerSetContent::decode(&raw.payload).ok())
+        .expect("the open sends the window contents");
+    assert_eq!(
+        shown.slots.len(),
+        63,
+        "a single chest is 27 slots plus the 36-slot player half"
+    );
+    let shown = shown.slots.into_iter().next().expect("slot 0");
+    assert_eq!(shown.item_id, stick, "the stack is still shown");
+    assert_eq!(shown.count, 3, "with its count");
+    assert!(
+        shown.components.is_empty(),
+        "and in the component-free form the fallback chose"
+    );
+}
+
+/// AUDIT-19 B19-2 (arm 2): the creative take's fallback is a `warn!`.
+///
+/// A creative client sends the full component patch, so a patch this build
+/// cannot decode used to become a plain stack with no trace anywhere. The
+/// payload here is a known type (damage, 3) with an empty body: the decoder
+/// refuses the truncation, which is the fallback trigger.
+#[test]
+fn a_creative_take_whose_patch_cannot_be_decoded_warns_at_warn_level() {
+    let mut harness = Harness::new("p19-b19-2-creative-fallback");
+    // The receiver is kept alive so the take's own window sync can be sent;
+    // a dropped one turns the join's packets into "outbound queue full"
+    // warnings that have nothing to do with what this test pins.
+    let _out = harness.join("Architect");
+    harness.set_game_mode(GameMode::Creative);
+    let stick = harness.item_id("minecraft:stick");
+
+    let ((), events) = capture_events(|| {
+        harness.intent(PlayIntent::SetCreativeModeSlot {
+            slot: 36, // window slot 36 is hotbar 0
+            item: WireStack {
+                item_id: stick,
+                count: 5,
+                components: vec![(mc_entity::components::TYPE_DAMAGE, Vec::new())],
+            },
+        });
+    });
+
+    assert_warned(
+        &events,
+        "a creative take fell back to a component-free stack",
+    );
+    assert_eq!(
+        harness.inv_count("minecraft:stick"),
+        5,
+        "the take still lands, so the warn is the only trace of the lost patch"
+    );
+    let landed = harness
+        .game
+        .player(harness.id)
+        .expect("player")
+        .inventory
+        .slot(0);
+    assert!(
+        landed.components().is_empty(),
+        "the fallback is the component-free stack the warn names"
     );
 }

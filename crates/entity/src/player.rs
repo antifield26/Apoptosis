@@ -1314,12 +1314,24 @@ fn read_inventory(root: &NbtTag, items: &ItemRegistry) -> ServerResult<PlayerInv
         let Ok(stack) = ItemStack::new(item_id, count) else {
             continue;
         };
-        // P18-01a: attach the data-component patch when present. A malformed
-        // patch is corrupt data (it changes identity/behaviour), matching the
-        // unknown-item-name rule above.
+        // P18-01a: attach the data-component patch when present. AUDIT-19
+        // B19-5: an unreadable patch no longer fails the whole file. This path
+        // used to propagate the decoder error, so one bad field cost the
+        // player's position, health, experience and every other slot, while the
+        // block-entity reader warned and kept the stack. Both use the one
+        // policy now, and the reason — which names the component — is logged.
         let stack = if let Some(components_tag) = entry.get("components") {
-            let components = crate::components::from_nbt(components_tag)?;
-            ItemStack::with_components(item_id, count, components).unwrap_or(stack)
+            let (stack, unreadable) =
+                crate::components::attach_saved_components(stack, components_tag);
+            if let Some(reason) = unreadable {
+                tracing::warn!(
+                    slot,
+                    item = name,
+                    %reason,
+                    "a saved item's component patch is unreadable; the stack is kept without it"
+                );
+            }
+            stack
         } else {
             stack
         };
@@ -2406,6 +2418,66 @@ mod tests {
         ]);
         let err = Player::from_nbt(&root, profile(), 1, &items).expect_err("unknown item");
         assert!(matches!(err, ServerError::CorruptData(_)), "{err:?}");
+    }
+
+    /// AUDIT-19 B19-5, the item-stack half of the one policy.
+    ///
+    /// This path used to `?` the decoder's error, so a single unreadable
+    /// component patch discarded the entire `playerdata` file — everything the
+    /// file carried, not just the patch — while the block-entity reader warned
+    /// and kept its stack. The stack (identity, count and the rest of the file)
+    /// now survives, and the reason is reported instead of the load failing.
+    #[test]
+    fn an_unreadable_component_patch_keeps_the_stack_instead_of_failing_the_file() {
+        let items = registry();
+        let mut player = survivor();
+        player.experience = 0.5;
+        player.level = 7;
+        player.total_experience = 100;
+        let mut components = crate::components::ItemComponents::new();
+        components.set(crate::components::DataComponent::Damage(5));
+        player
+            .inventory
+            .set_slot(
+                20,
+                ItemStack::with_components(STONE, 12, components).expect("stack"),
+            )
+            .expect("slot");
+        let mut root = player.to_nbt(&items).expect("encodes");
+        // One field of the patch is present but unreadable, which is the shape
+        // the strict reader refuses and the pre-strict writer could not produce.
+        let bad_components = NbtTag::compound([(
+            "minecraft:food".to_owned(),
+            NbtTag::compound([
+                ("nutrition".to_owned(), NbtTag::Int(4)),
+                ("saturation".to_owned(), NbtTag::String("lots".to_owned())),
+            ]),
+        )]);
+        root.insert(
+            "Inventory",
+            NbtTag::List(vec![NbtTag::compound([
+                ("Slot".to_owned(), NbtTag::Byte(20)),
+                (
+                    "id".to_owned(),
+                    NbtTag::String("minecraft:stone".to_owned()),
+                ),
+                ("Count".to_owned(), NbtTag::Byte(12)),
+                ("components".to_owned(), bad_components),
+            ])]),
+        );
+
+        let loaded = Player::from_nbt(&root, profile(), 1, &items)
+            .expect("one unreadable patch must not discard the player file");
+        let kept = loaded.inventory.slot(20);
+        assert_eq!(kept.item_id(), Some(STONE), "the stack is kept");
+        assert_eq!(kept.count(), 12, "with its count");
+        assert!(
+            kept.components().is_empty(),
+            "the unreadable patch is dropped whole, not half-applied"
+        );
+        // Everything else in the file is the point of not failing it.
+        assert_eq!(loaded.level, 7);
+        assert_eq!(loaded.total_experience, 100);
     }
 
     #[test]

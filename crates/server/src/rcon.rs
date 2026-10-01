@@ -5,8 +5,10 @@
 //! `[length i32LE][id i32LE][type i32LE][payload][0x00 0x00]` where `length`
 //! covers everything after itself. Auth answers with the request id on
 //! success and id `-1` on failure; commands answer with one or more
-//! `RESPONSE` packets (long output is chunked — a single packet is capped
-//! like a request).
+//! `RESPONSE` packets. **Sizes do not match Vanilla's, deliberately and by
+//! measurement** (AUDIT-19 C19-L1/L2) — see [`VANILLA_MAX_REQUEST_BODY`] and
+//! [`encode_response`] for the two numbers and where each jar constant comes
+//! from.
 //!
 //! What this module owns: the codec (with a hard length cap — a hostile
 //! length prefix drops the connection before any allocation), the password
@@ -46,21 +48,56 @@ pub const AUTH_FAILURE_ID: i32 = -1;
 
 /// Largest framed body accepted, header included.
 ///
-/// Vanilla caps requests at 4 KiB; anything declaring more is hostile
-/// (the classic overflow is a huge length followed by a short read), so
-/// the connection dies before a single payload byte is allocated.
+/// **This is our own bound, not Vanilla's.** Vanilla does not have a
+/// packet-length constant at all: `RconClient.run` reads each request with one
+/// `BufferedInputStream.read(buf, 0, 1460)` into a 1460-byte array and then
+/// requires the declared length to match what that single read delivered
+/// (`length == read - 4`, else `closeSocket`), so the effective Vanilla request
+/// bound is [`VANILLA_MAX_REQUEST_BODY`] *and* an exact fit — a packet split
+/// across two reads is a closed connection, not a reassembled one. The claim
+/// that "Vanilla caps requests at 4 KiB" was false (AUDIT-19 C19-L1): the
+/// jar's only 4096 is `sendCmdResponse`'s chunk size for *replies*, in
+/// characters.
+///
+/// What we implement instead: a declared length is a claim, and we hold the
+/// claimant to it — the cap is enforced before any payload allocation, and
+/// [`length_accepted`] is the single predicate the reader asks. 4096 is the
+/// same order as Vanilla's reply chunk size and four times its request bound,
+/// which covers real clients (`mcrcon` sends 14 bytes) with room to spare.
+/// Unlike Vanilla we *do* reassemble a body that arrives in several TCP reads
+/// (`read_exact`), because our framing is length-prefixed and a length we have
+/// already accepted and bounded is safe to complete; that is a divergence in
+/// robustness, not in the bound, and it is pinned by
+/// `a_body_split_across_reads_is_reassembled_not_refused` in the listener.
 pub const MAX_PACKET_LEN: usize = 4096;
+
+/// Vanilla's own request bound, for the divergence note above and for tests.
+///
+/// Measured from the 26.1.2 jar: `javap -p -c ... rcon.thread.RconClient`
+/// shows `sipush 1460` for the read buffer and the `length == read - 4` guard
+/// that rejects anything shorter *or* longer. Not a limit this server applies.
+pub const VANILLA_MAX_REQUEST_BODY: usize = 1460;
 
 /// Whether a declared length may be read (P19-04).
 ///
 /// Checked before allocating or reading the body: a hostile prefix fails
-/// here, never in an allocator.
+/// here, never in an allocator. The bound is ours — see [`MAX_PACKET_LEN`]
+/// for why it is not Vanilla's 1460.
 #[must_use]
 pub const fn length_accepted(declared: usize) -> bool {
     declared <= MAX_PACKET_LEN
 }
 
 /// Largest reply text carried in one `RESPONSE` packet body.
+///
+/// Vanilla's `sendCmdResponse` splits at **4096 characters** of the command's
+/// answer and sends the pieces back to back with the request id, so a
+/// multi-packet reply is not an invention of ours (AUDIT-19 C19-L2 — an
+/// earlier note in this tree claimed Vanilla never splits, which the jar
+/// contradicts). Our split is at 4000 **bytes**, the same chunk with a little
+/// headroom; [`MAX_RESPONSE_BODY`] + 10 bytes of header + padding stays under
+/// [`MAX_PACKET_LEN`], so a reply chunk is never longer than a request we
+/// would accept.
 pub const MAX_RESPONSE_BODY: usize = 4000;
 
 /// One decoded packet.
@@ -136,10 +173,24 @@ pub fn encode_login(id: i32, password: &str) -> Vec<u8> {
 /// Encode command output as one or more `RESPONSE` packets.
 ///
 /// Output longer than [`MAX_RESPONSE_BODY`] bytes is chunked on byte
-/// boundaries (the payload is UTF-8 answers built from chat lines; a chunk
-/// may split mid-character and the stock reassembly concatenates raw bytes
-/// first, so splitting is safe). Empty output still sends one packet —
-/// silence is an answer, not a hang.
+/// boundaries. Vanilla chunks its replies too (`sendCmdResponse`: 4096
+/// characters per packet, id preserved, no terminator — see
+/// [`MAX_RESPONSE_BODY`]), so the shape is not ours alone. Two caveats are
+/// ours and are stated rather than implied (AUDIT-19 C19-L2):
+///
+/// - the boundary is **bytes, not characters**, so a chunk may split a UTF-8
+///   sequence. That is safe for the reassembly the protocol defines — a
+///   client concatenates payload bytes and decodes the result once — and it
+///   is what `mcrcon`-style readers do (read until a packet is shorter than
+///   the maximum, join, decode);
+/// - **no real third-party client has reassembled one of our multi-chunk
+///   replies yet.** The owner session's `mcrcon 0.7.0` run only carried
+///   replies under 4000 bytes, so every reply so far fit in one packet
+///   (`docs/testing/P19-ACCESS-SESSION.md`). The unit pin below is our own
+///   encoder against our own decoder; the first long reply on a real client
+///   is what closes that gap.
+///
+/// Empty output still sends one packet — silence is an answer, not a hang.
 #[must_use]
 pub fn encode_response(id: i32, text: &str) -> Vec<Vec<u8>> {
     let bytes = text.as_bytes();
@@ -193,10 +244,24 @@ pub const LISTENER_MAX_CONNECTIONS_PER_IP: u32 = 4;
 
 /// Time to regain one reconnect token after the per-address burst is spent.
 ///
-/// Deliberately slower than the game listener's 250 ms: RCON clients have no
-/// legitimate reconnect churn (a stock client opens one socket, runs its
-/// commands and closes), so after the burst an address is throttled to one
-/// socket per second instead of four.
+/// Deliberately slower than the game listener's 250 ms, and the difference is
+/// named where an operator reads it rather than left to be discovered
+/// (AUDIT-19 G-08). What the two share: the gate is per **source address**,
+/// never per connection, and a socket that lands in the same address bucket
+/// draws on the same 8-token burst. Where they differ:
+///
+/// | budget | game listener | RCON |
+/// |---|---|---|
+/// | burst | 8 sockets | 8 sockets |
+/// | refill | 1 token / 250 ms | 1 token / 1 s |
+/// | concurrent per address | 4 | 4 |
+///
+/// RCON clients have no legitimate reconnect churn (a stock client opens one
+/// socket, runs its commands and closes), so after the burst an address is
+/// throttled to one socket per second instead of four. The per-connection
+/// login backoff (`auth_delay`, ~3.0 s for five failures) is *additional* to
+/// this and not a substitute: five bad logins close one socket, while
+/// [`AuthBudget`] keeps the address itself refused.
 pub const LISTENER_RECONNECT_REFILL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Bad logins one address may accumulate before the listener refuses it.
@@ -348,9 +413,10 @@ pub struct RconRequest {
 mod tests {
     use super::{
         AUTH_BLOCK_WINDOW, AUTH_FAILURE_BUDGET, AUTH_FAILURE_ID, AuthBudget,
-        LISTENER_MAX_CONNECTIONS, LISTENER_MAX_CONNECTIONS_PER_IP, MAX_PACKET_LEN,
-        MAX_RESPONSE_BODY, TYPE_COMMAND, TYPE_LOGIN, TYPE_RESPONSE, auth_delay, check_password,
-        decode_body, encode_login, encode_packet, encode_response, listener_gate,
+        LISTENER_MAX_CONNECTIONS, LISTENER_MAX_CONNECTIONS_PER_IP,
+        LISTENER_RECONNECT_REFILL_INTERVAL, MAX_PACKET_LEN, MAX_RESPONSE_BODY, TYPE_COMMAND,
+        TYPE_LOGIN, TYPE_RESPONSE, VANILLA_MAX_REQUEST_BODY, auth_delay, check_password,
+        decode_body, encode_login, encode_packet, encode_response, length_accepted, listener_gate,
     };
     use std::net::{IpAddr, Ipv4Addr};
     use std::sync::Arc;
@@ -368,6 +434,40 @@ mod tests {
         const {
             assert!(MAX_PACKET_LEN >= 4096);
         }
+    }
+
+    #[test]
+    fn the_request_cap_is_ours_and_documented_as_such() {
+        // AUDIT-19 C19-L1: the module used to claim "Vanilla caps requests at
+        // 4 KiB". The jar has no such cap — `RconClient.run` reads at most
+        // 1460 bytes per request and requires the declared length to match
+        // that read exactly — so the two numbers are named separately and the
+        // boundary is pinned here. Neutralise `length_accepted`'s comparison
+        // and this goes red.
+        assert_eq!(VANILLA_MAX_REQUEST_BODY, 1460, "the measured jar constant");
+        assert_ne!(
+            MAX_PACKET_LEN, VANILLA_MAX_REQUEST_BODY,
+            "our cap is a deliberate divergence, not a copy of Vanilla's read size"
+        );
+        // The cap is inclusive, and one byte over it is refused before any
+        // allocation happens (the reader asks this predicate first).
+        assert!(length_accepted(0));
+        assert!(length_accepted(10), "an empty body is 10 bytes of header");
+        assert!(length_accepted(VANILLA_MAX_REQUEST_BODY));
+        assert!(length_accepted(MAX_PACKET_LEN));
+        assert!(!length_accepted(MAX_PACKET_LEN + 1));
+        assert!(!length_accepted(usize::MAX), "a hostile prefix is refused");
+    }
+
+    #[test]
+    fn a_reply_chunk_fits_the_request_cap_it_shares_a_reader_with() {
+        // The reply split must not produce a packet the same listener would
+        // refuse: header (10) plus payload plus the two trailing zeros.
+        const { assert!(MAX_RESPONSE_BODY + 12 <= MAX_PACKET_LEN) };
+        let packet = encode_packet(1, TYPE_RESPONSE, &vec![b'x'; MAX_RESPONSE_BODY]);
+        let declared = u32::from_le_bytes(packet[..4].try_into().expect("prefix")) as usize;
+        assert_eq!(declared, MAX_RESPONSE_BODY + 10);
+        assert!(length_accepted(declared), "a reply chunk is within the cap");
     }
 
     #[test]
@@ -396,6 +496,10 @@ mod tests {
 
     #[test]
     fn long_output_chunks_and_reassembles() {
+        // Vanilla chunks replies too (`sendCmdResponse`, 4096 chars a packet);
+        // this pins our 4000-byte split end to end through our own decoder.
+        // AUDIT-19 C19-L2: the multi-chunk shape has no *client* evidence yet
+        // (see `encode_response`), so the caveat lives there rather than here.
         let text = "x".repeat(MAX_RESPONSE_BODY * 2 + 17);
         let packets = encode_response(3, &text);
         assert_eq!(packets.len(), 3, "two full chunks and a tail");
@@ -407,6 +511,20 @@ mod tests {
             joined.extend_from_slice(&packet.payload);
         }
         assert_eq!(joined, text.as_bytes());
+        // A split mid-character is safe for a byte-concatenating reader: join
+        // the raw payloads and decode once, and the text is whole again.
+        let unicode = "\u{4E2D}\u{6587}".repeat(MAX_RESPONSE_BODY); // 3 bytes each
+        let packets = encode_response(9, &unicode);
+        assert!(packets.len() > 2, "a multi-byte payload splits too");
+        let mut joined = Vec::new();
+        for bytes in &packets {
+            let packet = decode_body(&bytes[4..]).expect("each chunk decodes");
+            joined.extend_from_slice(&packet.payload);
+        }
+        assert_eq!(
+            String::from_utf8(joined).expect("raw-byte reassembly is valid UTF-8"),
+            unicode
+        );
         // Silence is one empty packet, not zero packets.
         assert_eq!(encode_response(3, "").len(), 1);
     }
@@ -498,5 +616,68 @@ mod tests {
         const { assert!(LISTENER_MAX_CONNECTIONS >= LISTENER_MAX_CONNECTIONS_PER_IP) };
         assert_eq!(AUTH_FAILURE_BUDGET, 20);
         assert_eq!(AUTH_BLOCK_WINDOW, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn the_budget_is_per_address_and_the_game_listener_divergence_is_named() {
+        // The game listener's numbers are read out of its own source (the game
+        // crate comes *after* this one, so importing them would be a cycle —
+        // `crates/container/tests/fuel_table_consistency.rs` reads a source file
+        // for the same reason), which also pins that it still declares them: a
+        // rename panics by name instead of un-pinning silently. Declared before
+        // any statement because an item after one is a lint.
+        const LISTENER_SOURCE: &str = include_str!("../../network/src/listener.rs");
+        // AUDIT-19 G-08: the throttle budget is a property of the *address*,
+        // shared by reconnects and by every player behind the same NAT — not
+        // of a connection. The per-connection part (five failures then a
+        // close, ~3.0 s of backoff) is additional. Neutralise the per-address
+        // bookkeeping (`AuthBudget::record_failure` starting each connection
+        // at zero) and this goes red.
+        let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let budget = AuthBudget::new(2, Duration::from_secs(60));
+        let start = Instant::now();
+        assert_eq!(budget.record_failure(ip, start), 1);
+        // A reconnect is the same address: the count continues rather than
+        // restarting, which is exactly what a per-connection budget would not
+        // do.
+        assert_eq!(
+            budget.record_failure(ip, start + Duration::from_secs(30)),
+            2
+        );
+        assert!(budget.is_blocked(ip, start + Duration::from_secs(30)));
+
+        // The two listeners' numbers, pinned side by side so the deliberate
+        // difference cannot drift silently: same burst and same per-address
+        // concurrency, four times slower refill on the admin port.
+        let listener_number = |name: &str| {
+            for line in LISTENER_SOURCE.lines() {
+                let Some(rest) = line.trim().strip_prefix("pub const ") else {
+                    continue;
+                };
+                let Some((found, value)) = rest.split_once('=') else {
+                    continue;
+                };
+                if found.trim().split(':').next().map(str::trim) == Some(name) {
+                    return value.trim().trim_end_matches(';').trim().to_owned();
+                }
+            }
+            panic!("the game listener no longer declares `{name}`; this doc table names it")
+        };
+        assert_eq!(
+            listener_number("RECONNECT_REFILL_INTERVAL"),
+            "Duration::from_millis(250)",
+            "the game listener's refill, as the doc table names it"
+        );
+        assert_eq!(listener_number("MAX_CONNECTIONS_PER_IP"), "4");
+        assert_eq!(LISTENER_RECONNECT_REFILL_INTERVAL, Duration::from_secs(1));
+        assert_eq!(
+            LISTENER_RECONNECT_REFILL_INTERVAL,
+            Duration::from_millis(250) * 4,
+            "RCON is deliberately four times slower to refill than the game port"
+        );
+        assert_eq!(
+            LISTENER_MAX_CONNECTIONS_PER_IP, 4,
+            "and the same per-IP cap"
+        );
     }
 }

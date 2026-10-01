@@ -8,6 +8,14 @@ fn parse(text: &str) -> Result<OperatorList, String> {
     OperatorList::parse(text, Path::new("ops.json")).map_err(|error| error.to_string())
 }
 
+/// A well-formed uuid for tests that only need an identity.
+///
+/// The field is validated now (AUDIT-19 G-10), so a one-character placeholder
+/// is a damaged row; `id(1)` and `id(2)` are two distinct real uuids.
+fn id(n: u32) -> String {
+    format!("00000000-0000-0000-0000-{n:012}")
+}
+
 /// Vanilla's own file shape, with two entries.
 const VANILLA_SHAPE: &str = r#"[
   {
@@ -96,11 +104,33 @@ fn a_file_that_exists_and_is_malformed_is_refused_by_name() {
         ("[1, 2]", "not an object"),
         (r#"[{"name": "Nobody"}]"#, "no string `uuid`"),
         (r#"[{"uuid": ""}]"#, "empty `uuid`"),
-        (r#"[{"uuid": "a"}]"#, "no integer `level`"),
-        (r#"[{"uuid": "a", "level": "high"}]"#, "no integer `level`"),
-        (r#"[{"uuid": "a", "level": 5}]"#, "unknown one is refused"),
-        (r#"[{"uuid": "a", "level": -1}]"#, "not 0-4"),
-        (r#"[{"uuid": "a", "level": 999}]"#, "not 0-4"),
+        (r#"[{"uuid": "a"}]"#, "is not a uuid"),
+        (r#"[{"uuid": "a", "level": "high"}]"#, "is not a uuid"),
+        (r#"[{"uuid": "a", "level": 5}]"#, "is not a uuid"),
+        (r#"[{"uuid": "a", "level": -1}]"#, "is not a uuid"),
+        (r#"[{"uuid": "a", "level": 999}]"#, "is not a uuid"),
+        // AUDIT-19 G-10: the four rows below are the field-level checks, and
+        // they only fire once the uuid is well formed.
+        (
+            r#"[{"uuid": "00000000-0000-0000-0000-000000000001"}]"#,
+            "no integer `level`",
+        ),
+        (
+            r#"[{"uuid": "00000000-0000-0000-0000-000000000001", "level": "high"}]"#,
+            "no integer `level`",
+        ),
+        (
+            r#"[{"uuid": "00000000-0000-0000-0000-000000000001", "level": 5}]"#,
+            "unknown one is refused",
+        ),
+        (
+            r#"[{"uuid": "00000000-0000-0000-0000-000000000001", "level": -1}]"#,
+            "not 0-4",
+        ),
+        (
+            r#"[{"uuid": "00000000-0000-0000-0000-000000000001", "level": 999}]"#,
+            "not 0-4",
+        ),
     ] {
         match parse(text) {
             Ok(list) => panic!("{text:?} must be refused, got {} entries", list.len()),
@@ -121,30 +151,72 @@ fn an_unknown_level_is_refused_rather_than_clamped() {
     // it to 0 would make a listed operator a silent no-op. Refusing is the only option that
     // cannot be wrong in a way nobody notices.
     for level in [5, 6, 10, 100, 255] {
-        let text = format!(r#"[{{"uuid": "a", "level": {level}}}]"#);
+        let text = format!(r#"[{{"uuid": "{}", "level": {level}}}]"#, id(1));
         let error = parse(&text).expect_err(&format!("level {level} must be refused"));
         assert!(error.contains("refused rather than clamped"), "{error}");
     }
     // And every valid level is accepted.
     for level in 0..=4u8 {
-        let text = format!(r#"[{{"uuid": "a", "level": {level}}}]"#);
+        let text = format!(r#"[{{"uuid": "{}", "level": {level}}}]"#, id(1));
         let list = parse(&text).unwrap_or_else(|e| panic!("level {level} must parse: {e}"));
         assert_eq!(
-            list.level_for("a"),
+            list.level_for(&id(1)),
             PermissionLevel::from_level(level).expect("a known level")
         );
     }
 }
 
 #[test]
+fn a_typoed_uuid_is_refused_rather_than_becoming_a_row_that_never_matches() {
+    // AUDIT-19 G-10: `{"uuid": "not-a-uuid"}` used to be accepted into the operator list,
+    // where it granted nothing to anybody and matched nobody — "my op stopped working" with
+    // no cause in the log. It is a damaged row now: named, skipped, siblings still load.
+    let list = parse(&format!(
+        r#"[{{"uuid": "{}", "name": "Notch", "level": 4}},
+            {{"uuid": "not-a-uuid-at-all", "name": "Typo", "level": 4}}]"#,
+        id(1)
+    ))
+    .expect("one damaged row does not void the table");
+    assert_eq!(list.len(), 1, "only the well-formed row is an operator");
+    assert!(list.is_operator(&id(1)));
+    assert!(!list.is_operator("not-a-uuid-at-all"));
+
+    // Every row damaged is still the file-level refusal, naming the file and the row.
+    let error = parse(r#"[{"uuid": "not-a-uuid-at-all", "level": 4}]"#)
+        .expect_err("a file whose every row is damaged is refused");
+    assert!(error.contains("ops.json"), "{error}");
+    assert!(error.contains("is not a uuid"), "{error}");
+    assert!(
+        error.contains("never match a player"),
+        "the message says what a live row would have meant: {error}"
+    );
+
+    // The undashed shape a Mojang session answers with is a real uuid too, so a file
+    // written from one still loads (it keeps its spelling: matching is exact-string).
+    let undashed = "069a79f444e94726a5bef4a7b64ac909";
+    let list = parse(&format!(
+        r#"[{{"uuid": "{undashed}", "name": "Notch", "level": 4}}]"#
+    ))
+    .expect("an undashed uuid is a uuid");
+    assert!(
+        list.is_operator(undashed),
+        "the row that loaded is the row the file names"
+    );
+}
+
+#[test]
 fn a_repeated_uuid_is_refused_rather_than_resolved_by_order() {
     // The two entries could name different levels, in which case the authority granted would
     // depend on file order — which is not a property a permissions file should have.
-    let text = r#"[
-      {"uuid": "abc", "name": "One", "level": 4},
-      {"uuid": "abc", "name": "Two", "level": 1}
-    ]"#;
-    let error = parse(text).expect_err("a repeated uuid must be refused");
+    let text = format!(
+        r#"[
+      {{"uuid": "{}", "name": "One", "level": 4}},
+      {{"uuid": "{}", "name": "Two", "level": 1}}
+    ]"#,
+        id(1),
+        id(1)
+    );
+    let error = parse(&text).expect_err("a repeated uuid must be refused");
     assert!(error.contains("repeats uuid"), "{error}");
     assert!(
         error.contains('4') && error.contains('1'),
@@ -167,46 +239,63 @@ fn uuids_are_case_insensitive_and_trimmed() {
 fn a_stale_name_still_grants_because_the_uuid_is_the_identity() {
     // Names change; a uuid does not. Matching by name would let anyone take an operator's
     // identity by taking their name.
-    let list = parse(r#"[{"uuid": "abc", "name": "OldName", "level": 3}]"#).expect("parses");
-    assert!(list.is_operator("abc"));
-    assert_eq!(list.level_for("abc"), PermissionLevel::Administrator);
-    assert_eq!(list.get("abc").expect("entry").name, "OldName");
+    let one = id(1);
+    let two = id(2);
+    let list = parse(&format!(
+        r#"[{{"uuid": "{one}", "name": "OldName", "level": 3}}]"#
+    ))
+    .expect("parses");
+    assert!(list.is_operator(&one));
+    assert_eq!(list.level_for(&one), PermissionLevel::Administrator);
+    assert_eq!(list.get(&one).expect("entry").name, "OldName");
     // And a different uuid with the same name gets nothing.
-    assert!(!list.is_operator("def"));
+    assert!(!list.is_operator(&two));
+    assert!(list.get(&two).is_none());
 }
 
 #[test]
 fn a_name_is_optional_because_matching_does_not_use_it() {
-    let list = parse(r#"[{"uuid": "abc", "level": 2}]"#).expect("parses");
-    assert_eq!(list.get("abc").expect("entry").name, "");
-    assert_eq!(list.level_for("abc"), PermissionLevel::Operator);
+    let list = parse(&format!(r#"[{{"uuid": "{}", "level": 2}}]"#, id(1))).expect("parses");
+    assert_eq!(list.get(&id(1)).expect("entry").name, "");
+    assert_eq!(list.level_for(&id(1)), PermissionLevel::Operator);
 }
 
 #[test]
 fn a_missing_bypass_field_defaults_to_false() {
-    let list = parse(r#"[{"uuid": "abc", "level": 4}]"#).expect("parses");
-    assert!(!list.get("abc").expect("entry").bypasses_player_limit);
+    let list = parse(&format!(r#"[{{"uuid": "{}", "level": 4}}]"#, id(1))).expect("parses");
+    assert!(!list.get(&id(1)).expect("entry").bypasses_player_limit);
     assert_eq!(list.bypass_count(), 0);
 
     // And a non-boolean one is treated as absent rather than refused: it is an unenforced
     // field, so refusing the file over it would block a working operator list.
-    let list =
-        parse(r#"[{"uuid": "abc", "level": 4, "bypassesPlayerLimit": "yes"}]"#).expect("parses");
-    assert!(!list.get("abc").expect("entry").bypasses_player_limit);
+    let list = parse(&format!(
+        r#"[{{"uuid": "{}", "level": 4, "bypassesPlayerLimit": "yes"}}]"#,
+        id(1)
+    ))
+    .expect("parses");
+    assert!(!list.get(&id(1)).expect("entry").bypasses_player_limit);
 }
 
 #[test]
 fn operators_are_iterated_in_a_reproducible_order() {
     let list = parse(
         r#"[
-          {"uuid": "zzz", "level": 1},
-          {"uuid": "aaa", "level": 2},
-          {"uuid": "mmm", "level": 3}
+          {"uuid": "cccccccc-cccc-cccc-cccc-cccccccccccc", "level": 1},
+          {"uuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "level": 2},
+          {"uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "level": 3}
         ]"#,
     )
     .expect("parses");
     let order: Vec<&str> = list.operators().map(|o| o.uuid.as_str()).collect();
-    assert_eq!(order, vec!["aaa", "mmm", "zzz"], "ascending by uuid");
+    assert_eq!(
+        order,
+        vec![
+            "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            "cccccccc-cccc-cccc-cccc-cccccccccccc"
+        ],
+        "ascending by uuid"
+    );
 }
 
 #[test]
@@ -260,6 +349,9 @@ fn hostile_files_do_not_panic() {
         r#"[{"uuid": "a", "name": null, "level": 4}]"#,
         r#"[{"uuid": "\u0000", "level": 4}]"#,
         r#"[{"uuid": "a", "level": 4}, "trailing"]"#,
+        r#"[{"uuid": "069a79f4-44e9-4726-a5be-f4a7b64ac909", "level": 1e400}]"#,
+        r#"[{"uuid": "069a79f4-44e9-4726-a5be-f4a7b64ac909", "level": 3.5}]"#,
+        r#"[{"uuid": "069a79f444e94726a5bef4a7b64ac909", "level": 4}]"#,
         "[[[[[[[[[[",
         &format!(r#"[{{"uuid": "{}", "level": 4}}]"#, "a".repeat(100_000)),
     ];
@@ -304,14 +396,17 @@ fn insert_grants_updates_and_reports_change() {
     assert_eq!(list.level_for("aaa"), PermissionLevel::Console);
     // A re-grant keeps a previously granted bypass rather than clearing it.
     let mut flagged = OperatorList::parse(
-        r#"[{"uuid": "abc", "level": 4, "bypassesPlayerLimit": true}]"#,
+        &format!(
+            r#"[{{"uuid": "{}", "level": 4, "bypassesPlayerLimit": true}}]"#,
+            id(1)
+        ),
         Path::new("ops.json"),
     )
     .expect("parses");
-    assert!(flagged.insert("abc", "Abc", PermissionLevel::Operator));
+    assert!(flagged.insert(&id(1), "Abc", PermissionLevel::Operator));
     assert_eq!(flagged.bypass_count(), 1);
-    assert!(flagged.remove("ABC"));
-    assert!(!flagged.remove("abc"), "removing twice reports no change");
+    assert!(flagged.remove(&id(1).to_ascii_uppercase()));
+    assert!(!flagged.remove(&id(1)), "removing twice reports no change");
     assert!(flagged.is_empty());
 }
 
