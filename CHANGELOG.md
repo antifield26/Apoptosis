@@ -47,6 +47,46 @@ align with (per-dimension queues, shared phase slots, per-dimension radius).
 No code in this entry: the ADR is the deliverable, and P20-01 is the first task
 allowed to touch `PHASE_ORDER`.
 
+**P20-01 — the fluids core, proved against the real server.** Water and lava
+flow: levels and falling state, the jar's spread delays (water 5; lava 30, or 10
+where the dimension's `FAST_LAVA` attribute says so), source creation, the
+conversions (a source becomes obsidian, a flowing block cobblestone, lava flowing
+into water leaves stone), waterlogging, buckets through `UseItemOn`, drowning and
+lava damage. Fluids ride their **own** queue — the jar's `ServerLevel` owns a
+separate `LevelTicks<Fluid>` — with a 4 096-per-tick cap that spills in order
+rather than dropping, and `fluid_ticks_pending` as the lateness counter P20-07
+watches.
+
+The acceptance is a differential, not a proxy: five scenario names frozen in
+ADR-0009 before the fixture's first run, the vanilla side being the **real 26.1.2
+server** (sha1 `83eb1106…`, OpenJDK 25) driven through its console — `/forceload`,
+`/tick freeze`, build, `save-all flush` (tick-0), `/tick step 40` with
+`/time query gametime` polled until it moved by **exactly** 40 or the run fails,
+then `save-all flush` (tick-40). Every row was captured twice in freshly
+generated worlds with 0 of 864 cells differing. Result: **5/5 scenarios, 864/864
+cells, compared 5 / skipped 0** (and 864/864 at tick 0 before the engine ran,
+which proves the setup path rather than the simulation).
+
+Two defects the rig caught that no unit test would have: the harness wrote with
+the raw `world_mut().set_block` (which does not schedule, leaving the fluid queue
+empty for all 40 ticks — every Vanilla-changed cell read as a divergence, so the
+setup now makes the same `feed_block_change` call the game's edit paths make, with
+a guard that fails if that feed stops), and the engine never ran
+`LiquidBlock.onPlace`/`neighborChanged` on its own writes, so water written beside
+a lava source converted it only when the lava's own tick came due — by which time
+the water had overwritten the cell and flowed on. Writes now notify neighbours in
+the jar's `UPDATE_ORDER` and run `onPlace`, on **both** the engine path and
+`Game::fluid_feed`, so a player's bucket beside lava converts in the placement
+tick.
+
+Fixed on the way: `tick_timers` drained air unconditionally, so anything on dry
+land "drowned" after 15 seconds. Air is drained only with the eye in water now.
+
+Not done, named rather than implied: mobs/items float-or-sink, `BucketItem.use`
+(filling a bucket in mid-air), particles, fluid-driven block drops, the Nether
+basalt arm, fluid-tick persistence, `neighborChanged`'s reschedule half, and the
+fix is verified against these five scenarios rather than arbitrary terrain.
+
 ## [Unreleased] — AUDIT-19 fix round
 
 The first half of the audit's fix queue (`docs/audits/AUDIT-19.md` §8), landed

@@ -117,7 +117,7 @@ P21-00a does **not** depend on this ADR; it must *align* with it:
 - **Phase slots are shared.** One `FluidTicks` and one `RandomTicks` phase per
   tick, iterating dimensions in a fixed order (Overworld → Nether → End), so
   per-phase cost stays a single number per phase and the tick stays
-  deterministic (AGENTS.md §3.6).
+  deterministic (the engineering contract §3.6).
 - **Radius is per dimension.** `simulation_distance` is global config today;
   P21 decides whether it becomes per-dimension, and inherits the
   `min(simulation, view)` boundary of 2.4 for each.
