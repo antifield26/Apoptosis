@@ -207,6 +207,8 @@ C19-L1（"vanilla 4 KiB 上限"失实，实为 ≤1460 且长度须精确；**�
 > 产出这种文件）；种子文档的确切磁盘位置与键路径未验证（无 jar fixture）；`/ban-ip` 与 `/kick` 的理由
 > 仍必填；`/gamemode` 变更不刷新列表条目、`UPDATE_LATENCY` 未下发；真客户端不可用，玩家列表与皮肤
 > 只有"字节与 jar 及真实服务端抓包一致"这一级证据；§9 的 NOT RUN 项不变。
+> 另：§7 的 **F5**（失败 RCON 登录无日志）其**实质**已由第一波的 RCON 修复覆盖——每次坏登录现在都会
+> 记一条 warn，accept 持续错误也 warn+backoff；§7 表本身保留为审计当时的处置记录，不回改。
 
 ### P0 — 安全与数据（建议 v0.3.1 或 P20 首批）
 1. **G-01 提权**：`/execute as|at|positioned` 不得转移权限等级——按 Vanilla 保留调用者 level（`select` 不再 `with_permission`），并按"至少两个 session"重写 `as_does_not_grant_permission`（现有钉单 session，纯空洞）。
