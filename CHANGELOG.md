@@ -191,8 +191,9 @@ online-mode named gap (Mojang uuids need the usercache) applies here as it
 does for bans. Adversarial finding F1, fixed with two pins (each proven red
 by restoring the refuse path). Finding F2 pinned: `whitelist reload` loads
 before replacing, so a malformed file errors with the live list kept (proven
-red by clearing first). Review table: `docs/testing/P19-REVIEW.md` (16 rows:
-13 confirmed, 1 confirmed+pinned, 1 refuted-then-fixed, 1 NOT RUN).
+red by clearing first). Review table: `docs/testing/P19-REVIEW.md` (17 rows:
+14 confirmed, one narrowed by AUDIT-19, 1 confirmed+pinned, 1
+refuted-then-fixed, 1 NOT RUN).
 
 **Owner access session, 2026-09-30** (`docs/testing/P19-ACCESS-SESSION.md`):
 the owner's real 26.1.2 client passed all four runnable items — the whitelist
