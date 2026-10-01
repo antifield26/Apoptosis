@@ -190,13 +190,23 @@ C19-L1（"vanilla 4 KiB 上限"失实，实为 ≤1460 且长度须精确；**�
 
 ## 8. 修复队列（审计后另开修复轮，本文件不改行为）
 
-> **修复轮状态（2026-10-01，第一波）**：P0 的 1–6 全部落地（G-01、A-01/A-02、D-19-H1+M1、
-> C19-H1、G-02/G-03、A-06），P1 的 7（RCON 预算/超时/共享节流）、8（console 非法 UTF-8 + `ip=` 接线）、
-> 9（双箱 close 臂与半边 viewer）、11（`/fill` 预算）与 10 的两处弱钉已落地；G-04/G-06（RUNBOOK）
-> 一并修好。每一项都带了具名红测与扰动记录，见 CHANGELOG 的 "AUDIT-19 fix round" 条目。
-> **仍开放**：P1-10 的其余弱/缺钉、P1-12 的 B/A/D/E 残余、P2 文档批、以及 §9 里那些 NOT RUN 项。
-> 保留边界：访问文件顶层不可解析仍按 Vanilla 行为以空表启动（写入路径已不可能产出这种文件）；
-> 种子文档的确切磁盘位置与键路径仍未验证（无 jar fixture）。
+> **修复轮状态（2026-10-01，三波全部落地）**：本队列已清空。
+> 第一波（`93619d3`）P0 1–6：G-01、A-01/A-02、D-19-H1+M1、C19-H1、G-02/G-03、A-06，外加 P1 的
+> 7（RCON 预算/预认证超时/跨重连共享节流）、8（console 非法 UTF-8 + `hasJoined` 的 `ip=` 接线）、
+> 9（双箱 close 臂与半边 viewer）、11（`/fill` 区块预算）、12 的 B19-1/B19-1b/A-09/A-12 与两处
+> "不能失败"的钉子，以及 G-04/G-06（RUNBOOK）。
+> 第二波（`a501e09`、`36f4357`）P1-12 残余与 P2：B19-2/B19-4/B19-5/B-M5、D-19-L2/L3、
+> A-03/A-07/A-10、C19-L1/L2/L5/L7/L8、G-05/G-08…G-12、Lane E 三个"零钉子"行为（ban/kick 无 op
+> 豁免、门序、暴露告警的**调用点**）、F-19-02…F-19-10 与 A-08。
+> 第三波（`946e837`）A-04 的 feature 半边：`player_info_update`（play 70）与 `player_info_remove`
+> （69）按 jar 形状实现并接入 join/leave 广播（Vanilla 的 `broadcastAll` 受众），顺带修死亡重连的
+> 模式丢失、`/fill` 的先扫描后写入、`/ban` 的可选理由。
+> 每一波都带具名红测 + 扰动记录 + 字节级还原；本地全闸门 **1 903 passed / 0 failed / 41 ignored /
+> 153 suites**（`run.py --quick` 全绿），三波 head 的 CI 各自转绿。
+> **仍具名的边界（不属本队列）**：访问文件顶层不可解析仍按 Vanilla 行为以空表启动（写入路径已不可能
+> 产出这种文件）；种子文档的确切磁盘位置与键路径未验证（无 jar fixture）；`/ban-ip` 与 `/kick` 的理由
+> 仍必填；`/gamemode` 变更不刷新列表条目、`UPDATE_LATENCY` 未下发；真客户端不可用，玩家列表与皮肤
+> 只有"字节与 jar 及真实服务端抓包一致"这一级证据；§9 的 NOT RUN 项不变。
 
 ### P0 — 安全与数据（建议 v0.3.1 或 P20 首批）
 1. **G-01 提权**：`/execute as|at|positioned` 不得转移权限等级——按 Vanilla 保留调用者 level（`select` 不再 `with_permission`），并按"至少两个 session"重写 `as_does_not_grant_permission`（现有钉单 session，纯空洞）。
