@@ -5,9 +5,11 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 885 passed, 0 failed, 41 ignored** across **151 suites**, re-derived from
+Totals: **1 903 passed, 0 failed, 41 ignored** across **153 suites**, re-derived from
 `python tools/gates/run.py --quick` on the current tree (every gate passed).
-The +97 over the **1 788** figure is the AUDIT-19 fix round, in two waves: the
+The +115 over the **1 788** figure is the AUDIT-19 fix round, in three waves (the
+last adds \player_info_wire_shape\, \player_info_tab_list\ and the pins the
+two command gaps needed): the
 second wave adds \p19_persistence_standards\, \p19_write_pins\ and
 \udit19_gate_pins\ and grows the command/chunk-streaming suites the G-09
 permission tightening moved to an operator fixture. The first wave: new suites
