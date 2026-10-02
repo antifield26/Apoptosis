@@ -5,8 +5,15 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 903 passed, 0 failed, 41 ignored** across **153 suites**, re-derived from
-`python tools/gates/run.py --quick` on the current tree (every gate passed).
+Totals: **1 957 passed, 0 failed, 44 ignored** across **156 suites**, re-derived from
+`cargo test --workspace --no-fail-fast` on the current tree (156/156 `ok`,
+this task's run). The +54 over the **1 903** figure is two landings the header
+had not recorded: P20-01's fluid delta (+46 passed, +2 suites — the new
+`fluid_core` (12) and `fluid_differential` (2) targets plus the simulation /
+tick fluid unit remainder) and P20-01b's +8 passed / +3 ignored / +1 suite
+(5 `lake` unit + 2 `carver` fluid-fill pins + the always-on `lake_stats`
+smoke; the 3 ignored are the `lake_stats` 32×32 acceptance, determinism and
+neutralise pins).
 The +115 over the **1 788** figure is the AUDIT-19 fix round, in three waves (the
 last adds \player_info_wire_shape\, \player_info_tab_list\ and the pins the
 two command gaps needed): the

@@ -87,6 +87,40 @@ Not done, named rather than implied: mobs/items float-or-sink, `BucketItem.use`
 basalt arm, fluid-tick persistence, `neighborChanged`'s reschedule half, and the
 fix is verified against these five scenarios rather than arbitrary terrain.
 
+**P20-01b — lakes and water-filled carvers in generated terrain.** Two halves,
+both documented approximations rather than Vanilla's aquifer (clean-room note:
+Pumpkin's `aquifer_sampler.rs` was read for orientation — sea-level +
+lava-at-`-54` fluid levels, carver-aquifer sampling — and nothing was copied;
+GPL-3.0, version 26.2/776, so version applicability stops at the concept):
+
+- *Carvers flood by height* (`crates/worldgen/src/carver.rs`): a carved cell
+  at or below the pack's `lava_level` (`above_bottom`, default 8 → y −56)
+  becomes lava, at or below sea level (63) water, above sea level dry air.
+  Vanilla consults a per-cell aquifer field, so shoreline lips differ — stated
+  in the module docs. Fluid cells are terminal (a later carve step never
+  re-carves water to air). Stats gain `blocks_water`/`blocks_lava`.
+- *Seeded surface lakes* (`crates/worldgen/src/lake.rs`, new): one 1/64
+  chance per chunk, a shallow bowl (radius 3–6, depth 2–3) dug at the surface
+  and filled with source water, land above sea level and below sea + 32 only;
+  clipped to the chunk like structures. Lava lakes are a named gap.
+- Wired into the live pipeline (`Game::run_pack_passes`, extracted from
+  `load_or_create_chunk` when the lake call pushed it over the line budget):
+  terrain → carvers → lakes → ores → structures → trees.
+
+Acceptance is statistical, not voxel: 32×32 region at the evidence seed,
+**17 lakes** inside the pre-written band [2, 64] (mean 16), 2 207 lake-water
+cells, same-seed run identical, skipping the pass yields zero
+(`crates/worldgen/tests/lake_stats.rs`). Pins, each proven red by
+neutralising the mechanism and restored byte-exact: the dry-carve probe turns
+`a_forced_cave_…_floods_by_height` + `carving_at_or_below_the_lava_floor_…`
+red; the never-water probe turns the lake basin test red; the lake-stats file
+carries the live-pass vs skipped-pass pin. The `underground_wiring` scanner
+now counts carved water as carved (the forced cave band is below sea level)
+and its order replay includes the lake pass.
+
+Not done, named: lava lakes, pack-driven lake placement, multi-chunk lakes,
+springs/aquifers, perched-water lips at shorelines.
+
 ## [Unreleased] — AUDIT-19 fix round
 
 The first half of the audit's fix queue (`docs/audits/AUDIT-19.md` §8), landed
