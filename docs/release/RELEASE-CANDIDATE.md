@@ -12,8 +12,8 @@ needs to produce and run the server from source today.
 A from-scratch, pure-Rust dedicated server for Minecraft: Java Edition
 **26.1.2** (protocol **775**, wire display string "26.1"), offline mode,
 Vanilla-Survival slice: login → config → play, movement/collision, break/place,
-inventory transactions, containers transactable, death/respawn, commands (40
-root literals — help/list/say/time/weather/tp/teleport/execute/function/op/deop/stop/
+inventory transactions, containers transactable, death/respawn, commands (41
+root literals — help/list/say/time/weather/spawnpoint/tp/teleport/execute/function/op/deop/stop/
 effect plus the admin set gamemode/give/kill/seed/difficulty, the P19-01
 whitelist, the P19-02 ban set ban/ban-ip/pardon/pardon-ip/banlist/kick, the
 P19-03 save set save-all/save-off/save-on and the P18-02 set
@@ -28,7 +28,7 @@ citations in older documents, and its highest row tag is KD-71; the
 release-affecting highlights: static lighting only (no day/night dimming, no
 incremental relight); mobs have per-kind follow ranges, an A* chase arm and XP
 orbs, but wander and flee steer directly; redstone is measured and tick-driven
-but has no pistons and no exact update order; 40 of ~90 commands).
+but has no pistons and no exact update order; 41 of ~90 commands).
 
 ## 2. Building from source
 

@@ -231,6 +231,40 @@ break only), sleep-count broadcast, respawn persistence + `/spawnpoint` +
 obstructed-respawn redirect (slice 2), bed explosion (P21), placement
 survival checks.
 
+**P20-04 slice 2 — respawn persistence, `/spawnpoint`, obstructed redirect
+(DONE — the P20-04 row is complete except the named client-presentation
+gaps).** Deaths now consult the recorded point through the jar's
+`findRespawnAndUseSpawnBlock` shape: a bed head with `canSetSpawn` (always
+here) resolves to standing room directly above it; a commanded point
+(`forced`, which jar `SetSpawnCommand` always sets) spawns blind at
+`(x+0.5, y+0.1, z+0.5)` when both cells pass (`isPossibleToRespawnInThis`,
+subset to air); anything else is spent — cleared with one "missing or
+obstructed" message, the next death silent. The point loads its chunk
+before judging, so a death far from home (or an unvisited command point)
+never reads as missing. `/spawnpoint [player] [x y z] [yaw]` is level 2
+with the jar's blind-set semantics (mid-air allowed, judged at death);
+bare form takes own feet, multi-target selectors narrow to one online
+player. Points persist as vanilla's own `SpawnX/Y/Z/Angle/Dimension/Forced`
+playerdata keys — written on leave beside `Player::to_nbt` (which never
+sees them, as with the death location), read on join with the file
+outranking the remembered disconnect, pitch leveling to 0 across the file
+(the jar persists angle only).
+
+Evidence: `crates/server/tests/sleep.rs` gains bed-death on the bed,
+broken-bed world-spawn with the message, all `/spawnpoint` forms plus
+refusals with a redirected death, forced-point-in-rock fallback, and a
+restart round-trip (Spawn keys on disk, rebooted death on the bed). Both
+mechanisms proven red by neutralising them and restored byte-exact; the
+root count moves 40 → 41 (KD-31 pin moved with it).
+
+Reference search (§5): no local respawn/bed analogue beyond the jar (the
+P20-04 slice-1 no-hit stands).
+
+Not done, named: the slice-1 presentation gaps (pose, bed screen,
+leave-bed packet, sleep-count broadcast), bed explosion (P21), placement
+survival checks, `RotationArgument` day suffixes (none — angles are plain
+doubles), water/snow above a forced point (air-subset edge).
+
 ## [Unreleased] — AUDIT-19 fix round
 
 The first half of the audit's fix queue (`docs/audits/AUDIT-19.md` §8), landed
