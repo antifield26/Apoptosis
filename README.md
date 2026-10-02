@@ -32,7 +32,7 @@ in [docs/vanilla-parity/PARITY-MATRIX.md](docs/vanilla-parity/PARITY-MATRIX.md).
   end-to-end: 529 vanilla chunks decoded, rewritten by this server, then
   **booted on a real vanilla 26.1.2 server**, which preserved our edits and
   re-saved every dimension.
-- **Commands & data packs** — 39 of ~90 Vanilla root literals with permission
+- **Commands & data packs** — 40 of ~90 Vanilla root literals with permission
   levels (`/op` and `/deop` persist grants to `ops.json`, which is also read
   at boot; `/gamemode`, `/give`, `/kill`, `/seed`, `/difficulty` are
   operator-only), plus `/function` running under the invoker's permissions;
@@ -67,7 +67,7 @@ This project records gaps instead of papering over them. The headline items
   scheduled ticks propagate and broadcast, and P17-01 added doors, trapdoors,
   gates, observers and dispensers. Open: pistons and rails, exact update
   order, delay constants.
-- **39 of ~90 commands**; chests, furnaces and hoppers open as windows a real
+- **40 of ~90 commands**; chests, furnaces and hoppers open as windows a real
   client can transact with (P12-07/08), and the P17-02/P17-05 owner session
   transacted a double chest and a hopper→furnace chain on a live client.
   Open: the remaining root literals, and `execute` covers 9 of ~20 modifiers.

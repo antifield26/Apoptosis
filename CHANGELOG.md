@@ -121,6 +121,43 @@ and its order replay includes the lake pass.
 Not done, named: lava lakes, pack-driven lake placement, multi-chunk lakes,
 springs/aquifers, perched-water lips at shorelines.
 
+**P20-03 slice 1 — weather state, cycle, packets, `/weather`, persistence
+(PARTIAL; slice 2 owns lightning strikes).** `Game` owns the jar's five
+`WeatherData` fields plus two eased client levels
+(`crates/server/src/game/weather.rs`): the cycle runs at the head of
+`ScheduledTicks` (the jar's `tickTime` slot) exactly as the bytecode reads —
+clear-time countdown forcing both flags false, per-timer decrement/flip or
+provider sample (`RAIN_DELAY (12000, 180000)`, `RAIN_DURATION (12000,
+24000)`, `THUNDER_DELAY (12000, 180000)`, `THUNDER_DURATION (3600, 15600)`),
+levels easing ±0.01 toward the flags. Broadcasts match the jar too:
+`START/STOP_RAINING` (ids 1/2) on a rain flip, `RAIN/THUNDER_LEVEL_CHANGE`
+(ids 7/8) on every level change. `/weather <clear|rain|thunder> [ticks]`
+(level 2, absent duration samples the provider — never a fixed 6000) wired
+through the same dispatcher, permission-tested like every command; the root
+count moves 39 → 40 (KD-31 pin moved with it). `weather.dat` round-trips
+through `mc-persistence` (`{DataVersion, data: {rain_time, raining,
+thundering, thunder_time, clear_weather_time}}`, the measured vanilla shape)
+— loaded at boot, written on every save, corrupt file warns and starts
+clear. `is_raining_at` (raining with sky above) closes the farmland rain arm
+P20-02 left false. `ADVANCE_WEATHER` reads true until P20-05 stores rules.
+
+Evidence: `crates/server/tests/weather.rs` — scheduled flip with START +
+easing level packets on a joined client, thunder level without a start event
+(the jar sends none), command sets/stops/refusals/permission, a 400-soil
+storm wetting with no water near, restart round-trip (document asserts plus
+rebooted rain wetting dry soil). Duration bounds and the document round-trip
+pinned inside `weather.rs`. Both mechanisms proven red by neutralising them
+(no flip, no broadcast) and restored byte-exact.
+
+Reference search (§5): no local weather analogue beyond the jar — Pumpkin's
+worldgen has no weather cycle, Paper carries it only as vanilla patch paths;
+both recorded, neither copied.
+
+Not done, named: lightning strikes (no bolt entity yet — slice 2), thunder
+darkness in the spawn-light rule, sleep does not reset the cycle (P20-04
+owns the call), `canHaveWeather` is one dimension, `TimeArgument` day
+suffixes unmodelled, crops still grow at night (static light).
+
 **P20-02 slice 1 — the sweep draws, crops and farmland answer (PARTIAL; slice
 2 owns hoe/trampling plus saplings, grass, leaf decay, cane, cactus and bone
 meal).** The `RandomTicks` phase stopped counting and started sampling: every

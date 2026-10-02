@@ -5,9 +5,10 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 963 passed, 0 failed, 44 ignored** across **157 suites**, re-derived from
-`cargo test --workspace --no-fail-fast` on the current tree (157/157 `ok`,
-this task's run). The +54 over the **1 903** figure is two landings the header
+Totals: **1 970 passed, 0 failed, 44 ignored** across **158 suites**, re-derived from
+`cargo test --workspace --no-fail-fast` on the current tree (158/158 `ok`,
+this task's run). The +7 over the **1 963** figure is P20-03 slice 1's new
+`weather` target (5 integration plus 2 `game::weather` units). The +54 over the **1 903** figure is two landings the header
 had not recorded: P20-01's fluid delta (+46 passed, +2 suites — the new
 `fluid_core` (12) and `fluid_differential` (2) targets plus the simulation /
 tick fluid unit remainder) and P20-01b's +8 passed / +3 ignored / +1 suite
@@ -16,13 +17,9 @@ smoke; the 3 ignored are the `lake_stats` 32×32 acceptance, determinism and
 neutralise pins). The +6 over the **1 957** figure is P20-02 slice 1's new
 `growth` target (sampling-rate pin, moist-wheat aggregate, wheat-vs-beetroot,
 sealed-box dark farm, dry-farmland dry-down, fixture age/moisture bands).
-Load-flake note, kept not deleted: the previous full run failed one suite —
-`network_game_bridge` (1 target) — while the `mc-server`-scope run and the
-isolated re-run on the same tree were green; this run is green everywhere
-including that suite, so the single red is recorded as load-induced timing
-flake (25–250 ms socket timeouts under full-workspace parallelism), not a
-regression. If it ever fails twice in a row, bisect instead of repeating this
-note.
+The previous run's single `network_game_bridge` red did not repeat (green
+here, green in isolation, green at `mc-server` scope): load-induced timing
+flake stands, with three greens against one red.
 The +115 over the **1 788** figure is the AUDIT-19 fix round, in three waves (the
 last adds \player_info_wire_shape\, \player_info_tab_list\ and the pins the
 two command gaps needed): the
