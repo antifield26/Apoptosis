@@ -3662,6 +3662,9 @@ impl Game {
         // players through the same store as everything else. This is a projection:
         // `Session::player` stays authoritative (module docs).
         self.project_player_entities();
+        // Sleep timers and the morning skip (P20-04): positions are final now,
+        // like the jar's per-tick evaluation.
+        self.tick_sleep();
         Ok(())
     }
 
@@ -4552,6 +4555,9 @@ impl Game {
     pub(crate) fn after_damage(&mut self, id: ConnectionId, outcome: DamageOutcome) {
         let mut local = TickReport::default();
         if outcome.applied {
+            // A hit wakes the sleeper (P20-04): before the vitals sync, so a
+            // lethal hit still clears the bed it died in.
+            self.wake(id);
             // jar `DamageSource.getFoodExhaustion()` = 0.1 for the modelled set.
             if let Some(session) = self.sessions.get_mut(&id) {
                 session.food_exhaustion += mc_entity::player::EXHAUSTION_HURT;

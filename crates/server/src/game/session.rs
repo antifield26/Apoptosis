@@ -208,6 +208,17 @@ pub(crate) struct Session {
     pub(crate) food_exhaustion: f32,
     /// Eat/drink in progress (P18-06): ticks left until the food applies.
     pub(crate) eating: Option<EatState>,
+    /// Sleep in progress (P20-04): the bed's head cell and ticks spent.
+    ///
+    /// `None` awake. Set by right-clicking a bed that passes every jar gate,
+    /// cleared by morning, damage, disconnect, or the bed breaking.
+    pub(crate) sleeping: Option<super::sleep::SleepState>,
+    /// Respawn point recorded by a bed (P20-04 slice 1: memory only).
+    ///
+    /// Set whenever a sleep attempt passes the spawn gate — even a daytime
+    /// click that refuses to sleep, exactly like the jar. Persisted and
+    /// redirected in slice 2; the single dimension is implicit.
+    pub(crate) respawn: Option<super::sleep::RespawnPoint>,
 }
 
 /// One `UseItem` consumable in progress (P18-06).
@@ -419,6 +430,9 @@ impl SessionView<'_> {
 impl Game {
     /// Remove a connection's player and mark its entity for the sweep.
     pub(crate) fn leave(&mut self, id: ConnectionId) {
+        // A sleeper who disconnects leaves the bed (P20-04): first, while the
+        // session still names it — after removal there is nothing to wake by.
+        self.wake(id);
         // An address reported for a connection that never joined (refused at
         // the gate) must not linger for a later connection id.
         self.pending_ips.remove(&id);
@@ -749,6 +763,8 @@ impl Game {
                 block_dirty: BTreeSet::new(),
                 food_exhaustion: 0.0,
                 eating: None,
+                sleeping: None,
+                respawn: None,
                 ip: self.pending_ips.remove(&id),
             },
         );
@@ -3905,6 +3921,31 @@ impl Game {
                 self.block_feed(target.x, other_y, target.z, other);
             }
         }
+        // P20-04: breaking one bed half wakes its sleepers and removes the
+        // other (no second drop — the initiator's table already rolled the one
+        // bed item). Either half may be dug first; the survivor must be the
+        // opposite part of the same bed.
+        if let Some((name, part, facing)) = self.bed_part_of(target.block) {
+            self.wake_sleepers_on_bed(target.x, target.y, target.z);
+            let (dx, _, dz) = super::sleep::facing_offset(&facing);
+            let (px, py, pz) = if part == "head" {
+                (target.x - dx, target.y, target.z - dz)
+            } else {
+                (target.x + dx, target.y, target.z + dz)
+            };
+            let want = if part == "head" { "foot" } else { "head" };
+            if let Some(other) = self.world.get_block_loaded(px, py, pz)
+                && let Ok(other_name) = self.registries.blocks.block_name(other)
+                && other_name == name
+                && let Ok(other_props) = self.registries.blocks.properties_of(other)
+                && other_props
+                    .iter()
+                    .any(|(key, value)| key == "part" && value == want)
+                && self.world.set_block(px, py, pz, air).is_ok()
+            {
+                self.block_feed(px, py, pz, other);
+            }
+        }
         // P17-02 Step B: breaking one chest half singles the other (pumpkin
         // `broken_chest_impl`). The partner keeps its facing and block; its
         // entity and contents are untouched (the retire path drops only the
@@ -4452,8 +4493,71 @@ impl Game {
         debug!(id = %id, block = %block, x, y, z, facing, hinge, "door placed");
     }
 
-    /// Consume one held item in survival and re-mirror the menu (P17-01).
+    /// Place a two-part bed: foot at the target, head one step along the
+    /// clicker's look (vanilla `BedItem`: `facing = getHorizontalDirection`,
+    /// head forward — note this is the look itself, not its opposite the way
+    /// doors face the clicker).
     ///
+    /// Both cells must be air and outside every player, like the door's two
+    /// halves; the target cell itself was checked by the caller.
+    fn place_bed(
+        &mut self,
+        id: ConnectionId,
+        pos: (i32, i32, i32),
+        block: &str,
+        hand: Hand,
+        report: &mut TickReport,
+    ) {
+        let (x, y, z) = pos;
+        let facing = self.player_facing(id);
+        let (dx, _, dz) = super::sleep::facing_offset(facing);
+        let (hx, hy, hz) = (x + dx, y, z + dz);
+        if !self.in_build_range(hy) {
+            debug!(id = %id, y = hy, "rejected bed: head outside the world height");
+            return;
+        }
+        let head_open = self
+            .world
+            .get_block_loaded(hx, hy, hz)
+            .is_some_and(|head| self.registries.blocks.is_empty(head));
+        if !head_open {
+            debug!(id = %id, "refused to place a bed into an occupied head cell");
+            return;
+        }
+        let head_box = Aabb::block(hx, hy, hz);
+        if self
+            .sessions
+            .values()
+            .any(|other| other.aabb().intersects(head_box))
+        {
+            debug!(id = %id, "refused to place a bed inside a player");
+            return;
+        }
+        let foot = self.oriented_state(
+            block,
+            &[("facing", facing), ("occupied", "false"), ("part", "foot")],
+        );
+        let head = self.oriented_state(
+            block,
+            &[("facing", facing), ("occupied", "false"), ("part", "head")],
+        );
+        let (Some(foot), Some(head)) = (foot, head) else {
+            debug!(id = %id, block = %block, "bed orientation does not resolve");
+            return;
+        };
+        if self.world.set_block(x, y, z, foot).is_err()
+            || self.world.set_block(hx, hy, hz, head).is_err()
+        {
+            debug!(id = %id, "bed placement was refused");
+            return;
+        }
+        self.block_feed(x, y, z, foot);
+        self.block_feed(hx, hy, hz, head);
+        self.consume_held(id, hand, report);
+        debug!(id = %id, block = %block, x, y, z, facing, "bed placed");
+    }
+
+    /// Consume one held item in survival and re-mirror the menu (P17-01).
     /// Factored out of the placement tail so door placement shares the exact
     /// same consume-and-sync (P14-09 walk: take + shrink + write back to the
     /// same slot, never through `add_stack`).
@@ -5016,6 +5120,16 @@ impl Game {
                 self.open_crafting_table(id, x, y, z, report);
                 return;
             }
+            // Beds sleep on right-click (P20-04): the attempt chain answers
+            // every path itself (success or a named refusal), so a held
+            // block must not place through the bed.
+            if self
+                .clicked_block_name(x, y, z)
+                .is_some_and(|n| n.ends_with("_bed"))
+            {
+                self.try_sleep(id, x, y, z);
+                return;
+            }
         }
         let hand = Hand::from_id(u8::try_from(hand).unwrap_or(0)).unwrap_or(Hand::Main);
         // A bucket acts instead of placing (P20-01): the three bucket items are
@@ -5337,6 +5451,10 @@ impl Game {
         // first state for the same reason.
         if mc_redstone::blocks::is_door(&block) {
             self.place_door(id, (tx, ty, tz), &block, hand, cursor, report);
+            return;
+        }
+        if block.ends_with("_bed") {
+            self.place_bed(id, (tx, ty, tz), &block, hand, report);
             return;
         }
         if is_chest_family(&block) {

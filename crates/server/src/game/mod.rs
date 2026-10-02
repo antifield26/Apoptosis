@@ -199,6 +199,7 @@ mod fluids;
 mod growth;
 mod persist;
 mod session;
+mod sleep;
 mod tick;
 mod weather;
 
