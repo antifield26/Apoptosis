@@ -5,8 +5,9 @@
 //! **integration**: the game owns a second scheduled-tick queue for fluids, the
 //! `FluidTicks` phase drains it under the ADR-0009 cap, the flow rules write
 //! through [`mc_world::World`] so the Broadcast phase can send the changes, and
-//! the `RandomTicks` phase reports its sample count while applying nothing
-//! (P20-02's seam).
+//! the `RandomTicks` phase reports its sample count (since P20-02 it also
+//! applies growth through `game::growth`; the no-player stone-floor pin below
+//! still applies nothing, which is what makes it a control).
 //!
 //! These are this task's own tests and deliberately **not** the frozen
 //! differential scenarios (`spring_flow`, `falling_column`, `lava_meets_water`,
@@ -365,9 +366,11 @@ fn water_fills_a_waterloggable_block_instead_of_replacing_it() {
 
 #[test]
 fn the_random_tick_phase_counts_its_samples_and_applies_nothing() {
-    // P20-01 installs the sweep's shape and its counters; the growth handlers are
-    // P20-02. Two claims, both falsifiable: with no player there is no ticking
-    // radius, so no samples; and nothing in a run of ticks is ever *applied*.
+    // The sweep's shape and its counters (P20-01); the growth handlers are
+    // P20-02, and this fixture — no player, stone floor — still applies
+    // nothing, which is what makes it the control both phases share. Two
+    // claims, both falsifiable: with no player there is no ticking radius,
+    // so no samples; and nothing in a run of ticks is ever *applied*.
     let (mut game, _storage, _dir) = game("p20-random-tick");
     stone_floor(&mut game);
     let mut applied = 0usize;
@@ -379,7 +382,10 @@ fn the_random_tick_phase_counts_its_samples_and_applies_nothing() {
         );
         applied += report.random_ticks_applied;
     }
-    assert_eq!(applied, 0, "no growth handler exists yet (P20-02)");
+    assert_eq!(
+        applied, 0,
+        "stone has no random-tick handler (P20-02 growth)"
+    );
 }
 
 #[test]

@@ -196,6 +196,7 @@ use std::path::PathBuf;
 use tracing::{debug, info, warn};
 
 mod fluids;
+mod growth;
 mod persist;
 mod session;
 mod tick;
@@ -941,6 +942,18 @@ pub struct Game {
     /// water and lava wait for P20 fluids. Boxed for the same future-size
     /// reason.
     carvers: Box<mc_worldgen::carver::CarverSet>,
+    /// Block states in the pack's `grows_crops` tag (P20-02 growth).
+    ///
+    /// Same empty-until-loaded contract as the ore set: resolved once from
+    /// the namespace root at pack load, read by the crop growth-speed rule.
+    /// Without packs the set is empty and every soil column scores dry
+    /// points only — growth still runs, only slower.
+    grows_crops: BTreeSet<i32>,
+    /// Block states in the pack's `maintains_farmland` tag (P20-02 growth).
+    ///
+    /// Same lifecycle: crops above hold dry farmland, anything else lets it
+    /// turn to dirt.
+    maintains_farmland: BTreeSet<i32>,
     /// Who may run operator commands, loaded from `ops.json` at construction.
     ///
     /// Loaded once rather than per login, matching Vanilla's startup read. A change to the
@@ -1282,9 +1295,11 @@ impl Game {
                 &mc_worldgen::structures::StructureRegistry::new(),
             ),
             // Empty sets: no-op passes until the pack loader installs the
-            // overworld ore and carver sets.
+            // overworld ore and carver sets (and the growth tags, P20-02).
             ores: Box::new(mc_worldgen::ore::OreSet::empty()),
             carvers: Box::new(mc_worldgen::carver::CarverSet::empty()),
+            grows_crops: BTreeSet::new(),
+            maintains_farmland: BTreeSet::new(),
             operators,
             ops_directory: None,
             whitelist: crate::whitelist::Whitelist::new(),
@@ -2074,6 +2089,21 @@ impl Game {
     #[must_use]
     pub fn carvers(&self) -> &mc_worldgen::carver::CarverSet {
         &self.carvers
+    }
+
+    /// Install the pack's growth tags (P20-02).
+    ///
+    /// Called once from the pack loader alongside the ore/carver sets; a game
+    /// that never loads packs keeps the empty sets. Split from
+    /// `set_ores_and_carvers` because the tags come from a different table
+    /// than the worldgen sets, and tests install hand-built sets here.
+    pub fn set_growth_tags(
+        &mut self,
+        grows_crops: BTreeSet<i32>,
+        maintains_farmland: BTreeSet<i32>,
+    ) {
+        self.grows_crops = grows_crops;
+        self.maintains_farmland = maintains_farmland;
     }
 
     /// Install the loaded loot tables (P11-04).

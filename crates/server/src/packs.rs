@@ -368,6 +368,18 @@ pub fn load_packs(
             outcome.carvers_skipped.push(format!("{name}: {reason}"));
         }
         game.set_ores_and_carvers(ores, carvers);
+        // Growth tags for the P20-02 random-tick handlers (same table, same
+        // root, same degrade rule: no vanilla data means empty sets, and the
+        // growth rules treat an unlisted block as dry/inert rather than
+        // refusing to run).
+        game.set_growth_tags(
+            tags.members("minecraft:grows_crops")
+                .cloned()
+                .unwrap_or_default(),
+            tags.members("minecraft:maintains_farmland")
+                .cloned()
+                .unwrap_or_default(),
+        );
     }
 
     // Loot, from every pack's `loot_table/` directory in load order (P11-04).

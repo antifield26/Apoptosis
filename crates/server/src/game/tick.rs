@@ -504,58 +504,65 @@ impl Game {
         report.fluid_ticks_pending = self.fluid_ticks.pending();
     }
 
-    /// Phase 4: the random-tick sweep of the ticking radius (**P20-01 skeleton**).
+    /// Phase 4: the random-tick sweep of the ticking radius (P20-01 shape,
+    /// P20-02 behaviour).
     ///
-    /// **This phase samples and applies nothing.** It walks the shape the jar's
-    /// `ServerLevel.tickChunk(LevelChunk, int)` walks — every loaded chunk inside
-    /// the ticking radius, every section of it, `randomTickSpeed` sample slots per
-    /// section — and counts the samples that shape implies. It does **not** draw a
-    /// position, look up a block, or grow anything: those are P20-02's deliverable,
-    /// and `random_ticks_applied` is zero by construction until then. The counter
-    /// exists now because the phase's cost is `ticking_sections × randomTickSpeed`
-    /// (ADR-0009 §2.3) and P20-07 compares that against the ADR's estimate.
+    /// The shape is the jar's `ServerLevel.tickChunk(LevelChunk, int)`: every
+    /// loaded chunk inside the ticking radius, every section of it,
+    /// `randomTickSpeed` sample slots per section. Each slot draws a uniform
+    /// position (x/z in the chunk, y in the section) from the game's seeded
+    /// source and offers it to the block's random-tick handler
+    /// ([`Game::random_tick_block`]); positions whose block has no handler are
+    /// the early-out the ADR's cost estimate assumes (no neighbour is touched
+    /// for them).
     ///
-    /// Two things are deliberately *not* done here yet, and both are named rather
-    /// than implied:
+    /// Two things are deliberately *not* done here yet, and both are named
+    /// rather than implied:
     ///
-    /// - **No RNG is drawn.** A draw with no consumer would burn the game's seeded
-    ///   entropy — the same source mob AI and loot use — and change their outcomes
-    ///   for no behaviour at all. P20-02 adds the draw together with the lookup it
-    ///   feeds.
     /// - **The radius is the view distance.** ADR-0009 §2.4 makes
     ///   `simulation_distance` the ticking radius and records the boundary that
     ///   this server loads by `view_distance`, so the effective radius is
-    ///   `min(simulation_distance, view_distance)`; until P20-05 stores the game
-    ///   rules there is one number, and it is the loader's.
+    ///   `min(simulation_distance, view_distance)`; until P20-05 stores the
+    ///   game rules there is one number, and it is the loader's.
+    /// - **Rain never falls.** Farmland's wetting rule reads
+    ///   `isNearWater || isRainingAt`, and the second arm is false until P20-03
+    ///   owns weather — dry biomes dry out here even under Vanilla rain.
     fn phase_random_ticks(&mut self, report: &mut TickReport) {
-        // The jar's `random_tick_speed` game rule: `javap -c GameRules` registers
-        // it as `registerInteger("random_tick_speed", UPDATES, 3, 0)`. P20-05
-        // stores it; until then the default is the honest value. First in the
-        // body because an item declares itself from the start of its scope.
-        const RANDOM_TICK_SPEED: usize = 3;
-        let radius = self.view_distance.clamp(2, 16);
-        let mut centres: Vec<ChunkPos> = self
-            .entity_ids
-            .values()
-            .filter_map(|id| self.entities.get(*id).map(|entity| entity.position))
-            .map(|position| chunk_of(position.x, position.z))
-            .collect();
-        centres.sort_unstable();
-        centres.dedup();
-        let mut chunks: BTreeSet<ChunkPos> = BTreeSet::new();
-        for centre in centres {
-            for dx in -radius..=radius {
-                for dz in -radius..=radius {
-                    let pos = ChunkPos::new(centre.x + dx, centre.z + dz);
-                    if self.world.is_loaded(pos) {
-                        chunks.insert(pos);
+        // The jar's `random_tick_speed` game rule: `javap -c GameRules`
+        // registers it as `registerInteger("random_tick_speed", UPDATES, 3,
+        // 0)`. P20-05 stores it; until then the default is the honest value.
+        // First in the body because an item declares itself from the start of
+        // its scope.
+        use super::growth::RANDOM_TICK_SPEED;
+        let chunks = self.random_tick_chunks();
+        let sections = self.world.section_count();
+        let mut samples = 0_usize;
+        let mut applied = 0_usize;
+        for pos in &chunks {
+            let Some(chunk) = self.world.chunk(*pos) else {
+                continue;
+            };
+            let min_y = chunk.min_y();
+            let base_x = pos.x.saturating_mul(mc_world::SECTION_WIDTH);
+            let base_z = pos.z.saturating_mul(mc_world::SECTION_WIDTH);
+            for section in 0..sections {
+                let base_y = min_y.saturating_add(section as i32 * mc_world::SECTION_WIDTH);
+                for _ in 0..RANDOM_TICK_SPEED {
+                    let x = base_x + self.random.next_i32_bounded(mc_world::SECTION_WIDTH);
+                    let y = base_y + self.random.next_i32_bounded(mc_world::SECTION_WIDTH);
+                    let z = base_z + self.random.next_i32_bounded(mc_world::SECTION_WIDTH);
+                    samples += 1;
+                    let Some(id) = self.world.get_block_loaded(x, y, z) else {
+                        continue;
+                    };
+                    if self.random_tick_block(x, y, z, id) {
+                        applied += 1;
                     }
                 }
             }
         }
-        let sections = self.world.section_count();
-        report.random_tick_samples = chunks.len() * sections * RANDOM_TICK_SPEED;
-        report.random_ticks_applied = 0;
+        report.random_tick_samples = samples;
+        report.random_ticks_applied = applied;
     }
 
     /// Water and lava effects on one entity (P20-01).
@@ -2132,7 +2139,7 @@ impl Game {
     /// Sky and block light at one world position, from the chunk's cached
     /// computation. A chunk without light computes it; a chunk that cannot be
     /// lit reports absence rather than guessing zero.
-    fn light_at(&mut self, x: i32, y: i32, z: i32) -> Option<(u8, u8)> {
+    pub(crate) fn light_at(&mut self, x: i32, y: i32, z: i32) -> Option<(u8, u8)> {
         let pos = mc_world::ChunkPos::new(x >> 4, z >> 4);
         if self.world.cached_light(pos).is_none() {
             self.world.compute_light(pos, &self.registries.light).ok()?;
