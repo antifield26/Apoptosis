@@ -176,7 +176,7 @@ load into `Game::grows_crops`, as ores/carvers do); `BeetrootBlock.randomTick`
 (near `WATER` fluid in `(-4,0,-4)..=(4,1,4)` wets to 7 at once, dry ticks
 down, moisture-0 with nothing `MAINTAINS_FARMLAND` above turns to dirt) with
 `isNearWater` reading through the flow engine's own `fluid_state_at`. The
-rain arm is false until P20-03 owns weather; the brightness gate reads cached
+rain arm reads live sky since P20-03 closed it; the brightness gate reads cached
 chunk light, so crops grow through the night as a consequence of the static
 lighting boundary (named, not hidden).
 
@@ -197,6 +197,39 @@ Reference search (§5): Pumpkin `pumpkin-world` per-chunk
 `RandomTickSectionCache` + `has_random_ticks` early-out (GPL-3.0, 26.2 —
 concept only, nothing copied); Paper has no local random-tick analogue beyond
 patch paths (recorded no-hit for mechanics).
+
+**P20-04 slice 1 — beds, sleep attempts, skip-night (PARTIAL; slice 2 owns
+respawn persistence, `/spawnpoint` and the obstructed-respawn redirect).**
+`Game` gains per-session sleep (`crates/server/src/game/sleep.rs`, a new
+module): bed items place foot+head with the clicker's look, right-click runs
+the jar's `startSleepInBed` order (range 3/2/3 of either half, both cells
+above free, spawn recorded even on daytime refusal, night-or-thunder gate
+— thundering or the pack timeline's `sky_darken >= 4` for the jar's
+`WHEN_DARK` — non-creative monster box 16×10×16, occupied refusal carrying
+the jar-verified `block.minecraft.bed.occupied`), `occupied` marks both
+halves while slept in. Each tick counts sleepers and deep sleepers (≥ 100
+ticks, jar `isSleepingLongEnough`); `max(1, ceil(active × 100 / 100))` of
+each — the jar-default percentage until P20-05 stores it — skips to morning
+(`time_offset` jump to `WAKE_UP_FROM_SLEEP` = 0, measured in `day.json`)
+with the jar's silent weather reset and wake-all. Wake on damage,
+disconnect and bed-break (the partner half goes with the dug one, one drop).
+Sleep state lives on the session, never on disk (a relog wakes, as in
+Vanilla).
+
+Evidence: `crates/server/tests/sleep.rs` — placement pair/consume, the day
+refusal, ten players skipping with nine holding (percentage edge), occupied,
+monsters, damage/disconnect/break wakes with the bed clearing. Skip and
+occupied mechanisms proven red by neutralising them and restored byte-exact.
+One honest failure on the way: the zombie fell 55 blocks to the terrain
+because the floating bed has no floor under the fight — the test builds one.
+
+Reference search (§5): Pumpkin has no bed/sleep analogue (no-hit).
+
+Not done, named: sleep-pose/bed-screen packets (no metadata channel),
+voluntary leave-bed packet (unverified — wake on damage/disconnect/skip/
+break only), sleep-count broadcast, respawn persistence + `/spawnpoint` +
+obstructed-respawn redirect (slice 2), bed explosion (P21), placement
+survival checks.
 
 ## [Unreleased] — AUDIT-19 fix round
 
