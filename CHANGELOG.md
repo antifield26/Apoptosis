@@ -121,6 +121,46 @@ and its order replay includes the lake pass.
 Not done, named: lava lakes, pack-driven lake placement, multi-chunk lakes,
 springs/aquifers, perched-water lips at shorelines.
 
+**P20-02 slice 1 — the sweep draws, crops and farmland answer (PARTIAL; slice
+2 owns hoe/trampling plus saplings, grass, leaf decay, cane, cactus and bone
+meal).** The `RandomTicks` phase stopped counting and started sampling: every
+loaded chunk in the radius, every section, `randomTickSpeed` (3, the jar's
+registered default until P20-05 stores the rule) uniform positions from the
+game's seeded source, each offered to the block's handler
+(`crates/server/src/game/growth.rs`, a new module per the architecture
+contract — not growth inside `tick.rs`).
+
+Jar truth, all `javap -c` on the 26.1.2 server jar: `CropBlock.randomTick`
+(brightness ≥ 9, `age < max`, `nextInt((int)(25/speed)+1) == 0` grows one
+step) and `getGrowthSpeed` (`GROWS_CROPS` soil scores 1.0, 3.0 when moist,
+quartered off-centre, halved rows/diagonals — the pack tag resolves at pack
+load into `Game::grows_crops`, as ores/carvers do); `BeetrootBlock.randomTick`
+(the shared path behind a `nextInt(3)` pre-gate); `FarmlandBlock.randomTick`
+(near `WATER` fluid in `(-4,0,-4)..=(4,1,4)` wets to 7 at once, dry ticks
+down, moisture-0 with nothing `MAINTAINS_FARMLAND` above turns to dirt) with
+`isNearWater` reading through the flow engine's own `fluid_state_at`. The
+rain arm is false until P20-03 owns weather; the brightness gate reads cached
+chunk light, so crops grow through the night as a consequence of the static
+lighting boundary (named, not hidden).
+
+Evidence is statistical with a seeded source, per the row's acceptance:
+`crates/server/tests/growth.rs` — exact samples (loaded × sections × 3),
+200 moist wheat gaining ≥ 5 ages over 300 ticks (≈14 expected), wheat
+outgrowing beetroot on a 100/100 split, a sealed-box dark farm growing
+exactly 0 with moisture unchanged, 100 dry soils losing ≥ 8 moisture with
+dirt appearing, fixture-pinned age/moisture bands. Two honest failures on the
+way: the sweep centres on players (`entity_ids` tracks connections — a free
+mob centres nothing, so the pin joins a player), and hand-placed farm blocks
+bypass the edit path's light queue (stale load-time light; the tests settle
+light synchronously, the documented equivalent of idle ticks). Pins, each
+proven red by neutralising the mechanism and restored byte-exact: growth
+bound blown up, brightness forced bright, dry-down disabled.
+
+Reference search (§5): Pumpkin `pumpkin-world` per-chunk
+`RandomTickSectionCache` + `has_random_ticks` early-out (GPL-3.0, 26.2 —
+concept only, nothing copied); Paper has no local random-tick analogue beyond
+patch paths (recorded no-hit for mechanics).
+
 ## [Unreleased] — AUDIT-19 fix round
 
 The first half of the audit's fix queue (`docs/audits/AUDIT-19.md` §8), landed

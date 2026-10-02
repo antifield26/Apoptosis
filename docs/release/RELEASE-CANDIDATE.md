@@ -24,7 +24,7 @@ subset, Anvil-compatible persistence verified against real vanilla worlds.
 Scope boundaries and every known divergence:
 [docs/vanilla-parity/PARITY-MATRIX.md](../vanilla-parity/PARITY-MATRIX.md) (its identifiers span KD-01…KD-87;
 not every number in that range has a row today — 57 of them are carried as row tags, the rest stand only as
-citations in older documents, and its highest row tag is KD-70; the
+citations in older documents, and its highest row tag is KD-71; the
 release-affecting highlights: static lighting only (no day/night dimming, no
 incremental relight); mobs have per-kind follow ranges, an A* chase arm and XP
 orbs, but wander and flee steer directly; redstone is measured and tick-driven
@@ -78,7 +78,7 @@ graceful stop on hardware; KD-36), `docs/operations/DEPENDENCY-POLICY.md`.
 |---|---|
 | Full regression matrix passes | **Yes** — five gates green on 2026-09-12, the day this candidate was cut: `cargo test --workspace --no-fail-fast` (**1 212** passed / 0 failed / 21 ignored, 78 suites), `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo check --target aarch64-unknown-linux-gnu`, `cargo deny check licenses bans sources` — all exit 0. **That figure is this release's own, and is not restated as current**: the tree has moved on (1 344 / 0 / 30 / 102 when P11-04..09 landed; 1 346 / 0 / 33 / 104 after AUDIT-10; 1 358 after AUDIT-11 remediation; 1 365 at `v0.1.0-rc.1`'s follower; 1 380 at the P12 landing; **1 384** after AUDIT-12 remediation — P13 not started), and `docs/testing/TEST-MATRIX.md` owns the current number. The table records what the release measured, which is why it keeps its own figure rather than tracking the owner. **The run logs live under the git-ignored `target/` on the build machine, not in this repository**, so they are evidence a reader cannot inspect; re-run the five commands in §2 to reproduce them. The P09 logs that were originally cited here record **1 189**, a run from before five tests were added — and this row previously said "the current figure is 1 196", which was true when written and is exactly the drift this note now prevents |
 | Conformance report produced | Yes — the Phase 09 acceptance report (git history, tag `phase-09-final`) + the sweep rows in `docs/testing/TEST-MATRIX.md` |
-| Known divergences documented | Yes — [PARITY-MATRIX.md](../vanilla-parity/PARITY-MATRIX.md), the single authority (today its identifiers span KD-01…KD-87 and 57 of them are carried as row tags, highest KD-70; the catalogue stood at KD-01…KD-38 when this candidate was cut) |
+| Known divergences documented | Yes — [PARITY-MATRIX.md](../vanilla-parity/PARITY-MATRIX.md), the single authority (today its identifiers span KD-01…KD-87 and 58 of them are carried as row tags, highest KD-71; the catalogue stood at KD-01…KD-38 when this candidate was cut) |
 | Release artifacts published | **Yes** — tag `v0.1.0-rc.1` on GitHub Releases with the x86_64 (Windows) and aarch64 (Pi) `mc-server` binaries and SHA-256 sums; source is the repository itself (public, MIT) |
 | 20 TPS on Pi 5 with 10 players | **Met for the scripted workload** — the `BENCHMARK-BASELINE.md` §4 acceptance run executed on a Pi 5 (Debian 13, release, on-device build): 30-min soak, settled MSPT medians 0.21/0.27/0.29 ms, zero settled overruns (§P09-Pi). Boundaries: scripted clients (KD-38), loopback, microSD |
 | Real-client acceptance | **No** — no Java client was driven; the scripted clients speak the exact TestClient conversation the E2E suite proves (KD-38). **That is this release's own measurement, and is not current**: a real 26.1.2 client has since been driven by the owner in the 2026-09-30 P19 access session — four runnable items, all passing — recorded in `docs/testing/P19-ACCESS-SESSION.md`; this row keeps what the release measured, and that file owns the current answer |
@@ -88,7 +88,7 @@ graceful stop on hardware; KD-36), `docs/operations/DEPENDENCY-POLICY.md`.
 - the Phase 09 acceptance report — git history (tag `phase-09-final`), distilled into `CHANGELOG.md`
 - `docs/testing/TEST-MATRIX.md` — what every test claims and how it could fail
 - [vanilla-parity/PARITY-MATRIX.md](../vanilla-parity/PARITY-MATRIX.md) — per-domain parity with cited evidence
-- `docs/vanilla-parity/PARITY-MATRIX.md` — the single parity/divergence authority (today its identifiers span KD-01…KD-87 with 57 carried as row tags, highest KD-70; KD-01…KD-38 at this release)
+- `docs/vanilla-parity/PARITY-MATRIX.md` — the single parity/divergence authority (today its identifiers span KD-01…KD-87 with 58 carried as row tags, highest KD-71; KD-01…KD-38 at this release)
 - `docs/performance/BENCHMARK-BASELINE.md` — every benchmark record + the Pi acceptance procedure
 - `docs/adr/ADR-0005-plugin-boundary.md` — plugin readiness: boundary, not API
 - `docs/architecture/system-overview.md` — how the crates fit together
