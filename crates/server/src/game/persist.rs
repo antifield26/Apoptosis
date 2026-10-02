@@ -189,35 +189,7 @@ impl Game {
                         .map_err(|error| error.to_string())
                 }) {
                 Some(Ok(mut chunk)) => {
-                    // Ores and carvers (P18-03 wiring): terrain → carvers →
-                    // ores, then structures and trees below. Both passes are
-                    // pure functions of (seed, chunk position), so a generated
-                    // chunk stays reproducible byte for byte and the
-                    // clean-marking below still holds. Empty sets are no-op
-                    // passes: a packless server generates P07 terrain.
-                    if !self.carvers.is_empty() || !self.ores.is_empty() {
-                        // Rebuilt from the seed for the same reason the tree
-                        // pass rebuilds its context below: one source of truth
-                        // for the seed, and no borrow of `self` held across the
-                        // mutable use of `chunk`.
-                        let context = mc_worldgen::WorldgenContext::overworld(
-                            mc_worldgen::WorldSeed::from_raw(self.random_seed),
-                        );
-                        let _carved = mc_worldgen::carve_chunk(
-                            &mut chunk,
-                            pos,
-                            &context,
-                            &self.carvers,
-                            &self.registries.blocks,
-                        );
-                        let _placed = mc_worldgen::populate_ores(
-                            &mut chunk,
-                            pos,
-                            &context,
-                            &self.ores,
-                            &self.registries.blocks,
-                        );
-                    }
+                    self.run_pack_passes(pos, &mut chunk);
                     // Left **clean**, which is the non-obvious part: this generator is
                     // deterministic, so a generated chunk is reproducible byte for byte
                     // from `(seed, pos)` at any later time. Persisting it buys nothing, and
@@ -751,6 +723,32 @@ impl Game {
             }
             self.block_entities.insert(entity);
         }
+    }
+
+    /// Pack-driven passes over fresh terrain: carvers, lakes, ores (P18-03, P20-01b).
+    ///
+    /// Order is terrain → carvers (flooded by height) → lakes → ores. All
+    /// passes are pure functions of (seed, chunk position), so a generated
+    /// chunk stays reproducible byte for byte. Empty sets are no-op passes: a
+    /// packless server generates P07 terrain. Extracted from
+    /// `load_or_create_chunk` when the lake pass pushed it over the line
+    /// budget — the call site keeps the ordering contract, this owns the
+    /// passes.
+    fn run_pack_passes(&self, pos: ChunkPos, chunk: &mut Chunk) {
+        if self.carvers.is_empty() && self.ores.is_empty() {
+            return;
+        }
+        // Rebuilt from the seed for the same reason the tree pass rebuilds
+        // its context below: one source of truth for the seed, and no borrow
+        // of `self` held across the mutable use of `chunk`.
+        let context = mc_worldgen::WorldgenContext::overworld(mc_worldgen::WorldSeed::from_raw(
+            self.random_seed,
+        ));
+        let _carved =
+            mc_worldgen::carve_chunk(chunk, pos, &context, &self.carvers, &self.registries.blocks);
+        let _lakes = mc_worldgen::place_lakes(chunk, pos, &context, &self.registries.blocks);
+        let _placed =
+            mc_worldgen::populate_ores(chunk, pos, &context, &self.ores, &self.registries.blocks);
     }
 
     /// Place whatever structure this chunk's selection picks, if any.

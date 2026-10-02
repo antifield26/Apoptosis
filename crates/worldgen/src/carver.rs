@@ -1,4 +1,4 @@
-//! Pack-driven cave and canyon carvers, with **no water fill** (P18-03).
+//! Pack-driven cave and canyon carvers, with water/lava fill (P18-03, P20-01b).
 //!
 //! ## What is implemented
 //!
@@ -9,9 +9,12 @@
 //! | `minecraft:cave` | `cave`, `cave_extra_underground` | winding tunnels with elliptical cross-section |
 //! | `minecraft:canyon` | `canyon` | long, tall, thin ravine along a slowly turning path |
 //!
-//! Both carve **air only**. `lava_level` is parsed and then **ignored**: a lava
-//! floor needs the fluid system (P20), and a dry carver is the honest partial.
-//! Water-filled carver output and lakes are **P20-01b** — named, not hidden.
+//! Carved cells are filled by height (P20-01b): at or below the pack's
+//! `lava_level` (as `above_bottom`, default 8) they become lava; above that
+//! and at or below sea level they become water; above sea level they stay dry
+//! air. The rule is a documented approximation of Vanilla's aquifer: Vanilla
+//! consults a per-cell fluid field, we consult two heights, so a cave mouth at
+//! the shoreline fills exactly to sea level where Vanilla may leave a dry lip.
 //! `debug_settings` (the pack's coloured-glass markers) are ignored entirely;
 //! they exist only for Vanilla's carver debug world.
 //!
@@ -40,9 +43,9 @@
 //!
 //! ## What is **not** implemented
 //!
-//! - **Water or lava in carvers** (P20-01b / P20 fluids).
-//! - **Aquifers.** Vanilla's carver consults an aquifer so a cave below sea
-//!   level can flood; we always leave dry air.
+//! - **Aquifers.** Vanilla's carver consults a per-cell aquifer field; we fill
+//!   by height (sea level / `lava_level`), so shoreline lips and perched water
+//!   differ. Surface lakes live in [`crate::lake`].
 //! - **Bit-identical tunnel geometry.** The walk (angle drift, radius
 //!   multipliers, floor level) consumes the pack's parameters and is our
 //!   documented approximation of `CaveWorldCarver` / `RavineWorldCarver`, not a
@@ -120,10 +123,55 @@ pub struct CarverConfig {
     pub thickness: FloatRange,
     /// Canyon vertical rotation per step (radians).
     pub vertical_rotation: FloatRange,
-    /// Lava level, parsed and **not applied** (P20). Kept so a later fluid pass
-    /// reads the pack value from here rather than re-parsing.
-    #[allow(dead_code)]
+    /// Lava level, as the pack writes it (`above_bottom`, default 8).
+    ///
+    /// P20-01b: cells at or below `min_y + lava_level` carve to lava instead
+    /// of air (the pack value is read here so no later pass re-parses it).
     pub lava_level: i32,
+}
+
+/// What a carved cell becomes, by height (P20-01b).
+///
+/// Vanilla consults a per-cell aquifer field; this struct carries the two
+/// heights our approximation fills by. All three ids come from the same
+/// registry in one place, so the fill can never disagree with the chunk's own
+/// air. A name the registry cannot resolve falls back to air (dry carve),
+/// which keeps a packless test registry working.
+#[derive(Debug, Clone, Copy)]
+struct FluidFill {
+    /// Registry air id.
+    air: i32,
+    /// `minecraft:water` default state, or air when unresolvable.
+    water: i32,
+    /// `minecraft:lava` default state, or air when unresolvable.
+    lava: i32,
+    /// Cells at or below this y flood with water (the dimension's sea level).
+    sea_level: i32,
+    /// Cells at or below this y flood with lava (`min_y + lava_level`).
+    lava_top: i32,
+}
+
+impl FluidFill {
+    /// The fill block for a carved cell at height `y`.
+    const fn fill_for(&self, y: i32) -> i32 {
+        if y <= self.lava_top {
+            self.lava
+        } else if y <= self.sea_level {
+            self.water
+        } else {
+            self.air
+        }
+    }
+
+    /// Whether `fill_for(y)` placed a fluid (used for stats).
+    const fn is_water(&self, y: i32, fill: i32) -> bool {
+        fill == self.water && self.water != self.air && y > self.lava_top
+    }
+
+    /// Whether `fill_for(y)` placed lava (used for stats).
+    const fn is_lava(&self, y: i32, fill: i32) -> bool {
+        fill == self.lava && self.lava != self.air && y <= self.lava_top
+    }
 }
 
 /// An ordered carver set.
@@ -280,8 +328,12 @@ pub struct CarverStats {
     pub sources_considered: usize,
     /// Source chunks that rolled a carver this chunk must honour.
     pub systems: usize,
-    /// Blocks changed from non-air to air.
+    /// Blocks changed from non-fluid to the height fill (air, water or lava).
     pub blocks_carved: usize,
+    /// Of `blocks_carved`, cells that flooded with water (P20-01b).
+    pub blocks_water: usize,
+    /// Of `blocks_carved`, cells that flooded with lava (P20-01b).
+    pub blocks_lava: usize,
     /// Candidate cells whose block was not replaceable (left alone).
     pub skipped_not_replaceable: usize,
     /// Candidate cells outside this chunk (clipped).
@@ -294,8 +346,20 @@ impl CarverStats {
         self.sources_considered += other.sources_considered;
         self.systems += other.systems;
         self.blocks_carved += other.blocks_carved;
+        self.blocks_water += other.blocks_water;
+        self.blocks_lava += other.blocks_lava;
         self.skipped_not_replaceable += other.skipped_not_replaceable;
         self.cells_outside += other.cells_outside;
+    }
+
+    /// Record one carved cell and its fluid kind.
+    const fn record_fill(&mut self, y: i32, fill: i32, fluids: &FluidFill) {
+        self.blocks_carved += 1;
+        if fluids.is_water(y, fill) {
+            self.blocks_water += 1;
+        } else if fluids.is_lava(y, fill) {
+            self.blocks_lava += 1;
+        }
     }
 }
 
@@ -313,7 +377,19 @@ pub fn carve_chunk(
 ) -> CarverStats {
     let mut total = CarverStats::default();
     let air = registry.air_id();
+    // Fluid states resolve once per chunk, not per cell: the default state is
+    // the source block, which is what a generator must place (flowing levels
+    // belong to the simulation, P20-01). Unresolvable names fall back to air.
+    let water = registry.default_state("minecraft:water").unwrap_or(air);
+    let lava = registry.default_state("minecraft:lava").unwrap_or(air);
     for carver in carvers.carvers() {
+        let fluids = FluidFill {
+            air,
+            water,
+            lava,
+            sea_level: context.sea_level,
+            lava_top: context.min_y.saturating_add(carver.lava_level),
+        };
         for dz in -CARVER_SOURCE_RADIUS_CHUNKS..=CARVER_SOURCE_RADIUS_CHUNKS {
             for dx in -CARVER_SOURCE_RADIUS_CHUNKS..=CARVER_SOURCE_RADIUS_CHUNKS {
                 let source = ChunkPos::new(pos.x.saturating_add(dx), pos.z.saturating_add(dz));
@@ -339,7 +415,7 @@ pub fn carve_chunk(
                     source,
                     &mut random,
                     registry,
-                    air,
+                    &fluids,
                     &mut local,
                 );
                 total.record(local);
@@ -357,7 +433,7 @@ fn walk_and_carve(
     source: ChunkPos,
     random: &mut RandomSource,
     registry: &BlockRegistry,
-    air: i32,
+    fluids: &FluidFill,
     stats: &mut CarverStats,
 ) {
     let base_x = f64::from(source.x.saturating_mul(SECTION_WIDTH)) + 8.0;
@@ -402,7 +478,7 @@ fn walk_and_carve(
                     v_r,
                     Some(floor),
                     registry,
-                    air,
+                    fluids,
                     stats,
                 );
             }
@@ -413,7 +489,7 @@ fn walk_and_carve(
                 let h_r = (base_radius * h_mult * taper).max(0.35);
                 let v_r = (thickness * y_scale.abs().max(0.5) * 0.5).max(1.0);
                 carve_ellipsoid(
-                    chunk, context, carver, x, y, z, h_r, v_r, None, registry, air, stats,
+                    chunk, context, carver, x, y, z, h_r, v_r, None, registry, fluids, stats,
                 );
             }
         }
@@ -448,7 +524,7 @@ fn carve_ellipsoid(
     ry: f64,
     floor: Option<f64>,
     registry: &BlockRegistry,
-    air: i32,
+    fluids: &FluidFill,
     stats: &mut CarverStats,
 ) {
     let min_y = context.min_y;
@@ -483,15 +559,21 @@ fn carve_ellipsoid(
                     continue;
                 }
                 let current = chunk.get_block(x, y, z);
-                if current == air {
+                let fill = fluids.fill_for(y);
+                if current == fill {
+                    continue;
+                }
+                // Fluid cells are terminal: a cave that reaches water stays
+                // water, it does not re-carve it to air on a later step.
+                if current == fluids.water || current == fluids.lava {
                     continue;
                 }
                 if !carver.replaceable.contains(&current) {
                     stats.skipped_not_replaceable += 1;
                     continue;
                 }
-                if matches!(chunk.set_block(x, y, z, air, registry), Ok(Some(_))) {
-                    stats.blocks_carved += 1;
+                if matches!(chunk.set_block(x, y, z, fill, registry), Ok(Some(_))) {
+                    stats.record_fill(y, fill, fluids);
                 }
             }
         }
@@ -593,7 +675,7 @@ mod tests {
     }
 
     #[test]
-    fn a_forced_cave_carves_air_out_of_stone_deterministically() {
+    fn a_forced_cave_carves_deterministically_and_floods_by_height() {
         let blocks = registry();
         let ctx = context();
         let set = CarverSet::from_carvers(vec![cave(&blocks, 1.0)]);
@@ -605,18 +687,101 @@ mod tests {
         assert_eq!(a, b);
         assert!(sa.systems > 0, "{sa:?}");
         assert!(sa.blocks_carved > 0, "{sa:?}");
+        // The stone helper fills y in -64..32 and this cave walks y in
+        // -40..-10: every carved cell is below sea level (63) but above the
+        // pack's lava floor (-64 + 8 = -56), so the whole system is water.
+        assert!(sa.blocks_water > 0, "{sa:?}");
+        assert_eq!(sa.blocks_water, sa.blocks_carved, "{sa:?}");
+        assert_eq!(sa.blocks_lava, 0, "{sa:?}");
+        let water = blocks.default_state("minecraft:water").expect("water");
+        let lava = blocks.default_state("minecraft:lava").expect("lava");
         let air = blocks.air_id();
-        let mut air_seen = 0;
+        let mut fluid_seen = 0;
         for y in ctx.min_y..ctx.min_y + 96 {
             for z in 0..16 {
                 for x in 0..16 {
-                    if a.get_block(x, y, z) == air {
-                        air_seen += 1;
+                    let cell = a.get_block(x, y, z);
+                    assert_ne!(cell, air, "no dry air may remain below sea level");
+                    if cell == water || cell == lava {
+                        fluid_seen += 1;
                     }
                 }
             }
         }
-        assert_eq!(air_seen, sa.blocks_carved);
+        assert_eq!(fluid_seen, sa.blocks_carved);
+    }
+
+    #[test]
+    fn carving_at_or_below_the_lava_floor_places_lava() {
+        let blocks = registry();
+        let ctx = context();
+        let mut config = cave(&blocks, 1.0);
+        config.name = "test_deep_cave".to_owned();
+        config.y = HeightDist::Uniform {
+            min: YAnchor::Absolute(-62),
+            max: YAnchor::Absolute(-58),
+        };
+        let set = CarverSet::from_carvers(vec![config]);
+        let mut chunk = stone_chunk(&blocks);
+        let before = chunk.clone();
+        let stats = carve_chunk(&mut chunk, ChunkPos::new(0, 0), &ctx, &set, &blocks);
+        assert!(stats.blocks_carved > 0, "{stats:?}");
+        assert!(stats.blocks_lava > 0, "{stats:?}");
+        assert_ne!(chunk, before);
+        // Perturbation pin (DoD 13): lava must come from the fill rule, not
+        // from the fixture. Every lava cell sits at or below the floor.
+        let lava = blocks.default_state("minecraft:lava").expect("lava");
+        let lava_top = ctx.min_y + 8;
+        for y in ctx.min_y..ctx.min_y + 96 {
+            for z in 0..16 {
+                for x in 0..16 {
+                    if chunk.get_block(x, y, z) == lava {
+                        assert!(y <= lava_top, "lava at y={y} above floor {lava_top}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn carving_above_sea_level_stays_dry() {
+        let blocks = registry();
+        let ctx = context();
+        let set = CarverSet::from_carvers(vec![high_cave(&blocks)]);
+        let mut chunk = high_stone_chunk(&blocks);
+        let stats = carve_chunk(&mut chunk, ChunkPos::new(0, 0), &ctx, &set, &blocks);
+        assert!(stats.blocks_carved > 0, "{stats:?}");
+        assert_eq!(stats.blocks_water, 0, "{stats:?}");
+        assert_eq!(stats.blocks_lava, 0, "{stats:?}");
+    }
+
+    fn high_cave(blocks: &BlockRegistry) -> super::CarverConfig {
+        let mut config = cave(blocks, 1.0);
+        config.name = "test_high_cave".to_owned();
+        config.y = HeightDist::Uniform {
+            min: YAnchor::Absolute(70),
+            max: YAnchor::Absolute(100),
+        };
+        config
+    }
+
+    fn high_stone_chunk(blocks: &BlockRegistry) -> Chunk {
+        let ctx = context();
+        let mut chunk = Chunk::air(
+            ChunkPos::new(0, 0),
+            ctx.min_section_y(),
+            ctx.section_count(),
+            blocks,
+        );
+        let stone = blocks.default_state("minecraft:stone").expect("stone");
+        for y in ctx.min_y..120 {
+            for z in 0..16 {
+                for x in 0..16 {
+                    let _ = chunk.set_block(x, y, z, stone, blocks);
+                }
+            }
+        }
+        chunk
     }
 
     #[test]

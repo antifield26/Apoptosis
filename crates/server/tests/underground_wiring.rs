@@ -101,16 +101,18 @@ fn cave_set(game: &Game) -> CarverSet {
     }])
 }
 
-/// Count coal-ore cells and carved-air cells in one generated chunk.
+/// Count coal-ore cells and carved cells in one generated chunk.
 ///
 /// The 0..=16 band is solid stone on generated terrain — the surface never
-/// dips that low — so any air there was carved, not provided.
+/// dips that low — so any air or water there was carved, not provided
+/// (P20-01b: carvers flood at/below sea level, and this band is below it).
 fn scan_chunk(game: &Game, pos: ChunkPos) -> (usize, usize) {
     let blocks = &game.registries().blocks;
     let coal = blocks
         .default_state("minecraft:coal_ore")
         .expect("coal ore");
     let air = blocks.air_id();
+    let water = blocks.default_state("minecraft:water").expect("water");
     let chunk = game
         .world()
         .chunk(pos)
@@ -124,7 +126,7 @@ fn scan_chunk(game: &Game, pos: ChunkPos) -> (usize, usize) {
                 if id == coal {
                     coal_seen += 1;
                 }
-                if (0..=16).contains(&y) && id == air {
+                if (0..=16).contains(&y) && (id == air || id == water) {
                     carved_seen += 1;
                 }
             }
@@ -250,6 +252,7 @@ fn live_generation_matches_the_documented_pass_order() {
     let blocks = game.registries().blocks.clone();
     // The documented order, replayed outside the server (structures are
     // empty without packs, so the direct replay skips them honestly).
+    // P20-01b: terrain → carvers → lakes → ores, then trees.
     let context =
         WorldgenContext::overworld(WorldSeed::from_raw(mc_server::game::DEFAULT_RANDOM_SEED));
     let generator =
@@ -262,6 +265,7 @@ fn live_generation_matches_the_documented_pass_order() {
             .generate_chunk(pos, &blocks)
             .expect("direct terrain");
         let _ = carve_chunk(&mut direct, pos, &context, &carvers, &blocks);
+        let _ = mc_worldgen::place_lakes(&mut direct, pos, &context, &blocks);
         let _ = populate_ores(&mut direct, pos, &context, &ores, &blocks);
         generator.decorate(&mut direct, pos, &blocks);
         // The live path marks generated chunks clean (persistence contract);

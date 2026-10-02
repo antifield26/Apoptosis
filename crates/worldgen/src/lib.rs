@@ -39,8 +39,8 @@
 //! | Structure *placement* | one whole template per selected chunk on a documented grid; **not** Vanilla's `RandomSpreadStructurePlacement`, and **not** jigsaw assembly |
 //! | Structure *types* | templates a data pack ships; mineshafts, strongholds and fortresses are procedural in Vanilla and **are not implemented** |
 //! | **Ores** | **pack-driven** counts, y bands, size and air-exposure discard from `configured_feature`/`placed_feature` (P18-03); blob geometry is our approximation of `OreFeature` |
-//! | **Caves / canyons** | **pack-driven** cave + canyon carvers (P18-03), dry air only — lakes and water-filled carvers are P20-01b |
-//! | Lakes, springs, aquifers, water in carvers | **not implemented** (P20-01b) |
+//! | **Caves / canyons** | **pack-driven** cave + canyon carvers (P18-03), flooded by height since P20-01b (lava at/below `min_y + lava_level`, water to sea level, dry above) |
+//! | Lakes | **seeded surface basins** (P20-01b): one chance per chunk, water only, lava lakes named as gap |
 //!
 //! Every constant in this crate carries one of four labels: **verified** (with a
 //! source), **derived** (from something verified, derivation written out),
@@ -61,14 +61,16 @@
 //! ## Generation order for one chunk (P18-03)
 //!
 //! ```text
-//! terrain fill  →  carvers (cave/canyon, dry)  →  ore veins  →  trees / structures
+//! terrain fill  →  carvers (cave/canyon, flooded by height)  →  lakes  →  ore veins  →  trees / structures
 //! ```
 //!
 //! Carvers run before ores so a vein can be exposed to cave air and hit its
 //! `discard_chance_on_air_exposure`, which is the buried-vein behaviour the
-//! pack encodes. [`ore`] and [`carver`] are separate passes so a caller can
-//! skip either; `tests/ore_carver_stats.rs` measures both over a 32×32-chunk
-//! region with tolerances written before the run.
+//! pack encodes. Lakes run between them: a lake basin is surface terrain, and
+//! an ore vein under a lake is buried, not exposed. [`ore`] and [`carver`] are
+//! separate passes so a caller can skip either; `tests/ore_carver_stats.rs`
+//! measures both over a 32×32-chunk region with tolerances written before the
+//! run.
 
 #![forbid(unsafe_code)]
 // Terrain, noise and features narrow and widen constantly: block coordinates are
@@ -88,6 +90,7 @@ pub mod biome;
 pub mod carver;
 pub mod existing;
 pub mod features;
+pub mod lake;
 pub mod noise;
 pub mod ore;
 pub mod pack_json;
@@ -109,6 +112,10 @@ pub use existing::{
 pub use features::{
     OakPlacement, TreeDensity, TreeStats, place_oak_at, populate_oak_trees,
     populate_oak_trees_flat, tree_fits_in_chunk,
+};
+pub use lake::{
+    LAKE_CHANCE_PER_CHUNK, LAKE_DEPTH_MAX, LAKE_DEPTH_MIN, LAKE_MAX_ELEVATION_ABOVE_SEA,
+    LAKE_RADIUS_MAX, LAKE_RADIUS_MIN, LakeStats, place_lakes,
 };
 pub use noise::{FractalNoise, MAX_OCTAVES, PerlinNoise};
 pub use ore::{
