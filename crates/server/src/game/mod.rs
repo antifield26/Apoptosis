@@ -200,6 +200,12 @@ mod growth;
 mod persist;
 mod session;
 mod tick;
+mod weather;
+
+pub(crate) use weather::{
+    RAIN_DELAY_MAX, RAIN_DELAY_MIN, RAIN_DURATION_MAX, RAIN_DURATION_MIN, THUNDER_DURATION_MAX,
+    THUNDER_DURATION_MIN,
+};
 
 use self::session::Session;
 
@@ -954,6 +960,13 @@ pub struct Game {
     /// Same lifecycle: crops above hold dry farmland, anything else lets it
     /// turn to dirt.
     maintains_farmland: BTreeSet<i32>,
+    /// Live weather (P20-03).
+    ///
+    /// The jar's `WeatherData` plus the two eased client levels. Loaded from
+    /// `weather.dat` at boot, advanced at the head of `ScheduledTicks`,
+    /// written back on every save. Default is clear skies with zeroed timers
+    /// — what the jar's own fresh file records.
+    weather: self::weather::WeatherState,
     /// Who may run operator commands, loaded from `ops.json` at construction.
     ///
     /// Loaded once rather than per login, matching Vanilla's startup read. A change to the
@@ -1300,6 +1313,7 @@ impl Game {
             carvers: Box::new(mc_worldgen::carver::CarverSet::empty()),
             grows_crops: BTreeSet::new(),
             maintains_farmland: BTreeSet::new(),
+            weather: self::weather::WeatherState::default(),
             operators,
             ops_directory: None,
             whitelist: crate::whitelist::Whitelist::new(),

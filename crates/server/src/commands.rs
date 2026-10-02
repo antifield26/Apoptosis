@@ -297,6 +297,15 @@ impl Game {
             .with_argument(Argument::optional("action", ArgumentKind::Word))
             .with_argument(Argument::optional("value", ArgumentKind::Word))
             .requiring(PermissionLevel::Operator));
+        // Vanilla gates `/weather` at level 2 as well (`Commands.LEVEL_GAMEMASTERS`,
+        // jar `WeatherCommand.register`), so it is operator-only here. Duration
+        // is plain integer ticks (Vanilla's `TimeArgument` also takes `1d`
+        // suffixes — a named gap); absent means "sample the duration provider",
+        // never a fixed 6000 (jar `getDuration`).
+        add(Command::new("weather", "Set the weather")
+            .with_argument(Argument::optional("kind", ArgumentKind::Word))
+            .with_argument(Argument::optional("duration", ArgumentKind::Word))
+            .requiring(PermissionLevel::Operator));
         // `/tp` is Vanilla level 2 (wiki: Commands/teleport), so level-0
         // players cannot reach it — AUDIT-19 G-09 found the default `All`
         // permission left it open. Recorded as a deliberate divergence from
@@ -672,6 +681,7 @@ impl Game {
             "list" => Ok(self.command_list()),
             "say" => Ok(self.command_say(parsed, report)?),
             "time" => Ok(self.command_time(parsed, report)?),
+            "weather" => Ok(self.command_weather(parsed, report)),
             "tp" | "teleport" => Ok(self.command_tp(id, parsed)),
             "execute" => {
                 // The chain parser owns the grammar; the token list is the raw argument text so
@@ -851,6 +861,78 @@ impl Game {
             "Set the time to {}",
             (self.tick_count().cast_signed() + self.time_offset()).rem_euclid(24_000)
         )))
+    }
+
+    /// `/weather <clear|rain|thunder> [duration]` (P20-03).
+    ///
+    /// Jar `WeatherCommand`: `clear` → `(RAIN_DELAY.sample or t, 0, false,
+    /// false)`, `rain` → `(0, RAIN_DURATION.sample or t, true, false)`,
+    /// `thunder` → `(0, THUNDER_DURATION.sample or t, true, true).` An absent
+    /// duration samples the provider (never a fixed number); a present one is
+    /// integer ticks, minimum 1 like the jar's `TimeArgument.time(1)`.
+    fn command_weather(
+        &mut self,
+        parsed: &mc_command::dispatch::ParsedCommand,
+        report: &mut TickReport,
+    ) -> CommandResult {
+        const USAGE: &str = "Usage: /weather <clear|rain|thunder> [duration ticks]";
+        let Some(kind) = parsed.string(0) else {
+            return CommandResult::message(USAGE.to_owned());
+        };
+        let duration = match parsed.string(1) {
+            None => None,
+            Some(word) => match word.parse::<i32>() {
+                Ok(ticks) if ticks >= 1 => Some(ticks),
+                _ => {
+                    return CommandResult::message(
+                        "The duration must be at least 1 tick".to_owned(),
+                    );
+                }
+            },
+        };
+        // `getDuration`: absent samples the duration provider with the level's
+        // RNG — here the game's seeded source, which is also what the cycle
+        // itself draws from.
+        let mut sample = |min: i32, max: i32| self.sample_uniform(min, max);
+        let (clear, rain, raining, thundering, label) = match kind {
+            "clear" => (
+                duration.unwrap_or_else(|| {
+                    sample(crate::game::RAIN_DELAY_MIN, crate::game::RAIN_DELAY_MAX)
+                }),
+                0,
+                false,
+                false,
+                "clear",
+            ),
+            "rain" => (
+                0,
+                duration.unwrap_or_else(|| {
+                    sample(
+                        crate::game::RAIN_DURATION_MIN,
+                        crate::game::RAIN_DURATION_MAX,
+                    )
+                }),
+                true,
+                false,
+                "rain",
+            ),
+            "thunder" => (
+                0,
+                duration.unwrap_or_else(|| {
+                    sample(
+                        crate::game::THUNDER_DURATION_MIN,
+                        crate::game::THUNDER_DURATION_MAX,
+                    )
+                }),
+                true,
+                true,
+                "thunder",
+            ),
+            _ => return CommandResult::message(USAGE.to_owned()),
+        };
+        self.set_weather_parameters(clear, rain, raining, thundering, report);
+        info!(from = %parsed.source.name, kind = label, "weather set");
+        CommandResult::message(format!("Set the weather to {label}"))
     }
 
     /// A `/time` value word: an integer, or one of Vanilla's presets

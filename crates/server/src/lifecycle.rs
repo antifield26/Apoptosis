@@ -539,6 +539,12 @@ impl<H: TickHook> Server<H> {
             }
         }
 
+        // Weather (P20-03): `weather.dat` into the game beside the packs. A
+        // missing file is clear skies; a corrupt one warns inside the loader
+        // and starts clear. Never fatal to the boot (unlike the seed, weather
+        // re-randomizes — there is nothing to fork).
+        game.load_weather(&self.config.storage.world_dir);
+
         // The lifecycle is the authority for the player cap, so it tells the game
         // rather than the game reading the config itself (`/list` is the only consumer).
         game.set_max_players(self.config.network.max_players);

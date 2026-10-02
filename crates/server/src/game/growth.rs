@@ -22,9 +22,8 @@
 //! Done: the sweep draws real positions (P20-01 only counted them), wheat,
 //! carrots, potatoes and beetroots grow by the rules above, farmland wets and
 //! dries by the rule above. Named gaps, each owned by a later slice or phase:
-//! rain never falls here (the jar's `isNearWater || isRainingAt` disjunction
-//! runs with its second arm always false until P20-03, so rain-fed hydration
-//! and the `/weather` half do not exist); hoe tilling and trampling
+//! rain falls through it since P20-03 (`is_raining_at` reads live sky);
+//! hoe tilling and trampling
 //! are player/entity hooks, not random ticks (slice 2); saplings, grass
 //! spread, leaf decay, cane, cactus and bone meal are further handlers on the
 //! same dispatch (slice 2); `turnToDirt` does not push entities up; crop
@@ -175,9 +174,8 @@ impl Game {
         let Some(moisture) = int_property(&properties, "moisture") else {
             return false;
         };
-        // P20-03 owns weather: nothing rains here yet, so the rain arm of the
-        // jar's `isNearWater || isRainingAt` disjunction is always false.
-        let wet = self.farmland_is_near_water(x, y, z);
+        // The rain arm reads live sky since P20-03.
+        let wet = self.farmland_is_near_water(x, y, z) || self.is_raining_at(x, y + 1, z);
         if wet {
             if moisture >= MAX_MOISTURE {
                 return false;

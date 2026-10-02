@@ -280,6 +280,9 @@ impl Game {
         match phase {
             TickPhase::Network => self.phase_network(report),
             TickPhase::ScheduledTicks => {
+                // World time and weather first (the jar's `tickTime()` slot,
+                // ADR-0009 §2.2), then the due block scheduled ticks.
+                self.tick_weather(report);
                 self.tick_scheduled(tick, report);
                 Ok(())
             }

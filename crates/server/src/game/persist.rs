@@ -893,6 +893,15 @@ impl Game {
                 "world flush reported failures; dirty chunks keep their flags for retry"
             );
         }
+        // Weather rides every save (P20-03): the document is tiny, timers move
+        // every tick, and a crash between saves must resume the storm rather
+        // than clear skies. A weather write that fails warns rather than
+        // failing the save — chunks are the payload, weather is along for it.
+        if let Err(error) =
+            mc_persistence::level::write_weather(storage.root(), &self.weather.to_document())
+        {
+            warn!(%error, "weather document could not be written");
+        }
         Ok(())
     }
 

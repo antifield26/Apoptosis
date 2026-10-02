@@ -87,6 +87,78 @@ pub fn world_gen_settings_paths(world_root: &Path) -> [PathBuf; 2] {
     ]
 }
 
+/// File name of the 26.1 weather document (`data/minecraft/weather.dat`).
+pub const WEATHER_FILE: &str = "weather.dat";
+
+/// Paths a 26.1 world may keep [`WEATHER_FILE`] at, most likely first.
+///
+/// Same two placements as [`world_gen_settings_paths`]: the global
+/// `<world>/data/minecraft/` tree, then the overworld's own 26.1 tree. A real
+/// 26.1.2 world carries `data/minecraft/weather.dat` (measured on the
+/// evidence world: `{DataVersion: 4790, data: {rain_time, raining,
+/// thundering, thunder_time, clear_weather_time}}`); the second placement is
+/// the symmetric fallback, not a second measurement.
+#[must_use]
+pub fn weather_paths(world_root: &Path) -> [PathBuf; 2] {
+    [
+        world_root.join("data").join("minecraft").join(WEATHER_FILE),
+        DimensionLayout::modern(world_root, &Dimension::Overworld)
+            .data_dir()
+            .join(WEATHER_FILE),
+    ]
+}
+
+/// Read a world's 26.1 weather document, if it has one.
+///
+/// Returns `Ok(None)` when neither candidate path exists — a fresh world has
+/// no weather yet, which is not an error: the caller starts clear with zeroed
+/// timers (what the jar's own fresh `weather.dat` records).
+///
+/// # Errors
+///
+/// [`ServerError::Operational`] when a document exists but cannot be read, and
+/// [`ServerError::CorruptData`] when it is not a gzip NBT document. Unlike a
+/// missing file, a present-but-unreadable document is loud: silently
+/// restarting a thunderstorm as clear skies would desync every client-visible
+/// timer the operator may be watching.
+pub fn read_weather(world_root: &Path) -> ServerResult<Option<NbtTag>> {
+    for path in weather_paths(world_root) {
+        if !path.is_file() {
+            continue;
+        }
+        let bytes = std::fs::read(&path).map_err(|e| {
+            ServerError::Operational(format!("cannot read {}: {e}", path.display()))
+        })?;
+        let document = crate::save::decode_gzip_nbt(&bytes).map_err(|e| match e {
+            ServerError::CorruptData(message) => ServerError::CorruptData(format!(
+                "{} is not a readable weather document: {message}",
+                path.display()
+            )),
+            other => other,
+        })?;
+        return Ok(Some(document));
+    }
+    Ok(None)
+}
+
+/// Write a world's 26.1 weather document to the global placement.
+///
+/// Always the first candidate of [`weather_paths`]: one writer, one place,
+/// so two documents can never disagree. Atomic with no backup — unlike
+/// `level.dat`, a weather document regenerates its timers from scratch, so a
+/// crash between staging and commit keeps the previous timers rather than
+/// losing the world.
+///
+/// # Errors
+///
+/// [`ServerError::Operational`] when the document cannot be encoded or the
+/// atomic write fails.
+pub fn write_weather(world_root: &Path, document: &NbtTag) -> ServerResult<()> {
+    let path = weather_paths(world_root)[0].clone();
+    let bytes = crate::save::encode_gzip_nbt("", document)?;
+    crate::save::write_atomic(&path, &bytes, false)
+}
+
 /// Read a world's 26.1 world-gen settings document, if it has one.
 ///
 /// The seed inside it is *not* interpreted here: which key path holds it is

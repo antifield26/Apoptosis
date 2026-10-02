@@ -687,9 +687,13 @@ fn dispatcher_counts_pin_the_kd_31_and_kd_32_rows() {
         names.contains(&"whitelist"),
         "P19-01 adds the whitelist root; tree has {names:?}"
     );
+    assert!(
+        names.contains(&"weather"),
+        "P20-03 adds the weather root; tree has {names:?}"
+    );
     assert_eq!(
-        kd31, 39,
-        "KD-31 counts {kd31} roots (36 at P19-02 + save-all/save-off/save-on); bump the tree \
+        kd31, 40,
+        "KD-31 counts {kd31} roots (39 at P20-02 + weather); bump the tree \
          and this pin plus the parity row move together"
     );
 
