@@ -306,6 +306,19 @@ impl Game {
             .with_argument(Argument::optional("kind", ArgumentKind::Word))
             .with_argument(Argument::optional("duration", ArgumentKind::Word))
             .requiring(PermissionLevel::Operator));
+        // Vanilla gates `/spawnpoint` at level 2 as well (jar
+        // `SetSpawnCommand.register`: `LEVEL_GAMEMASTERS`). Five loose words:
+        // the shape (`self`, `player`, `pos`, `player pos`, `player pos yaw`)
+        // is decided by count in the executor, like `/time` parses its words
+        // by hand. Multi-target selectors narrow to one online player (named
+        // gap); `RotationArgument` narrows to a yaw double.
+        add(Command::new("spawnpoint", "Set a player's spawn point")
+            .with_argument(Argument::optional("a", ArgumentKind::Word))
+            .with_argument(Argument::optional("b", ArgumentKind::Word))
+            .with_argument(Argument::optional("c", ArgumentKind::Word))
+            .with_argument(Argument::optional("d", ArgumentKind::Word))
+            .with_argument(Argument::optional("e", ArgumentKind::Word))
+            .requiring(PermissionLevel::Operator));
         // `/tp` is Vanilla level 2 (wiki: Commands/teleport), so level-0
         // players cannot reach it — AUDIT-19 G-09 found the default `All`
         // permission left it open. Recorded as a deliberate divergence from
@@ -682,6 +695,7 @@ impl Game {
             "say" => Ok(self.command_say(parsed, report)?),
             "time" => Ok(self.command_time(parsed, report)?),
             "weather" => Ok(self.command_weather(parsed, report)),
+            "spawnpoint" => Ok(self.command_spawnpoint(id, parsed)),
             "tp" | "teleport" => Ok(self.command_tp(id, parsed)),
             "execute" => {
                 // The chain parser owns the grammar; the token list is the raw argument text so
@@ -933,6 +947,115 @@ impl Game {
         self.set_weather_parameters(clear, rain, raining, thundering, report);
         info!(from = %parsed.source.name, kind = label, "weather set");
         CommandResult::message(format!("Set the weather to {label}"))
+    }
+
+    /// `/spawnpoint [player] [x y z] [yaw]` (P20-04 slice 2).
+    ///
+    /// Jar `SetSpawnCommand` takes player selectors, a block pos and a
+    /// rotation at level 2; this build takes one online player (name or
+    /// `@s`), integer triples and a yaw double. Set blindly — even mid-air —
+    /// like the jar: obstruction is judged at respawn, not here.
+    fn command_spawnpoint(
+        &mut self,
+        id: mc_network::bridge::ConnectionId,
+        parsed: &mc_command::dispatch::ParsedCommand,
+    ) -> CommandResult {
+        const USAGE: &str = "Usage: /spawnpoint [player] [<x> <y> <z>] [<yaw>]";
+        let words: Vec<&str> = (0..5).filter_map(|i| parsed.string(i)).collect();
+        // Split into (target word?, position words, yaw word?) by count, with
+        // the 4-word ambiguity resolved jar-side-out: a leading number means
+        // self + pos + yaw, a leading name means target + pos.
+        let (target_word, pos_words, yaw_word): (Option<&str>, Vec<&str>, Option<&str>) =
+            match words.as_slice() {
+                [] => (None, vec![], None),
+                [target] => (Some(target), vec![], None),
+                [x, y, z] => (None, vec![x, y, z], None),
+                [a, x, y, z] => {
+                    if a.parse::<i32>().is_ok() {
+                        // Four numbers: self + pos + yaw.
+                        (None, vec![a, x, y], Some(z))
+                    } else {
+                        (Some(a), vec![x, y, z], None)
+                    }
+                }
+                [a, x, y, z, yaw] => (Some(a), vec![x, y, z], Some(yaw)),
+                _ => return CommandResult::message(USAGE.to_owned()),
+            };
+        // Every shaped form above carries exactly three position words —
+        // or none at all (bare form: own feet). Anything else is a usage
+        // error, not a silent reinterpret.
+        let (pos_words, yaw_word) = match (pos_words.as_slice(), yaw_word) {
+            ([], None) => (vec![], None),
+            ([x, y, z], yaw) => (vec![x, y, z], yaw),
+            _ => return CommandResult::message(USAGE.to_owned()),
+        };
+        let target = match target_word {
+            None | Some("@s") => id,
+            Some(name) => match self.session_id_by_name(name) {
+                Some(target) => target,
+                None => {
+                    return CommandResult::message(format!("{name} is not online."));
+                }
+            },
+        };
+        let (pos, yaw) = match pos_words.as_slice() {
+            [] => {
+                let Some(session) = self.sessions.get(&target) else {
+                    return CommandResult::message(USAGE.to_owned());
+                };
+                // Feet block coords: positions are finite by the movement
+                // gate, and `as` saturates rather than panics out of range.
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "finite feet position narrowed to block coords; saturates, never panics"
+                )]
+                let pos = (
+                    session.player.position.x.floor() as i32,
+                    session.player.position.y.floor() as i32,
+                    session.player.position.z.floor() as i32,
+                );
+                ((pos.0, pos.1, pos.2), session.player.yaw)
+            }
+            [x, y, z] => {
+                let (Some(x), Some(y), Some(z)) = (
+                    x.parse::<i32>().ok(),
+                    y.parse::<i32>().ok(),
+                    z.parse::<i32>().ok(),
+                ) else {
+                    return CommandResult::message(USAGE.to_owned());
+                };
+                let yaw = match yaw_word {
+                    None => self
+                        .sessions
+                        .get(&target)
+                        .map_or(0.0, |session| session.player.yaw),
+                    Some(word) => match word.parse::<f32>() {
+                        Ok(yaw) if yaw.is_finite() => yaw,
+                        _ => return CommandResult::message(USAGE.to_owned()),
+                    },
+                };
+                ((x, y, z), yaw)
+            }
+            _ => return CommandResult::message(USAGE.to_owned()),
+        };
+        let Some(session) = self.sessions.get_mut(&target) else {
+            return CommandResult::message(USAGE.to_owned());
+        };
+        let name = session.name.clone();
+        let pitch = session.player.pitch;
+        // Command points are forced (jar `SetSpawnCommand`): they spawn
+        // blind when passable, unlike beds, which need their block.
+        session.respawn = Some(crate::game::RespawnPoint {
+            pos,
+            yaw,
+            pitch,
+            forced: true,
+        });
+        info!(from = %parsed.source.name, target = %name, ?pos, yaw, "spawn point set");
+        CommandResult::message(format!(
+            "Set {name}'s spawn point to ({}, {}, {})",
+            pos.0, pos.1, pos.2
+        ))
     }
 
     /// A `/time` value word: an integer, or one of Vanilla's presets

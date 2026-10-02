@@ -105,6 +105,55 @@ pub fn peek_pos(tag: &NbtTag) -> Option<mc_world::Vec3> {
     Some(mc_world::Vec3::new(x, y, z))
 }
 
+/// Respawn-point fields of a decoded player compound: `SpawnX/Y/Z` ints plus
+/// `SpawnAngle` float and the `SpawnForced` flag, or `None` when any is
+/// missing or malformed.
+///
+/// Vanilla's own keys (`Player`: `SpawnX`, `SpawnY`, `SpawnZ`, `SpawnAngle`,
+/// `SpawnDimension`, `SpawnForced`); the dimension is always this build's
+/// overworld so it is not read — but it round-trips below, so a file that
+/// carries it keeps it.
+#[must_use]
+pub fn peek_spawn(tag: &NbtTag) -> Option<(i32, i32, i32, f32, bool)> {
+    let x = tag.get_i32("SpawnX")?;
+    let y = tag.get_i32("SpawnY")?;
+    let z = tag.get_i32("SpawnZ")?;
+    let angle = tag.get_f64("SpawnAngle").unwrap_or(0.0);
+    if !angle.is_finite() {
+        return None;
+    }
+    // Finite-checked above: the file's yaw narrowed to the f32 field.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "finite-checked file yaw narrowed to the f32 rotation field"
+    )]
+    let yaw = angle as f32;
+    let forced = !matches!(tag.get("SpawnForced"), None | Some(NbtTag::Byte(0)));
+    Some((x, y, z, yaw, forced))
+}
+
+/// Respawn-point entries for a player compound: `SpawnX/Y/Z`, `SpawnAngle`,
+/// `SpawnForced`, plus the `SpawnDimension` the file shape carries.
+///
+/// Written by the server on leave next to `Player::to_nbt` (which does not
+/// model respawn — the entity crate never sees it, as with the session's
+/// death location). A missing point writes nothing: no keys means world
+/// spawn, which is also what a fresh file says.
+#[must_use]
+pub fn spawn_entries(pos: (i32, i32, i32), yaw: f32, forced: bool) -> Vec<(String, NbtTag)> {
+    vec![
+        ("SpawnX".to_owned(), NbtTag::Int(pos.0)),
+        ("SpawnY".to_owned(), NbtTag::Int(pos.1)),
+        ("SpawnZ".to_owned(), NbtTag::Int(pos.2)),
+        ("SpawnAngle".to_owned(), NbtTag::Float(yaw)),
+        (
+            "SpawnDimension".to_owned(),
+            NbtTag::String("minecraft:overworld".to_owned()),
+        ),
+        ("SpawnForced".to_owned(), NbtTag::Byte(i8::from(forced))),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::{load, path_for, save};

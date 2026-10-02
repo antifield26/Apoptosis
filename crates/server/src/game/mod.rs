@@ -203,6 +203,7 @@ mod sleep;
 mod tick;
 mod weather;
 
+pub(crate) use sleep::RespawnPoint;
 pub(crate) use weather::{
     RAIN_DELAY_MAX, RAIN_DELAY_MIN, RAIN_DURATION_MAX, RAIN_DURATION_MIN, THUNDER_DURATION_MAX,
     THUNDER_DURATION_MIN,
@@ -843,6 +844,12 @@ pub struct Game {
     /// restarts: `playerdata/<uuid>.dat` files restore players across restarts
     /// since P14-10 (pinned by `reconnect.rs::restart_restores_the_player_from_the_playerdata_file`).
     remembered: BTreeMap<String, Player>,
+    /// Respawn points remembered alongside [`Game::remembered`] (P20-04).
+    ///
+    /// The file is the primary record (written on leave, read on join); this
+    /// map is the fallback for the same runs the player map covers — a
+    /// disconnect whose file write failed still respawns at its bed.
+    remembered_respawn: BTreeMap<String, sleep::RespawnPoint>,
     /// Every live entity in the dimension (P05-03).
     entities: EntityStore,
     /// Which entity each connection controls.
@@ -1273,6 +1280,7 @@ impl Game {
             world,
             sessions: BTreeMap::new(),
             remembered: BTreeMap::new(),
+            remembered_respawn: BTreeMap::new(),
             entities: EntityStore::new(),
             entity_ids: BTreeMap::new(),
             events,

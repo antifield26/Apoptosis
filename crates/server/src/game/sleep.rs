@@ -63,6 +63,9 @@ const MONSTER_DZ: f64 = 8.0;
 /// Morning marker (`timeline/day.json` `wake_up_from_sleep: 0`, measured).
 const WAKE_TIME_OF_DAY: i64 = 0;
 
+/// Where a death respawns: exact feet position plus look rotation.
+pub(crate) type RespawnDestination = ((f64, f64, f64), (f32, f32));
+
 /// One sleeping session: which bed (head cell) and for how long.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SleepState {
@@ -76,11 +79,15 @@ pub(crate) struct SleepState {
 /// (persisted and redirected in slice 2; the single dimension is implicit).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct RespawnPoint {
-    /// Head cell of the bed.
+    /// Head cell of the bed, or the commanded point.
     pub pos: (i32, i32, i32),
     /// The sleeper's yaw/pitch at the attempt (jar `RespawnData.of`).
     pub yaw: f32,
     pub pitch: f32,
+    /// Jar `RespawnConfig.forced`: beds record false, `/spawnpoint` true. A
+    /// forced point spawns blind when its two cells pass; an unforced one
+    /// needs its bed.
+    pub forced: bool,
 }
 
 /// Offset of a horizontal cardinal (`north` = −Z, jar `Direction`).
@@ -192,12 +199,14 @@ impl Game {
             return true;
         }
         // Spawn gate first (jar order): a daytime click still records home.
+        // Beds record unforced (a missing bed later spends the point).
         let (yaw, pitch) = (session.player.yaw, session.player.pitch);
         if let Some(session) = self.sessions.get_mut(&id) {
             session.respawn = Some(RespawnPoint {
                 pos: head,
                 yaw,
                 pitch,
+                forced: false,
             });
         }
         if !self.can_sleep_now() {
@@ -379,6 +388,89 @@ impl Game {
         for id in sleepers {
             self.wake(id);
         }
+    }
+
+    /// Where a death respawns: the recorded point when it still validates,
+    /// else world spawn with the message (P20-04 slice 2).
+    ///
+    /// Jar `findRespawnAndUseSpawnBlock`: a bed head with `canSetSpawn`
+    /// (always here) resolves through the stand-up search — this build's
+    /// honest subset is the two air cells above foot and head, spawning
+    /// directly above the head. A commanded point (`forced`, which
+    /// `/spawnpoint` always sets, jar `SetSpawnCommand`) spawns at
+    /// `(x+0.5, y+0.1, z+0.5)` when both cells pass (`isPossibleToRespawnIn-
+    /// This`, subset to air — water/snow above a forced point is a named
+    /// edge). Anything else is spent — cleared with one message, so the next
+    /// death goes to world spawn silently, exactly like the jar consuming a
+    /// broken `RespawnConfig`.
+    pub(crate) fn respawn_destination(&mut self, id: ConnectionId) -> Option<RespawnDestination> {
+        let point = self.sessions.get(&id)?.respawn?;
+        // Judge the point as it stands: a death far from home (or a command
+        // point nobody has visited) must load its chunk first, or every
+        // unloaded point reads as missing.
+        self.load_chunk(mc_world::ChunkPos::new(point.pos.0 >> 4, point.pos.2 >> 4));
+        let spend = |game: &mut Self| {
+            if let Some(session) = game.sessions.get_mut(&id) {
+                session.respawn = None;
+            }
+            game.send_message(id, "Your home bed was missing or obstructed.");
+        };
+        if !point.forced {
+            // Bed points: the head must still be a bed with headroom.
+            // Standing room is directly above the head — the two air cells
+            // the check just confirmed.
+            let (hx, hy, hz) = point.pos;
+            let valid = self
+                .bed_head_of(hx, hy, hz)
+                .is_some_and(|head| head == point.pos)
+                && {
+                    let facing = self
+                        .bed_facing_of(point.pos)
+                        .unwrap_or_else(|| "north".to_owned());
+                    let (dx, _, dz) = facing_offset(&facing);
+                    let air = self.registries.blocks.air_id();
+                    [(hx - dx, hy + 1, hz - dz), (hx, hy + 1, hz)]
+                        .iter()
+                        .all(|(x, y, z)| {
+                            self.world
+                                .get_block_loaded(*x, *y, *z)
+                                .is_some_and(|cell| cell == air)
+                        })
+                };
+            if !valid {
+                spend(self);
+                return None;
+            }
+            return Some((
+                (
+                    f64::from(hx) + 0.5,
+                    f64::from(hy) + 1.0,
+                    f64::from(hz) + 0.5,
+                ),
+                (point.yaw, point.pitch),
+            ));
+        }
+        // Forced points: spawn blind when both cells pass (jar `+0.1` nudge
+        // against ground clip).
+        let (px, py, pz) = point.pos;
+        let air = self.registries.blocks.air_id();
+        let passable = [(px, py, pz), (px, py + 1, pz)].iter().all(|(x, y, z)| {
+            self.world
+                .get_block_loaded(*x, *y, *z)
+                .is_some_and(|cell| cell == air)
+        });
+        if !passable {
+            spend(self);
+            return None;
+        }
+        Some((
+            (
+                f64::from(px) + 0.5,
+                f64::from(py) + 0.1,
+                f64::from(pz) + 0.5,
+            ),
+            (point.yaw, point.pitch),
+        ))
     }
 
     /// Advance sleep timers and skip the night when enough sleep deeply.

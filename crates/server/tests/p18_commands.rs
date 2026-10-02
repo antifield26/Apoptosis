@@ -691,9 +691,13 @@ fn dispatcher_counts_pin_the_kd_31_and_kd_32_rows() {
         names.contains(&"weather"),
         "P20-03 adds the weather root; tree has {names:?}"
     );
+    assert!(
+        names.contains(&"spawnpoint"),
+        "P20-04 adds the spawnpoint root; tree has {names:?}"
+    );
     assert_eq!(
-        kd31, 40,
-        "KD-31 counts {kd31} roots (39 at P20-02 + weather); bump the tree \
+        kd31, 41,
+        "KD-31 counts {kd31} roots (40 at P20-03 + spawnpoint); bump the tree \
          and this pin plus the parity row move together"
     );
 

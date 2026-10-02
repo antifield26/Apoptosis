@@ -479,12 +479,27 @@ impl Game {
         // already ran, so the inventory stored here is complete.
         self.remembered
             .insert(session.uuid.clone(), session.player.clone());
+        // The respawn point rides the same two records (P20-04 slice 2): the
+        // file is primary, the map covers a failed file write.
+        if let Some(respawn) = session.respawn {
+            self.remembered_respawn
+                .insert(session.uuid.clone(), respawn);
+        }
         // And persist it to `playerdata/<uuid>.dat` so a *restart* also
         // restores it (P14-10 walk). A failed write warns and keeps the
         // in-memory copy as the fallback rather than failing the leave.
         if let Some(root) = self.playerdata_root() {
             match session.player.to_nbt(&self.registries.items) {
-                Ok(tag) => {
+                Ok(mut tag) => {
+                    if let Some(respawn) = session.respawn
+                        && let mc_nbt::NbtTag::Compound(entries) = &mut tag
+                    {
+                        entries.extend(crate::playerdata::spawn_entries(
+                            respawn.pos,
+                            respawn.yaw,
+                            respawn.forced,
+                        ));
+                    }
                     if let Err(error) = crate::playerdata::save(&root, &session.uuid, &tag) {
                         warn!(id = %id, %error, "playerdata save failed; memory copy kept");
                     }
@@ -604,6 +619,25 @@ impl Game {
         };
         let entity_id = entity.get();
 
+        // The respawn point outranks memory the same way the position does:
+        // the file first, the remembered disconnect second, none otherwise.
+        // Read before `file_tag` moves into the player decode below. Pitch
+        // does not survive the file (vanilla persists `SpawnAngle` only),
+        // so a reboot levels the view — same-run respawns keep it.
+        let respawn = file_tag
+            .as_ref()
+            .and_then(crate::playerdata::peek_spawn)
+            .map(|(x, y, z, yaw, forced)| super::sleep::RespawnPoint {
+                pos: (x, y, z),
+                yaw,
+                pitch: 0.0,
+                forced,
+            })
+            .or_else(|| {
+                self.remembered_respawn
+                    .get(&profile.id.to_string())
+                    .copied()
+            });
         // A stored file rebuilds the whole player (position, health, inventory,
         // mode); a stored death rejoins fresh at spawn. Otherwise the fresh
         // player below, with the in-memory restore after it.
@@ -764,7 +798,7 @@ impl Game {
                 food_exhaustion: 0.0,
                 eating: None,
                 sleeping: None,
-                respawn: None,
+                respawn,
                 ip: self.pending_ips.remove(&id),
             },
         );
@@ -5858,7 +5892,18 @@ impl Game {
             debug!(id = %id, "ignored a respawn request from a living player");
             return Ok(());
         }
-        let (sx, sy, sz) = self.world.spawn();
+        // Bed respawn (P20-04 slice 2): the recorded point wins when it still
+        // validates (bed present, headroom free); a spent point already
+        // messaged and cleared itself inside, so this falls to world spawn.
+        let bed = self.respawn_destination(id);
+        let (sx, sy, sz) = bed.map_or_else(
+            || {
+                let (wx, wy, wz) = self.world.spawn();
+                (f64::from(wx) + 0.5, f64::from(wy), f64::from(wz) + 0.5)
+            },
+            |((x, y, z), _)| (x, y, z),
+        );
+        let bed_rotation = bed.map(|(_, rotation)| rotation);
         let (game_mode, dropped, death_location) = {
             let Some(session) = self.sessions.get_mut(&id) else {
                 return Ok(());
@@ -5869,9 +5914,12 @@ impl Game {
             // which this path no longer knows, and item entities for a death drop
             // land with the rest of P05-15. Stated, not implied.
             let dropped = session.player.respawn(false);
-            session.player.position =
-                mc_world::Vec3::new(f64::from(sx) + 0.5, f64::from(sy), f64::from(sz) + 0.5);
-            session.tick_start_y = f64::from(sy);
+            session.player.position = mc_world::Vec3::new(sx, sy, sz);
+            if let Some((yaw, pitch)) = bed_rotation {
+                session.player.yaw = yaw;
+                session.player.pitch = pitch;
+            }
+            session.tick_start_y = sy;
             session.sent_chunks.clear();
             (
                 session.player.game_mode.id(),
@@ -5918,8 +5966,8 @@ impl Game {
         )?;
         self.correct_position(
             id,
-            Vec3::new(f64::from(sx) + 0.5, f64::from(sy), f64::from(sz) + 0.5),
-            Some((0.0, 0.0)),
+            Vec3::new(sx, sy, sz),
+            Some(bed_rotation.unwrap_or((0.0, 0.0))),
             Some(report),
         );
         self.send_vitals(id, report)?;

@@ -23,7 +23,7 @@ struct Harness {
     game: Game,
     events: tokio::sync::mpsc::Sender<ClientEvent>,
     ids: ConnectionIds,
-    _dir: TempDir,
+    dir: TempDir,
 }
 
 impl Harness {
@@ -43,7 +43,7 @@ impl Harness {
             game,
             events: tx,
             ids: ConnectionIds::new(),
-            _dir: dir,
+            dir,
         }
     }
 
@@ -650,5 +650,382 @@ fn bed_break_wakes_and_removes_the_partner() {
         occupied_pair(&harness.game, 14, 121, 8),
         (true, true),
         "the woken player can sleep again"
+    );
+}
+
+/// Dying with a recorded bed respawns on it (slice 2).
+#[test]
+fn bed_death_respawns_on_the_bed() {
+    let mut harness = Harness::new("sleep-respawn", ops_for("Chief", 4));
+    let (chief, mut chief_out) = harness.join("Chief");
+    assert!(
+        harness.game.load_chunk(ChunkPos::new(0, 0)),
+        "bed chunk loads"
+    );
+    lay_bed(&mut harness.game, 8, 121, 8);
+    make_night(&mut harness, chief, &mut chief_out);
+    harness.stand(chief, 8, 121, 6);
+    harness.click(chief, 8, 121, 8);
+    assert_eq!(
+        occupied_pair(&harness.game, 8, 121, 8),
+        (true, true),
+        "the sleeper is down"
+    );
+    let lines = harness.command(chief, &mut chief_out, "kill");
+    assert!(
+        lines.iter().any(|line| line.contains("Killed")),
+        "the op dies, saw {lines:?}"
+    );
+    harness
+        .events
+        .try_send(mc_network::bridge::ClientEvent {
+            id: chief,
+            kind: mc_network::bridge::ClientEventKind::Intent(
+                mc_protocol::packets::play::PlayIntent::ClientCommand { action: 0 },
+            ),
+        })
+        .expect("respawn queued");
+    for _ in 0..5 {
+        harness.game.tick().expect("tick");
+    }
+    let player = harness.game.player(chief).expect("player");
+    assert!(
+        (player.position.x - 8.5).abs() < 0.01 && (player.position.z - 9.5).abs() < 0.01,
+        "respawn stands at the bed x/z, at {:?}",
+        player.position
+    );
+    assert!(
+        player.position.y <= 122.01 && player.position.y > 121.0,
+        "respawn starts above the head and settles onto the bed, at {:?}",
+        player.position
+    );
+}
+
+/// A broken bed spends the point: world spawn plus one message.
+#[test]
+fn broken_bed_respawns_at_world_spawn_with_message() {
+    let mut harness = Harness::new("sleep-spent", ops_for("Chief", 4));
+    let (chief, mut chief_out) = harness.join("Chief");
+    assert!(
+        harness.game.load_chunk(ChunkPos::new(0, 0)),
+        "bed chunk loads"
+    );
+    lay_bed(&mut harness.game, 8, 121, 8);
+    make_night(&mut harness, chief, &mut chief_out);
+    harness.stand(chief, 8, 121, 6);
+    harness.click(chief, 8, 121, 8);
+    // Creative dig removes the foot; the hook takes the head with it.
+    let lines = harness.command(chief, &mut chief_out, "gamemode creative");
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains("do not have permission")),
+        "the op goes creative, saw {lines:?}"
+    );
+    harness
+        .events
+        .try_send(mc_network::bridge::ClientEvent {
+            id: chief,
+            kind: mc_network::bridge::ClientEventKind::Intent(
+                mc_protocol::packets::play::PlayIntent::PlayerAction {
+                    status: 0,
+                    position: mc_protocol::packets::play::block_position(8, 121, 8),
+                    facing: 1,
+                    sequence: 1,
+                },
+            ),
+        })
+        .expect("dig queued");
+    for _ in 0..5 {
+        harness.game.tick().expect("tick");
+    }
+    let lines = harness.command(chief, &mut chief_out, "gamemode survival");
+    let _ = lines;
+    let lines = harness.command(chief, &mut chief_out, "kill");
+    assert!(
+        lines.iter().any(|line| line.contains("Killed")),
+        "the op dies, saw {lines:?}"
+    );
+    harness
+        .events
+        .try_send(mc_network::bridge::ClientEvent {
+            id: chief,
+            kind: mc_network::bridge::ClientEventKind::Intent(
+                mc_protocol::packets::play::PlayIntent::ClientCommand { action: 0 },
+            ),
+        })
+        .expect("respawn queued");
+    for _ in 0..5 {
+        harness.game.tick().expect("tick");
+    }
+    let mut lines = Vec::new();
+    while let Some(raw) = chief_out.try_recv() {
+        if raw.id == mc_protocol::ids::clientbound::play::DISGUISED_CHAT {
+            match mc_protocol::packets::play::SystemChat::decode(&raw.payload) {
+                Ok(chat) => lines.push(chat.content.as_plain().to_owned()),
+                Err(error) => panic!("a disguised_chat must decode: {error}"),
+            }
+        }
+    }
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("missing or obstructed")),
+        "the spent point messages once, saw {lines:?}"
+    );
+    let (sx, _, _) = harness.game.world().spawn();
+    let player = harness.game.player(chief).expect("player");
+    assert!(
+        (player.position.x - (f64::from(sx) + 0.5)).abs() < 1.0,
+        "respawn falls back to world spawn, at {:?}",
+        player.position
+    );
+}
+
+/// `/spawnpoint` in all its forms, plus refusals.
+#[test]
+fn spawnpoint_sets_self_others_and_refuses() {
+    let mut harness = Harness::new("sleep-spawnpoint", ops_for("Chief", 4));
+    let (chief, mut chief_out) = harness.join("Chief");
+    let (pleb, mut pleb_out) = harness.join("Pleb");
+    // Level 0 cannot touch it.
+    let lines = harness.command(pleb, &mut pleb_out, "spawnpoint");
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("do not have permission")),
+        "level 0 is refused, saw {lines:?}"
+    );
+    // Bare form: own feet.
+    let lines = harness.command(chief, &mut chief_out, "spawnpoint");
+    assert!(
+        lines.iter().any(|line| line.contains("spawn point")),
+        "bare form answers, saw {lines:?}"
+    );
+    // Explicit pos + yaw on self.
+    let lines = harness.command(chief, &mut chief_out, "spawnpoint 100 64 -30 90");
+    assert!(
+        lines.iter().any(|line| line.contains("(100, 64, -30)")),
+        "pos form answers, saw {lines:?}"
+    );
+    // Another player, by name, at their feet.
+    let lines = harness.command(chief, &mut chief_out, "spawnpoint Pleb");
+    assert!(
+        lines.iter().any(|line| line.contains("Pleb")),
+        "named form answers, saw {lines:?}"
+    );
+    // Unknown player, bad numbers, bad yaw: usage, not a side effect.
+    for text in [
+        "spawnpoint Nobody",
+        "spawnpoint 1 2",
+        "spawnpoint 1 2 three",
+        "spawnpoint 1 2 3 north",
+    ] {
+        let lines = harness.command(chief, &mut chief_out, text);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Usage") || line.contains("not online")),
+            "{text:?} is refused, saw {lines:?}"
+        );
+    }
+    // The set point redirects death: Chief points at open sky (set
+    // blindly, like the jar) and wakes up falling through it.
+    let lines = harness.command(chief, &mut chief_out, "spawnpoint 200 120 40");
+    assert!(
+        lines.iter().any(|line| line.contains("(200, 120, 40)")),
+        "pos form answers, saw {lines:?}"
+    );
+    let lines = harness.command(chief, &mut chief_out, "kill");
+    assert!(
+        lines.iter().any(|line| line.contains("Killed")),
+        "the op dies, saw {lines:?}"
+    );
+    harness
+        .events
+        .try_send(mc_network::bridge::ClientEvent {
+            id: chief,
+            kind: mc_network::bridge::ClientEventKind::Intent(
+                mc_protocol::packets::play::PlayIntent::ClientCommand { action: 0 },
+            ),
+        })
+        .expect("respawn queued");
+    for _ in 0..5 {
+        harness.game.tick().expect("tick");
+    }
+    let player = harness.game.player(chief).expect("player");
+    assert!(
+        (player.position.x - 200.5).abs() < 0.01 && (player.position.z - 40.5).abs() < 0.01,
+        "respawn stands at the set x/z, at {:?}",
+        player.position
+    );
+    assert!(
+        player.position.y <= 120.2 && player.position.y > 115.0,
+        "respawn starts at the set height and falls, at {:?}",
+        player.position
+    );
+}
+
+/// A forced point inside solid rock still falls back (both cells must pass).
+#[test]
+fn forced_point_inside_rock_falls_back() {
+    let mut harness = Harness::new("sleep-forced-rock", ops_for("Chief", 4));
+    let (chief, mut chief_out) = harness.join("Chief");
+    // Bury the point: solid stone at feet and head height.
+    let stone = harness
+        .game
+        .registries()
+        .blocks
+        .default_state("minecraft:stone")
+        .expect("stone");
+    for y in [120, 121] {
+        harness
+            .game
+            .world_mut()
+            .set_block(200, y, 40, stone)
+            .expect("rock placed");
+    }
+    let lines = harness.command(chief, &mut chief_out, "spawnpoint 200 120 40");
+    assert!(
+        lines.iter().any(|line| line.contains("(200, 120, 40)")),
+        "set blindly, saw {lines:?}"
+    );
+    let lines = harness.command(chief, &mut chief_out, "kill");
+    assert!(
+        lines.iter().any(|line| line.contains("Killed")),
+        "the op dies, saw {lines:?}"
+    );
+    harness
+        .events
+        .try_send(mc_network::bridge::ClientEvent {
+            id: chief,
+            kind: mc_network::bridge::ClientEventKind::Intent(
+                mc_protocol::packets::play::PlayIntent::ClientCommand { action: 0 },
+            ),
+        })
+        .expect("respawn queued");
+    for _ in 0..5 {
+        harness.game.tick().expect("tick");
+    }
+    let mut lines = Vec::new();
+    while let Some(raw) = chief_out.try_recv() {
+        if raw.id == mc_protocol::ids::clientbound::play::DISGUISED_CHAT {
+            match mc_protocol::packets::play::SystemChat::decode(&raw.payload) {
+                Ok(chat) => lines.push(chat.content.as_plain().to_owned()),
+                Err(error) => panic!("a disguised_chat must decode: {error}"),
+            }
+        }
+    }
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("missing or obstructed")),
+        "the failed point messages, saw {lines:?}"
+    );
+    let (sx, _, _) = harness.game.world().spawn();
+    let player = harness.game.player(chief).expect("player");
+    assert!(
+        (player.position.x - (f64::from(sx) + 0.5)).abs() < 1.0,
+        "respawn falls back to world spawn, at {:?}",
+        player.position
+    );
+}
+
+/// Respawn points survive a restart through playerdata.
+#[test]
+fn respawn_survives_restart() {
+    let mut harness = Harness::new("sleep-persist", ops_for("Chief", 4));
+    let (chief, mut chief_out) = harness.join("Chief");
+    assert!(
+        harness.game.load_chunk(ChunkPos::new(0, 0)),
+        "bed chunk loads"
+    );
+    lay_bed(&mut harness.game, 8, 121, 8);
+    make_night(&mut harness, chief, &mut chief_out);
+    harness.stand(chief, 8, 121, 6);
+    harness.click(chief, 8, 121, 8);
+    assert_eq!(
+        occupied_pair(&harness.game, 8, 121, 8),
+        (true, true),
+        "the sleeper is down"
+    );
+    // Leave writes playerdata (with the Spawn keys); the dir outlives the game.
+    harness
+        .events
+        .try_send(mc_network::bridge::ClientEvent {
+            id: chief,
+            kind: mc_network::bridge::ClientEventKind::Left,
+        })
+        .expect("leave queued");
+    for _ in 0..3 {
+        harness.game.tick().expect("tick");
+    }
+    harness.game.save_all_owned().expect("saves");
+    harness.game.close_storage().expect("storage closes");
+    let root = harness.dir.path().join("world");
+    let Harness {
+        game,
+        dir: _keep_dir,
+        ..
+    } = harness;
+    drop(game);
+    // The document on disk carries the bed: Spawn keys beside the Pos.
+    let uuid = mc_network::auth::offline_profile("Chief").id.to_string();
+    let tag = mc_server::playerdata::load(&root, &uuid)
+        .expect("playerdata reads")
+        .expect("the leave wrote it");
+    assert_eq!(tag.get_i32("SpawnX"), Some(8), "SpawnX persists");
+    assert_eq!(tag.get_i32("SpawnZ"), Some(9), "SpawnZ persists");
+    let config = mc_server::config::StorageConfig {
+        world_dir: root.clone(),
+        autosave_ticks: 0,
+        seed: None,
+    };
+    let service = WorldService::open(&config).expect("world reopens");
+    let (tx, rx) = game_channel(256);
+    let mut second = Game::build_with_operators(
+        None,
+        Some(service),
+        4,
+        rx,
+        DEFAULT_RANDOM_SEED,
+        ops_for("Chief", 4),
+    )
+    .expect("game rebuilds");
+    second.load_weather(&root);
+    assert!(second.load_chunk(ChunkPos::new(0, 0)), "bed chunk loads");
+    let id = mc_network::bridge::ConnectionId(1);
+    let (outbound, _out) = OutboundSender::pair(id, 8192);
+    tx.try_send(ClientEvent {
+        id,
+        kind: ClientEventKind::Joined {
+            profile: mc_network::auth::offline_profile("Chief"),
+            outbound,
+        },
+    })
+    .expect("join queued");
+    second.tick().expect("tick");
+    // Die and ask to respawn: the rebooted point aims at the same bed.
+    {
+        let mut report = mc_server::game::TickReport::default();
+        second
+            .dispatch_command(id, "kill", &mut report)
+            .expect("answered");
+    }
+    tx.try_send(ClientEvent {
+        id,
+        kind: ClientEventKind::Intent(mc_protocol::packets::play::PlayIntent::ClientCommand {
+            action: 0,
+        }),
+    })
+    .expect("respawn queued");
+    for _ in 0..5 {
+        second.tick().expect("tick");
+    }
+    let player = second.player(id).expect("player");
+    assert!(
+        (player.position.x - 8.5).abs() < 0.01 && (player.position.z - 9.5).abs() < 0.01,
+        "rebooted respawn stands at the bed x/z, at {:?}",
+        player.position
     );
 }
