@@ -5,12 +5,14 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **1 983 passed, 0 failed, 44 ignored** across **159 suites**, re-derived from
-`cargo test --workspace --no-fail-fast` on the current tree (159/159 `ok`,
+Totals: **1 989 passed, 0 failed, 44 ignored** across **160 suites**, re-derived from
+`cargo test --workspace --no-fail-fast` on the current tree (160/160 `ok`,
 this task's run). The +5 over the **1 978** figure is P20-04 slice 2's five
 new `sleep` tests (bed-death on the bed, broken-bed fallback with message,
 all spawnpoint forms with a redirected death, forced-in-rock fallback,
-restart round-trip). The +7 over the **1 963** figure is P20-03 slice 1's new
+restart round-trip). The +6 over the **1 983** figure is P20-02 slice 2a's
+new `till` target (table, rooted drop, refusals, deterministic fall,
+standing-still control, mob landing). The +7 over the **1 963** figure is P20-03 slice 1's new
 `weather` target (5 integration plus 2 `game::weather` units). The +54 over the **1 903** figure is two landings the header
 had not recorded: P20-01's fluid delta (+46 passed, +2 suites — the new
 `fluid_core` (12) and `fluid_differential` (2) targets plus the simulation /
