@@ -306,14 +306,53 @@ explained away.
 - **Still queued:** `mc-container` lib attribution (§7) — noting it now reads
   8–20 s, so the 31 s suspicion that queued it may no longer be worth the
   diagnosis.
-- **Plan §5 acceptance:** the gate's suite-time sum reads **≈450 s** after the
-  ring sweep, against the ≤ ~600 s target the plan set (≈1 690 s at the plan's
-  writing).
+- **Plan §5 acceptance:** the gate's suite-time sum reads **379.5 s** after the
+  second ring sweep (1 690 s at the plan's writing; the ≤ ~600 s target is met
+  with ~37 % margin), and the whole `cargo test --workspace` phase takes 388 s
+  against 1 307 s at the start of this work.
+- **Remaining candidates, measured (2026-10-03; suite wall clocks taken one
+  suite at a time on an otherwise idle host).** After the two ring sweeps the
+  sum is 379.5 s and the distribution is flat, so what is left is small.
+  - **§3, view-distance-4 stragglers whose scenes are local:**
+    `gameplay_config_e2e` 7.4 s (three harnesses), `player_info_tab_list`
+    4.9 s. Expect ~5–8 s together.
+  - **§3, the view-distance-3 set (26 suites, ~72 s measured):** a 3 → 2 pass
+    takes the ring from 49 to 25 chunks, worth an estimated 15–25 s. Six of them
+    are socket e2e suites that set `NetworkSettings { view_distance: 3 }` *as
+    well as* the game's (`command_e2e`, `container_e2e`, `execute_e2e`,
+    `function_e2e`, `network_game_bridge`, `pack_loading_e2e`); for those the two
+    numbers must move together, or the client's radius and the server's
+    disagree. `execute_e2e` (13.7 s) is the largest of the set.
+  - **§3, `natural_spawn` (39.6 s, the largest single suite):** not a blind
+    trim — its spawn ring is a fixed 8 chunks that must meet the 24-block
+    minimum, so the view distance decides how much of the annulus is loaded. An
+    experiment worth running first: *load* the outer chunks explicitly without
+    paying a larger ring's per-tick cost, if the spawn cycle scans loaded chunks
+    rather than the configured ring. Measure before claiming.
+  - **§3, the §2 wiring tests** (`growth` 18.5 s, `reach_validation` 18.7 s,
+    `weather` 12.4 s, `spread` 9.0 s): their tick counts *are* the mechanism — a
+    stone dig needs its 150 ticks, a sweep farm needs its statistical floor — so
+    the remaining lever is small and would weaken what they pin. Not
+    recommended.
+  - **§7 `mc-container` lib attribution:** reads 8–20 s (load-dependent) against
+    the 31 s that queued it. Low value now; the honest close is "no longer
+    warranted at this size" unless a production-path suspicion reopens it.
+  - **§4.4 release profile:** §5's step 5 opens that question only if the sum is
+    *not* under ~600 s. It is (379.5 s), so it stays closed by the plan's own
+    rule rather than by preference; re-opening it needs a new reason, not a slow
+    suite.
+  - **§1's per-suite budget check is the one instrumentation item still open:**
+    the gate prints the table and the sum, but nothing fails when a suite creeps
+    from 5 s to 50 s. A recorded budget per suite (the P18-07 precedent) is the
+    regression guard this work now lacks — it buys no speed and is recommended
+    anyway.
+  - **Unverified in the real environment:** the CI tier/retry/timeout changes
+    take effect on push; nothing in this session observed a runner.
 - **Proofs are a tool now, not a command:** `python tools/gates/perturb.py
-  growth` neutralises each mechanism the group names, requires that
-  mechanism's pin to go red, and restores byte-exact (hash-checked). It
-  exists because the hand-rolled version restored the perturbed file with a
-  copy that preserved its original mtime, so cargo reused the *perturbed*
-  test binary in the next full run and reported two harness artifacts as
-  test failures (see CHANGELOG). The §2 migrations still to come add their
-  cases to the same file.
+  <group>` neutralises each mechanism the group names, requires that mechanism's
+  pin to go red, and restores byte-exact (hash-checked). It exists because the
+  hand-rolled version restored the perturbed file with a copy that preserved its
+  original mtime, so cargo reused the *perturbed* test binary in the next full
+  run and reported two harness artifacts as test failures (see CHANGELOG). The
+  groups so far are `growth` (7), `till` (7), `sleep` (3), `weather` (1) and
+  `reach` (1) — fourteen mechanisms plus the dispatch line.
