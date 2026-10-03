@@ -230,10 +230,28 @@ explained away.
     `weather` were resolved by §3 at 7.8 s and 12.6 s, where §2's ~10× would buy
     single-digit seconds. §2 applies again when a suite is both expensive and
     mechanism-heavy.
-- **Still queued:** `reach_validation` 64 s, `xp_orbs` 52 s, `natural_spawn`
-  41 s, `ai_wiring` 37 s, `p18_hunger` 33 s (§3 candidates, by measurement);
-  `mc-container` lib attribution (§7); gate tiers and CI timeouts (§4)
-  untouched.
+- **§3 ring sweep, ten suites (2026-10-03).** The same harness pattern — view
+  distance 4 on tests that assert local behaviour — ran in ten more
+  integration suites. At view distance 2 they go **≈286 s → 46 s** of suite
+  time: `reach_validation` 64.8 → 18.6, `xp_orbs` 54.7 → 2.7, `ai_wiring`
+  34.3 → 2.5, `p18_hunger` 33.3 → 10.6, `mob_pathing` 32.1 → 1.8,
+  `loot_and_pickup` 15.4 → 2.3, `mechanisms` 14.8 → 1.7, `ranged_explosive`
+  12.7 → 1.7, `status_effects` 12.3 → 1.8, `player_attack` 12.4 → 2.8. No pin
+  changed, and each suite was run green on its own before the landing's gate.
+  - **Checked, not assumed:** none of the ten asserts the ring — their
+    "radius" references are gameplay radii (ignite, merge, wander) — and
+    `mob_pathing`'s walk, which treats an unloaded cell as solid, still passes
+    (so the mob never leaves the ring).
+  - **Left at 4 on purpose:** `chunk_streaming`, `survival_e2e`, the light,
+    worldgen and structure suites, and `natural_spawn` (its spawn ring meets a
+    24-block minimum).
+- **Still queued:** the remaining ~30 harnesses that still build at view
+  distance 4 — mechanical, one suite at a time (verify green, then trim; the
+  ring-owning suites above stay); `mc-container` lib attribution (§7); gate
+  tiers and CI timeouts (§4) untouched.
+- **Plan §5 acceptance:** the gate's suite-time sum reads **≈450 s** after the
+  ring sweep, against the ≤ ~600 s target the plan set (≈1 690 s at the plan's
+  writing).
 - **Proofs are a tool now, not a command:** `python tools/gates/perturb.py
   growth` neutralises each mechanism the group names, requires that
   mechanism's pin to go red, and restores byte-exact (hash-checked). It

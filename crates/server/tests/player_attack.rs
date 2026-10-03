@@ -67,8 +67,10 @@ impl Harness {
         let (tx, rx) = game_channel(256);
         // Owned storage: a borrowing game never generates terrain, so the mob
         // would be standing in an all-air placeholder (see natural_spawn.rs).
+        // View distance 2 (TEST-TIME-PLAN §3): the fight is in the chunks
+        // around the player.
         let game =
-            Game::with_seed_and_storage(storage, 4, rx, mc_server::game::DEFAULT_RANDOM_SEED)
+            Game::with_seed_and_storage(storage, 2, rx, mc_server::game::DEFAULT_RANDOM_SEED)
                 .expect("game builds");
         Self {
             game,

@@ -116,8 +116,11 @@ impl Harness {
         };
         let storage = WorldService::open(&config).expect("world opens");
         let (tx, rx) = game_channel(256);
+        // View distance 2 (TEST-TIME-PLAN §3): every dig and swing happens in
+        // the blocks around a player standing in chunk (0, 0), and the dig
+        // tests pay 160 ticks each — the ring was their cost, not their scene.
         let game =
-            Game::with_seed_and_storage(storage, 4, rx, mc_server::game::DEFAULT_RANDOM_SEED)
+            Game::with_seed_and_storage(storage, 2, rx, mc_server::game::DEFAULT_RANDOM_SEED)
                 .expect("game builds");
         Self {
             game,

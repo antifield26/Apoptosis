@@ -73,7 +73,9 @@ impl Harness {
         };
         let storage = WorldService::open(&config).expect("world opens");
         let (tx, rx) = game_channel(256);
-        let game = Game::new(&storage, 4, rx).expect("game builds");
+        // View distance 2 (TEST-TIME-PLAN §3): hunger and exhaustion are
+        // per-player timers; the 81-chunk ring was cost.
+        let game = Game::new(&storage, 2, rx).expect("game builds");
         Self {
             game,
             events: tx,

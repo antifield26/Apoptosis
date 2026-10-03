@@ -202,6 +202,19 @@ CASES: dict[str, list[dict[str, str]]] = {
             'target': '-p mc-server --test weather -E test(rain_wets_farmland_with_no_water_nearby)',
         },
     ],
+    'reach': [
+        {
+            'name': 'block reach buffer',
+            'file': 'crates/server/src/game/mod.rs',
+            # Dropping the verification buffer takes the effective block reach
+            # from 5.5 to 4.5 -- exactly the band the swept suite pins as
+            # accepted (AUDIT-11's finding, in one line).
+            'old': 'base + BLOCK_INTERACTION_DISTANCE_VERIFICATION_BUFFER',
+            'new': 'base',
+            'target': '-p mc-server --test reach_validation '
+                      '-E test(a_survival_dig_between_the_attribute_and_the_buffer_is_accepted)',
+        },
+    ],
 }
 
 SUMMARY = re.compile(r'Summary \[[^\]]*\] (\d+) tests? run: (\d+) passed(?:, (\d+) failed)?')

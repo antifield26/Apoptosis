@@ -47,8 +47,10 @@ impl Harness {
         // The game must own its storage (borrowing games never generate
         // terrain — see natural_spawn.rs).
         let (tx, rx) = game_channel(256);
+        // View distance 2 (TEST-TIME-PLAN §3): the mobs under test are spawned
+        // and driven inside the chunks around the player.
         let game =
-            Game::with_seed_and_storage(storage, 4, rx, mc_server::game::DEFAULT_RANDOM_SEED)
+            Game::with_seed_and_storage(storage, 2, rx, mc_server::game::DEFAULT_RANDOM_SEED)
                 .expect("game builds");
         Self {
             game,

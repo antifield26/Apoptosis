@@ -328,6 +328,24 @@ per-cell rate is ring-invariant, so the expectation scales with the ticks and
 nothing else). Suite **59.6 s wall -> 12.6 s**. One mechanism re-proven red and
 restored byte-exact: the rain gate where farmland wetting reads the sky.*
 
+*Test-time trim, ring sweep (TEST-TIME-PLAN §3, no behavior change): ten more
+integration harnesses built at view distance 4 while asserting local behaviour —
+reach/dig, orb scatter and pickup, mob AI and pathing, hunger, loot,
+mechanisms, ranged blasts, status effects, melee. At view distance 2 the ten
+suites go **≈286 s -> 46 s** of suite time (`reach_validation` 64.8 -> 18.6,
+`xp_orbs` 54.7 -> 2.7, `ai_wiring` 34.3 -> 2.5, `p18_hunger` 33.3 -> 10.6,
+`mob_pathing` 32.1 -> 1.8, `loot_and_pickup` 15.4 -> 2.3, `mechanisms`
+14.8 -> 1.7, `ranged_explosive` 12.7 -> 1.7, `status_effects` 12.3 -> 1.8,
+`player_attack` 12.4 -> 2.8), every pin unchanged and green. Checked before
+changing them rather than after: none of the ten asserts the ring (their only
+"radius" references are gameplay radii — ignite, merge, wander), and the one
+that reads loaded cells, `mob_pathing`'s no-phasing walk (an unloaded cell
+counts as solid), still passes at the smaller ring. The suites that *own* the
+ring were left at 4 deliberately: `chunk_streaming`, `survival_e2e`, the light,
+worldgen and structure suites, and `natural_spawn` (its spawn ring meets a
+24-block minimum). With this the gate's suite-time sum reads ≈450 s against the
+plan's ≤ ~600 s target.*
+
 *Same landing, four tooling gaps the run exposed. (1) TEST-TIME-PLAN §1's
 slowest-first table printed `?` for every row — cargo writes the
 `Running ... (target/debug/deps/<name>-<hash>.exe)` header to *stderr* and the

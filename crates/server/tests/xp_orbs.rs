@@ -34,8 +34,10 @@ impl Harness {
         };
         let storage = WorldService::open(&config).expect("world opens");
         let (tx, rx) = game_channel(256);
+        // View distance 2 (TEST-TIME-PLAN §3): kills, orbs and pickups are all
+        // inside the strip around the player; the 81-chunk ring was cost.
         let game =
-            Game::with_seed_and_storage(storage, 4, rx, mc_server::game::DEFAULT_RANDOM_SEED)
+            Game::with_seed_and_storage(storage, 2, rx, mc_server::game::DEFAULT_RANDOM_SEED)
                 .expect("game builds");
         Self {
             game,
