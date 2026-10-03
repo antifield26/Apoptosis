@@ -247,6 +247,13 @@ the farm being seen.
 Reference search (§5): no local stalk/spread analogue beyond the jar
 (Pumpkin's worldgen has no random-tick growth; recorded no-hit).
 
+*Test-time migration (TEST-TIME-PLAN §2, no behavior change): the five
+farm tests became ten direct-call unit pins in `game::growth::tests`
+(one handler call each, ~0.3 s total) plus one phase-wiring test in
+`tests/spread.rs` (cane through the sweep, view_distance 2 — the
+per-cell rate is invariant, so statistics are identical). All five
+perturbations re-proven red on the unit pins in ~0.2 s each.*
+
 **P20-04 slice 1 — beds, sleep attempts, skip-night (PARTIAL; slice 2 owns
 respawn persistence, `/spawnpoint` and the obstructed-respawn redirect).**
 `Game` gains per-session sleep (`crates/server/src/game/sleep.rs`, a new

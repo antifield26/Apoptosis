@@ -585,3 +585,388 @@ fn int_property(properties: &[(String, String)], key: &str) -> Option<i32> {
         .find(|(k, _)| k == key)
         .and_then(|(_, v)| v.parse().ok())
 }
+
+#[cfg(test)]
+mod tests {
+    //! Mechanism pins for slice 2b, called directly (TEST-TIME-PLAN §2).
+    //!
+    //! Each pin below proves what a 400-tick farm run proved, with one
+    //! handler call instead of a sweep: no players, no streaming, no
+    //! broadcast, no light settle (except where a brightness gate is
+    //! asserted — then light is computed for the single farm chunk,
+    //! directly). The one full-tick wiring test per area stays in
+    //! `tests/spread.rs`; these prove the mechanisms.
+
+    use super::Game;
+    use crate::storage::WorldService;
+    use mc_world::ChunkPos;
+
+    /// A game with owned storage on a scratch dir (no players, one chunk).
+    fn bare_game(tag: &str) -> (Game, mc_test_support::fixtures::TempDir) {
+        let dir = mc_test_support::fixtures::TempDir::new(tag);
+        let config = crate::config::StorageConfig {
+            world_dir: dir.path().join("world"),
+            autosave_ticks: 0,
+            seed: None,
+        };
+        let storage = WorldService::open(&config).expect("world opens");
+        let (_tx, rx) = mc_network::bridge::game_channel(64);
+        let game = Game::with_seed_and_storage(storage, 2, rx, crate::game::DEFAULT_RANDOM_SEED)
+            .expect("game builds");
+        (game, dir)
+    }
+
+    fn aged(game: &Game, name: &str, age: i32) -> i32 {
+        game.registries()
+            .blocks
+            .state_id(name, &[("age".to_owned(), age.to_string())])
+            .expect("aged stalk state")
+    }
+
+    fn age_of(game: &Game, x: i32, y: i32, z: i32) -> i32 {
+        let id = game.world().get_block_loaded(x, y, z).expect("loaded");
+        game.registries()
+            .blocks
+            .properties_of(id)
+            .expect("properties")
+            .iter()
+            .find(|(k, _)| k == "age")
+            .and_then(|(_, v)| v.parse().ok())
+            .expect("age reads")
+    }
+
+    fn stalk_height(game: &Game, name: &str, x: i32, y: i32, z: i32) -> usize {
+        let blocks = &game.registries().blocks;
+        let mut height = 0_usize;
+        for dy in 0..8 {
+            let Some(id) = game.world().get_block_loaded(x, y + dy, z) else {
+                break;
+            };
+            if blocks.block_name(id).unwrap_or("") != name {
+                break;
+            }
+            height += 1;
+        }
+        height
+    }
+
+    #[test]
+    fn cane_grows_and_resets_on_direct_call() {
+        let (mut game, _dir) = bare_game("cane-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        let sand = game
+            .registries()
+            .blocks
+            .default_state("minecraft:sand")
+            .expect("sand");
+        game.world_mut()
+            .set_block(8, 120, 8, sand)
+            .expect("sand placed");
+        let stalk = aged(&game, "minecraft:sugar_cane", 15);
+        game.world_mut()
+            .set_block(8, 121, 8, stalk)
+            .expect("cane placed");
+        let id = game.world().get_block_loaded(8, 121, 8).expect("loaded");
+        assert!(
+            game.random_tick_block(8, 121, 8, id),
+            "a max-age tick applies"
+        );
+        assert_eq!(
+            stalk_height(&game, "minecraft:sugar_cane", 8, 121, 8),
+            2,
+            "one direct call grows one level"
+        );
+        assert_eq!(age_of(&game, 8, 121, 8), 0, "the grower resets to 0");
+    }
+
+    #[test]
+    fn cane_climbs_on_direct_call() {
+        let (mut game, _dir) = bare_game("cane-climb-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        let sand = game
+            .registries()
+            .blocks
+            .default_state("minecraft:sand")
+            .expect("sand");
+        game.world_mut()
+            .set_block(8, 120, 8, sand)
+            .expect("sand placed");
+        let stalk = aged(&game, "minecraft:sugar_cane", 0);
+        game.world_mut()
+            .set_block(8, 121, 8, stalk)
+            .expect("cane placed");
+        let id = game.world().get_block_loaded(8, 121, 8).expect("loaded");
+        assert!(
+            game.random_tick_block(8, 121, 8, id),
+            "a young tick applies"
+        );
+        assert_eq!(age_of(&game, 8, 121, 8), 1, "the age climbs by one");
+        assert_eq!(
+            stalk_height(&game, "minecraft:sugar_cane", 8, 121, 8),
+            1,
+            "climbing does not grow"
+        );
+    }
+
+    #[test]
+    fn cane_cap_holds_on_direct_call() {
+        let (mut game, _dir) = bare_game("cane-cap-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        let blocks = game.registries().blocks.clone();
+        let sand = blocks.default_state("minecraft:sand").expect("sand");
+        game.world_mut()
+            .set_block(8, 120, 8, sand)
+            .expect("sand placed");
+        for dy in 1..=3 {
+            let stalk = blocks
+                .state_id(
+                    "minecraft:sugar_cane",
+                    &[("age".to_owned(), "15".to_owned())],
+                )
+                .expect("max-age cane");
+            game.world_mut()
+                .set_block(8, 120 + dy, 8, stalk)
+                .expect("cane placed");
+        }
+        let id = game.world().get_block_loaded(8, 123, 8).expect("loaded");
+        assert!(
+            !game.random_tick_block(8, 123, 8, id),
+            "a full stack applies nothing"
+        );
+        assert_eq!(
+            stalk_height(&game, "minecraft:sugar_cane", 8, 121, 8),
+            3,
+            "a full stack stays full"
+        );
+    }
+
+    #[test]
+    fn cactus_grows_and_resets_on_direct_call() {
+        let (mut game, _dir) = bare_game("cactus-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        let sand = game
+            .registries()
+            .blocks
+            .default_state("minecraft:sand")
+            .expect("sand");
+        game.world_mut()
+            .set_block(8, 120, 8, sand)
+            .expect("sand placed");
+        let stalk = aged(&game, "minecraft:cactus", 15);
+        game.world_mut()
+            .set_block(8, 121, 8, stalk)
+            .expect("cactus placed");
+        let id = game.world().get_block_loaded(8, 121, 8).expect("loaded");
+        assert!(
+            game.random_tick_block(8, 121, 8, id),
+            "a max-age tick applies"
+        );
+        assert_eq!(
+            stalk_height(&game, "minecraft:cactus", 8, 121, 8),
+            2,
+            "one direct call grows one level"
+        );
+        assert_eq!(age_of(&game, 8, 121, 8), 0, "the grower resets to 0");
+    }
+
+    #[test]
+    fn cactus_climbs_on_direct_call() {
+        let (mut game, _dir) = bare_game("cactus-climb-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        let sand = game
+            .registries()
+            .blocks
+            .default_state("minecraft:sand")
+            .expect("sand");
+        game.world_mut()
+            .set_block(8, 120, 8, sand)
+            .expect("sand placed");
+        let stalk = aged(&game, "minecraft:cactus", 0);
+        game.world_mut()
+            .set_block(8, 121, 8, stalk)
+            .expect("cactus placed");
+        let id = game.world().get_block_loaded(8, 121, 8).expect("loaded");
+        assert!(
+            game.random_tick_block(8, 121, 8, id),
+            "a young tick applies"
+        );
+        assert_eq!(age_of(&game, 8, 121, 8), 1, "the age climbs by one");
+    }
+
+    #[test]
+    fn cactus_cap_holds_on_direct_call() {
+        let (mut game, _dir) = bare_game("cactus-cap-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        let blocks = game.registries().blocks.clone();
+        let sand = blocks.default_state("minecraft:sand").expect("sand");
+        game.world_mut()
+            .set_block(8, 120, 8, sand)
+            .expect("sand placed");
+        for dy in 1..=3 {
+            let stalk = blocks
+                .state_id("minecraft:cactus", &[("age".to_owned(), "15".to_owned())])
+                .expect("max-age cactus");
+            game.world_mut()
+                .set_block(8, 120 + dy, 8, stalk)
+                .expect("cactus placed");
+        }
+        let id = game.world().get_block_loaded(8, 123, 8).expect("loaded");
+        assert!(
+            !game.random_tick_block(8, 123, 8, id),
+            "a full stack applies nothing"
+        );
+        assert_eq!(
+            stalk_height(&game, "minecraft:cactus", 8, 121, 8),
+            3,
+            "a full stack stays full"
+        );
+    }
+
+    /// Light over exactly the farm chunk (what the brightness gate reads;
+    /// computed directly, not settled through ticks).
+    fn light_farm(game: &mut Game) {
+        let table = game.registries().light.clone();
+        let pos = ChunkPos::new(0, 0);
+        game.world_mut().invalidate_light_3x3(pos);
+        game.world_mut()
+            .compute_light(pos, &table)
+            .expect("light computes");
+    }
+
+    #[test]
+    fn grass_starves_on_direct_call() {
+        let (mut game, _dir) = bare_game("grass-starve-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        let blocks = game.registries().blocks.clone();
+        let grass = blocks
+            .default_state("minecraft:grass_block")
+            .expect("grass");
+        let stone = blocks.default_state("minecraft:stone").expect("stone");
+        game.world_mut()
+            .set_block(8, 120, 8, grass)
+            .expect("grass placed");
+        game.world_mut()
+            .set_block(8, 121, 8, stone)
+            .expect("roof placed");
+        let id = game.world().get_block_loaded(8, 120, 8).expect("loaded");
+        assert!(
+            game.random_tick_block(8, 120, 8, id),
+            "a covered tick applies"
+        );
+        assert_eq!(
+            blocks
+                .block_name(game.world().get_block_loaded(8, 120, 8).expect("loaded"))
+                .expect("registered"),
+            "minecraft:dirt",
+            "covered grass starves to dirt"
+        );
+    }
+
+    #[test]
+    fn grass_spreads_on_direct_calls() {
+        let (mut game, _dir) = bare_game("grass-spread-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        let blocks = game.registries().blocks.clone();
+        let grass = blocks
+            .default_state("minecraft:grass_block")
+            .expect("grass");
+        let dirt = blocks.default_state("minecraft:dirt").expect("dirt");
+        game.world_mut()
+            .set_block(8, 120, 8, grass)
+            .expect("grass placed");
+        for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            game.world_mut()
+                .set_block(8 + dx, 120, 8 + dz, dirt)
+                .expect("dirt placed");
+        }
+        light_farm(&mut game);
+        let id = game.world().get_block_loaded(8, 120, 8).expect("loaded");
+        let mut grown = false;
+        // Four attempts per call over four dirt neighbours: bounded draws
+        // from the fixed seed, so this terminates either way.
+        for _ in 0..30 {
+            if game.random_tick_block(8, 120, 8, id) {
+                grown = true;
+                break;
+            }
+        }
+        assert!(grown, "open grass converts neighbouring dirt");
+        let converted = [(-1, 0), (1, 0), (0, -1), (0, 1)].iter().any(|(dx, dz)| {
+            game.world()
+                .get_block_loaded(8 + dx, 120, 8 + dz)
+                .and_then(|cell| blocks.block_name(cell).ok())
+                .is_some_and(|name| name == "minecraft:grass_block")
+        });
+        assert!(converted, "a dirt neighbour is grass now");
+    }
+
+    #[test]
+    fn grass_refuses_water_roofed_dirt() {
+        let (mut game, _dir) = bare_game("grass-refuse-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        let blocks = game.registries().blocks.clone();
+        let grass = blocks
+            .default_state("minecraft:grass_block")
+            .expect("grass");
+        let dirt = blocks.default_state("minecraft:dirt").expect("dirt");
+        let water = blocks.default_state("minecraft:water").expect("water");
+        game.world_mut()
+            .set_block(8, 120, 8, grass)
+            .expect("grass placed");
+        for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            game.world_mut()
+                .set_block(8 + dx, 120, 8 + dz, dirt)
+                .expect("dirt placed");
+            game.world_mut()
+                .set_block(8 + dx, 121, 8 + dz, water)
+                .expect("water placed");
+        }
+        light_farm(&mut game);
+        let id = game.world().get_block_loaded(8, 120, 8).expect("loaded");
+        for _ in 0..30 {
+            let _ = game.random_tick_block(8, 120, 8, id);
+        }
+        for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let cell = game
+                .world()
+                .get_block_loaded(8 + dx, 120, 8 + dz)
+                .expect("loaded");
+            assert_eq!(
+                blocks.block_name(cell).expect("registered"),
+                "minecraft:dirt",
+                "water-roofed dirt never converts"
+            );
+        }
+    }
+
+    #[test]
+    fn mycelium_spreads_on_direct_calls() {
+        let (mut game, _dir) = bare_game("mycelium-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        let blocks = game.registries().blocks.clone();
+        let mycelium = blocks
+            .default_state("minecraft:mycelium")
+            .expect("mycelium");
+        let dirt = blocks.default_state("minecraft:dirt").expect("dirt");
+        game.world_mut()
+            .set_block(8, 120, 8, mycelium)
+            .expect("mycelium placed");
+        for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            game.world_mut()
+                .set_block(8 + dx, 120, 8 + dz, dirt)
+                .expect("dirt placed");
+        }
+        light_farm(&mut game);
+        let id = game.world().get_block_loaded(8, 120, 8).expect("loaded");
+        // Mycelium and grass share the handler; the odd loop below is the
+        // same bounded-draw shape as the grass pin (fixed seed, terminates).
+        let mut grown = false;
+        for _ in 0..30 {
+            if game.random_tick_block(8, 120, 8, id) {
+                grown = true;
+                break;
+            }
+        }
+        assert!(grown, "open mycelium converts neighbouring dirt");
+    }
+}
