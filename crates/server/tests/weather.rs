@@ -36,8 +36,11 @@ impl Harness {
         };
         let service = WorldService::open(&config).expect("world opens");
         let (tx, rx) = game_channel(256);
+        // View distance 2 (TEST-TIME-PLAN §3): the cycle, its packets and the
+        // storm's wetting are all read in the ring's inner chunks, and the
+        // per-cell random-tick rate is invariant to the loaded-chunk count.
         let game =
-            Game::build_with_operators(None, Some(service), 4, rx, DEFAULT_RANDOM_SEED, operators)
+            Game::build_with_operators(None, Some(service), 2, rx, DEFAULT_RANDOM_SEED, operators)
                 .expect("game builds");
         // Boot reads `weather.dat` the way the lifecycle does (P20-03 wiring
         // lives in `lifecycle.rs`; the test calls the same loader).
@@ -282,7 +285,11 @@ fn rain_wets_farmland_with_no_water_nearby() {
     // Storm for the whole run (timers far beyond it).
     harness.game.set_weather(0, 100_000, 100_000, true, false);
     harness.stand(8, 121, 8);
-    for _ in 0..300 {
+    // 150 ticks, not 300: the per-cell rate is invariant, so the expectation
+    // halves with the ticks (≈44 hits, floor 15) and the pin still separates a
+    // storm from dry weather by a wide margin. The 300-tick draft paid 60 s for
+    // margin the 20-hit floor never used.
+    for _ in 0..150 {
         harness.game.tick().expect("tick");
     }
     let mut wet = 0_usize;
@@ -297,9 +304,9 @@ fn rain_wets_farmland_with_no_water_nearby() {
             wet += 1;
         }
     }
-    // ~88 random-tick hits over the run, each wetting straight to 7.
+    // ≈44 random-tick hits over the run, each wetting straight to 7.
     assert!(
-        wet >= 20,
+        wet >= 15,
         "a storm must wet the field (a dry one stays dry), wet {wet}/400"
     );
 }
@@ -348,7 +355,7 @@ fn weather_survives_restart() {
     let service = WorldService::open(&config).expect("world reopens");
     let (tx, rx) = game_channel(256);
     let mut second =
-        Game::with_seed_and_storage(service, 4, rx, DEFAULT_RANDOM_SEED).expect("game rebuilds");
+        Game::with_seed_and_storage(service, 2, rx, DEFAULT_RANDOM_SEED).expect("game rebuilds");
     second.load_weather(&root);
     for cz in -1..=1 {
         for cx in -1..=1 {

@@ -216,8 +216,22 @@ explained away.
     remaining poles (`xp_orbs` 94 s, `reach_validation` 87 s, `weather` 84 s,
     `natural_spawn` 51 s) are tens of seconds each. §3 first; §2 where a suite
     is still expensive.
-- **Still queued:** `weather` (§2); `xp_orbs`, `reach_validation`,
-  `natural_spawn`, `ai_wiring`, `p18_hunger` (§3 candidates by measurement);
+- **§3 step, second suite: `weather` (2026-10-03).** Same shape as `sleep`:
+  both harnesses at view distance 4, and the storm-wetting pin at 300 ticks ×
+  400 cells. View distance 2 takes the cycle/packet/command pins to 1.4–1.8 s
+  and the restart round-trip to 4.9 s; the wetting pin runs 150 ticks with the
+  floor re-derived from the rate (≈44 expected, floor 15). Suite **59.6 s wall
+  → 12.6 s**, pins unchanged. One mechanism re-proven red: the rain gate
+  feeding farmland wetting. §2's weather rows (direct `tick_weather` pins) were
+  not taken, for the same measured reason as sleep: at 12.6 s the suite is no
+  longer a pole.
+  - **The §2 P20 set is closed on the numbers:** `spread` and `growth` and
+    `till` were migrated (the three that were still expensive), and `sleep` and
+    `weather` were resolved by §3 at 7.8 s and 12.6 s, where §2's ~10× would buy
+    single-digit seconds. §2 applies again when a suite is both expensive and
+    mechanism-heavy.
+- **Still queued:** `reach_validation` 64 s, `xp_orbs` 52 s, `natural_spawn`
+  41 s, `ai_wiring` 37 s, `p18_hunger` 33 s (§3 candidates, by measurement);
   `mc-container` lib attribution (§7); gate tiers and CI timeouts (§4)
   untouched.
 - **Proofs are a tool now, not a command:** `python tools/gates/perturb.py

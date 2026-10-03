@@ -191,6 +191,17 @@ CASES: dict[str, list[dict[str, str]]] = {
             'target': '-p mc-server --test sleep -E test(ten_players_skip_the_night)',
         },
     ],
+    'weather': [
+        {
+            'name': 'rain reaches farmland',
+            'file': 'crates/server/src/game/weather.rs',
+            # The rain arm `tick_farmland` consults; with it shut, a storm wets
+            # nothing and the wetting pin must notice.
+            'old': 'if !self.weather.raining {\n            return false;\n        }',
+            'new': 'if true {\n            return false;\n        }',
+            'target': '-p mc-server --test weather -E test(rain_wets_farmland_with_no_water_nearby)',
+        },
+    ],
 }
 
 SUMMARY = re.compile(r'Summary \[[^\]]*\] (\d+) tests? run: (\d+) passed(?:, (\d+) failed)?')

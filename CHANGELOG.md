@@ -319,6 +319,15 @@ counter. §2's sleep rows (direct pins for the refusals, occupied, monsters and
 respawn variants) were **not** taken: at 7.8 s the suite is no longer a pole,
 and §2's ~10× on it would buy seconds while the remaining poles are 84–94 s.*
 
+*Test-time trim, weather (TEST-TIME-PLAN §3, no behavior change): the suite's
+two harnesses also built at view distance 4, and its storm pin ran 300 ticks
+over a 400-cell field. At view distance 2 the cycle/packet/command pins are
+1.4–1.8 s and the restart round-trip 4.9 s; the storm-wetting pin now runs 150
+ticks with a 15-hit floor (expectation ≈44, was ≈88 under a 20 floor — the
+per-cell rate is ring-invariant, so the expectation scales with the ticks and
+nothing else). Suite **59.6 s wall -> 12.6 s**. One mechanism re-proven red and
+restored byte-exact: the rain gate where farmland wetting reads the sky.*
+
 *Same landing, four tooling gaps the run exposed. (1) TEST-TIME-PLAN §1's
 slowest-first table printed `?` for every row — cargo writes the
 `Running ... (target/debug/deps/<name>-<hash>.exe)` header to *stderr* and the
