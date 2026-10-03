@@ -199,7 +199,7 @@ concept only, nothing copied); Paper has no local random-tick analogue beyond
 patch paths (recorded no-hit for mechanics).
 
 **P20-02 slice 2a — hoe tilling and trampling (PARTIAL with slice 1; slice
-2b owns saplings, grass, leaf decay, cane, cactus and bone meal).**
+2b owns saplings, leaf decay, cane, cactus, grass spread and bone meal).**
 `apply_hoe` runs the jar's `HoeItem.TILLABLES` table from the static init:
 grass/dirt-path/dirt → farmland, coarse dirt → dirt, rooted dirt → dirt plus
 a hanging-roots drop — uniformly gated on a non-DOWN face with air above
@@ -220,6 +220,32 @@ them and restored byte-exact.
 
 Reference search (§5): no local hoe/trample analogue beyond the jar (the
 P20-02 slice-1 searches stand).
+
+**P20-02 slice 2b — stalks and spread: cane, cactus, grass, mycelium
+(PARTIAL with slices 1+2a; slice 2c owns saplings, leaf decay, bone
+meal).** Three stateless random-tick handlers in `game::growth`, all
+`javap -c` on the 26.1.2 jar: cane grows only at the stack top (air above,
+fewer than 3 consecutive cane below, `age == 15` plants above and resets,
+else the age climbs); cactus the same shape minus the flower arm (the
+`ATTEMPT_GROW_CACTUS_FLOWER_AGE` constants were read, the 0.25/0.10
+`cactus_flower` planting is a named gap — cacti grow flowerless); grass and
+mycelium run `SpreadingSnowyBlock` (starve to dirt first when the roof
+cannot stay alive — snow-layers-1, source-fluid kill, else dampening < 15
+via the jar-derived light table — then up to four `nextInt(3)-1,
+nextInt(5)-3, nextInt(3)-1` attempts converting dirt that could itself
+survive without water above, `snowy` re-read per target). Evidence:
+`crates/server/tests/spread.rs` — age-split cane/cactus fields (grow arm
+plus climb arm), triple-stack cap, 64-seed grass bed with a roofed
+starvation row and a water-roofed refusal checkerboard, 64-seed mycelium
+bed. Five perturbations proven red and restored byte-exact (cane grow,
+cactus grow, spread attempts, starvation, height cap). One honest
+debugging round on the way: the draft mycelium farm sampled nothing (one
+cell in eight million), and the instrumented re-run showed the only
+starves anywhere were natural grass under cover — the rule working, not
+the farm being seen.
+
+Reference search (§5): no local stalk/spread analogue beyond the jar
+(Pumpkin's worldgen has no random-tick growth; recorded no-hit).
 
 **P20-04 slice 1 — beds, sleep attempts, skip-night (PARTIAL; slice 2 owns
 respawn persistence, `/spawnpoint` and the obstructed-respawn redirect).**

@@ -70,6 +70,23 @@ const WATER_DX: i32 = 4;
 const WATER_DY_LO: i32 = 0;
 const WATER_DY_HI: i32 = 1;
 
+/// Stalk rules shared by cane and cactus (jar static init, both classes).
+struct CaneCactus;
+
+impl CaneCactus {
+    /// No stalk grows past three (`height >= 3` returns, both classes).
+    const MAX_STACK: i32 = 3;
+    /// The age that grows instead of climbing (`age == 15`, both classes).
+    const GROW_AGE: i32 = 15;
+}
+
+/// Spread attempts per random tick (jar `SpreadingSnowyBlock`: `4`).
+const SPREAD_ATTEMPTS: usize = 4;
+
+/// Full light opacity: dampening `>= 15` starves the cell below (jar
+/// `canStayAlive` tail).
+const FULL_OPACITY: u8 = 15;
+
 impl Game {
     /// One random-tick sample at `(x, y, z)`: dispatch to the block's handler.
     ///
@@ -88,6 +105,9 @@ impl Game {
                 self.tick_crop(x, y, z, id, &name)
             }
             "minecraft:farmland" => self.tick_farmland(x, y, z, id),
+            "minecraft:sugar_cane" => self.tick_cane(x, y, z, id),
+            "minecraft:cactus" => self.tick_cactus(x, y, z, id),
+            "minecraft:grass_block" | "minecraft:mycelium" => self.tick_spread(x, y, z, id, &name),
             _ => false,
         }
     }
@@ -297,6 +317,226 @@ impl Game {
         if is_farmland && self.random.next_f64() < fall - 0.5 {
             self.turn_to_dirt(x, y, z);
         }
+    }
+
+    /// Sugar cane growth (`SugarCaneBlock.randomTick`, jar bytecode).
+    ///
+    /// Only the stack top runs (guard: the cell above must be air): count
+    /// consecutive cane below (capped at 3 — the loop stops counting there,
+    /// and `height >= 3` returns); at `age == 15` a fresh cane lands above
+    /// and this cell resets to 0, otherwise the age climbs. Growth writes
+    /// ride the canonical edit path, so the Broadcast phase streams them.
+    fn tick_cane(&mut self, x: i32, y: i32, z: i32, id: i32) -> bool {
+        if !self.is_empty_block(x, y + 1, z) {
+            return false;
+        }
+        let mut height = 1;
+        for depth in 1..=2 {
+            let below = self.world.get_block_loaded(x, y - depth, z);
+            let is_cane = below.is_some_and(|cell| {
+                self.registries
+                    .blocks
+                    .block_name(cell)
+                    .is_ok_and(|name| name == "minecraft:sugar_cane")
+            });
+            if !is_cane {
+                break;
+            }
+            height += 1;
+        }
+        if height >= CaneCactus::MAX_STACK {
+            return false;
+        }
+        let properties = self.registries.blocks.properties_of(id).unwrap_or_default();
+        let Some(age) = int_property(&properties, "age") else {
+            return false;
+        };
+        if age >= CaneCactus::GROW_AGE {
+            let Ok(fresh) = self.registries.blocks.default_state("minecraft:sugar_cane") else {
+                return false;
+            };
+            if self.world.set_block(x, y + 1, z, fresh).is_err() {
+                return false;
+            }
+            self.block_feed(x, y + 1, z, fresh);
+            return self.write_property(x, y, z, "minecraft:sugar_cane", "age", 0);
+        }
+        self.write_property(x, y, z, "minecraft:sugar_cane", "age", age + 1)
+    }
+
+    /// Cactus growth (`CactusBlock.randomTick`, jar bytecode, minus the
+    /// flower arm).
+    ///
+    /// Same stack-top shape as cane (air above, height < 3, `age == 15`
+    /// grows and resets, else the age climbs). The flower branch — planting
+    /// `cactus_flower` above at age with a 0.25/0.10 roll — is a named gap:
+    /// the constants (`ATTEMPT_GROW_CACTUS_FLOWER_AGE`, both probabilities)
+    /// were read but the arm is not wired, so cacti grow flowerless here.
+    fn tick_cactus(&mut self, x: i32, y: i32, z: i32, id: i32) -> bool {
+        if !self.is_empty_block(x, y + 1, z) {
+            return false;
+        }
+        let mut height = 1;
+        for depth in 1..=2 {
+            let below = self.world.get_block_loaded(x, y - depth, z);
+            let is_cactus = below.is_some_and(|cell| {
+                self.registries
+                    .blocks
+                    .block_name(cell)
+                    .is_ok_and(|name| name == "minecraft:cactus")
+            });
+            if !is_cactus {
+                break;
+            }
+            height += 1;
+        }
+        if height >= CaneCactus::MAX_STACK {
+            return false;
+        }
+        let properties = self.registries.blocks.properties_of(id).unwrap_or_default();
+        let Some(age) = int_property(&properties, "age") else {
+            return false;
+        };
+        if age >= CaneCactus::GROW_AGE {
+            let Ok(fresh) = self.registries.blocks.default_state("minecraft:cactus") else {
+                return false;
+            };
+            if self.world.set_block(x, y + 1, z, fresh).is_err() {
+                return false;
+            }
+            self.block_feed(x, y + 1, z, fresh);
+            return self.write_property(x, y, z, "minecraft:cactus", "age", 0);
+        }
+        self.write_property(x, y, z, "minecraft:cactus", "age", age + 1)
+    }
+
+    /// Grass/mycelium spread and starvation (`SpreadingSnowyBlock.randomTick`).
+    ///
+    /// Starving first (jar order): without a survivable roof the cell
+    /// reverts to dirt. Otherwise, under bright sky (`>= 9` above), four
+    /// attempts land at `nextInt(3)-1, nextInt(5)-3, nextInt(3)-1`; a dirt
+    /// target that could itself survive there (and carries no water above)
+    /// takes this block's state with its `snowy` flag re-read from the snow
+    /// above the *target*. Mycelium spreads onto dirt the same way (its jar
+    /// base block is dirt, like grass).
+    fn tick_spread(&mut self, x: i32, y: i32, z: i32, id: i32, name: &str) -> bool {
+        let Ok(spreader) = self.registries.blocks.block_name(id) else {
+            return false;
+        };
+        let spreader = spreader.to_owned();
+        if !self.spread_stays_alive(x, y, z) {
+            let Ok(dirt) = self.registries.blocks.default_state("minecraft:dirt") else {
+                return false;
+            };
+            if self.world.set_block(x, y, z, dirt).is_err() {
+                return false;
+            }
+            self.block_feed(x, y, z, dirt);
+            return true;
+        }
+        if self.raw_brightness(x, y + 1, z) < GROWTH_LIGHT {
+            return false;
+        }
+        let mut grew = false;
+        for _ in 0..SPREAD_ATTEMPTS {
+            let tx = x + self.random.next_i32_bounded(3) - 1;
+            let ty = y + self.random.next_i32_bounded(5) - 3;
+            let tz = z + self.random.next_i32_bounded(3) - 1;
+            let Some(target) = self.world.get_block_loaded(tx, ty, tz) else {
+                continue;
+            };
+            let is_dirt = self
+                .registries
+                .blocks
+                .block_name(target)
+                .is_ok_and(|target_name| target_name == "minecraft:dirt");
+            if !is_dirt || !self.spread_can_propagate(tx, ty, tz) {
+                continue;
+            }
+            let snowy = self.is_snowy_above(tx, ty, tz);
+            let mut props = self.registries.blocks.properties_of(id).unwrap_or_default();
+            if let Some(entry) = props.iter_mut().find(|(k, _)| k == "snowy") {
+                entry.1 = snowy.to_string();
+            }
+            let Ok(new_id) = self.registries.blocks.state_id(&spreader, &props) else {
+                continue;
+            };
+            if self.world.set_block(tx, ty, tz, new_id).is_err() {
+                continue;
+            }
+            self.block_feed(tx, ty, tz, new_id);
+            grew = true;
+        }
+        // Keep the borrow checker honest: `name` selects the dispatch arm
+        // and `spreader` (the owned copy) does the writing.
+        let _ = name;
+        grew
+    }
+
+    /// Whether the cell at `(x, y, z)` is air-like (the stack-top guard both
+    /// stalk rules share with the jar's `isEmptyBlock`).
+    fn is_empty_block(&self, x: i32, y: i32, z: i32) -> bool {
+        self.world
+            .get_block_loaded(x, y, z)
+            .is_some_and(|cell| self.registries.blocks.is_empty(cell))
+    }
+
+    /// Jar `SpreadingSnowyBlock.canStayAlive`: snow with one layer always
+    /// suffices; a full (source) fluid above kills; otherwise the roof's
+    /// light dampening must stay below full opacity (15).
+    fn spread_stays_alive(&self, x: i32, y: i32, z: i32) -> bool {
+        let Some(above) = self.world.get_block_loaded(x, y + 1, z) else {
+            return false;
+        };
+        if self.is_single_snow_layer(above) {
+            return true;
+        }
+        if self.is_water_source(x, y + 1, z) {
+            return false;
+        }
+        self.registries.light.dampening(above) < FULL_OPACITY
+    }
+
+    /// Jar `canPropagate`: survivable there, and no water (any) above.
+    fn spread_can_propagate(&self, x: i32, y: i32, z: i32) -> bool {
+        if !self.spread_stays_alive(x, y, z) {
+            return false;
+        }
+        !matches!(
+            self.fluid_state_at(x, y + 1, z),
+            mc_simulation::FluidState::Water(_)
+        )
+    }
+
+    /// Whether the cell holds `minecraft:snow` at `layers == 1`.
+    fn is_single_snow_layer(&self, id: i32) -> bool {
+        if self
+            .registries
+            .blocks
+            .block_name(id)
+            .is_ok_and(|name| name == "minecraft:snow")
+        {
+            let props = self.registries.blocks.properties_of(id).unwrap_or_default();
+            return int_property(&props, "layers").is_some_and(|layers| layers == 1);
+        }
+        false
+    }
+
+    /// Whether the cell holds a water *source* (the jar's `isFull`).
+    fn is_water_source(&self, x: i32, y: i32, z: i32) -> bool {
+        matches!(
+            self.fluid_state_at(x, y, z),
+            mc_simulation::FluidState::Water(body) if body.is_source()
+        )
+    }
+
+    /// Whether snow (block or layer) sits above, for the `snowy` flag (the
+    /// jar's `isSnowySetting`, subset to the two snow blocks).
+    fn is_snowy_above(&self, x: i32, y: i32, z: i32) -> bool {
+        self.world
+            .get_block_loaded(x, y + 1, z)
+            .and_then(|above| self.registries.blocks.block_name(above).ok())
+            .is_some_and(|name| name == "minecraft:snow" || name == "minecraft:snow_block")
     }
 
     /// Sweep helper: the loaded chunks inside the ticking radius around loaded
