@@ -24,7 +24,7 @@ fn game_with_storage(tag: &str, autosave_ticks: u64) -> (Game, TempDir) {
     };
     let storage = WorldService::open(&config).expect("world opens");
     let (_tx, rx) = mc_network::bridge::game_channel(64);
-    let game = Game::with_seed_and_storage(storage, 4, rx, mc_server::game::DEFAULT_RANDOM_SEED)
+    let game = Game::with_seed_and_storage(storage, 2, rx, mc_server::game::DEFAULT_RANDOM_SEED)
         .expect("game builds");
     (game, dir)
 }

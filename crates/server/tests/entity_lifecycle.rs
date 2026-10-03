@@ -736,7 +736,7 @@ fn a_stored_chunk_is_loaded_from_disk_and_never_overwritten_by_a_placeholder() {
         let (events, rx) = game_channel(64);
         // The production shape: the game owns the world handle so it can read a
         // chunk before creating a placeholder for it.
-        let mut game = Game::with_seed_and_storage(storage, 4, rx, 7).expect("game builds");
+        let mut game = Game::with_seed_and_storage(storage, 2, rx, 7).expect("game builds");
         game.world_mut().set_spawn(bx, by, bz);
         let (outbound, _out) = OutboundSender::pair(ConnectionId(1), 8192);
         events

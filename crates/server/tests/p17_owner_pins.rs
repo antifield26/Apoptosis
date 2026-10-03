@@ -41,7 +41,7 @@ impl Harness {
         let storage = WorldService::open(&config).expect("world opens");
         let (tx, rx) = game_channel(256);
         let game =
-            Game::with_seed_and_storage(storage, 4, rx, mc_server::game::DEFAULT_RANDOM_SEED)
+            Game::with_seed_and_storage(storage, 2, rx, mc_server::game::DEFAULT_RANDOM_SEED)
                 .expect("game builds");
         Self {
             game,

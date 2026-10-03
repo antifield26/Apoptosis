@@ -346,6 +346,25 @@ worldgen and structure suites, and `natural_spawn` (its spawn ring meets a
 24-block minimum). With this the gate's suite-time sum reads ≈450 s against the
 plan's ≤ ~600 s target.*
 
+*Test-time trim, ring sweep second pass (TEST-TIME-PLAN §3, no behavior change):
+the rest of the view-distance-4 harnesses whose scenes are local — 19
+constructors in 17 suites (`barrel`, `reconnect`, `block_change_ack`,
+`console_save_e2e`, `crafting_table`, `dig_progress`, `doors`, `double_chest`,
+`entity_lifecycle`, `entity_persistence`, `fluid_core`, `hopper_furnace`,
+`join_entity_id`, `p17_owner_pins`, `p18_wear_enchant`, `p19_write_pins`,
+`pvp_authority`) — drop to view distance 2, with every suite verified green and
+the whole workspace with them (2 002 passed). No per-suite saving is claimed for
+this pass: the before/after nextest logs are not comparable (231 s against
+155 s, summed test time 45 % higher under load), so the evidence is the
+reasoning plus the gate's sum. `natural_spawn` stays at 4 on purpose — its spawn
+ring is a fixed 8 chunks that must meet the 24-block minimum, so the view
+distance decides how much of the annulus is loaded, which is a semantic rather
+than a cost. Two measurement caveats are now recorded in the plan: per-suite
+times move up to ±60 % between runs on this host (read the sum as ±20–30 s), and
+a bulk edit script that used `Path.write_text` translated newlines and turned 17
+LF files into CRLF — `check_line_endings` caught it, and its prescribed byte
+rewrite is the fix.*
+
 *Test-time tiers and CI timeouts (TEST-TIME-PLAN §4): `run.py --quick` is now
 the per-commit tier and keeps **every** test — nextest schedules across binaries
 instead of running them one at a time, so the workspace runs in **155 s** against

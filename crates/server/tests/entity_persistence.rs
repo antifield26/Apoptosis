@@ -63,7 +63,7 @@ impl World {
         let storage = WorldService::open(&self.config).expect("world opens");
         let (tx, rx) = game_channel(256);
         let game =
-            Game::with_seed_and_storage(storage, 4, rx, DEFAULT_RANDOM_SEED).expect("game builds");
+            Game::with_seed_and_storage(storage, 2, rx, DEFAULT_RANDOM_SEED).expect("game builds");
         (game, tx)
     }
 }

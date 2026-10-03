@@ -43,7 +43,7 @@ impl Harness {
         let storage = WorldService::open(&config).expect("world opens");
         let (tx, rx) = game_channel(256);
         let game =
-            Game::with_seed_and_storage(storage, 4, rx, mc_server::game::DEFAULT_RANDOM_SEED)
+            Game::with_seed_and_storage(storage, 2, rx, mc_server::game::DEFAULT_RANDOM_SEED)
                 .expect("game builds");
         Self {
             game,
@@ -286,7 +286,7 @@ fn a_barrel_survives_a_restart_with_its_contents() {
         let storage = WorldService::open(&config).expect("world opens");
         let (_tx, rx) = game_channel(64);
         let mut first =
-            Game::with_seed_and_storage(storage, 4, rx, DEFAULT_RANDOM_SEED).expect("game builds");
+            Game::with_seed_and_storage(storage, 2, rx, DEFAULT_RANDOM_SEED).expect("game builds");
         let (sx, sy, sz) = first.spawn();
         let stone = first
             .registries()
@@ -341,7 +341,7 @@ fn a_barrel_survives_a_restart_with_its_contents() {
     let storage = WorldService::open(&config).expect("world reopens");
     let (_tx, rx) = game_channel(64);
     let mut second =
-        Game::with_seed_and_storage(storage, 4, rx, DEFAULT_RANDOM_SEED).expect("game builds");
+        Game::with_seed_and_storage(storage, 2, rx, DEFAULT_RANDOM_SEED).expect("game builds");
     assert!(second.load_chunk(chunk), "the saved chunk loads");
     let total: i64 = second.block_entities().total_items();
     assert_eq!(total, 17, "the barrel contents must survive, saw {total}");

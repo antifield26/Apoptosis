@@ -268,9 +268,44 @@ explained away.
   - **Not done, and named:** §4.4 (release profile) stays deferred, and the CI
     jobs themselves have not been observed on a runner from here — they run on
     push.
-- **Still queued:** the remaining ~30 harnesses that still build at view
-  distance 4 — mechanical, one suite at a time (verify green, then trim; the
-  ring-owning suites above stay); `mc-container` lib attribution (§7).
+- **§3 ring sweep, second pass: the remaining local-scene harnesses
+  (2026-10-03).** The first sweep took the ten *largest* suites; this one takes
+  the rest of the view-distance-4 harnesses whose scenes are local — 19
+  constructors in 17 suites (`barrel` ×3, `reconnect` ×2, `block_change_ack`,
+  `console_save_e2e`, `crafting_table`, `dig_progress`, `doors`,
+  `double_chest`, `entity_lifecycle`, `entity_persistence`, `fluid_core`,
+  `hopper_furnace`, `join_entity_id`, `p17_owner_pins`, `p18_wear_enchant`,
+  `p19_write_pins`, `pvp_authority`). Every suite was verified green, and the
+  whole workspace with them (nextest's own count, which is not the canonical
+  figure TEST-MATRIX owns — it skips doctests).
+  - **No per-suite saving is claimed.** The before/after logs for this pass are
+    not comparable — the second full nextest run took 231 s against the first's
+    155 s, with the summed test time 45 % higher under load — so the evidence is
+    the reasoning (81 chunks of ring down to 25) plus the full gate's sum, not a
+    table. The first pass's numbers (where the two logs *were* comparable) are
+    the shape to expect.
+  - **Left at 4, with reasons:** `natural_spawn` (its spawn ring is a fixed
+    8 chunks that must meet the 24-block minimum, so the view distance decides
+    how much of the annulus is loaded — a real semantic, not cost), plus
+    `chunk_streaming`, `survival_e2e`, the light suites, the worldgen/structure
+    suites, `p15_zero_delta`, `fluid_differential` and `spawn_on_land`.
+- **Two measurement caveats, recorded because the numbers are read as
+  evidence.**
+  - **Load noise is large.** Per-suite times move by up to ±60 % between gate
+    runs on this host (the same `mc_container` lib read 20.5 s, 18.4 s and 8.4 s
+    across three runs; two nextest logs of the same tree differ by 45 % in
+    summed test time). Read the suite-time sum as ±20–30 s, and prefer a
+    like-for-like comparison or an isolated re-run before calling a small delta
+    a win.
+  - **Bulk edits must write bytes, not text.** The sweep script used
+    `Path.write_text`, which translates newlines on Windows and silently turned
+    17 LF files into CRLF; `check_line_endings` caught it and its own message
+    prescribes the fix (`read_bytes().replace(b'\r\n', b'\n')` + `write_bytes`).
+    The audit is what makes this a non-event rather than a committed
+    line-ending flip.
+- **Still queued:** `mc-container` lib attribution (§7) — noting it now reads
+  8–20 s, so the 31 s suspicion that queued it may no longer be worth the
+  diagnosis.
 - **Plan §5 acceptance:** the gate's suite-time sum reads **≈450 s** after the
   ring sweep, against the ≤ ~600 s target the plan set (≈1 690 s at the plan's
   writing).

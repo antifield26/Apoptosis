@@ -138,7 +138,7 @@ fn a_drop_with_components_is_announced_without_them_and_keeps_them() {
     let storage = WorldService::open(&config).expect("world opens");
     let (events, rx) = game_channel(256);
     let mut game =
-        Game::with_seed_and_storage(storage, 4, rx, DEFAULT_RANDOM_SEED).expect("game builds");
+        Game::with_seed_and_storage(storage, 2, rx, DEFAULT_RANDOM_SEED).expect("game builds");
     let (bx, by, bz) = game.spawn();
     let diamond = game
         .registries()
