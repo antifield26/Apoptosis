@@ -24,11 +24,25 @@ on.
 * **a test run that produced no results**, which is the hole above;
 * a test run with any failing suite.
 
+## The two tiers (TEST-TIME-PLAN §4)
+
+```text
+python tools/gates/run.py --quick    # per commit: fmt, clippy, docs audits, nextest over the workspace
+python tools/gates/run.py            # full: the above plus aarch64, cargo-deny and the canonical cargo test
+```
+
+`--quick` keeps **every test** and buys its wall clock from scheduling rather than from dropping coverage:
+nextest interleaves tests across binaries instead of running one binary at a time (measured 155 s against
+`cargo test`'s 452 s on the development host, against the plan's < 8 min budget), with the retry policy for
+the two suites that carry written flake history in `.config/nextest.toml`. The full tier runs `cargo test`,
+which is what `docs/testing/TEST-MATRIX.md` owns and what also runs the doctests nextest skips -- so the
+counts a document quotes come from the tier that owns them.
+
 Usage, from the repository root:
 
 ```text
-python tools/gates/run.py            # every gate
-python tools/gates/run.py --quick    # skip the aarch64 and deny passes
+python tools/gates/run.py            # every gate (the canonical tier)
+python tools/gates/run.py --quick    # the per-commit tier: everything but aarch64/deny, tests via nextest
 ```
 """
 
@@ -122,9 +136,50 @@ def summarize_tests(output: str) -> tuple[int, int, int, int]:
     return passed, failed, ignored, suites
 
 
+#: nextest's per-test line: `        PASS [   0.014s] (   1/2002) mc-capture-rig tests::name`.
+NEXTEST_TEST = re.compile(
+    r'^\s+(?:PASS|FAIL|FLAKY|SLOW)\s+\[\s*([\d.]+)s\]\s+\(\s*\d+/\d+\)\s+(\S+)\s+'
+)
+#: nextest's summary: `Summary [ 155.13s] 2002 tests run: 2002 passed (2 slow), 44 skipped`
+#: -- the `(N slow)` clause appears once anything passes nextest's slow mark, the `failed` clause only when
+#: something failed, and "1 test run" is singular.
+NEXTEST_SUMMARY = re.compile(
+    r'Summary \[[^\]]*\]\s+(\d+) tests? run:\s+(\d+) passed(?:\s*\(\d+ slow\))?'
+    r'(?:,\s*(\d+) failed)?(?:,\s*(\d+) skipped)?'
+)
+
+
+def summarize_nextest(output: str) -> tuple[int, int, int, int]:
+    """Aggregate the fast tier's run: nextest does not print cargo's per-suite `test result:` lines.
+
+    Two differences from `summarize_tests` are labelled rather than hidden. The **suite rows are sums of
+    their tests' durations**, not a binary's wall clock, because nextest interleaves tests across binaries
+    and never reports a per-binary time; and the **totals are nextest's**, which do not include doctests
+    (2 002 vs `cargo test`'s 2 006 today), so this tier reports counts but never claims the canonical figure
+    that `docs/testing/TEST-MATRIX.md` owns.
+    """
+    per_binary: dict[str, float] = {}
+    for line in output.splitlines():
+        match = NEXTEST_TEST.match(line)
+        if match:
+            per_binary[match.group(2)] = per_binary.get(match.group(2), 0.0) + float(match.group(1))
+    rows = sorted(((seconds, label) for label, seconds in per_binary.items()), reverse=True)
+    print('--- slowest suites (sum of test seconds, suite):')
+    for seconds, label in rows[:15]:
+        print(f'    {seconds:>9.2f}s  {label}')
+    print(f'--- suite-time sum: {sum(row[0] for row in rows):.1f}s across {len(rows)} suites')
+    summary = NEXTEST_SUMMARY.search(output)
+    if not summary:
+        return 0, 0, 0, 0
+    passed = int(summary.group(1))
+    failed = int(summary.group(3) or 0)
+    skipped = int(summary.group(4) or 0)
+    return passed, failed, skipped, len(rows)
+
+
 failures = []
 
-# The five gates. `cargo test` is handled separately because its *output* is checked, not only its exit code.
+# The five gates. The test tier is handled separately because its *output* is checked, not only its exit code.
 for label, command in [
     ('cargo fmt --all -- --check', ['cargo', 'fmt', '--all', '--', '--check']),
     (
@@ -155,17 +210,33 @@ for script in ('check_encoding', 'check_links', 'check_gate_totals', 'check_line
     if not ok:
         failures.append(label)
 
-# The tests, and **the count is the check**, not only the exit code.
-ok, output = run('cargo test --workspace', ['cargo', 'test', '--workspace', '--no-fail-fast'])
-passed, failed, ignored, suites = summarize_tests(output)
-print(f'--- tests: {passed} passed, {failed} failed, {ignored} ignored, {suites} suites')
+# The two tiers (TEST-TIME-PLAN §4). `--quick` is the per-commit gate: the same
+# workspace, scheduled across test binaries by nextest instead of one binary at a
+# time (measured 344 s against `cargo test`'s 452 s on the development host,
+# against the plan's < 8 min budget), with the retry policy in
+# `.config/nextest.toml`. The default tier is the canonical one: `cargo test`,
+# whose totals TEST-MATRIX owns and which also runs the doctests nextest skips.
+TEST_LABEL = 'cargo nextest run --workspace' if QUICK else 'cargo test --workspace'
+TEST_COMMAND = (
+    ['cargo', 'nextest', 'run', '--workspace', '--no-fail-fast']
+    if QUICK
+    else ['cargo', 'test', '--workspace', '--no-fail-fast']
+)
+ok, output = run(TEST_LABEL, TEST_COMMAND)
+if QUICK:
+    passed, failed, ignored, suites = summarize_nextest(output)
+    print(f'--- tests (nextest; doctests are the full tier\'s): {passed} run, '
+          f'{failed} failed, {ignored} skipped, {suites} binaries')
+else:
+    passed, failed, ignored, suites = summarize_tests(output)
+    print(f'--- tests: {passed} passed, {failed} failed, {ignored} ignored, {suites} suites')
 
 if not ok:
-    failures.append('cargo test')
+    failures.append(TEST_LABEL)
 if suites == 0:
     # **The hole that let a commit through.** A test binary that cannot link prints an error and no result line,
     # and "no failing suite" is true of no suites at all.
-    failures.append('cargo test produced no results (a locked binary, or a build failure)')
+    failures.append(f'{TEST_LABEL} produced no results (a locked binary, or a build failure)')
 if failed:
     failures.append(f'{failed} failing tests')
 

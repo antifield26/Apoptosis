@@ -4,11 +4,22 @@ name: ci
 # cargo-deny) on both host platforms, plus the documentation audit
 # (tools/docs-audit/). The workflow first executed on 2026-09-12 when the
 # repository gained its remote; results are visible under the Actions tab.
+#
+# **Every job carries an explicit `timeout-minutes`** (TEST-TIME-PLAN §4): the
+# GitHub default is 360 minutes, so a hung suite used to burn six runner-hours
+# silently instead of failing loudly. The budgets are ~4x the measured wall
+# clock on the development host (tests ≈ 7.5 min for `cargo test`, ≈ 5.7 min
+# for `cargo nextest`), which leaves room for a cold cache without leaving room
+# for a hang.
 
 on:
   push:
   pull_request:
   workflow_dispatch:
+  schedule:
+    # The full tier below runs nightly (03:00 UTC) so the canonical figures are
+    # re-derived on a fixed cadence, not only when someone remembers.
+    - cron: '0 3 * * *'
 
 env:
   CARGO_TERM_COLOR: always
@@ -16,6 +27,7 @@ env:
 jobs:
   check-x86_64:
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -24,7 +36,13 @@ jobs:
           components: rustfmt, clippy
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      # The per-push tier: nextest schedules across test binaries instead of
+      # running them one at a time (452 s -> 344 s on the development host), and
+      # `.config/nextest.toml` carries the retry policy for the two suites with
+      # written flake history. The canonical `cargo test` total is still owned
+      # by the nightly/full tier below.
+      - uses: taiki-e/install-action@nextest
+      - run: cargo nextest run --workspace --no-fail-fast
       - run: cargo build --workspace --release
 
   check-linux:
@@ -35,6 +53,7 @@ jobs:
     # This runs the same gates natively rather than cross-compiling, because a
     # cross-`check` does not link and would miss a linker or libc problem.
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -43,7 +62,9 @@ jobs:
           components: rustfmt, clippy
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      # Linux runs the *canonical* tier: this is the job whose figure the
+      # matrices quote, so it stays `cargo test` rather than nextest.
+      - run: cargo test --workspace --no-fail-fast
 
   check-aarch64:
     # P01-11: the Pi 5 target must at least typecheck + clippy-clean on every push.
@@ -58,6 +79,7 @@ jobs:
     # Running natively on arm64 belongs to the P08 Pi harness, where the hardware is
     # real and the benchmark needs it anyway.
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -81,6 +103,7 @@ jobs:
     # P01-03 / ADR-0001 D-08: the licence/dependency gate the policy promises.
     # Policy and local usage: docs/operations/DEPENDENCY-POLICY.md.
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -101,6 +124,7 @@ jobs:
     # and one drifted -- Audit 07 finding M2). Scripts and rules:
     # tools/docs-audit/, CONTRIBUTING.md.
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       # The link checker resolves citations of retired documentation against
@@ -114,3 +138,24 @@ jobs:
       - run: python tools/docs-audit/check_links.py
       - run: python tools/docs-audit/check_gate_totals.py
       - run: python tools/docs-audit/check_line_endings.py
+
+  # The full tier on a schedule (TEST-TIME-PLAN §4): the canonical `cargo test`
+  # total, the aarch64 cross-check and the dependency policy, nightly rather than
+  # per push, so the numbers the matrices quote are re-derived on a fixed cadence
+  # and a per-push regression is still caught by the jobs above.
+  nightly-full:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98.1"
+          components: rustfmt, clippy
+      - run: cargo test --workspace --no-fail-fast
+      # The acceptance suites are `#[ignore]`d on purpose (jar-gated
+      # differentials, distribution statistics, the benchmark harness): the full
+      # tier runs them so an ignored suite cannot rot unnoticed.
+      - run: cargo test --workspace --no-fail-fast -- --ignored
+

@@ -46,6 +46,18 @@ differential — full breakdown in [docs/testing/TEST-MATRIX.md](docs/testing/TE
 CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs
 all of this on every push; a red CI is a stop for everything else.
 
+**Two tiers (TEST-TIME-PLAN §4).** The table above is the full tier, and
+`python tools/gates/run.py` runs it as one command (plus the four docs audits).
+For a per-commit check, `python tools/gates/run.py --quick` is the same gates
+minus aarch64 and cargo-deny, with the tests run by nextest instead of
+`cargo test`: it keeps **every** test and takes **165 s** end to end against the
+full tier's ~8 min, because nextest schedules across test binaries rather than
+running one binary at a time. The counts `--quick` prints are nextest's own —
+it does not run doctests, so they read 2 002 where the canonical figure is
+2 006; the figure TEST-MATRIX owns always comes from the full tier's
+`cargo test`. Retries for the two suites with written flake history live in
+[.config/nextest.toml](.config/nextest.toml).
+
 ### Differential tests (need a real vanilla 26.1.2 jar)
 
 The ignored differential suites compare behaviour against the official server

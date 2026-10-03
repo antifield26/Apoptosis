@@ -1,0 +1,27 @@
+# nextest configuration -- TEST-TIME-PLAN §1 (per-test timing, work-stealing
+# scheduling, retries for the known timing-sensitive suites) and §4 (gate tiers).
+#
+# Why the retries are here rather than in a shell flag: both suites below have
+# written flake history in this repository -- each has failed under a loaded
+# `cargo test --workspace` run and passed immediately in isolation -- and
+# `run.py --quick` is meant to be the check a commit waits on. A retry that
+# passes is reported as **FLAKY** in nextest's summary, so a real failure cannot
+# hide behind it; only the two named binaries get retries, and everything else
+# still fails on the first attempt.
+#
+# The canonical totals stay owned by `cargo test --workspace --no-fail-fast`
+# (docs/testing/TEST-MATRIX.md), which the *full* gate runs. `--quick` uses
+# nextest for wall clock: it schedules across binaries instead of running them
+# one at a time, which is where the 452 s -> 344 s comes from.
+
+[profile.default]
+# Same semantics as `--no-fail-fast`: report every failure in one run.
+fail-fast = false
+retries = 0
+
+[[profile.default.overrides]]
+# `network_game_bridge` and `whitelist_revocation`: the two suites whose flake
+# history is recorded (P20-02's regression note and the bridge's load-induced
+# timing).
+filter = 'binary(network_game_bridge) | binary(whitelist_revocation)'
+retries = 2

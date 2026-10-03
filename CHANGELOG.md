@@ -346,6 +346,22 @@ worldgen and structure suites, and `natural_spawn` (its spawn ring meets a
 24-block minimum). With this the gate's suite-time sum reads ≈450 s against the
 plan's ≤ ~600 s target.*
 
+*Test-time tiers and CI timeouts (TEST-TIME-PLAN §4): `run.py --quick` is now
+the per-commit tier and keeps **every** test — nextest schedules across binaries
+instead of running them one at a time, so the workspace runs in **155 s** against
+`cargo test`'s 452 s (165 s end to end with fmt, clippy and the four docs
+audits, against the plan's < 8 min budget). The default tier stays canonical —
+aarch64, cargo-deny, and `cargo test` whose totals TEST-MATRIX owns — and
+`.config/nextest.toml` adds the retries §1 asked for: two attempts for
+`network_game_bridge` and `whitelist_revocation` (the suites with written flake
+history), none for anything else, with a retried pass reported FLAKY so a retry
+cannot hide a real failure. `ci.yml` gains an explicit `timeout-minutes` on every
+job (GitHub's default is 360, so a hang used to burn six runner-hours silently),
+the per-push x86_64 job moves to the nextest tier, and a `schedule`-gated
+`nightly-full` job runs the canonical `cargo test` plus the `#[ignore]`d
+acceptance suites. The fast tier's counts are labelled as nextest's: it does not
+run doctests, so they are 2 002 rather than the canonical 2 006.*
+
 *Same landing, four tooling gaps the run exposed. (1) TEST-TIME-PLAN §1's
 slowest-first table printed `?` for every row — cargo writes the
 `Running ... (target/debug/deps/<name>-<hash>.exe)` header to *stderr* and the

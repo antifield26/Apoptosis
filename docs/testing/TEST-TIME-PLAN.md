@@ -245,10 +245,32 @@ explained away.
   - **Left at 4 on purpose:** `chunk_streaming`, `survival_e2e`, the light,
     worldgen and structure suites, and `natural_spawn` (its spawn ring meets a
     24-block minimum).
+- **§4 executed: two tiers, and CI timeouts (2026-10-03).**
+  - `run.py --quick` is the per-commit tier: fmt, clippy, the four docs audits,
+    and **nextest over the whole workspace** — every test kept, with the wall
+    clock bought from scheduling rather than from dropping suites (**155 s**
+    against `cargo test`'s 452 s; the plan's budget was < 8 min). That is a
+    deliberate deviation from §4.1's letter ("lib + unit tests + integration
+    suites under a per-suite budget"): with nextest the whole workspace already
+    fits the budget, so there is nothing worth dropping. Measured end to end,
+    including fmt, clippy and the audits: **165 s**.
+  - The default tier stays canonical: aarch64 + cargo-deny + `cargo test
+    --workspace --no-fail-fast`, which owns the totals in TEST-MATRIX and runs
+    the doctests nextest skips (2 006 against nextest's 2 002).
+  - `.config/nextest.toml` carries the retry policy §1 asked for: two retries
+    for `network_game_bridge` and `whitelist_revocation` — the two suites with
+    written flake history — and none for anything else. A retried pass is
+    reported FLAKY, so a retry cannot hide a real failure.
+  - `ci.yml`: every job now has an explicit `timeout-minutes` (GitHub's default
+    is 360, so a hang used to burn six runner-hours silently), the per-push
+    x86_64 job runs the nextest tier, and a `schedule`-gated `nightly-full` job
+    runs the canonical `cargo test` plus the `#[ignore]`d acceptance suites.
+  - **Not done, and named:** §4.4 (release profile) stays deferred, and the CI
+    jobs themselves have not been observed on a runner from here — they run on
+    push.
 - **Still queued:** the remaining ~30 harnesses that still build at view
   distance 4 — mechanical, one suite at a time (verify green, then trim; the
-  ring-owning suites above stay); `mc-container` lib attribution (§7); gate
-  tiers and CI timeouts (§4) untouched.
+  ring-owning suites above stay); `mc-container` lib attribution (§7).
 - **Plan §5 acceptance:** the gate's suite-time sum reads **≈450 s** after the
   ring sweep, against the ≤ ~600 s target the plan set (≈1 690 s at the plan's
   writing).
