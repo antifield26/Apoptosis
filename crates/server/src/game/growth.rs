@@ -1114,6 +1114,43 @@ mod tests {
         );
     }
 
+    /// The `fallOn` threshold: a fall that cannot beat `fall - 0.5` never
+    /// tramples.
+    ///
+    /// Deterministic without a seed: at 0.5 blocks the roll is `< 0.0`, which
+    /// `next_f64` (range `[0, 1)`) can never satisfy. This is the arm the
+    /// tick-level "standing still" control cannot reach — an idle player never
+    /// produces a landing at all — so the threshold is pinned here rather than
+    /// implied there.
+    #[test]
+    fn short_falls_do_not_trample() {
+        let (mut game, _dir) = bare_game("trample-threshold-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        let soil = game
+            .registries()
+            .blocks
+            .state_id(
+                "minecraft:farmland",
+                &[("moisture".to_owned(), "7".to_owned())],
+            )
+            .expect("moist farmland");
+        game.world_mut()
+            .set_block(8, 120, 8, soil)
+            .expect("soil placed");
+        for fall in [0.0, 0.4, 0.5] {
+            game.trample_on_landing(8, 120, 8, fall);
+            assert_eq!(
+                game.registries()
+                    .blocks
+                    .block_name(game.world().get_block_loaded(8, 120, 8).expect("loaded"))
+                    .expect("registered"),
+                "minecraft:farmland",
+                "a {fall}-block fall is under the threshold (roll < {} never passes)",
+                fall - 0.5
+            );
+        }
+    }
+
     /// Beetroot's `nextInt(3)` pre-gate makes it grow at a third of wheat's
     /// rate under identical soil.
     ///

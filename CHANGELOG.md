@@ -283,6 +283,27 @@ moisture half ("dark soil is still watered") is kept as
 `dark_farmland_still_wets_on_direct_call`, with the box's darkness itself
 asserted.*
 
+*Test-time migration, slice 2a (TEST-TIME-PLAN §2, no behavior change): the
+three hoe tests in `tests/till.rs` — the `TILLABLES` table, rooted dirt's drop
+and the three refusals — became three direct `apply_hoe` pins in
+`game::session::tests`, which needs no ticks and no streaming (the hoe path is
+one click, not a simulation). What stays in `tests/till.rs` is what a direct
+call cannot show: the 5-block landing, the falling mob, the idle-player
+negative control, and — the arm this migration nearly dropped — **one click
+that proves `UseItemOn` still dispatches to `apply_hoe`**, since the direct pins
+call the handler and would all stay green if that dispatch line went. Suite
+**47.7 s wall -> 3.9 s** — the control's 200 ticks
+became 10 (an idle player sends no movement intent, so the landing path is
+never entered and a level-triggered regression fires on the first tick), and the
+harness dropped to view distance 2, which alone took the mob fall from 23.9 s
+to 2.8 s. Seven perturbations proven red and restored byte-exact (the coarse-dirt
+row, the roots drop, the DOWN-face and cover gates, the wear each till costs,
+`fallOn`'s `fall - 0.5` threshold, and the `UseItemOn` dispatch). The threshold
+case is new coverage rather
+than migrated coverage: the "standing still" control never reached the
+threshold — an idle player produces no landing at all — so
+`short_falls_do_not_trample` pins it directly in `game::growth::tests`.*
+
 *Same landing, four tooling gaps the run exposed. (1) TEST-TIME-PLAN §1's
 slowest-first table printed `?` for every row — cargo writes the
 `Running ... (target/debug/deps/<name>-<hash>.exe)` header to *stderr* and the
@@ -304,9 +325,9 @@ arm's "dirting applies" and the `sections × 3` rate pin against a
 `RANDOM_TICK_SPEED` of 2 — that were artifacts of the harness, not the tree,
 and were reproduced deliberately (identical bytes restored: pin still red;
 mtime touched: pin green) before the fix. The harness now rewrites the bytes on
-restore and is a committed tool, `tools/gates/perturb.py`: the growth group's
-seven mechanisms, a refusal on any neutralised mechanism that leaves its pin
-green, and a hash check that every restore lands byte-exact.*
+restore and is a committed tool, `tools/gates/perturb.py`: the growth and till
+groups (fourteen mechanisms), a refusal on any neutralised mechanism that leaves
+its pin green, and a hash check that every restore lands byte-exact.*
 
 **P20-04 slice 1 — beds, sleep attempts, skip-night (PARTIAL; slice 2 owns
 respawn persistence, `/spawnpoint` and the obstructed-respawn redirect).**

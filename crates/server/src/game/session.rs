@@ -6152,3 +6152,197 @@ impl Game {
 
     // ------------------------------------------------------------- streaming
 }
+
+#[cfg(test)]
+mod tests {
+    //! Direct-call pins for the hoe intent path (TEST-TIME-PLAN §2): the
+    //! `UseItemOn` wrapper's job is dispatch, and `apply_hoe` is the table.
+    //! The tick tests that remain in `tests/till.rs` carry the physics — fall
+    //! and mob-fall trampling — that a direct call cannot.
+    //!
+    //! They live inside this module because `apply_hoe` is private: an
+    //! integration test can only reach it through a real click on a joined
+    //! session, which is the cost the migration removes.
+
+    use super::*;
+    use crate::game::DEFAULT_RANDOM_SEED;
+    use crate::storage::WorldService;
+    use mc_network::bridge::{ClientEvent, ClientEventKind, game_channel};
+
+    /// A game with one joined session holding `item` in the main hand, with
+    /// chunk (0, 0) loaded — the same join path the integration harness uses,
+    /// without its ticks or streaming.
+    struct Tiller {
+        game: Game,
+        id: ConnectionId,
+        _dir: mc_test_support::fixtures::TempDir,
+    }
+
+    impl Tiller {
+        fn new(tag: &str, item: &str) -> Self {
+            let dir = mc_test_support::fixtures::TempDir::new(tag);
+            let config = crate::config::StorageConfig {
+                world_dir: dir.path().join("world"),
+                autosave_ticks: 0,
+                seed: None,
+            };
+            let storage = WorldService::open(&config).expect("world opens");
+            let (tx, rx) = game_channel(256);
+            let mut game = Game::with_seed_and_storage(storage, 2, rx, DEFAULT_RANDOM_SEED)
+                .expect("game builds");
+            assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+            let id = ConnectionId(1);
+            let (outbound, _out) = OutboundSender::pair(id, 8192);
+            tx.try_send(ClientEvent {
+                id,
+                kind: ClientEventKind::Joined {
+                    profile: mc_network::auth::offline_profile("Tiller"),
+                    outbound,
+                },
+            })
+            .expect("join queued");
+            game.tick().expect("tick applies the join");
+            let item_id = game.registries().items.id(item).expect("known item");
+            game.player_mut(id)
+                .expect("player")
+                .inventory
+                .set_slot(
+                    0,
+                    mc_entity::stack::ItemStack::new(item_id, 1).expect("stack"),
+                )
+                .expect("slot 0 takes it");
+            Self {
+                game,
+                id,
+                _dir: dir,
+            }
+        }
+
+        /// One direct `apply_hoe` call on `(x, y, z)` from `face`.
+        fn hoe(&mut self, x: i32, y: i32, z: i32, face: i32) -> bool {
+            let mut report = TickReport::default();
+            self.game
+                .apply_hoe(self.id, (x, y, z), face, Hand::Main, &mut report)
+        }
+
+        fn put(&mut self, x: i32, y: i32, z: i32, name: &str) {
+            let id = self
+                .game
+                .registries()
+                .blocks
+                .default_state(name)
+                .expect("state");
+            self.game
+                .world_mut()
+                .set_block(x, y, z, id)
+                .expect("placed");
+        }
+
+        fn block_name(&self, x: i32, y: i32, z: i32) -> String {
+            let id = self.game.world().get_block_loaded(x, y, z).expect("loaded");
+            self.game
+                .registries()
+                .blocks
+                .block_name(id)
+                .expect("registered")
+                .to_owned()
+        }
+
+        /// The held stack's damage (`None` = undamaged).
+        fn wear(&mut self) -> Option<i32> {
+            self.game
+                .player_mut(self.id)
+                .expect("player")
+                .inventory
+                .selected_item()
+                .damage()
+        }
+    }
+
+    /// The `TILLABLES` table, one direct call per row, plus the wear a till costs.
+    #[test]
+    fn hoe_tills_the_table_on_direct_call() {
+        let mut t = Tiller::new("till-table-unit", "minecraft:stone_hoe");
+        for (i, (soil, expect)) in [
+            ("minecraft:grass_block", "minecraft:farmland"),
+            ("minecraft:dirt_path", "minecraft:farmland"),
+            ("minecraft:dirt", "minecraft:farmland"),
+            ("minecraft:coarse_dirt", "minecraft:dirt"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let x = 4 + i32::try_from(i).expect("row fits") * 3;
+            t.put(x, 120, 8, soil);
+            assert!(t.hoe(x, 120, 8, 1), "the hoe acts on {soil}");
+            assert_eq!(
+                t.block_name(x, 120, 8),
+                expect,
+                "hoe on {soil} gives {expect}"
+            );
+        }
+        assert_eq!(
+            t.wear(),
+            Some(4),
+            "four tills wear four (jar hurtAndBreak(1))"
+        );
+    }
+
+    /// Rooted dirt tills to dirt and drops hanging roots.
+    #[test]
+    fn rooted_dirt_tills_and_drops_roots_on_direct_call() {
+        let mut t = Tiller::new("till-rooted-unit", "minecraft:stone_hoe");
+        t.put(8, 120, 8, "minecraft:rooted_dirt");
+        assert!(t.hoe(8, 120, 8, 1), "the hoe acts on rooted dirt");
+        assert_eq!(
+            t.block_name(8, 120, 8),
+            "minecraft:dirt",
+            "rooted dirt tills to dirt"
+        );
+        let roots: Vec<String> = t
+            .game
+            .dropped_items()
+            .iter()
+            .filter_map(|(stack, _)| {
+                stack
+                    .item_id()
+                    .and_then(|id| t.game.registries().items.name(id).ok().map(str::to_owned))
+            })
+            .collect();
+        assert!(
+            roots.iter().any(|name| name == "minecraft:hanging_roots"),
+            "hanging roots drop, saw {roots:?}"
+        );
+        assert_eq!(t.wear(), Some(1), "a successful rooted till wears one");
+    }
+
+    /// The three refusals — DOWN face, covered soil, untillable block — change
+    /// nothing and wear nothing.
+    #[test]
+    fn hoe_refusals_change_nothing_on_direct_call() {
+        let mut t = Tiller::new("till-refuse-unit", "minecraft:stone_hoe");
+        t.put(8, 120, 8, "minecraft:dirt");
+        t.put(8, 121, 8, "minecraft:stone");
+        t.put(11, 120, 8, "minecraft:dirt");
+        t.put(14, 120, 8, "minecraft:stone");
+        assert!(!t.hoe(11, 120, 8, 0), "the DOWN face refuses");
+        assert!(!t.hoe(8, 120, 8, 1), "covered soil refuses");
+        assert!(!t.hoe(14, 120, 8, 1), "stone refuses");
+        assert_eq!(
+            t.block_name(11, 120, 8),
+            "minecraft:dirt",
+            "the DOWN face changed nothing"
+        );
+        assert_eq!(
+            t.block_name(8, 120, 8),
+            "minecraft:dirt",
+            "covered soil changed nothing"
+        );
+        assert_eq!(
+            t.block_name(14, 120, 8),
+            "minecraft:stone",
+            "stone changed nothing"
+        );
+        assert_eq!(t.wear(), None, "refusals wear nothing");
+    }
+}

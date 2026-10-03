@@ -5,15 +5,19 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **2 004 passed, 0 failed, 44 ignored** across **161 suites**, re-derived from
+Totals: **2 006 passed, 0 failed, 44 ignored** across **161 suites**, re-derived from
 `cargo test --workspace --no-fail-fast` on the current tree (161/161 `ok`,
-this task's run). The +10 over the **1 994** figure is the two TEST-TIME-PLAN
-§2 migrations, both landed 2026-10-03: the `spread` suite's five tick tests
-became one phase-wiring test plus ten direct-call pins (+6), and the `growth`
+this task's run). The +12 over the **1 994** figure is the three TEST-TIME-PLAN
+§2 migrations, all landed 2026-10-03: the `spread` suite's five tick tests
+became one phase-wiring test plus ten direct-call pins (+6); the `growth`
 slice-1 suite's four tick farms plus its sampling-rate test became one
 phase-wiring test — which now carries the rate pin itself — plus eight
-direct-call pins (+4). Neither migration changed an assertion's meaning; the
-tick tests they replaced are recorded in the plan's §7 log. The +5 over the **1 989** figure is P20-02 slice 2b's new
+direct-call pins (+4); and the `till` slice-2a suite's three hoe tests became
+three direct `apply_hoe` pins plus a new `fallOn` threshold pin, while the file
+kept a click test that proves the `UseItemOn` dispatch, less the two tick tests
+that went with the migration (+2). No migration changed an assertion's meaning;
+the tick tests they replaced, and the one addition, are recorded in the plan's
+§7 log. The +5 over the **1 989** figure is P20-02 slice 2b's new
 `spread` target (age-split cane/cactus with climb arms, triple-stack cap,
 64-seed grass bed with starvation row and refusal checkerboard, 64-seed
 mycelium bed). Regression note, kept not deleted: this same run first caught

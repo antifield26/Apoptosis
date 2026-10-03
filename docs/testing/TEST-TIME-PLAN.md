@@ -187,7 +187,22 @@ explained away.
   - **Kept:** `crops_do_not_grow_in_the_dark`'s moisture half ("dark soil
     is still watered") as `dark_farmland_still_wets_on_direct_call`, with
     the box's darkness (brightness 0) itself asserted.
-- **Still queued:** `till`, `sleep`, `weather` (§2); `mc-container` lib
+- **§2 step 2, third suite: `till` migrated (2026-10-03).** The three hoe
+  tests in `tests/till.rs` — the `TILLABLES` table, rooted dirt's drop, the
+  three refusals — became three direct `apply_hoe` pins in
+  `game::session::tests`. The file keeps what a direct call cannot show: the
+  5-block landing, the shaft-guided mob fall, the idle control (200 ticks →
+  10), and **one click proving `UseItemOn` still dispatches to `apply_hoe`**
+  (without it, deleting the dispatch would leave every direct pin green).
+  All at view distance 2. Suite **47.7 s wall → 3.9 s** (the ring alone took
+  the mob fall from 23.9 s to 2.8 s). Seven perturbations re-proven red and
+  restored byte-exact, including the dispatch line itself.
+  - **New coverage, not migrated:** `fallOn`'s threshold is now a unit pin
+    (`short_falls_do_not_trample`). The idle control could never reach it —
+    an idle player sends no movement intent, so it never produces a landing
+    at all — which is why its 200 ticks were 47 s of runtime for no
+    additional red-capability.
+- **Still queued:** `sleep`, `weather` (§2); `mc-container` lib
   attribution (§7); gate tiers and CI timeouts (§4) untouched.
 - **Proofs are a tool now, not a command:** `python tools/gates/perturb.py
   growth` neutralises each mechanism the group names, requires that

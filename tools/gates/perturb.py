@@ -104,6 +104,64 @@ CASES: dict[str, list[dict[str, str]]] = {
             'target': '-p mc-server --test growth -E test(wheat_grows_through_the_phase)',
         },
     ],
+    'till': [
+        {
+            'name': 'TILLABLES coarse-dirt row',
+            'file': 'crates/server/src/game/session.rs',
+            # Coarse dirt's row returns dirt; pointing it at farmland must break
+            # the table pin (the Ok binding keeps its `dirt` name, so this still
+            # compiles -- the perturbed value, not the shape, is the change).
+            'old': '"minecraft:coarse_dirt" => match self.registries.blocks.default_state("minecraft:dirt")',
+            'new': '"minecraft:coarse_dirt" => match self.registries.blocks.default_state("minecraft:farmland")',
+            'target': '-p mc-server --lib -E test(hoe_tills_the_table_on_direct_call)',
+        },
+        {
+            'name': 'rooted-dirt roots drop',
+            'file': 'crates/server/src/game/session.rs',
+            'old': 'Ok(dirt) => (Some(dirt), true),',
+            'new': 'Ok(dirt) => (Some(dirt), false),',
+            'target': '-p mc-server --lib -E test(rooted_dirt_tills_and_drops_roots_on_direct_call)',
+        },
+        {
+            'name': 'hoe DOWN-face gate',
+            'file': 'crates/server/src/game/session.rs',
+            'old': 'if face == 0 {',
+            'new': 'if false {',
+            'target': '-p mc-server --lib -E test(hoe_refusals_change_nothing_on_direct_call)',
+        },
+        {
+            'name': 'hoe cover gate',
+            'file': 'crates/server/src/game/session.rs',
+            'old': 'if !above_air {',
+            'new': 'if false {',
+            'target': '-p mc-server --lib -E test(hoe_refusals_change_nothing_on_direct_call)',
+        },
+        {
+            'name': 'hoe wear',
+            'file': 'crates/server/src/game/session.rs',
+            'old': 'self.wear_held(id, 1, report);',
+            'new': 'self.wear_held(id, 0, report);',
+            'target': '-p mc-server --lib -E test(hoe_tills_the_table_on_direct_call)',
+        },
+        {
+            'name': 'trample threshold',
+            'file': 'crates/server/src/game/growth.rs',
+            # `fall - 0.5` -> `fall + 0.5`: a 0-block fall then rolls against
+            # 0.5 instead of a value `next_f64` can never be below.
+            'old': 'if is_farmland && self.random.next_f64() < fall - 0.5 {',
+            'new': 'if is_farmland && self.random.next_f64() < fall + 0.5 {',
+            'target': '-p mc-server --lib -E test(short_falls_do_not_trample)',
+        },
+        {
+            'name': 'UseItemOn -> apply_hoe dispatch',
+            'file': 'crates/server/src/game/session.rs',
+            # The wrapper's dispatch to the hoe handler. Its pins call
+            # `apply_hoe` directly, so only the click test can see this line go.
+            'old': 'if self.apply_hoe(id, (x, y, z), face, hand, report) {',
+            'new': 'if false {',
+            'target': '-p mc-server --test till -E test(a_click_reaches_the_hoe)',
+        },
+    ],
 }
 
 SUMMARY = re.compile(r'Summary \[[^\]]*\] (\d+) tests? run: (\d+) passed(?:, (\d+) failed)?')
