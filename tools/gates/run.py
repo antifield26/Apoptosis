@@ -35,6 +35,7 @@ python tools/gates/run.py --quick    # skip the aarch64 and deny passes
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -47,14 +48,61 @@ def run(label: str, command: list[str]) -> tuple[bool, str]:
     # decode makes the reader thread raise -- which turned a passing run into exit code 1 the first time this
     # script was used. The script exists so that a gate cannot be quietly skipped; it cannot do that job if
     # it fails on its own output handling.
+    start = time.monotonic()
     result = subprocess.run(
         command, cwd=ROOT, capture_output=True, text=True, encoding='utf-8', errors='replace'
     )
+    elapsed = time.monotonic() - start
+    print(f'    ({elapsed:.1f}s)')
     if result.returncode != 0:
         tail = (result.stderr or result.stdout or '').strip().splitlines()[-6:]
         for line in tail:
             print(f'      {line[:110]}')
     return result.returncode == 0, result.stdout or ''
+
+
+def summarize_tests(output: str) -> tuple[int, int, int, int]:
+    """Aggregate counts and print a slowest-first table with suite labels.
+
+    Labels come from cargo's own `Running ...` / `Doc-tests ...` headers, so
+    a slow suite is named, not just timed (TEST-TIME-PLAN §1). Returns
+    (passed, failed, ignored, suites).
+    """
+    current = '?'
+    rows: list[tuple[float, int, str]] = []
+    passed = failed = ignored = suites = 0
+    for line in output.splitlines():
+        stripped = line.strip()
+        if stripped.startswith('Running ') or stripped.startswith('Doc-tests'):
+            # `Running unittests src/lib.rs (target/.../mc_server-HASH.exe)` or
+            # `Running tests/foo.rs (target/.../foo-HASH.exe)`: the exe stem
+            # names the target — for lib suites that *is* the crate, for
+            # integration suites the file stem (unique in practice).
+            # Cargo prints `deps/...` on unix and `deps\...` on Windows.
+            exe = re.search(r'deps[/\\]([A-Za-z0-9_]+)-[0-9a-f]+\.exe', stripped)
+            if 'unittests' in stripped and exe:
+                # The lib target is named after its crate (`mc_server-HASH`).
+                current = exe.group(1)
+            else:
+                current = re.sub(r'\s*\(target[/\\].*$', '', stripped)
+                current = re.sub(r'^Running (unittests |tests/)', '', current)
+            current = current[:80]
+        match = re.match(
+            r'test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored'
+            r'.*finished in ([\d.]+)s',
+            stripped,
+        )
+        if match:
+            passed += int(match.group(1))
+            failed += int(match.group(2))
+            ignored += int(match.group(3))
+            suites += 1
+            rows.append((float(match.group(4)), int(match.group(1)), current))
+    rows.sort(reverse=True)
+    print('--- slowest suites (seconds, tests, suite):')
+    for seconds, count, label in rows[:15]:
+        print(f'    {seconds:>9.2f}s  {count:>4} tests  {label}')
+    return passed, failed, ignored, suites
 
 
 failures = []
@@ -92,12 +140,7 @@ for script in ('check_encoding', 'check_links', 'check_gate_totals', 'check_line
 
 # The tests, and **the count is the check**, not only the exit code.
 ok, output = run('cargo test --workspace', ['cargo', 'test', '--workspace', '--no-fail-fast'])
-passed = failed = ignored = suites = 0
-for match in re.finditer(r'test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored', output):
-    passed += int(match.group(1))
-    failed += int(match.group(2))
-    ignored += int(match.group(3))
-    suites += 1
+passed, failed, ignored, suites = summarize_tests(output)
 print(f'--- tests: {passed} passed, {failed} failed, {ignored} ignored, {suites} suites')
 
 if not ok:

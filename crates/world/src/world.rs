@@ -116,7 +116,13 @@ impl BlockCursor<'_> {
 #[derive(Debug)]
 pub struct World {
     dimension: Dimension,
-    registry: BlockRegistry,
+    /// Shared, never mutated after construction: every write path used to
+    /// deep-clone this per block (≈ 14 ms in debug — the whole cost of the
+    /// `mc-world` lib suite), because `ensure_chunk` holds `&mut self`
+    /// while `Chunk::set_block` needs the table. An `Arc` keeps the shared
+    /// ownership with a refcount bump instead, and constructors still take
+    /// the table by value, so no caller changes.
+    registry: std::sync::Arc<BlockRegistry>,
     chunks: BTreeMap<ChunkPos, Chunk>,
     /// Computed light per chunk, dropped when the chunk or a neighbour it reads changes.
     ///
@@ -153,7 +159,7 @@ impl World {
     ) -> Self {
         Self {
             dimension,
-            registry,
+            registry: std::sync::Arc::new(registry),
             chunks: BTreeMap::new(),
             light: BTreeMap::new(),
             changes: Vec::new(),
@@ -171,7 +177,7 @@ impl World {
 
     /// Shared block registry.
     #[must_use]
-    pub const fn registry(&self) -> &BlockRegistry {
+    pub fn registry(&self) -> &BlockRegistry {
         &self.registry
     }
 
@@ -323,9 +329,9 @@ impl World {
         id: i32,
     ) -> ServerResult<Option<BlockChange>> {
         let pos = ChunkPos::new(x >> 4, z >> 4);
-        // The registry is immutable and cheap to clone (it is a name→layout map),
-        // so clone it out of `self` rather than holding two borrows at once.
-        let registry = self.registry.clone();
+        // Refcount bump, not a copy (see the field docs): the old deep clone
+        // was the entire debug cost of bulk writes.
+        let registry = std::sync::Arc::clone(&self.registry);
         let chunk = self.ensure_chunk(pos);
         let Some((old_id, new_id)) = chunk.set_block(x, y, z, id, &registry)? else {
             return Ok(None);

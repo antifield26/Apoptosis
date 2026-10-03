@@ -133,3 +133,25 @@ explained away.
 - Lowering statistical floors to allow fewer ticks (floors are evidence).
 - A shared mutable `Game` across parallel tests.
 - Silent profile splits between local and CI runs.
+
+## 7. Executed: Step 1 results (2026-10-03)
+
+- **Gate instrumentation landed** (`tools/gates/run.py`): per-gate wall
+  clock, slowest-first table with suite labels (crate from the exe stem
+  for lib suites, file stem for integration suites), same refusal
+  semantics as before.
+- **Nextest installed** (v0.9.146): trial on `mc-core` green with per-test
+  timing; CI integration and retry policy still open.
+- **The 168 s pole is fixed, not just named: `mc-world` lib, 49 tests.**
+  Attribution by measurement, not guessing: registry load 138 ms,
+  `World::new` 0 ms, the 66×66 floor build **58.8 s** — and 4 356 bare
+  `BlockRegistry` clones at **59.8 s**. The per-write deep clone in
+  `World::set_block` was 100% of it (~13.7 ms/write in debug). Fix: the
+  `World` registry field is now `Arc<BlockRegistry>` (constructors still
+  take the table by value; `set_block` bumps the refcount). Measured
+  after: floor **12 ms**, suite **169.89 s → 0.55 s** (309×). Zero
+  behavior change (same writes, same order), `clippy -D warnings` and
+  `fmt --check` clean, `mc-server` lib still green. This also speeds
+  every production edit path and every farm test that places blocks.
+- **Next suspect queued, not started:** `mc-container` lib (136 tests,
+  31 s) — same attribution method before any change.
