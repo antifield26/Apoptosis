@@ -115,6 +115,10 @@ def summarize_tests(output: str) -> tuple[int, int, int, int]:
     print('--- slowest suites (seconds, tests, suite):')
     for seconds, count, label in rows[:15]:
         print(f'    {seconds:>9.2f}s  {count:>4} tests  {label}')
+    # The plan's acceptance metric (TEST-TIME-PLAN §5: suite-time sum <= ~600 s) is a *sum*, and the table
+    # above is the top 15 -- printing only the head made the number this work is measured against unreadable
+    # from the gate output that measures it.
+    print(f'--- suite-time sum: {sum(row[0] for row in rows):.1f}s across {len(rows)} suites')
     return passed, failed, ignored, suites
 
 

@@ -304,6 +304,21 @@ than migrated coverage: the "standing still" control never reached the
 threshold — an idle player produces no landing at all — so
 `short_falls_do_not_trample` pins it directly in `game::growth::tests`.*
 
+*Test-time trim, sleep (TEST-TIME-PLAN §3, no behavior change): every one of
+the sleep suite's 13 tick tests built at view distance 4 to read a bed and a
+clock in chunk (0, 0), so the 81-chunk ring was cost, not coverage. At view
+distance 2 the suite is **88.5 s wall -> 7.8 s** (test-time sum ≈ 250 s -> 49 s)
+with all thirteen pins unchanged. The pole was `damage_wakes_the_sleeper`:
+88.5 s of waiting for a zombie spawned two blocks away to land a hit, now 3.8 s
+with the zombie adjacent and 80 ticks instead of 300 — "a hit wakes the sleeper"
+is this pin, "a zombie can walk there" is `mob_pathing`'s. The ten-player skip
+(28.5 s -> 7.1 s) and the restart round-trip (19.6 s -> 7.8 s) came from the
+ring alone. Three mechanisms re-proven red and restored byte-exact:
+`after_damage`'s wake call, the 100 % skip threshold, and the 100-tick deep
+counter. §2's sleep rows (direct pins for the refusals, occupied, monsters and
+respawn variants) were **not** taken: at 7.8 s the suite is no longer a pole,
+and §2's ~10× on it would buy seconds while the remaining poles are 84–94 s.*
+
 *Same landing, four tooling gaps the run exposed. (1) TEST-TIME-PLAN §1's
 slowest-first table printed `?` for every row — cargo writes the
 `Running ... (target/debug/deps/<name>-<hash>.exe)` header to *stderr* and the

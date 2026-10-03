@@ -162,6 +162,35 @@ CASES: dict[str, list[dict[str, str]]] = {
             'target': '-p mc-server --test till -E test(a_click_reaches_the_hoe)',
         },
     ],
+    'sleep': [
+        {
+            'name': 'damage wakes the sleeper',
+            'file': 'crates/server/src/game/tick.rs',
+            # `after_damage`'s wake call -- the only `self.wake(id)` in this
+            # file (the others are in session.rs and sleep.rs).
+            'old': 'self.wake(id);',
+            'new': 'if false { self.wake(id); }',
+            'target': '-p mc-server --test sleep -E test(damage_wakes_the_sleeper)',
+        },
+        {
+            'name': 'skip threshold (percentage 100)',
+            'file': 'crates/server/src/game/sleep.rs',
+            # At 1 %, nine sleepers are already "enough", so the night skips
+            # while the tenth is still awake -- the hold the pin asserts.
+            'old': 'pub(crate) const SLEEPING_PERCENTAGE: i32 = 100;',
+            'new': 'pub(crate) const SLEEPING_PERCENTAGE: i32 = 1;',
+            'target': '-p mc-server --test sleep -E test(ten_players_skip_the_night)',
+        },
+        {
+            'name': 'deep-sleep counter',
+            'file': 'crates/server/src/game/sleep.rs',
+            # A skip needs sleepers *deep* (>= 100 ticks); at 0 ticks any
+            # sleeper counts, so the first click would skip the night.
+            'old': 'pub(crate) const DEEP_SLEEP_TICKS: u32 = 100;',
+            'new': 'pub(crate) const DEEP_SLEEP_TICKS: u32 = 0;',
+            'target': '-p mc-server --test sleep -E test(ten_players_skip_the_night)',
+        },
+    ],
 }
 
 SUMMARY = re.compile(r'Summary \[[^\]]*\] (\d+) tests? run: (\d+) passed(?:, (\d+) failed)?')

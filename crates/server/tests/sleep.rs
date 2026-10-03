@@ -36,8 +36,10 @@ impl Harness {
         };
         let service = WorldService::open(&config).expect("world opens");
         let (tx, rx) = game_channel(256);
+        // View distance 2 (TEST-TIME-PLAN §3): every pin here reads a bed or a
+        // clock in chunk (0, 0), so the 81-chunk ring bought cost, not coverage.
         let game =
-            Game::build_with_operators(None, Some(service), 4, rx, DEFAULT_RANDOM_SEED, operators)
+            Game::build_with_operators(None, Some(service), 2, rx, DEFAULT_RANDOM_SEED, operators)
                 .expect("game builds");
         Self {
             game,
@@ -527,14 +529,18 @@ fn damage_wakes_the_sleeper() {
         "the sleeper is down"
     );
     let before = harness.game.player(chief).expect("player").health;
+    // Adjacent to the sleeper, on the floor: the 300-tick draft spawned it two
+    // blocks away and paid ~88 s of pathing before the first hit. The pin is
+    // "a hit wakes the sleeper", not "a zombie can walk" (`mob_pathing` owns
+    // that), so the wait is the attack cooldown with a margin.
     harness
         .game
         .spawn_mob(
             mc_entity::mob::MobKind::Zombie,
-            mc_world::Vec3::new(10.5, 121.0, 8.5),
+            mc_world::Vec3::new(9.5, 121.0, 6.5),
         )
         .expect("zombie spawns");
-    for _ in 0..300 {
+    for _ in 0..80 {
         harness.game.tick().expect("tick");
     }
     let after = harness.game.player(chief).expect("player").health;

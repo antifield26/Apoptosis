@@ -202,8 +202,24 @@ explained away.
     an idle player sends no movement intent, so it never produces a landing
     at all — which is why its 200 ticks were 47 s of runtime for no
     additional red-capability.
-- **Still queued:** `sleep`, `weather` (§2); `mc-container` lib
-  attribution (§7); gate tiers and CI timeouts (§4) untouched.
+- **§3 step, first suite: `sleep` (2026-10-03).** Solved by the *harness*, not
+  by §2. All 13 tick tests built at view distance 4 to read a bed and a clock
+  in chunk (0, 0), so the 81-chunk ring was pure cost: at view distance 2 the
+  suite is **88.5 s wall → 7.8 s** (sum ≈ 250 s → 49 s), pins unchanged. The
+  pole was `damage_wakes_the_sleeper` — 88.5 s waiting for a zombie two blocks
+  away to land a hit — now 3.8 s with the zombie adjacent and 80 ticks instead
+  of 300 ("a hit wakes the sleeper" is this pin; that a zombie can walk is
+  `mob_pathing`'s). Three mechanisms re-proven red: `after_damage`'s wake call,
+  the 100 % skip threshold, the 100-tick deep counter.
+  - **§2's sleep rows were not taken**, as a decision with a number: at 7.8 s
+    the suite is no longer a pole, so §2's ~10× would buy seconds while the
+    remaining poles (`xp_orbs` 94 s, `reach_validation` 87 s, `weather` 84 s,
+    `natural_spawn` 51 s) are tens of seconds each. §3 first; §2 where a suite
+    is still expensive.
+- **Still queued:** `weather` (§2); `xp_orbs`, `reach_validation`,
+  `natural_spawn`, `ai_wiring`, `p18_hunger` (§3 candidates by measurement);
+  `mc-container` lib attribution (§7); gate tiers and CI timeouts (§4)
+  untouched.
 - **Proofs are a tool now, not a command:** `python tools/gates/perturb.py
   growth` neutralises each mechanism the group names, requires that
   mechanism's pin to go red, and restores byte-exact (hash-checked). It
