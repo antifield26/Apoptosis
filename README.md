@@ -1,4 +1,4 @@
-﻿# Apoptosis — a pure-Rust Minecraft Java Edition 26.1.2 server
+# Apoptosis — a pure-Rust Minecraft Java Edition 26.1.2 server
 
 A from-scratch, dependency-light dedicated server for **Minecraft: Java Edition
 26.1.2** (protocol **775**), written entirely in safe Rust. First-class target:
@@ -114,14 +114,19 @@ cargo deny check licenses bans sources
 The 44 ignored tests are on-demand suites: jar-gated differentials, light
 suites, terrain distribution and the ore/carver distribution (three environment
 variables — see [CONTRIBUTING.md](CONTRIBUTING.md)) and the benchmark harness. Full breakdown:
-[docs/testing/TEST-MATRIX.md](docs/testing/TEST-MATRIX.md). Details and the
+[docs/testing/TEST-MATRIX.md](docs/testing/TEST-MATRIX.md); suite runtime and its
+method: [docs/testing/TEST-TIME-RESULTS.md](docs/testing/TEST-TIME-RESULTS.md) ·
+[docs/testing/TEST-TIME-PLAN.md](docs/testing/TEST-TIME-PLAN.md). For a
+per-commit check, `python tools/gates/run.py --quick` runs the same gates minus
+aarch64/deny with the tests scheduled by nextest — **135–165 s** end to end against
+the full tier's ~8 min, with every test kept. Details and the
 documentation-audit scripts: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Project documentation
 
 | Layer | Entry points |
 |---|---|
-| Current state | [docs/release/RELEASE-CANDIDATE.md](docs/release/RELEASE-CANDIDATE.md) · [docs/architecture/system-overview.md](docs/architecture/system-overview.md) · [docs/vanilla-parity/PARITY-MATRIX.md](docs/vanilla-parity/PARITY-MATRIX.md) · [docs/testing/TEST-MATRIX.md](docs/testing/TEST-MATRIX.md) |
+| Current state | [docs/release/RELEASE-CANDIDATE.md](docs/release/RELEASE-CANDIDATE.md) · [docs/architecture/system-overview.md](docs/architecture/system-overview.md) · [docs/vanilla-parity/PARITY-MATRIX.md](docs/vanilla-parity/PARITY-MATRIX.md) · [docs/testing/TEST-MATRIX.md](docs/testing/TEST-MATRIX.md) · [docs/testing/TEST-TIME-RESULTS.md](docs/testing/TEST-TIME-RESULTS.md) (suite runtime; method in [docs/testing/TEST-TIME-PLAN.md](docs/testing/TEST-TIME-PLAN.md)) |
 | Reference baselines | [docs/protocol/](docs/protocol/26.1.2-wire-notes.md) · [docs/research/](docs/research/protocol-baseline.md) · [docs/performance/BENCHMARK-BASELINE.md](docs/performance/BENCHMARK-BASELINE.md) |
 | Operations | [docs/operations/RUNBOOK.md](docs/operations/RUNBOOK.md) · [docs/operations/DEPENDENCY-POLICY.md](docs/operations/DEPENDENCY-POLICY.md) |
 | Decisions (ADR) | [docs/adr/](docs/adr/ADR-0001-system-architecture.md) — accepted with dated status |

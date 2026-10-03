@@ -50,7 +50,7 @@ all of this on every push; a red CI is a stop for everything else.
 `python tools/gates/run.py` runs it as one command (plus the four docs audits).
 For a per-commit check, `python tools/gates/run.py --quick` is the same gates
 minus aarch64 and cargo-deny, with the tests run by nextest instead of
-`cargo test`: it keeps **every** test and takes **165 s** end to end against the
+`cargo test`: it keeps **every** test and takes **135–165 s** end to end against the
 full tier's ~8 min, because nextest schedules across test binaries rather than
 running one binary at a time. The counts `--quick` prints are nextest's own —
 it does not run doctests, so they read 2 002 where the canonical figure is

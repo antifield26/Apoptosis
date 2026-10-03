@@ -1,133 +1,122 @@
-# Test Runtime Plan — from ~30 min toward ~10 min without losing pins
+# Test Runtime Plan — how the suite gets fast without losing pins
 
-Status: **plan** (2026-10-03). Owner: engineering. This file is the single
-answer to "why is the suite slow and what do we do about it, in what order".
+Status: **executed** (2026-10-03). This file is the *method*: what to do about a
+slow suite, in what order, and what is off limits. What actually happened — every
+measurement, every landing, the lessons and the remaining candidates — is
+[TEST-TIME-RESULTS.md](TEST-TIME-RESULTS.md), which owns the runtime figures the
+way [TEST-MATRIX.md](TEST-MATRIX.md) owns the pass/fail counts.
 
-## 0. Where the time goes (measured, not guessed)
+Result: suite-time sum **≈1 690 s → 379.5 s**, `cargo test --workspace`
+1 307 s → 388 s, per-commit fast tier **135–165 s**.
 
-From `cargo test --workspace --no-fail-fast` on the dev host (161 suites; the
-pass/fail totals belong to [TEST-MATRIX.md](TEST-MATRIX.md), and §7 records
-what each step moved — the suite-time sum at the plan's writing was
-**≈ 1 690 s**):
+## 0. Where the time went at the plan's writing (pre-work measurement)
+
+From `cargo test --workspace --no-fail-fast` on the dev host, before any of this
+work (161 suites; suite-time sum **≈ 1 690 s**):
 
 | Rank | Suite shape | Example | Cost driver |
 |---|---|---|---|
-| 1 | one 49-test suite, 168 s | (identify in §1) | mixed |
+| 1 | one 49-test suite, 168 s | `mc-world` lib | a deep `BlockRegistry` clone per write |
 | 2–8 | farm-style integration, 86–123 s each | `growth` (6), `spread` (5), `sleep` (13), `weather` (5), `till` (6) | hundreds of full debug ticks per test |
 | 9+ | long tail, 30–55 s each | `lake_stats` smoke, fluid suites | same shape, smaller |
 
-A farm test costs roughly: world build + chunk generation + light settle +
-`N × tick`, with debug ticks at **≈ 25–60 ms** (8 phases, streaming,
-light recompute on every write, broadcast encoding). Five P20 suites alone
-account for **≈ 500 s** of the sum. Wall clock is the longest pole, not the
-sum — but every lever below shortens both.
+A farm test cost roughly: world build + chunk generation + light settle +
+`N × tick`, with debug ticks at ≈ 25–60 ms (8 phases, streaming, light recompute
+on every write, broadcast encoding). Five P20 suites alone accounted for
+≈ 500 s. Wall clock is the longest pole, not the sum — but every lever below
+shortens both.
 
-What this plan does **not** propose: weakening thresholds, deleting
-coverage, moving everything to release profile, or redefining green. Every
-lever keeps all pins red-capable (DoD item 13) or says so explicitly.
+## 1. Instrument first
 
-## 1. Instrument first (half a day, unlocks everything else)
+1. **Slowest-first report in `tools/gates/run.py`**, with suite names, plus the
+   **suite-time sum** — the acceptance metric is a sum, and a table of the top
+   15 cannot show it.
+2. **`cargo-nextest`** for local and CI runs: per-test timing, work-stealing
+   scheduling across binaries, and retries for suites with written flake
+   history.
+3. **Name the pole** before touching anything: the report exists to say which
+   suite is expensive and why.
 
-1. **Slowest-first report in `tools/gates/run.py`.** It already prints per-suite
-   durations; aggregate the top 20 with suite names into the gate output and
-   fail loudly if any suite exceeds its recorded budget (P18-07 precedent:
-   budget vs measured, recorded per phase-close).
-2. **Adopt `cargo-nextest`** for local and CI runs: per-test (not just
-   per-suite) timing, work-stealing scheduling across binaries, and
-   automatic retries for the known timing-sensitive suites
-   (`network_game_bridge`, `whitelist_revocation` — both have written
-   flake history). Nextest does not change what is asserted.
-3. **Name the 168 s pole.** The current data strips suite labels; the first
-   run under nextest identifies it, and it gets §2 or §3 treatment first.
-
-Acceptance: `run.py` prints a slowest-first table; CI uses nextest; the pole
-has an owner and a number.
+**Status: done.** Two defects in that report were found by using it (labels
+printed `?` because cargo writes its `Running …` headers to stderr; the sum was
+not printed at all) — both fixed. The pole was `mc-world` lib, and its cause was
+a production inefficiency, not a test one: see RESULTS §1.
 
 ## 2. Test at the right layer (the big lever: ~10–50× per mechanism pin)
 
-Almost every P20 mechanism pin runs **hundreds of full ticks** to assert what
-**one direct call** proves. The handlers are already factored for it
-(`game::growth`, `game::sleep`, `game::weather` are modules, not tick
-inline code). Rule going forward:
+Almost every P20 mechanism pin ran **hundreds of full ticks** to assert what
+**one direct call** proves, and the handlers are already factored for it
+(`game::growth`, `game::sleep`, `game::weather` are modules, not tick inline
+code). The standing rule:
 
 > **No full-tick test asserts what a direct handler call can assert.**
-> Mechanism pins move to in-crate unit tests (`#[cfg(test)]` inside the
-> module — the only place that can reach `pub(crate)` handlers; `tests/`
-> cannot); each area keeps exactly **one** full-tick wiring test proving
-> phase integration.
+> Mechanism pins move to in-crate unit tests (`#[cfg(test)]` inside the module —
+> the only place that can reach `pub(crate)` handlers; `tests/` cannot); each
+> area keeps exactly **one** full-tick wiring test proving phase integration.
 
-Concretely, per suite:
+Two consequences learned by doing it (RESULTS §2):
 
-| Suite | Today | After |
-|---|---|---|
-| `growth` (6, ~126 s) | 300 ticks × 6 through players+streaming | 1 wiring test (sweep rate + one growth) + unit pins calling `tick_crop`/`tick_farmland` on hand-built cells |
-| `spread` (5, ~121 s) | 400 ticks × 5 | 1 wiring test + unit pins calling `tick_cane`/`tick_cactus`/`tick_spread` directly (≈ seconds) |
-| `till` (6, ~55 s) | intent + fall + mob-fall through ticks | hoe table/refusals as unit pins via `apply_hoe`; keep one fall + one mob-fall tick test (physics needs the loop) |
-| `sleep` (13, ~107 s) | 150–300 ticks × several | drive `tick_sleep` directly for quorum/deep-counter pins; keep one 10-player skip + one wake-path tick test |
-| `weather` (5, ~90 s) | scheduled flips over ticks | drive `tick_weather` directly for cycle/packet pins; keep command + restart round-trip |
+- **Run the new pins before deleting the old tick tests.** Four of the `growth`
+  draft pins were wrong in ways only a run showed; deleting first would have
+  removed the evidence that they were wrong.
+- **Keep the arm a direct call cannot reach.** For `till` that was the click
+  proving `UseItemOn` still dispatches to `apply_hoe`; without it, deleting the
+  dispatch line leaves every direct pin green.
 
-Perturbation value is preserved: neutralising a handler turns the unit pin
-red exactly as it turns the tick test red today (same mechanism, fewer
-ticks around it). The migration itself is verified by keeping the old
-full-tick test green side-by-side for one commit, then deleting it.
+The plan's per-suite estimates (what each suite should become) are recorded in
+RESULTS §2 alongside the actual numbers.
 
-Estimated effect: the five P20 suites drop from ≈ 500 s to **≈ 60–80 s**
-of suite time. Nothing about thresholds, seeds, or statistics changes.
+## 3. Trim the harnesses (the cheap lever, once §2 has taken the mechanism pins)
 
-## 3. Shrink the remaining full-tick tests (~2–4× each)
+1. **View distance 4 → 2** where the suite asserts local behaviour. The
+   per-cell random-tick rate is *invariant* to the loaded-chunk count, so
+   statistics are identical while the sweep covers 25 chunks instead of 81.
+   **Not** where the ring is the thing under test: chunk streaming,
+   `survival_e2e`, the light and worldgen/structure suites, `p15_zero_delta`,
+   `spawn_on_land`, `fluid_differential`, and `natural_spawn` (its spawn ring is
+   a fixed 8 chunks that must meet the 24-block minimum).
+2. **Skip the light settle where brightness is not asserted**; where it is,
+   compute light directly for the farm chunk instead of settling through ticks.
+3. **Revisit tick counts against their floors** — but only where the margin is
+   wide, and re-derive the floor from the rate rather than widening it
+   (`weather`'s storm pin: ≈88 expected / floor 20 → ≈44 / floor 15).
+4. **Share the builders, not the farms:** one harness struct and one world
+   builder per file; parallel tests never share a mutable `Game`.
 
-For the wiring tests that must keep the loop:
+**Status: done** for every suite that was expensive (RESULTS §3): `sleep`
+88.5 → 7.8 s, `weather` 59.6 → 12.6 s, and two ring sweeps over 27 suites.
 
-1. **`view_distance` 4 → 2 in farm harnesses.** The per-cell hit rate is
-   invariant to the loaded-chunk count (samples and cells scale together —
-   stated in `growth.rs`/`spread.rs` headers), so statistics are identical
-   while sweep samples drop 5 832 → 1 800/tick and streaming, light and
-   broadcast volume shrink with the ring. (~3× on tick cost.)
-2. **Skip the light settle where brightness is unasserted.** Cane, cactus,
-   hoe, trample and dark-farm tests never read light; `settle_after_streaming`
-   (5 ticks + full-ring recompute) is pure overhead there. Keep it only
-   where a brightness gate is pinned. (Saves seconds per test, not minutes
-   — do it while touching the file anyway.)
-3. **Revisit tick counts against calibrated floors.** Floors were set below
-   deterministic actuals; where margin is wide (e.g. actual 25 vs floor 12),
-   halving ticks is safe *if* the floor still holds — re-run, don't assume.
-4. **Share farm builders, not farms.** `growth`/`spread`/`till` each rebuild
-   near-identical scaffolding; factor one builder (code reuse, no shared
-   mutable state — parallel tests must never share a `Game`).
+## 4. Tier the gates
 
-## 4. Tier the gates (stop running everything everywhere)
+1. **Fast gate** (`--quick`): per commit. Target wall clock **< 8 min**.
+2. **Full gate**: everything, including `#[ignore]`d acceptance; nightly and at
+   phase-close, which records budget vs measured (P18-07 precedent).
+3. **CI timeouts**: an explicit `timeout-minutes` on every job, so a hung suite
+   fails loudly instead of burning a runner.
+4. **Release-profile evaluation (explicitly deferred).** Running heavy suites
+   under `cargo test --release` would buy ~5–10× on tick cost but surrenders
+   debug overflow checks and splits what "green" means across profiles. Revisit
+   only if §§2–4 miss the target; never silently.
 
-Today `run.py --quick` still runs **all** tests; CI runs the full workspace
-on two OSes with no tiers and no timeouts.
-
-1. **Fast gate** (`--quick` redefined): lib + unit tests + integration
-   suites under a per-suite budget (target: wall clock **< 8 min** on the
-   dev host). Runs per commit and in CI per push.
-2. **Full gate**: everything, including `#[ignore]`d acceptance
-   (`lake_stats` 32×32, ore/carver stats, Pi hooks). Runs nightly and at
-   phase-close; phase-close records budget vs measured (P18-07 rule).
-3. **CI timeouts.** Add explicit `timeout-minutes` to every CI job so a
-   hung suite fails loudly instead of burning the runner silently.
-4. **Release-profile evaluation (explicitly deferred).** Running heavy
-   suites under `cargo test --release` would buy ~5–10× on tick cost but
-   surrenders debug overflow checks and splits what "green" means across
-   profiles. Revisit only if §§2–4 miss the target; never silently.
+**Status: done except §4.4.** The fast tier keeps *every* test and buys its
+wall clock from nextest's scheduling rather than from dropping suites — 135–165 s
+end to end against the 8 min budget. §4.4 stays closed by §5's own rule: the
+sum met the target.
 
 ## 5. Rollout order and acceptance
 
-| Step | Work | Verdict |
-|---|---|---|
-| 1 | §1 instrumentation (report + nextest + name the pole) | slowest-first table in gate output |
-| 2 | §2 migration, one suite at a time (`till` first: smallest) | suite time drops ≥ 5×, all pins still perturbation-proven |
-| 3 | §3 harness trims on the remaining tick tests | view_distance change with statistics re-verified, not assumed |
-| 4 | §4 gate tiers + CI timeouts | `--quick` wall clock < 8 min; nightly full green |
-| 5 | Re-measure; if the sum is not under ~600 s, open the release-profile question with numbers |
+| Step | Work | Verdict | Status |
+|---|---|---|---|
+| 1 | §1 instrumentation | slowest-first table + sum in the gate output | done |
+| 2 | §2 migration, one suite at a time | suite drops ≥ 5×, all pins perturbation-proven | done (`spread`, `growth`, `till`) |
+| 3 | §3 harness trims | statistics re-verified, not assumed | done (`sleep`, `weather`, 27 suites) |
+| 4 | §4 gate tiers + CI timeouts | `--quick` < 8 min; nightly full green | done except §4.4 |
+| 5 | Re-measure; if the sum is not under ~600 s, open the release-profile question with numbers | — | sum **379.5 s**, so §4.4 stays closed |
 
-Overall acceptance: suite-time sum **≤ ~600 s** (≈ 10 min single-threaded,
-well under that wall-clock with parallelism), zero pins lost (every
-neutralisation still turns its named test red), zero thresholds widened to
-fit faster runs. Any step that cannot meet its verdict is reverted, not
-explained away.
+Overall acceptance: suite-time sum **≤ ~600 s** ✅ (**379.5 s**); zero pins lost
+(every neutralisation still turns its named test red — `tools/gates/perturb.py`
+carries 19 mechanisms across five groups); zero thresholds widened to fit faster
+runs. Any step that cannot meet its verdict is reverted, not explained away.
 
 ## 6. Non-goals (recorded so they stay non-goals)
 
@@ -136,223 +125,15 @@ explained away.
 - A shared mutable `Game` across parallel tests.
 - Silent profile splits between local and CI runs.
 
-## 7. Executed: Step 1 results (2026-10-03)
+## 7. Standing rules for the next slow suite
 
-- **Gate instrumentation landed** (`tools/gates/run.py`): per-gate wall
-  clock, slowest-first table with suite labels (crate from the exe stem
-  for lib suites, file stem for integration suites), same refusal
-  semantics as before.
-- **Nextest installed** (v0.9.146): trial on `mc-core` green with per-test
-  timing; CI integration and retry policy still open.
-- **The 168 s pole is fixed, not just named: `mc-world` lib, 49 tests.**
-  Attribution by measurement, not guessing: registry load 138 ms,
-  `World::new` 0 ms, the 66×66 floor build **58.8 s** — and 4 356 bare
-  `BlockRegistry` clones at **59.8 s**. The per-write deep clone in
-  `World::set_block` was 100% of it (~13.7 ms/write in debug). Fix: the
-  `World` registry field is now `Arc<BlockRegistry>` (constructors still
-  take the table by value; `set_block` bumps the refcount). Measured
-  after: floor **12 ms**, suite **169.89 s → 0.55 s** (309×). Zero
-  behavior change (same writes, same order), `clippy -D warnings` and
-  `fmt --check` clean, `mc-server` lib still green. This also speeds
-  every production edit path and every farm test that places blocks.
-- **Next suspect queued, not started:** `mc-container` lib (136 tests,
-  31 s) — same attribution method before any change.
-- **§2 step 2, second suite: `growth` migrated (2026-10-03).** The four
-  slice-1 tick farms in `tests/growth.rs` (300 ticks each) became eight
-  direct-call pins in `game::growth::tests`; the file keeps **one**
-  phase-wiring test — sweep rate plus wheat through the sweep at
-  view_distance 2 — beside the fixture age/moisture bands; that test also
-  carries the deleted dry farm's phase claim (60 dry cells lose moisture
-  through the same sweep). Suite **90.2 s wall / 268.5 s test-time →
-  19.3 s**; the eighteen crop/farmland/stalk/spread pins together run in
-  **1.6 s**. Seven perturbations re-proven red and restored byte-exact
-  (light gate, max age, beetroot pre-gate, growth-speed moisture term,
-  farmland wet arm, farmland dry arm, `random_tick_speed`).
-  - **Four draft-pin defects, all found by running the pins *before*
-    deleting the tick tests** — the argument for that order:
-    1. the plant helper built a lone soil column, so `getGrowthSpeed`
-       scored 4.0 where the rate arithmetic assumed the isolated-patch
-       10.0 (three pins red);
-    2. the draw loops cached a pre-growth block id, which
-       `random_tick_block` trusts (the sweep always hands it a fresh
-       read), so the crop re-wrote the same age step and the "grows" pin
-       sat at age 1;
-    3. the max-age pin could not see a deleted guard — `write_property`
-       refuses the out-of-band `wheat[age=8]` state either way — so it now
-       also asserts the guard returns **before the roll** (the seeded
-       source is untouched);
-    4. the beetroot pin compared final ages, which saturate on both sides,
-       and stayed green with the pre-gate deleted; it now compares hit
-       counts over two equal fields.
-  - **Kept:** `crops_do_not_grow_in_the_dark`'s moisture half ("dark soil
-    is still watered") as `dark_farmland_still_wets_on_direct_call`, with
-    the box's darkness (brightness 0) itself asserted.
-- **§2 step 2, third suite: `till` migrated (2026-10-03).** The three hoe
-  tests in `tests/till.rs` — the `TILLABLES` table, rooted dirt's drop, the
-  three refusals — became three direct `apply_hoe` pins in
-  `game::session::tests`. The file keeps what a direct call cannot show: the
-  5-block landing, the shaft-guided mob fall, the idle control (200 ticks →
-  10), and **one click proving `UseItemOn` still dispatches to `apply_hoe`**
-  (without it, deleting the dispatch would leave every direct pin green).
-  All at view distance 2. Suite **47.7 s wall → 3.9 s** (the ring alone took
-  the mob fall from 23.9 s to 2.8 s). Seven perturbations re-proven red and
-  restored byte-exact, including the dispatch line itself.
-  - **New coverage, not migrated:** `fallOn`'s threshold is now a unit pin
-    (`short_falls_do_not_trample`). The idle control could never reach it —
-    an idle player sends no movement intent, so it never produces a landing
-    at all — which is why its 200 ticks were 47 s of runtime for no
-    additional red-capability.
-- **§3 step, first suite: `sleep` (2026-10-03).** Solved by the *harness*, not
-  by §2. All 13 tick tests built at view distance 4 to read a bed and a clock
-  in chunk (0, 0), so the 81-chunk ring was pure cost: at view distance 2 the
-  suite is **88.5 s wall → 7.8 s** (sum ≈ 250 s → 49 s), pins unchanged. The
-  pole was `damage_wakes_the_sleeper` — 88.5 s waiting for a zombie two blocks
-  away to land a hit — now 3.8 s with the zombie adjacent and 80 ticks instead
-  of 300 ("a hit wakes the sleeper" is this pin; that a zombie can walk is
-  `mob_pathing`'s). Three mechanisms re-proven red: `after_damage`'s wake call,
-  the 100 % skip threshold, the 100-tick deep counter.
-  - **§2's sleep rows were not taken**, as a decision with a number: at 7.8 s
-    the suite is no longer a pole, so §2's ~10× would buy seconds while the
-    remaining poles (`xp_orbs` 94 s, `reach_validation` 87 s, `weather` 84 s,
-    `natural_spawn` 51 s) are tens of seconds each. §3 first; §2 where a suite
-    is still expensive.
-- **§3 step, second suite: `weather` (2026-10-03).** Same shape as `sleep`:
-  both harnesses at view distance 4, and the storm-wetting pin at 300 ticks ×
-  400 cells. View distance 2 takes the cycle/packet/command pins to 1.4–1.8 s
-  and the restart round-trip to 4.9 s; the wetting pin runs 150 ticks with the
-  floor re-derived from the rate (≈44 expected, floor 15). Suite **59.6 s wall
-  → 12.6 s**, pins unchanged. One mechanism re-proven red: the rain gate
-  feeding farmland wetting. §2's weather rows (direct `tick_weather` pins) were
-  not taken, for the same measured reason as sleep: at 12.6 s the suite is no
-  longer a pole.
-  - **The §2 P20 set is closed on the numbers:** `spread` and `growth` and
-    `till` were migrated (the three that were still expensive), and `sleep` and
-    `weather` were resolved by §3 at 7.8 s and 12.6 s, where §2's ~10× would buy
-    single-digit seconds. §2 applies again when a suite is both expensive and
-    mechanism-heavy.
-- **§3 ring sweep, ten suites (2026-10-03).** The same harness pattern — view
-  distance 4 on tests that assert local behaviour — ran in ten more
-  integration suites. At view distance 2 they go **≈286 s → 46 s** of suite
-  time: `reach_validation` 64.8 → 18.6, `xp_orbs` 54.7 → 2.7, `ai_wiring`
-  34.3 → 2.5, `p18_hunger` 33.3 → 10.6, `mob_pathing` 32.1 → 1.8,
-  `loot_and_pickup` 15.4 → 2.3, `mechanisms` 14.8 → 1.7, `ranged_explosive`
-  12.7 → 1.7, `status_effects` 12.3 → 1.8, `player_attack` 12.4 → 2.8. No pin
-  changed, and each suite was run green on its own before the landing's gate.
-  - **Checked, not assumed:** none of the ten asserts the ring — their
-    "radius" references are gameplay radii (ignite, merge, wander) — and
-    `mob_pathing`'s walk, which treats an unloaded cell as solid, still passes
-    (so the mob never leaves the ring).
-  - **Left at 4 on purpose:** `chunk_streaming`, `survival_e2e`, the light,
-    worldgen and structure suites, and `natural_spawn` (its spawn ring meets a
-    24-block minimum).
-- **§4 executed: two tiers, and CI timeouts (2026-10-03).**
-  - `run.py --quick` is the per-commit tier: fmt, clippy, the four docs audits,
-    and **nextest over the whole workspace** — every test kept, with the wall
-    clock bought from scheduling rather than from dropping suites (**155 s**
-    against `cargo test`'s 452 s; the plan's budget was < 8 min). That is a
-    deliberate deviation from §4.1's letter ("lib + unit tests + integration
-    suites under a per-suite budget"): with nextest the whole workspace already
-    fits the budget, so there is nothing worth dropping. Measured end to end,
-    including fmt, clippy and the audits: **165 s**.
-  - The default tier stays canonical: aarch64 + cargo-deny + `cargo test
-    --workspace --no-fail-fast`, which owns the totals in TEST-MATRIX and runs
-    the doctests nextest skips (2 006 against nextest's 2 002).
-  - `.config/nextest.toml` carries the retry policy §1 asked for: two retries
-    for `network_game_bridge` and `whitelist_revocation` — the two suites with
-    written flake history — and none for anything else. A retried pass is
-    reported FLAKY, so a retry cannot hide a real failure.
-  - `ci.yml`: every job now has an explicit `timeout-minutes` (GitHub's default
-    is 360, so a hang used to burn six runner-hours silently), the per-push
-    x86_64 job runs the nextest tier, and a `schedule`-gated `nightly-full` job
-    runs the canonical `cargo test` plus the `#[ignore]`d acceptance suites.
-  - **Not done, and named:** §4.4 (release profile) stays deferred, and the CI
-    jobs themselves have not been observed on a runner from here — they run on
-    push.
-- **§3 ring sweep, second pass: the remaining local-scene harnesses
-  (2026-10-03).** The first sweep took the ten *largest* suites; this one takes
-  the rest of the view-distance-4 harnesses whose scenes are local — 19
-  constructors in 17 suites (`barrel` ×3, `reconnect` ×2, `block_change_ack`,
-  `console_save_e2e`, `crafting_table`, `dig_progress`, `doors`,
-  `double_chest`, `entity_lifecycle`, `entity_persistence`, `fluid_core`,
-  `hopper_furnace`, `join_entity_id`, `p17_owner_pins`, `p18_wear_enchant`,
-  `p19_write_pins`, `pvp_authority`). Every suite was verified green, and the
-  whole workspace with them (nextest's own count, which is not the canonical
-  figure TEST-MATRIX owns — it skips doctests).
-  - **No per-suite saving is claimed.** The before/after logs for this pass are
-    not comparable — the second full nextest run took 231 s against the first's
-    155 s, with the summed test time 45 % higher under load — so the evidence is
-    the reasoning (81 chunks of ring down to 25) plus the full gate's sum, not a
-    table. The first pass's numbers (where the two logs *were* comparable) are
-    the shape to expect.
-  - **Left at 4, with reasons:** `natural_spawn` (its spawn ring is a fixed
-    8 chunks that must meet the 24-block minimum, so the view distance decides
-    how much of the annulus is loaded — a real semantic, not cost), plus
-    `chunk_streaming`, `survival_e2e`, the light suites, the worldgen/structure
-    suites, `p15_zero_delta`, `fluid_differential` and `spawn_on_land`.
-- **Two measurement caveats, recorded because the numbers are read as
-  evidence.**
-  - **Load noise is large.** Per-suite times move by up to ±60 % between gate
-    runs on this host (the same `mc_container` lib read 20.5 s, 18.4 s and 8.4 s
-    across three runs; two nextest logs of the same tree differ by 45 % in
-    summed test time). Read the suite-time sum as ±20–30 s, and prefer a
-    like-for-like comparison or an isolated re-run before calling a small delta
-    a win.
-  - **Bulk edits must write bytes, not text.** The sweep script used
-    `Path.write_text`, which translates newlines on Windows and silently turned
-    17 LF files into CRLF; `check_line_endings` caught it and its own message
-    prescribes the fix (`read_bytes().replace(b'\r\n', b'\n')` + `write_bytes`).
-    The audit is what makes this a non-event rather than a committed
-    line-ending flip.
-- **Still queued:** `mc-container` lib attribution (§7) — noting it now reads
-  8–20 s, so the 31 s suspicion that queued it may no longer be worth the
-  diagnosis.
-- **Plan §5 acceptance:** the gate's suite-time sum reads **379.5 s** after the
-  second ring sweep (1 690 s at the plan's writing; the ≤ ~600 s target is met
-  with ~37 % margin), and the whole `cargo test --workspace` phase takes 388 s
-  against 1 307 s at the start of this work.
-- **Remaining candidates, measured (2026-10-03; suite wall clocks taken one
-  suite at a time on an otherwise idle host).** After the two ring sweeps the
-  sum is 379.5 s and the distribution is flat, so what is left is small.
-  - **§3, view-distance-4 stragglers whose scenes are local:**
-    `gameplay_config_e2e` 7.4 s (three harnesses), `player_info_tab_list`
-    4.9 s. Expect ~5–8 s together.
-  - **§3, the view-distance-3 set (26 suites, ~72 s measured):** a 3 → 2 pass
-    takes the ring from 49 to 25 chunks, worth an estimated 15–25 s. Six of them
-    are socket e2e suites that set `NetworkSettings { view_distance: 3 }` *as
-    well as* the game's (`command_e2e`, `container_e2e`, `execute_e2e`,
-    `function_e2e`, `network_game_bridge`, `pack_loading_e2e`); for those the two
-    numbers must move together, or the client's radius and the server's
-    disagree. `execute_e2e` (13.7 s) is the largest of the set.
-  - **§3, `natural_spawn` (39.6 s, the largest single suite):** not a blind
-    trim — its spawn ring is a fixed 8 chunks that must meet the 24-block
-    minimum, so the view distance decides how much of the annulus is loaded. An
-    experiment worth running first: *load* the outer chunks explicitly without
-    paying a larger ring's per-tick cost, if the spawn cycle scans loaded chunks
-    rather than the configured ring. Measure before claiming.
-  - **§3, the §2 wiring tests** (`growth` 18.5 s, `reach_validation` 18.7 s,
-    `weather` 12.4 s, `spread` 9.0 s): their tick counts *are* the mechanism — a
-    stone dig needs its 150 ticks, a sweep farm needs its statistical floor — so
-    the remaining lever is small and would weaken what they pin. Not
-    recommended.
-  - **§7 `mc-container` lib attribution:** reads 8–20 s (load-dependent) against
-    the 31 s that queued it. Low value now; the honest close is "no longer
-    warranted at this size" unless a production-path suspicion reopens it.
-  - **§4.4 release profile:** §5's step 5 opens that question only if the sum is
-    *not* under ~600 s. It is (379.5 s), so it stays closed by the plan's own
-    rule rather than by preference; re-opening it needs a new reason, not a slow
-    suite.
-  - **§1's per-suite budget check is the one instrumentation item still open:**
-    the gate prints the table and the sum, but nothing fails when a suite creeps
-    from 5 s to 50 s. A recorded budget per suite (the P18-07 precedent) is the
-    regression guard this work now lacks — it buys no speed and is recommended
-    anyway.
-  - **Unverified in the real environment:** the CI tier/retry/timeout changes
-    take effect on push; nothing in this session observed a runner.
-- **Proofs are a tool now, not a command:** `python tools/gates/perturb.py
-  <group>` neutralises each mechanism the group names, requires that mechanism's
-  pin to go red, and restores byte-exact (hash-checked). It exists because the
-  hand-rolled version restored the perturbed file with a copy that preserved its
-  original mtime, so cargo reused the *perturbed* test binary in the next full
-  run and reported two harness artifacts as test failures (see CHANGELOG). The
-  groups so far are `growth` (7), `till` (7), `sleep` (3), `weather` (1) and
-  `reach` (1) — fourteen mechanisms plus the dispatch line.
+1. **Measure it first** — `python tools/gates/run.py --quick` prints per-suite
+   times and the sum; read them with the ±20–30 s noise in mind (RESULTS).
+2. **Decide the layer** — mechanism → §2 (direct pins + one wiring test); local
+   scene on a wide ring → §3.1; tick count above its floor → §3.3.
+3. **Prove the pins still bite** — `python tools/gates/perturb.py <group>`; a
+   neutralised mechanism that leaves its pin green means the pin is not carrying
+   the mechanism.
+4. **Record it** — the landing goes in [TEST-TIME-RESULTS.md](TEST-TIME-RESULTS.md)
+   (summary table + the detail), and the count in
+   [TEST-MATRIX.md](TEST-MATRIX.md) if it moved.

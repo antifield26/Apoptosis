@@ -16,8 +16,9 @@ direct-call pins (+4); and the `till` slice-2a suite's three hoe tests became
 three direct `apply_hoe` pins plus a new `fallOn` threshold pin, while the file
 kept a click test that proves the `UseItemOn` dispatch, less the two tick tests
 that went with the migration (+2). No migration changed an assertion's meaning;
-the tick tests they replaced, and the one addition, are recorded in the plan's
-§7 log. The +5 over the **1 989** figure is P20-02 slice 2b's new
+the tick tests they replaced, and the one addition, are recorded in
+[TEST-TIME-RESULTS.md](TEST-TIME-RESULTS.md) (the method is in
+[TEST-TIME-PLAN.md](TEST-TIME-PLAN.md)). The +5 over the **1 989** figure is P20-02 slice 2b's new
 `spread` target (age-split cane/cactus with climb arms, triple-stack cap,
 64-seed grass bed with starvation row and refusal checkerboard, 64-seed
 mycelium bed). Regression note, kept not deleted: this same run first caught
