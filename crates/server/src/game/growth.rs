@@ -969,4 +969,394 @@ mod tests {
         }
         assert!(grown, "open mycelium converts neighbouring dirt");
     }
+
+    /// Install hand-built growth tags (the test seam; production resolves
+    /// the pack tags in `load_packs`): every farmland moisture state grows
+    /// crops, every wheat age state holds dry soil.
+    fn install_growth_tags(game: &mut Game) {
+        use std::collections::BTreeSet;
+        let blocks = &game.registries().blocks;
+        let mut grows = BTreeSet::new();
+        let mut maintains = BTreeSet::new();
+        for level in 0..8 {
+            grows.insert(
+                blocks
+                    .state_id(
+                        "minecraft:farmland",
+                        &[("moisture".to_owned(), level.to_string())],
+                    )
+                    .expect("farmland moisture state"),
+            );
+        }
+        for age in 0..8 {
+            maintains.insert(
+                blocks
+                    .state_id("minecraft:wheat", &[("age".to_owned(), age.to_string())])
+                    .expect("wheat age state"),
+            );
+        }
+        game.set_growth_tags(grows, maintains);
+    }
+
+    /// One `crop` seedling at `(x, y+1, z)` on a **3×3 patch** of moist
+    /// farmland at `y`.
+    ///
+    /// The patch is the point, not scenery: `getGrowthSpeed` scores the centre
+    /// cell 1.0 + 3.0 + eight quartered neighbours = 10.0, which is the
+    /// arithmetic every pin below quotes. A lone soil column scores 4.0 (its
+    /// neighbours are air), so planting the crop without the patch silently
+    /// changes the rate under test — the first draft did exactly that and its
+    /// rate pins failed at 4.0.
+    fn plant_crop(game: &mut Game, x: i32, y: i32, z: i32, crop: &str, age: i32) {
+        let blocks = game.registries().blocks.clone();
+        let soil = blocks
+            .state_id(
+                "minecraft:farmland",
+                &[("moisture".to_owned(), "7".to_owned())],
+            )
+            .expect("moist farmland");
+        let seedling = blocks
+            .state_id(crop, &[("age".to_owned(), age.to_string())])
+            .expect("seedling crop");
+        for dx in -1..=1 {
+            for dz in -1..=1 {
+                game.world_mut()
+                    .set_block(x + dx, y, z + dz, soil)
+                    .expect("soil placed");
+            }
+        }
+        game.world_mut()
+            .set_block(x, y + 1, z, seedling)
+            .expect("crop placed");
+    }
+
+    /// One wheat seedling on a 3×3 moist-farmland patch (see [`plant_crop`]).
+    fn plant_wheat(game: &mut Game, x: i32, y: i32, z: i32, age: i32) {
+        plant_crop(game, x, y, z, "minecraft:wheat", age);
+    }
+
+    fn crop_age(game: &Game, x: i32, y: i32, z: i32) -> i32 {
+        let id = game.world().get_block_loaded(x, y, z).expect("loaded");
+        game.registries()
+            .blocks
+            .properties_of(id)
+            .expect("properties")
+            .iter()
+            .find(|(k, _)| k == "age")
+            .and_then(|(_, v)| v.parse().ok())
+            .expect("age reads")
+    }
+
+    /// `moisture` of the farmland at `(x, y, z)`.
+    fn moisture_of(game: &Game, x: i32, y: i32, z: i32) -> i32 {
+        let id = game.world().get_block_loaded(x, y, z).expect("loaded");
+        game.registries()
+            .blocks
+            .properties_of(id)
+            .expect("properties")
+            .iter()
+            .find(|(k, _)| k == "moisture")
+            .and_then(|(_, v)| v.parse().ok())
+            .expect("moisture reads")
+    }
+
+    #[test]
+    fn wheat_grows_on_direct_calls() {
+        let (mut game, _dir) = bare_game("wheat-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        install_growth_tags(&mut game);
+        plant_wheat(&mut game, 8, 120, 8, 0);
+        light_farm(&mut game);
+        // Moist isolated wheat: speed 10.0, bound 3, so ~10 gains in 30
+        // calls from the fixed seed; the floor below is less than half.
+        // Each call re-reads the id: `random_tick_block` trusts the id it is
+        // handed (the sweep always hands a fresh read of the sampled cell), so
+        // a cached pre-growth id would keep rewriting the same age step.
+        for _ in 0..30 {
+            let id = game.world().get_block_loaded(8, 121, 8).expect("loaded");
+            let _ = game.random_tick_block(8, 121, 8, id);
+        }
+        let age = crop_age(&game, 8, 121, 8);
+        assert!(
+            (4..=7).contains(&age),
+            "wheat must grow decisively in 30 calls, got age {age}"
+        );
+    }
+
+    /// A ripe crop applies nothing **and consumes no randomness**: the jar's
+    /// `age < maxAge` guard returns before the growth roll.
+    ///
+    /// The state assertion alone cannot carry this pin. `write_property` refuses
+    /// the out-of-band `wheat[age=8]` state, so a crop at max age stays at 7
+    /// whether or not the guard is there — measured, not assumed: neutralising
+    /// the guard left the first draft of this pin green. The draw counter can
+    /// tell the two apart, so the pin compares the seeded source either side of
+    /// the calls.
+    #[test]
+    fn wheat_respects_max_age_on_direct_call() {
+        let (mut game, _dir) = bare_game("wheat-max-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        install_growth_tags(&mut game);
+        plant_wheat(&mut game, 8, 120, 8, 7);
+        light_farm(&mut game);
+        let untouched = game.random.clone();
+        for _ in 0..30 {
+            let id = game.world().get_block_loaded(8, 121, 8).expect("loaded");
+            assert!(
+                !game.random_tick_block(8, 121, 8, id),
+                "a ripe crop applies nothing"
+            );
+        }
+        assert_eq!(crop_age(&game, 8, 121, 8), 7, "ripe wheat never exceeds 7");
+        assert_eq!(
+            game.random, untouched,
+            "a ripe crop consumes no draws: the max-age guard returns before the roll"
+        );
+    }
+
+    /// Beetroot's `nextInt(3)` pre-gate makes it grow at a third of wheat's
+    /// rate under identical soil.
+    ///
+    /// Rates are compared as **hit counts over a fixed number of rounds**, not
+    /// as final ages. A single crop per side saturates: both reach their max age
+    /// long before the run ends, so the first draft of this pin (two crops, 60
+    /// calls each) stayed green with the pre-gate deleted — measured, then
+    /// fixed. The fields below stay far from the cap (per-cell expectations are
+    /// 2.0 for wheat and 0.67 for beetroot, against a cap of 7).
+    #[test]
+    fn beetroot_grows_slower_on_direct_calls() {
+        let (mut game, _dir) = bare_game("beet-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        install_growth_tags(&mut game);
+        // Two equal fields inside one chunk, cells 2 apart in both axes so no
+        // cell has an orthogonal same-crop neighbour (which would halve its
+        // growth speed). 15 wheat + 15 beetroot over six rounds: wheat expects
+        // ≈30 hits, beetroot ≈10, and no cell comes near the age cap.
+        let mut wheat_cells = Vec::new();
+        let mut beet_cells = Vec::new();
+        for row in 0..5 {
+            for col in 0..3 {
+                let (x, z) = (1 + col * 2, 1 + row * 2);
+                plant_crop(&mut game, x, 120, z, "minecraft:wheat", 0);
+                wheat_cells.push((x, 121, z));
+                let (x, z) = (9 + col * 2, 1 + row * 2);
+                plant_crop(&mut game, x, 120, z, "minecraft:beetroots", 0);
+                beet_cells.push((x, 121, z));
+            }
+        }
+        light_farm(&mut game);
+        let hits = |cells: &[(i32, i32, i32)], game: &mut Game| -> usize {
+            let mut hits = 0;
+            for _ in 0..6 {
+                for &(x, y, z) in cells {
+                    // Fresh id per call, as in the sweep (a cached pre-growth
+                    // id would re-write the same age step).
+                    let id = game.world().get_block_loaded(x, y, z).expect("loaded");
+                    hits += usize::from(game.random_tick_block(x, y, z, id));
+                }
+            }
+            hits
+        };
+        let wheat_hits = hits(&wheat_cells, &mut game);
+        let beet_hits = hits(&beet_cells, &mut game);
+        assert!(beet_hits > 0, "beetroot still grows, only slower");
+        assert!(
+            beet_hits * 2 < wheat_hits,
+            "the pre-gate must put beetroot below half of wheat's rate: \
+             wheat {wheat_hits} hits vs beetroot {beet_hits} over the same rounds"
+        );
+    }
+
+    #[test]
+    fn dark_wheat_never_grows_on_direct_calls() {
+        let (mut game, _dir) = bare_game("dark-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        install_growth_tags(&mut game);
+        let stone = game
+            .registries()
+            .blocks
+            .default_state("minecraft:stone")
+            .expect("stone");
+        // A sealed stone box: settled light inside is 0 by construction.
+        for y in 118..=124 {
+            for z in 6..=10 {
+                for x in 6..=10 {
+                    game.world_mut()
+                        .set_block(x, y, z, stone)
+                        .expect("box sealed");
+                }
+            }
+        }
+        plant_wheat(&mut game, 8, 120, 8, 0);
+        light_farm(&mut game);
+        let id = game.world().get_block_loaded(8, 121, 8).expect("loaded");
+        for _ in 0..20 {
+            assert!(
+                !game.random_tick_block(8, 121, 8, id),
+                "darkness gates every call"
+            );
+        }
+        assert_eq!(crop_age(&game, 8, 121, 8), 0, "nothing grows without light");
+    }
+
+    /// The dry arm: moisture 1 ticks down to 0, and an uncovered moisture-0
+    /// soil turns to dirt on the next call.
+    ///
+    /// The premises are asserted, not assumed. "A call applied" is not proof of
+    /// the dry branch — the wet branch applies too (it writes moisture 7) — so a
+    /// plot that happened to stand within water's reach would have read the same
+    /// and the next call would find `moisture >= 7` and refuse. The intermediate
+    /// state is what separates the two branches.
+    #[test]
+    fn dry_farmland_dries_then_dirts_on_direct_calls() {
+        let (mut game, _dir) = bare_game("dry-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        install_growth_tags(&mut game);
+        let dry = game
+            .registries()
+            .blocks
+            .state_id(
+                "minecraft:farmland",
+                &[("moisture".to_owned(), "1".to_owned())],
+            )
+            .expect("dry farmland");
+        game.world_mut()
+            .set_block(8, 120, 8, dry)
+            .expect("soil placed");
+        assert!(!game.farmland_is_near_water(8, 120, 8), "no water in reach");
+        assert!(!game.is_raining_at(8, 121, 8), "not raining");
+        assert!(game.is_empty_block(8, 121, 8), "uncovered: air above");
+        let id = game.world().get_block_loaded(8, 120, 8).expect("loaded");
+        assert!(game.random_tick_block(8, 120, 8, id), "drying applies");
+        assert_eq!(
+            moisture_of(&game, 8, 120, 8),
+            0,
+            "one dry tick takes moisture 1 to 0"
+        );
+        let id = game.world().get_block_loaded(8, 120, 8).expect("loaded");
+        assert!(game.random_tick_block(8, 120, 8, id), "dirting applies");
+        assert_eq!(
+            game.registries()
+                .blocks
+                .block_name(game.world().get_block_loaded(8, 120, 8).expect("loaded"))
+                .expect("registered"),
+            "minecraft:dirt",
+            "dry uncovered soil becomes dirt in two calls"
+        );
+    }
+
+    #[test]
+    fn wet_farmland_wets_on_direct_call() {
+        let (mut game, _dir) = bare_game("wet-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        install_growth_tags(&mut game);
+        let blocks = game.registries().blocks.clone();
+        let dry = blocks
+            .state_id(
+                "minecraft:farmland",
+                &[("moisture".to_owned(), "0".to_owned())],
+            )
+            .expect("dry farmland");
+        let water = blocks.default_state("minecraft:water").expect("water");
+        game.world_mut()
+            .set_block(8, 120, 8, dry)
+            .expect("soil placed");
+        game.world_mut()
+            .set_block(9, 120, 8, water)
+            .expect("water placed");
+        let id = game.world().get_block_loaded(8, 120, 8).expect("loaded");
+        assert!(game.random_tick_block(8, 120, 8, id), "wetting applies");
+        let id = game.world().get_block_loaded(8, 120, 8).expect("loaded");
+        let moisture = blocks
+            .properties_of(id)
+            .expect("properties")
+            .iter()
+            .find(|(k, _)| k == "moisture")
+            .and_then(|(_, v)| v.parse::<i32>().ok())
+            .expect("moisture reads");
+        assert_eq!(moisture, 7, "water wets straight to 7");
+    }
+
+    /// Farmland wetting is not light-gated: soil beside water in a sealed dark
+    /// box still wets. This is the moisture half of the deleted
+    /// `crops_do_not_grow_in_the_dark` tick test ("dark soil is still watered,
+    /// not dried"), kept because the split would otherwise drop it.
+    #[test]
+    fn dark_farmland_still_wets_on_direct_call() {
+        let (mut game, _dir) = bare_game("dark-wet-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        install_growth_tags(&mut game);
+        let blocks = game.registries().blocks.clone();
+        let stone = blocks.default_state("minecraft:stone").expect("stone");
+        let dry = blocks
+            .state_id(
+                "minecraft:farmland",
+                &[("moisture".to_owned(), "3".to_owned())],
+            )
+            .expect("dry farmland");
+        let water = blocks.default_state("minecraft:water").expect("water");
+        // A sealed stone box: light inside is 0 by construction.
+        for y in 118..=124 {
+            for z in 6..=10 {
+                for x in 6..=10 {
+                    game.world_mut()
+                        .set_block(x, y, z, stone)
+                        .expect("box sealed");
+                }
+            }
+        }
+        game.world_mut()
+            .set_block(8, 120, 8, dry)
+            .expect("soil placed");
+        game.world_mut()
+            .set_block(9, 120, 8, water)
+            .expect("water placed");
+        light_farm(&mut game);
+        assert_eq!(
+            game.raw_brightness(8, 120, 8),
+            0,
+            "the box really is dark, so the wetting below cannot be light-driven"
+        );
+        let id = game.world().get_block_loaded(8, 120, 8).expect("loaded");
+        assert!(
+            game.random_tick_block(8, 120, 8, id),
+            "wetting applies in the dark"
+        );
+        let id = game.world().get_block_loaded(8, 120, 8).expect("loaded");
+        let moisture = blocks
+            .properties_of(id)
+            .expect("properties")
+            .iter()
+            .find(|(k, _)| k == "moisture")
+            .and_then(|(_, v)| v.parse::<i32>().ok())
+            .expect("moisture reads");
+        assert_eq!(moisture, 7, "dark soil beside water is watered, not dried");
+    }
+
+    /// The jar's `getGrowthSpeed` arithmetic, on the shapes the rate pins use.
+    ///
+    /// The comparison is epsilon-based, not `==`: the workspace denies
+    /// `clippy::float_cmp`, and the values are sums of quarters, not literals.
+    #[test]
+    fn growth_speed_matches_the_jar_arithmetic() {
+        let (mut game, _dir) = bare_game("speed-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        install_growth_tags(&mut game);
+        // Isolated moist wheat: 1.0 + centre 3.0 + eight neighbours × 0.75.
+        plant_wheat(&mut game, 8, 120, 8, 0);
+        let speed = game.crop_growth_speed(8, 121, 8);
+        assert!(
+            (speed - 10.0).abs() < f32::EPSILON,
+            "isolated moist wheat scores 10.0, got {speed}"
+        );
+        // A 2×2 block halves it (both row axes share the crop).
+        plant_wheat(&mut game, 9, 120, 8, 0);
+        plant_wheat(&mut game, 8, 120, 9, 0);
+        plant_wheat(&mut game, 9, 120, 9, 0);
+        let speed = game.crop_growth_speed(8, 121, 8);
+        assert!(
+            (speed - 5.0).abs() < f32::EPSILON,
+            "a 2×2 wheat block halves the speed, got {speed}"
+        );
+    }
 }

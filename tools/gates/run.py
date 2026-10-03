@@ -48,14 +48,27 @@ def run(label: str, command: list[str]) -> tuple[bool, str]:
     # decode makes the reader thread raise -- which turned a passing run into exit code 1 the first time this
     # script was used. The script exists so that a gate cannot be quietly skipped; it cannot do that job if
     # it fails on its own output handling.
+    #
+    # **stderr is merged into the parsed stream.** Cargo prints each test binary's
+    # `Running ... (target/debug/deps/<name>-<hash>.exe)` header to *stderr* while the `test result:` lines go
+    # to *stdout*, so parsing stdout alone left every row of the slowest-first table labelled `?` -- a table
+    # that times suites without naming them, which is the half of TEST-TIME-PLAN §1 that mattered. Order is
+    # what the label state machine needs, so the two are merged at the OS pipe rather than concatenated
+    # afterwards. (`capture_output=True` and `stderr=STDOUT` are mutually exclusive, hence the explicit pipes.)
     start = time.monotonic()
     result = subprocess.run(
-        command, cwd=ROOT, capture_output=True, text=True, encoding='utf-8', errors='replace'
+        command,
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding='utf-8',
+        errors='replace',
     )
     elapsed = time.monotonic() - start
     print(f'    ({elapsed:.1f}s)')
     if result.returncode != 0:
-        tail = (result.stderr or result.stdout or '').strip().splitlines()[-6:]
+        tail = (result.stdout or '').strip().splitlines()[-6:]
         for line in tail:
             print(f'      {line[:110]}')
     return result.returncode == 0, result.stdout or ''

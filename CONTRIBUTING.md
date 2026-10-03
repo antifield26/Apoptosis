@@ -30,15 +30,15 @@ and [docs/operations/RUNBOOK.md](docs/operations/RUNBOOK.md)).
 
 ## Quality gates (all must pass before you push)
 
-| Gate | Command | Current state (2026-09-25) |
+| Gate | Command | Current state (2026-10-03) |
 |---|---|---|
-| Tests | `cargo test --workspace --no-fail-fast` | 1 903 passed / 0 failed / 41 ignored, 153 suites |
+| Tests | `cargo test --workspace --no-fail-fast` | 2 004 passed / 0 failed / 44 ignored, 161 suites |
 | Formatting | `cargo fmt --all -- --check` | clean |
 | Lints | `cargo clippy --workspace --all-targets -- -D warnings` | clean |
-| aarch64 | `cargo check --target aarch64-unknown-linux-gnu --workspace --all-targets` | clean |
+| aarch64 | `cargo check --target aarch64-unknown-linux-gnu --workspace --all-targets` | needs a `*-linux-gnu-gcc` cross C compiler for `ring`; green in CI, not runnable on a host without one |
 | Licences/deps | `cargo deny check licenses bans sources` | clean |
 
-The 41 ignored tests are on-demand: the benchmark harness (`pi_profile`,
+The 44 ignored tests are on-demand: the benchmark harness (`pi_profile`,
 `tick_baseline`), the differential suites below, `vanilla_loot` (3),
 `vanilla_chunk_light` (2), the light suites (4), `terrain_distribution`
 (3), `ore_carver_stats` (5) and the `mc-command` selector sort/limit

@@ -5,8 +5,10 @@ answer to "why is the suite slow and what do we do about it, in what order".
 
 ## 0. Where the time goes (measured, not guessed)
 
-From `cargo test --workspace --no-fail-fast` on the dev host (161 suites,
-1 994 passed / 0 failed / 44 ignored; suite-time sum **≈ 1 690 s**):
+From `cargo test --workspace --no-fail-fast` on the dev host (161 suites; the
+pass/fail totals belong to [TEST-MATRIX.md](TEST-MATRIX.md), and §7 records
+what each step moved — the suite-time sum at the plan's writing was
+**≈ 1 690 s**):
 
 | Rank | Suite shape | Example | Cost driver |
 |---|---|---|---|
@@ -155,3 +157,43 @@ explained away.
   every production edit path and every farm test that places blocks.
 - **Next suspect queued, not started:** `mc-container` lib (136 tests,
   31 s) — same attribution method before any change.
+- **§2 step 2, second suite: `growth` migrated (2026-10-03).** The four
+  slice-1 tick farms in `tests/growth.rs` (300 ticks each) became eight
+  direct-call pins in `game::growth::tests`; the file keeps **one**
+  phase-wiring test — sweep rate plus wheat through the sweep at
+  view_distance 2 — beside the fixture age/moisture bands; that test also
+  carries the deleted dry farm's phase claim (60 dry cells lose moisture
+  through the same sweep). Suite **90.2 s wall / 268.5 s test-time →
+  19.3 s**; the eighteen crop/farmland/stalk/spread pins together run in
+  **1.6 s**. Seven perturbations re-proven red and restored byte-exact
+  (light gate, max age, beetroot pre-gate, growth-speed moisture term,
+  farmland wet arm, farmland dry arm, `random_tick_speed`).
+  - **Four draft-pin defects, all found by running the pins *before*
+    deleting the tick tests** — the argument for that order:
+    1. the plant helper built a lone soil column, so `getGrowthSpeed`
+       scored 4.0 where the rate arithmetic assumed the isolated-patch
+       10.0 (three pins red);
+    2. the draw loops cached a pre-growth block id, which
+       `random_tick_block` trusts (the sweep always hands it a fresh
+       read), so the crop re-wrote the same age step and the "grows" pin
+       sat at age 1;
+    3. the max-age pin could not see a deleted guard — `write_property`
+       refuses the out-of-band `wheat[age=8]` state either way — so it now
+       also asserts the guard returns **before the roll** (the seeded
+       source is untouched);
+    4. the beetroot pin compared final ages, which saturate on both sides,
+       and stayed green with the pre-gate deleted; it now compares hit
+       counts over two equal fields.
+  - **Kept:** `crops_do_not_grow_in_the_dark`'s moisture half ("dark soil
+    is still watered") as `dark_farmland_still_wets_on_direct_call`, with
+    the box's darkness (brightness 0) itself asserted.
+- **Still queued:** `till`, `sleep`, `weather` (§2); `mc-container` lib
+  attribution (§7); gate tiers and CI timeouts (§4) untouched.
+- **Proofs are a tool now, not a command:** `python tools/gates/perturb.py
+  growth` neutralises each mechanism the group names, requires that
+  mechanism's pin to go red, and restores byte-exact (hash-checked). It
+  exists because the hand-rolled version restored the perturbed file with a
+  copy that preserved its original mtime, so cargo reused the *perturbed*
+  test binary in the next full run and reported two harness artifacts as
+  test failures (see CHANGELOG). The §2 migrations still to come add their
+  cases to the same file.

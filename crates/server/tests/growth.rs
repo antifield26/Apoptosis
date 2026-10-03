@@ -1,32 +1,31 @@
-//! Random-tick growth, slice 1: crops and farmland moisture (P20-02).
+//! Phase wiring for slice 1: the `RandomTicks` sweep draws its samples and
+//! reaches the crop and farmland handlers (P20-02).
 //!
-//! ## Why aggregates, not single plants
+//! Exactly one full-tick test lives here. It carries the two facts a direct
+//! handler call cannot show: the sweep draws `sections × 3` slots per loaded
+//! chunk in the radius, and a crop really does grow through that sweep. Every
+//! mechanism (growth rate, max age, beetroot's pre-gate, the light gate,
+//! farmland drying, dirting and wetting, the growth-speed arithmetic) is
+//! pinned by direct calls in `game::growth::tests` — same handlers, no ticks,
+//! ~0.6 s for all seventeen. The fixture age/moisture bands stay here as well
+//! (a registry read, no ticks). See TEST-TIME-PLAN §2 for why the split
+//! exists; `tests/spread.rs` is the same shape for slice 2b.
+//!
+//! ## Why the wiring farm is an aggregate
 //!
 //! One cell is sampled with probability `sections × 3 / (16 × 16 × 384)` per
-//! tick — about 7.3e-4 — so a single wheat needs thousands of ticks to grow.
-//! That is Vanilla's own rate, not a test hook problem, and the phase's
-//! acceptance says exactly this: growth probability is tested
-//! *statistically* with a seeded source. Every farm below therefore plants a
-//! field (50–200 cells), runs a fixed tick count on the fixed
-//! `DEFAULT_RANDOM_SEED`, and asserts a total far from zero with the
-//! calculation beside it. Same seed twice is bit-identical (the game owns one
-//! seeded source), so these are regression pins, not flakes.
+//! tick — 7.3e-4 — so a single wheat needs thousands of ticks to grow. That is
+//! Vanilla's own rate, not a test hook problem. The farm below therefore plants
+//! 100 cells, runs a fixed tick count on the fixed `DEFAULT_RANDOM_SEED`, and
+//! asserts a total far from zero with the arithmetic beside it. Because the
+//! per-cell hit rate is invariant to the loaded-chunk count (samples and cells
+//! scale together), the run happens at view distance 2: 1 800 samples per tick
+//! instead of 5 832, with identical statistics (TEST-TIME-PLAN §3).
 //!
-//! ## Thresholds — written **before** the run
-//!
-//! Per-cell hit rate `p ≈ 7.3e-4`/tick is invariant to the loaded-chunk count
-//! (samples and cells scale together). Moist isolated wheat grows per hit with
-//! `P ≈ 1/3` (bound `(int)(25/10)+1 = 3`); dry farmland ticks down 1 per hit.
-//!
-//! | Farm | Ticks | Expected events | Assert |
-//! |---|---|---|
-//! | 200 moist wheat | 300 | `200×300×7.3e-4/3 ≈ 14.6` age steps | `≥ 5` total gains |
-//! | 100 wheat + 100 beetroot, moist | 300 | wheat ≈ 7.3, beet ≈ 2.4 | wheat sum `>` beet sum |
-//! | 50 dark wheat (y=0, moist) | 300 | 0 (light gate) | exactly 0 gains, moisture sum unchanged |
-//! | 100 dry farmland (moisture 1) | 300 | `100×300×7.3e-4 ≈ 22` decrements | moisture sum drop `≥ 8`, dirt `> 0` |
-//!
-//! If a measured total lands below its floor, the farm or the rule is wrong —
-//! the floor is not widened to fit.
+//! A moist isolated wheat grows on one hit in three (`bound = (int)(25/10)+1`),
+//! so 100 cells × 200 ticks expect `100 × 200 × 7.3e-4 / 3 ≈ 4.9` age steps.
+//! The floor is 2 — less than half, and the seed makes the run deterministic,
+//! so this is a regression pin and not a flake.
 
 use std::collections::BTreeSet;
 
@@ -40,28 +39,17 @@ use mc_world::{ChunkPos, Vec3};
 /// reads bright — the correct answer for an open field.
 const FARM_Y: i32 = 120;
 
-/// Underground band for the dark farm: solid stone on generated terrain.
-const DARK_Y: i32 = 0;
+/// Ticks the wiring farm runs after its measured tick.
+const FARM_TICKS: usize = 200;
 
-/// Ticks every farm runs.
-const FARM_TICKS: usize = 300;
+/// Sweep radius, matching the harness's view distance.
+const RADIUS: i32 = 2;
 
-fn open_world(tag: &str) -> (Game, TempDir) {
-    let dir = TempDir::new(tag);
-    let config = mc_server::config::StorageConfig {
-        world_dir: dir.path().join("world"),
-        autosave_ticks: 0,
-        seed: None,
-    };
-    let storage = WorldService::open(&config).expect("world opens");
-    let (_tx, rx) = mc_network::bridge::game_channel(256);
-    let game =
-        Game::with_seed_and_storage(storage, 4, rx, DEFAULT_RANDOM_SEED).expect("game builds");
-    (game, dir)
-}
+/// Chunks the spacing-2 farm grid below stays inside.
+const FARM_CHUNKS: [(i32, i32); 4] = [(0, 0), (1, 0), (0, 1), (1, 1)];
 
-/// Owned-storage game with a live channel, mirroring `fluid_core`'s harness:
-/// the sweep centres on players, so sampling tests join one.
+/// Owned-storage game with a live channel, mirroring `spread.rs`'s harness:
+/// the sweep centres on players, so the test joins one.
 struct Harness {
     game: Game,
     events: tokio::sync::mpsc::Sender<mc_network::bridge::ClientEvent>,
@@ -70,6 +58,9 @@ struct Harness {
 }
 
 impl Harness {
+    /// View distance 2 (TEST-TIME-PLAN §3): the per-cell hit rate is invariant
+    /// to the loaded-chunk count, so statistics are identical while the sweep
+    /// covers 25 chunks instead of 81.
     fn new(tag: &str) -> Self {
         let dir = TempDir::new(tag);
         let config = mc_server::config::StorageConfig {
@@ -80,7 +71,7 @@ impl Harness {
         let storage = WorldService::open(&config).expect("world opens");
         let (tx, rx) = mc_network::bridge::game_channel(256);
         let game =
-            Game::with_seed_and_storage(storage, 4, rx, DEFAULT_RANDOM_SEED).expect("game builds");
+            Game::with_seed_and_storage(storage, 2, rx, DEFAULT_RANDOM_SEED).expect("game builds");
         Self {
             game,
             events: tx,
@@ -137,8 +128,12 @@ fn install_growth_tags(game: &mut Game) {
     game.set_growth_tags(grows, maintains);
 }
 
-/// One farm plot: moist farmland with a seedling crop above.
-fn plant(game: &mut Game, x: i32, y: i32, z: i32, crop: &str) {
+/// One wheat seedling at `(x, y+1, z)` on a 3×3 moist-farmland patch at `y`.
+///
+/// The patch is the point: `getGrowthSpeed` scores that cell 10.0, the rate the
+/// floor below assumes. A lone soil column would score 4.0 and grow half as
+/// often.
+fn plant(game: &mut Game, x: i32, y: i32, z: i32) {
     let blocks = game.registries().blocks.clone();
     let soil = blocks
         .state_id(
@@ -147,295 +142,25 @@ fn plant(game: &mut Game, x: i32, y: i32, z: i32, crop: &str) {
         )
         .expect("moist farmland");
     let seedling = blocks
-        .state_id(crop, &[("age".to_owned(), "0".to_owned())])
-        .expect("seedling crop");
-    game.world_mut()
-        .set_block(x, y, z, soil)
-        .expect("soil placed");
+        .state_id("minecraft:wheat", &[("age".to_owned(), "0".to_owned())])
+        .expect("wheat seedling");
+    for dx in -1..=1 {
+        for dz in -1..=1 {
+            game.world_mut()
+                .set_block(x + dx, y, z + dz, soil)
+                .expect("soil placed");
+        }
+    }
     game.world_mut()
         .set_block(x, y + 1, z, seedling)
         .expect("crop placed");
 }
 
-/// Standing water at the plot (hydration source for the moisture rule).
-fn pour(game: &mut Game, x: i32, y: i32, z: i32) {
-    let water = game
-        .registries()
-        .blocks
-        .default_state("minecraft:water")
-        .expect("water");
-    game.world_mut()
-        .set_block(x, y, z, water)
-        .expect("water placed");
-}
-
-/// Sum of `age` over every slice-1 crop cell in the region, plus the count of
-/// cells holding each crop.
-fn crop_totals(game: &Game, plots: &[(i32, i32, i32)]) -> (i64, i64, usize) {
-    let blocks = &game.registries().blocks;
-    let mut wheat = 0_i64;
-    let mut beet = 0_i64;
-    let mut cells = 0_usize;
-    for &(x, y, z) in plots {
-        let Some(id) = game.world().get_block_loaded(x, y, z) else {
-            continue;
-        };
-        let Ok(name) = blocks.block_name(id) else {
-            continue;
-        };
-        if name != "minecraft:wheat" && name != "minecraft:beetroots" {
-            continue;
-        }
-        let props = blocks.properties_of(id).unwrap_or_default();
-        let age = props
-            .iter()
-            .find(|(k, _)| k == "age")
-            .and_then(|(_, v)| v.parse::<i64>().ok())
-            .unwrap_or(0);
-        assert!(age >= 0, "a crop age is never negative: {age}");
-        if name == "minecraft:wheat" {
-            assert!(age <= 7, "wheat never exceeds its max age: {age}");
-            wheat += age;
-        } else {
-            assert!(age <= 3, "beetroot never exceeds its max age: {age}");
-            beet += age;
-        }
-        cells += 1;
-    }
-    (wheat, beet, cells)
-}
-
-/// The sweep draws `sections × 3` slots per loaded chunk in the radius.
-#[test]
-fn the_sweep_samples_three_slots_per_section() {
-    let mut harness = Harness::new("growth-samples");
-    install_growth_tags(&mut harness.game);
-    harness.join("Sampler");
-    harness.stand(24, 121, 24);
-    // Settle streaming: the measured tick then sees a stable loaded set.
-    for _ in 0..5 {
-        harness.game.tick().expect("tick");
-    }
-    let report = harness.game.tick().expect("tick");
-    // The expected count is read off the live loaded set, not hardcoded: the
-    // pin is the *rate* (3 slots per section per chunk), while streaming owns
-    // which chunks those are.
-    // The player stands at (24, *, 24) and physics never moves x/z out of
-    // chunk (1, 1), so the centre is a constant, not a float cast.
-    let centre = ChunkPos::new(1, 1);
-    let radius = 4;
-    let loaded_in_radius = harness
-        .game
-        .world()
-        .chunk_positions()
-        .filter(|pos| (pos.x - centre.x).abs() <= radius && (pos.z - centre.z).abs() <= radius)
-        .count();
-    assert!(loaded_in_radius > 0, "streaming must have loaded chunks");
-    let sections = harness.game.world().section_count();
-    assert_eq!(
-        report.random_tick_samples,
-        loaded_in_radius * sections * 3,
-        "every loaded chunk in the radius contributes sections × 3 samples"
-    );
-}
-
-/// Moist wheat grows over a run of ticks (aggregate; see the module docs).
-#[test]
-fn wheat_grows_on_moist_farmland() {
-    let mut harness = Harness::new("growth-wheat");
-    install_growth_tags(&mut harness.game);
-    let game = &mut harness.game;
-    assert!(game.load_chunk(ChunkPos::new(0, 0)), "farm chunk loads");
-    assert!(game.load_chunk(ChunkPos::new(1, 0)), "farm chunk loads");
-    let mut plots = Vec::new();
-    for (i, (x, z)) in (0..20)
-        .flat_map(|dx| (0..10).map(move |dz| (dx, dz)))
-        .enumerate()
-    {
-        let (wx, wz) = (x - 2, z - 2);
-        if i % 4 == 3 {
-            pour(game, wx, FARM_Y, wz);
-            continue;
-        }
-        plant(game, wx, FARM_Y, wz, "minecraft:wheat");
-        plots.push((wx, FARM_Y + 1, wz));
-    }
-    harness.join("Farmer");
-    harness.stand(8, 121, 2);
-    settle_after_streaming(&mut harness);
-    for _ in 0..FARM_TICKS {
-        harness.game.tick().expect("tick");
-    }
-    let (wheat, _, cells) = crop_totals(&harness.game, &plots);
-    assert_eq!(cells, plots.len(), "every seedling is still a crop");
-    assert!(
-        wheat >= 5,
-        "200 moist wheat over 300 ticks should gain ≈14 ages, got {wheat}"
-    );
-}
-
-/// Beetroot's `nextInt(3)` pre-gate makes it grow slower than wheat.
-#[test]
-fn beetroot_grows_slower_than_wheat() {
-    let mut harness = Harness::new("growth-beet");
-    install_growth_tags(&mut harness.game);
-    let game = &mut harness.game;
-    assert!(game.load_chunk(ChunkPos::new(0, 0)), "farm chunk loads");
-    let mut plots = Vec::new();
-    for i in 0..200 {
-        let x = i % 20 - 2;
-        let z = i / 20 - 2;
-        let crop = if i % 2 == 0 {
-            "minecraft:wheat"
-        } else {
-            "minecraft:beetroots"
-        };
-        if i % 5 == 4 {
-            pour(game, x, FARM_Y, z);
-            continue;
-        }
-        plant(game, x, FARM_Y, z, crop);
-        plots.push((x, FARM_Y + 1, z));
-    }
-    harness.join("Farmer");
-    harness.stand(8, 121, 2);
-    settle_after_streaming(&mut harness);
-    for _ in 0..FARM_TICKS {
-        harness.game.tick().expect("tick");
-    }
-    let (wheat, beet, _) = crop_totals(&harness.game, &plots);
-    assert!(
-        wheat > beet,
-        "wheat ({wheat}) must outgrow beetroot ({beet}) under identical conditions"
-    );
-    assert!(beet > 0, "beetroot still grows, only slower: {beet}");
-}
-
-/// No light, no growth — and moisture stays put in the dark.
-///
-/// The dark room is a hand-sealed stone box (opaque in every direction, so
-/// the settled light inside is 0 by construction), not "somewhere deep":
-/// the first draft planted into raw terrain, where two plots sat in a
-/// skylit flooded cave and grew — an honest bright reading, not a gate
-/// failure, and the reason the room is built rather than found.
-#[test]
-fn crops_do_not_grow_in_the_dark() {
-    let mut harness = Harness::new("growth-dark");
-    install_growth_tags(&mut harness.game);
-    let game = &mut harness.game;
-    assert!(game.load_chunk(ChunkPos::new(-1, -1)), "farm chunk loads");
-    let stone = game
-        .registries()
-        .blocks
-        .default_state("minecraft:stone")
-        .expect("stone");
-    for y in -3..=5 {
-        for z in -14..=-7 {
-            for x in -14..=-1 {
-                game.world_mut()
-                    .set_block(x, y, z, stone)
-                    .expect("box sealed");
-            }
-        }
-    }
-    let mut plots = Vec::new();
-    // Spacing-2 grid: plots on even x, water on the odd x beside each plot.
-    // (Pouring at `x + 1` on a contiguous grid overwrites the neighbour's
-    // water with soil — the first draft's dry-out.)
-    for rz in 0..5 {
-        for rx in 0..5 {
-            let x = -12 + rx * 2;
-            let z = -12 + rz;
-            plant(game, x, DARK_Y, z, "minecraft:wheat");
-            plots.push((x, DARK_Y + 1, z));
-            pour(game, x + 1, DARK_Y, z);
-        }
-    }
-    let moisture_before = soil_moisture_sum(game, &plots);
-    harness.join("Miner");
-    harness.stand(-7, 121, -9);
-    settle_after_streaming(&mut harness);
-    for _ in 0..FARM_TICKS {
-        harness.game.tick().expect("tick");
-    }
-    let (wheat, _, _) = crop_totals(&harness.game, &plots);
-    assert_eq!(wheat, 0, "nothing grows without light");
-    assert_eq!(
-        soil_moisture_sum(&harness.game, &plots),
-        moisture_before,
-        "dark soil is still watered, not dried"
-    );
-}
-
-/// Dry soil ticks down and, uncovered, turns to dirt.
-#[test]
-fn dry_farmland_dries_then_dirts() {
-    let mut harness = Harness::new("growth-dry");
-    install_growth_tags(&mut harness.game);
-    let game = &mut harness.game;
-    assert!(game.load_chunk(ChunkPos::new(1, 1)), "farm chunk loads");
-    let blocks = game.registries().blocks.clone();
-    let mut plots = Vec::new();
-    for i in 0..100 {
-        let x = i % 10 + 20;
-        let z = i / 10 + 20;
-        let dry = blocks
-            .state_id(
-                "minecraft:farmland",
-                &[("moisture".to_owned(), "1".to_owned())],
-            )
-            .expect("dry farmland");
-        game.world_mut()
-            .set_block(x, FARM_Y, z, dry)
-            .expect("soil placed");
-        plots.push((x, FARM_Y, z));
-    }
-    harness.join("Farmer");
-    harness.stand(24, 121, 24);
-    settle_after_streaming(&mut harness);
-    for _ in 0..FARM_TICKS {
-        harness.game.tick().expect("tick");
-    }
-    // Moisture 1 over 100 cells starts at 100; every decrement is a hit.
-    let mut moisture = 0_i64;
-    let mut dirt = 0_usize;
-    for &(x, y, z) in &plots {
-        let Some(id) = harness.game.world().get_block_loaded(x, y, z) else {
-            continue;
-        };
-        let Ok(name) = blocks.block_name(id) else {
-            continue;
-        };
-        if name == "minecraft:dirt" {
-            dirt += 1;
-        } else if name == "minecraft:farmland" {
-            let props = blocks.properties_of(id).unwrap_or_default();
-            moisture += props
-                .iter()
-                .find(|(k, _)| k == "moisture")
-                .and_then(|(_, v)| v.parse::<i64>().ok())
-                .unwrap_or(0);
-        }
-    }
-    assert!(
-        100 - moisture >= 8,
-        "100 dry soils over 300 ticks should lose ≈22 moisture, lost {}",
-        100 - moisture
-    );
-    assert!(dirt > 0, "some dry uncovered soil became dirt");
-}
-
-/// Recompute light over the farm chunks after hand-placing blocks.
-///
-/// Direct `world.set_block` writes bypass the edit path's invalidate+queue,
-/// so the load-time light is stale over every touched cell (in a flooded
-/// cave that reads bright — exactly what the dark test first tripped on).
-/// The live server converges here by draining its light queue; the test
-/// settles synchronously instead, which is the same state a few idle ticks
-/// later.
 /// Let streaming settle, then recompute light over every loaded chunk (see
-/// [`settle_light`]): hand-placed farm blocks must be lit as built, not as
-/// the terrain was at load.
+/// [`settle_light`]): hand-placed farm blocks must be lit as built, not as the
+/// terrain was at load. Direct `world.set_block` writes bypass the edit path's
+/// invalidate+queue; the live server converges by draining its light queue, and
+/// this settles synchronously to the same state.
 fn settle_after_streaming(harness: &mut Harness) {
     for _ in 0..5 {
         harness.game.tick().expect("tick");
@@ -454,33 +179,164 @@ fn settle_light(game: &mut Game, chunks: &[ChunkPos]) {
     }
 }
 
-/// Sum of `moisture` over the soils under `plots` (each plot's crop sits one
-/// above its soil).
-fn soil_moisture_sum(game: &Game, plots: &[(i32, i32, i32)]) -> i64 {
+/// Sum of `age` over every plot cell, asserting each cell still holds the
+/// seedling it started as and stays inside its age band.
+fn crop_age_sum(game: &Game, plots: &[(i32, i32, i32)]) -> i64 {
     let blocks = &game.registries().blocks;
-    let mut sum = 0_i64;
+    let mut total = 0_i64;
     for &(x, y, z) in plots {
-        let Some(id) = game.world().get_block_loaded(x, y - 1, z) else {
-            continue;
+        let Some(id) = game.world().get_block_loaded(x, y, z) else {
+            panic!("plot ({x}, {y}, {z}) unloaded mid-run");
         };
-        if blocks.block_name(id).unwrap_or("") != "minecraft:farmland" {
-            continue;
-        }
-        sum += blocks
+        assert_eq!(
+            blocks.block_name(id).unwrap_or(""),
+            "minecraft:wheat",
+            "every seedling is still a crop"
+        );
+        let age = blocks
             .properties_of(id)
             .unwrap_or_default()
             .iter()
-            .find(|(k, _)| k == "moisture")
+            .find(|(k, _)| k == "age")
             .and_then(|(_, v)| v.parse::<i64>().ok())
-            .unwrap_or(0);
+            .expect("age reads");
+        assert!(
+            (0..=7).contains(&age),
+            "wheat never exceeds its max age: {age}"
+        );
+        total += age;
     }
-    sum
+    total
+}
+
+/// Moisture missing from `cells` since placement: a cell still at moisture `m`
+/// lost `1 - m`, and a cell that dried through to dirt lost its one point.
+fn moisture_lost(game: &Game, cells: &[(i32, i32, i32)]) -> i64 {
+    let blocks = &game.registries().blocks;
+    let mut lost = 0_i64;
+    for &(x, y, z) in cells {
+        let Some(id) = game.world().get_block_loaded(x, y, z) else {
+            panic!("dry cell ({x}, {y}, {z}) unloaded mid-run");
+        };
+        match blocks.block_name(id).unwrap_or("") {
+            "minecraft:dirt" => lost += 1,
+            "minecraft:farmland" => {
+                let moisture = blocks
+                    .properties_of(id)
+                    .unwrap_or_default()
+                    .iter()
+                    .find(|(k, _)| k == "moisture")
+                    .and_then(|(_, v)| v.parse::<i64>().ok())
+                    .expect("moisture reads");
+                lost += 1 - moisture;
+            }
+            other => panic!("dry cell ({x}, {y}, {z}) became {other}"),
+        }
+    }
+    lost
+}
+
+/// The sweep draws `sections × 3` slots per loaded chunk in the radius, and
+/// those samples reach the crop handler (the phase proof; mechanisms are
+/// unit-pinned).
+#[test]
+fn wheat_grows_through_the_phase() {
+    let mut harness = Harness::new("growth-wiring");
+    install_growth_tags(&mut harness.game);
+    for (cx, cz) in FARM_CHUNKS {
+        assert!(
+            harness.game.load_chunk(ChunkPos::new(cx, cz)),
+            "farm chunk ({cx}, {cz}) loads"
+        );
+    }
+    // Spacing-2 grid: every crop keeps its own 3×3 patch (neighbouring patches
+    // share their odd columns; the crop rows stay 2 apart, so no cell halves
+    // its speed for same-crop rows).
+    let mut plots = Vec::new();
+    for gx in 0..10 {
+        for gz in 0..10 {
+            let (x, z) = (gx * 2, gz * 2);
+            plant(&mut harness.game, x, FARM_Y, z);
+            plots.push((x, FARM_Y + 1, z));
+        }
+    }
+    // A dry patch in the same sweep: farmland is a dispatch arm of its own, and
+    // this keeps the deleted tick farm's *phase* claim ("dry soils lose moisture
+    // over the run") while the handler's own steps are unit-pinned. Placed clear
+    // of the wheat field (x -1..19, z -1..19), inside chunk (1, 1).
+    let mut dry_cells = Vec::new();
+    let dry = harness
+        .game
+        .registries()
+        .blocks
+        .state_id(
+            "minecraft:farmland",
+            &[("moisture".to_owned(), "1".to_owned())],
+        )
+        .expect("dry farmland");
+    for i in 0..60 {
+        let (x, z) = (22 + i % 10, 24 + i / 10);
+        harness
+            .game
+            .world_mut()
+            .set_block(x, FARM_Y, z, dry)
+            .expect("dry soil placed");
+        dry_cells.push((x, FARM_Y, z));
+    }
+    harness.join("Farmer");
+    harness.stand(8, 121, 2);
+    settle_after_streaming(&mut harness);
+
+    // The rate is read off the live loaded set, not hardcoded: the pin is
+    // *3 slots per section per chunk*, while streaming owns which chunks those
+    // are. The player stands in chunk (0, 0) and physics never moves x/z out
+    // of it, so the centre is a constant, not a float cast.
+    let centre = ChunkPos::new(0, 0);
+    let loaded_in_radius = harness
+        .game
+        .world()
+        .chunk_positions()
+        .filter(|pos| (pos.x - centre.x).abs() <= RADIUS && (pos.z - centre.z).abs() <= RADIUS)
+        .count();
+    assert!(loaded_in_radius > 0, "streaming must have loaded chunks");
+    let sections = harness.game.world().section_count();
+    let report = harness.game.tick().expect("tick");
+    assert_eq!(
+        report.random_tick_samples,
+        loaded_in_radius * sections * 3,
+        "every loaded chunk in the radius contributes sections × 3 samples"
+    );
+
+    for _ in 0..FARM_TICKS {
+        harness.game.tick().expect("tick");
+    }
+    let total = crop_age_sum(&harness.game, &plots);
+    assert!(
+        total >= 2,
+        "100 moist wheat over {FARM_TICKS} ticks should gain ≈4.9 ages, got {total}"
+    );
+    // 60 dry cells × 206 ticks × 7.3e-4 ≈ 9 sampled cells, each losing its one
+    // point of moisture (a second hit turns the cell to dirt, still 0).
+    let lost = moisture_lost(&harness.game, &dry_cells);
+    assert!(
+        lost >= 3,
+        "60 dry soils over {FARM_TICKS} ticks should lose ≈9 moisture, lost {lost}"
+    );
 }
 
 /// The age/moisture bands the growth code assumes, pinned against the fixture.
 #[test]
 fn max_ages_match_the_fixture() {
-    let (game, _dir) = open_world("growth-pins");
+    let dir = TempDir::new("growth-pins");
+    let config = mc_server::config::StorageConfig {
+        world_dir: dir.path().join("world"),
+        autosave_ticks: 0,
+        seed: None,
+    };
+    let storage = WorldService::open(&config).expect("world opens");
+    let (_tx, rx) = mc_network::bridge::game_channel(64);
+    let game =
+        Game::with_seed_and_storage(storage, 2, rx, DEFAULT_RANDOM_SEED).expect("game builds");
     let blocks = &game.registries().blocks;
     for (name, max) in [
         ("minecraft:wheat", 7),

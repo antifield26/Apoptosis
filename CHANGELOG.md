@@ -254,6 +254,60 @@ farm tests became ten direct-call unit pins in `game::growth::tests`
 per-cell rate is invariant, so statistics are identical). All five
 perturbations re-proven red on the unit pins in ~0.2 s each.*
 
+*Test-time migration, slice 1 (TEST-TIME-PLAN §2, no behavior change): the
+four tick farms in `tests/growth.rs` (300 ticks each) became eight
+direct-call pins in `game::growth::tests`, and that file keeps one
+phase-wiring test — sweep rate plus wheat through the sweep at
+view_distance 2, where the per-cell hit rate is invariant — beside the
+fixture age/moisture bands. That wiring test also carries the deleted dry
+farm's *phase* claim: 60 dry cells in the same sweep lose their moisture
+(≈9 sampled cells expected), so the farmland dispatch arm stays proven end
+to end. Suite **90.2 s wall / 268.5 s test-time ->
+19.3 s**; the eighteen crop/farmland/stalk/spread pins together run in
+**1.6 s**. Seven perturbations proven red and restored byte-exact (light
+gate, max age, beetroot pre-gate, growth-speed moisture term, farmland
+wet arm, farmland dry arm, `random_tick_speed`). Four findings on the way,
+all in the draft pins and all recorded rather than smoothed over: (1) the
+plant helper built a lone soil column, so `getGrowthSpeed` scored 4.0
+where the rate arithmetic assumed the isolated-patch 10.0, and three pins
+failed on it; (2) the draw loops cached a pre-growth block id, which
+`random_tick_block` trusts (the sweep always hands it a fresh read) — the
+crop re-wrote the same age step and the "grows" pin sat at age 1; (3) the
+max-age pin could not see a deleted guard, because `write_property`
+refuses the out-of-band `wheat[age=8]` state either way, so it now also
+asserts that the guard returns before the roll (the seeded source is
+untouched); (4) the beetroot pin compared final ages, which saturate on
+both sides, and stayed green with the pre-gate deleted — it now compares
+hit counts over two equal fields. `crops_do_not_grow_in_the_dark`'s
+moisture half ("dark soil is still watered") is kept as
+`dark_farmland_still_wets_on_direct_call`, with the box's darkness itself
+asserted.*
+
+*Same landing, four tooling gaps the run exposed. (1) TEST-TIME-PLAN §1's
+slowest-first table printed `?` for every row — cargo writes the
+`Running ... (target/debug/deps/<name>-<hash>.exe)` header to *stderr* and the
+`test result:` lines to *stdout*, and `tools/gates/run.py` parsed stdout only,
+so the table timed suites without naming them; the two streams are now merged
+at the pipe (verified: `mc_core`, `Doc-tests mc_core`). (2) `check_gate_totals`
+was **red on `main`**: `README.md` and `CONTRIBUTING.md` still stated 1 903
+while `TEST-MATRIX.md` owned 1 994; both now state the owner's figure
+(2 004, this landing's re-measured total), and TEST-TIME-PLAN §0 references the
+owner instead of restating a count. (3) The aarch64 gate cannot run on this
+Windows host at all: `ring`'s build script needs a `*-linux-gnu-gcc` cross C
+compiler that is not installed, and no manifest in this landing changed —
+recorded in `CONTRIBUTING.md`'s gate table (CI still runs it on Linux) rather
+than left as a silent skip. (4) The proofs themselves were run by a throwaway
+script whose restore used a **copy that preserved the original mtime**, so
+cargo's mtime freshness kept treating the *perturbed* test binary as current;
+the next full workspace run then reported two failures — the neutralised dry
+arm's "dirting applies" and the `sections × 3` rate pin against a
+`RANDOM_TICK_SPEED` of 2 — that were artifacts of the harness, not the tree,
+and were reproduced deliberately (identical bytes restored: pin still red;
+mtime touched: pin green) before the fix. The harness now rewrites the bytes on
+restore and is a committed tool, `tools/gates/perturb.py`: the growth group's
+seven mechanisms, a refusal on any neutralised mechanism that leaves its pin
+green, and a hash check that every restore lands byte-exact.*
+
 **P20-04 slice 1 — beds, sleep attempts, skip-night (PARTIAL; slice 2 owns
 respawn persistence, `/spawnpoint` and the obstructed-respawn redirect).**
 `Game` gains per-session sleep (`crates/server/src/game/sleep.rs`, a new

@@ -104,14 +104,14 @@ restore.
 ## Testing
 
 ```sh
-cargo test --workspace --no-fail-fast            # 1 903 passed / 0 failed / 41 ignored (153 suites)
+cargo test --workspace --no-fail-fast            # 2 004 passed / 0 failed / 44 ignored (161 suites)
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo check --target aarch64-unknown-linux-gnu --workspace --all-targets
 cargo deny check licenses bans sources
 ```
 
-The 41 ignored tests are on-demand suites: jar-gated differentials, light
+The 44 ignored tests are on-demand suites: jar-gated differentials, light
 suites, terrain distribution and the ore/carver distribution (three environment
 variables — see [CONTRIBUTING.md](CONTRIBUTING.md)) and the benchmark harness. Full breakdown:
 [docs/testing/TEST-MATRIX.md](docs/testing/TEST-MATRIX.md). Details and the
