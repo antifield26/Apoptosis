@@ -188,14 +188,7 @@ impl Game {
         if self.maintains_farmland_above(x, y, z) {
             return false;
         }
-        let Ok(dirt) = self.registries.blocks.default_state("minecraft:dirt") else {
-            return false;
-        };
-        if self.world.set_block(x, y, z, dirt).is_err() {
-            return false;
-        }
-        self.block_feed(x, y, z, dirt);
-        true
+        self.turn_to_dirt(x, y, z)
     }
 
     /// The jar's `isNearWater`: any `WATER` fluid in `(-4,0,-4)..=(4,1,4)`.
@@ -271,6 +264,39 @@ impl Game {
         }
         self.block_feed(x, y, z, new_id);
         true
+    }
+
+    /// Turn farmland to dirt on the canonical edit path (jar
+    /// `FarmlandBlock.turnToDirt`, minus `pushEntitiesUp`: entities inside the
+    /// cell stay where they are, a named gap since slice 1).
+    ///
+    /// Shared by dry-out and trampling — every caller names the jar rule it
+    /// implements.
+    pub(crate) fn turn_to_dirt(&mut self, x: i32, y: i32, z: i32) -> bool {
+        let Ok(dirt) = self.registries.blocks.default_state("minecraft:dirt") else {
+            return false;
+        };
+        if self.world.set_block(x, y, z, dirt).is_err() {
+            return false;
+        }
+        self.block_feed(x, y, z, dirt);
+        true
+    }
+
+    /// Roll trampling when something lands on farmland (jar
+    /// `FarmlandBlock.fallOn`): the roll is `nextFloat < fallDistance - 0.5`
+    /// with no per-tick minimum — a ≥1.5-block fall always qualifies, here
+    /// and in vanilla, while shorter hops inherit the documented P05-segment
+    /// interaction (our fall distance is per tick, vanilla's accumulates).
+    pub(crate) fn trample_on_landing(&mut self, x: i32, y: i32, z: i32, fall: f64) {
+        let is_farmland = self
+            .world
+            .get_block_loaded(x, y, z)
+            .and_then(|cell| self.registries.blocks.block_name(cell).ok())
+            .is_some_and(|name| name == "minecraft:farmland");
+        if is_farmland && self.random.next_f64() < fall - 0.5 {
+            self.turn_to_dirt(x, y, z);
+        }
     }
 
     /// Sweep helper: the loaded chunks inside the ticking radius around loaded

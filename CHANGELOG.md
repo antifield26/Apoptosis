@@ -159,8 +159,8 @@ owns the call), `canHaveWeather` is one dimension, `TimeArgument` day
 suffixes unmodelled, crops still grow at night (static light).
 
 **P20-02 slice 1 — the sweep draws, crops and farmland answer (PARTIAL; slice
-2 owns hoe/trampling plus saplings, grass, leaf decay, cane, cactus and bone
-meal).** The `RandomTicks` phase stopped counting and started sampling: every
+2a closed hoe/trampling below, slice 2b owns saplings, grass, leaf decay,
+cane, cactus and bone meal).** The `RandomTicks` phase stopped counting and started sampling: every
 loaded chunk in the radius, every section, `randomTickSpeed` (3, the jar's
 registered default until P20-05 stores the rule) uniform positions from the
 game's seeded source, each offered to the block's handler
@@ -197,6 +197,29 @@ Reference search (§5): Pumpkin `pumpkin-world` per-chunk
 `RandomTickSectionCache` + `has_random_ticks` early-out (GPL-3.0, 26.2 —
 concept only, nothing copied); Paper has no local random-tick analogue beyond
 patch paths (recorded no-hit for mechanics).
+
+**P20-02 slice 2a — hoe tilling and trampling (PARTIAL with slice 1; slice
+2b owns saplings, grass, leaf decay, cane, cactus and bone meal).**
+`apply_hoe` runs the jar's `HoeItem.TILLABLES` table from the static init:
+grass/dirt-path/dirt → farmland, coarse dirt → dirt, rooted dirt → dirt plus
+a hanging-roots drop — uniformly gated on a non-DOWN face with air above
+(the table's single predicate), wear 1 on the main hand only. Misses fall
+through to placement, which refuses the non-placeable hoe (the jar's `PASS`
+with the same observable outcome). Trampling implements `FarmlandBlock.fallOn`
+with no creative gate and no per-tick minimum: roll `nextFloat < fall − 0.5`,
+ground resolved as vanilla's `getOnPos(1e-5)` (epsilon below the feet, so the
+15/16-tall farmland top resolves to itself — the first draft read the air
+beneath and nothing ever trampled). Players take the session path; mobs with
+`width²×height > 0.512` take the entity path with mobGriefing assumed true
+until P20-05. Evidence: `crates/server/tests/till.rs` — the four-cell table
+with 4 wear, rooted drop, three refusals with no wear, a deterministic
+5-block fall, a 200-tick standing-still negative control, and a shaft-guided
+8-zombie mob landing (shaft needed: mob steering works mid-air and wanders
+off an open field — measured). Both mechanisms proven red by neutralising
+them and restored byte-exact.
+
+Reference search (§5): no local hoe/trample analogue beyond the jar (the
+P20-02 slice-1 searches stand).
 
 **P20-04 slice 1 — beds, sleep attempts, skip-night (PARTIAL; slice 2 owns
 respawn persistence, `/spawnpoint` and the obstructed-respawn redirect).**

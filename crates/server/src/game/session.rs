@@ -3571,6 +3571,18 @@ impl Game {
             debug!(id = %id, damage = fell_damage, health = outcome.health, "fall damage");
             self.after_damage(id, outcome);
         }
+        // Trampling (P20-02 slice 2a): jar `FarmlandBlock.fallOn` has no
+        // creative gate and no per-tick minimum — the roll is
+        // `nextFloat < fallDistance - 0.5`, which our per-tick `fallen`
+        // feeds. A 2-block drop always qualifies here (and in vanilla);
+        // shorter hops are the documented P05-segment interaction.
+        if grounded && !started_on_ground {
+            // The ground cell is vanilla's `getOnPos(1.0E-5)`: the block
+            // below the feet with epsilon, so a 15/16-tall top (farmland)
+            // resolves to its own block rather than the air beneath it.
+            let ground_y = floor_to_i32(applied.y - 1e-5);
+            self.trample_on_landing(feet_x, ground_y, feet_z, start_y - applied.y);
+        }
         if moved_less {
             self.correct_position(id, applied, rotation, None);
         }
@@ -5172,11 +5184,98 @@ impl Game {
         if self.apply_bucket(id, (x, y, z), face, hand, report) {
             return;
         }
+        // A hoe tills instead of placing (P20-02 slice 2a): the `TILLABLES
+        // table is consulted on the clicked block, and a miss falls through
+        // to placement (which refuses the non-placeable hoe).
+        if self.apply_hoe(id, (x, y, z), face, hand, report) {
+            return;
+        }
         self.place_held_block(id, (x, y, z), face, hand, cursor, report);
     }
 
-    /// Bucket fill and empty through `UseItemOn` (P20-01).
+    /// Hoe tilling through `UseItemOn` (P20-02 slice 2a).
     ///
+    /// The jar's `HoeItem.TILLABLES` table, read from the static init:
+    /// grass/dirt-path/dirt → farmland, coarse dirt → dirt, rooted dirt →
+    /// dirt plus a hanging-roots drop — uniformly gated on clicking a face
+    /// other than DOWN with air above (the table's single predicate).
+    /// A miss returns false and the placement path refuses the non-placeable
+    /// hoe, which is the jar's `PASS` with the same observable outcome.
+    /// Wear is 1 (`hurtAndBreak`), main hand only — the wear helper models
+    /// the held slot, so an off-hand hoe tills for free (named gap). Till
+    /// sound has no channel here, like every other action sound.
+    fn apply_hoe(
+        &mut self,
+        id: ConnectionId,
+        (x, y, z): (i32, i32, i32),
+        face: i32,
+        hand: Hand,
+        report: &mut TickReport,
+    ) -> bool {
+        let Some(held) = self.held_item_name(id) else {
+            return false;
+        };
+        if !held.ends_with("_hoe") {
+            return false;
+        }
+        let Some(clicked) = self.world.get_block_loaded(x, y, z) else {
+            return false;
+        };
+        let Ok(clicked_name) = self.registries.blocks.block_name(clicked) else {
+            return false;
+        };
+        // `onlyIfAirAbove`: never the DOWN face, and air above the cell.
+        if face == 0 {
+            return false;
+        }
+        let above_air = self
+            .world
+            .get_block_loaded(x, y + 1, z)
+            .is_some_and(|above| self.registries.blocks.is_empty(above));
+        if !above_air {
+            return false;
+        }
+        let (result, drop_roots) = match clicked_name {
+            "minecraft:grass_block" | "minecraft:dirt_path" | "minecraft:dirt" => {
+                match self.registries.blocks.default_state("minecraft:farmland") {
+                    Ok(farmland) => (Some(farmland), false),
+                    Err(_) => (None, false),
+                }
+            }
+            "minecraft:coarse_dirt" => match self.registries.blocks.default_state("minecraft:dirt")
+            {
+                Ok(dirt) => (Some(dirt), false),
+                Err(_) => (None, false),
+            },
+            "minecraft:rooted_dirt" => match self.registries.blocks.default_state("minecraft:dirt")
+            {
+                Ok(dirt) => (Some(dirt), true),
+                Err(_) => (None, false),
+            },
+            _ => (None, false),
+        };
+        let Some(new_id) = result else {
+            return false;
+        };
+        if self.world.set_block(x, y, z, new_id).is_err() {
+            return false;
+        }
+        self.block_feed(x, y, z, new_id);
+        if drop_roots
+            && let Ok(roots) = self.registries.items.id("minecraft:hanging_roots")
+            && let Ok(stack) = mc_entity::stack::ItemStack::new(roots, 1)
+        {
+            let at =
+                mc_world::Vec3::new(f64::from(x) + 0.5, f64::from(y) + 1.0, f64::from(z) + 0.5);
+            let _ = self.spawn_item_owned(stack, at, None);
+        }
+        if hand == Hand::Main {
+            self.wear_held(id, 1, report);
+        }
+        true
+    }
+
+    /// Bucket fill and empty through `UseItemOn` (P20-01).
     /// Mirrors the two halves of vanilla's `BucketItem`: `useOn` picks the cell
     /// to act on — the clicked block when it is a `LiquidBlockContainer` and the
     /// content is water, the cell across the clicked face otherwise — and

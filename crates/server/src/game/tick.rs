@@ -3335,6 +3335,31 @@ impl Game {
                     damage = (fallen - FALL_DAMAGE_THRESHOLD) as f32;
                 }
             }
+            // Trampling (P20-02 slice 2a): jar `fallOn` for mobs — LivingEntity
+            // with `width² × height > 0.512`, and `mobGriefing` assumed true
+            // until P20-05 stores rules (like the growth default). Players
+            // take the session path above; everything here is a mob.
+            if grounded && !on_ground && start_y > applied.y {
+                let big_enough = self
+                    .entities
+                    .get(id)
+                    .and_then(|entity| match &entity.body {
+                        mc_entity::EntityBody::Mob(mob) => {
+                            let (w, h) = mob.kind.dimensions();
+                            Some(w * w * h > 0.512)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or(false);
+                if big_enough {
+                    // Vanilla's `getOnPos(1.0E-5)`: the block below the feet
+                    // with epsilon, so sub-cube tops resolve to their block.
+                    let gx = floor_to_i32(applied.x);
+                    let gy = floor_to_i32(applied.y - 1e-5);
+                    let gz = floor_to_i32(applied.z);
+                    self.trample_on_landing(gx, gy, gz, start_y - applied.y);
+                }
+            }
         }
         if damage > 0.0 {
             let died = self.damage_entity(id, damage, mc_entity::combat::DamageSource::Fall, None);
