@@ -98,7 +98,16 @@ impl Harness {
         profile: mc_network::auth::GameProfile,
     ) -> (ConnectionId, InboundReceiver) {
         let id = self.ids.next_id();
-        let (outbound, inbound) = OutboundSender::pair(id, 64);
+        // 8192 slots like every other game harness (sleep, till, weather):
+        // the old 64 filled with join burst, and since P20-02 slice 2b the
+        // legitimate per-tick traffic on top — random-tick world writes
+        // (grass starving under cover across the natural terrain) plus
+        // streaming — overflowed it at send time and dropped the command
+        // feedback and kick packets the pins below assert on. The capacity
+        // is scaffolding, not the pin (the pins are the kicks, messages,
+        // file rows and enforcement checks, all untouched); 64 simply
+        // stopped modelling a client that drains its socket.
+        let (outbound, inbound) = OutboundSender::pair(id, 8192);
         self.events
             .try_send(ClientEvent {
                 id,
