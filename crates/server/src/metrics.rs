@@ -10,8 +10,17 @@
 //! No new accounting is introduced here. Every field is a read of state the
 //! server already keeps; the snapshot exists so the *shape* is tested in one
 //! place rather than re-derived by each consumer.
+//!
+//! The two per-phase means (`fluid_ms`, `random_ms`) are the exception that
+//! proves the "no CPU/RSS" rule above: P20-07 must report fluid and
+//! random-tick costs separately against the ADR-0009 estimate, and the
+//! busiest-phase field alone cannot say what the other phases cost. They are
+//! means, not percentiles — the scheduler keeps no per-phase distribution —
+//! so a soak record compares them against the p99 estimate explicitly as
+//! means, never silently as p99s.
 
 use crate::game::{Game, METRICS_LOG_INTERVAL_TICKS};
+use mc_simulation::TickPhase;
 
 /// One line of operational telemetry: tick health plus population.
 ///
@@ -51,6 +60,17 @@ pub struct OperationalSnapshot {
     pub busiest_phase: &'static str,
     /// Mean cost of the busiest phase since construction, in milliseconds.
     pub busiest_phase_ms: f64,
+    /// Mean cost of the fluid-tick phase since construction, in milliseconds.
+    ///
+    /// Reported separately (P20-07) against the ADR-0009 fluid estimate. A
+    /// mean, not a percentile: compare it against the estimate explicitly
+    /// as a mean.
+    pub fluid_ms: f64,
+    /// Mean cost of the random-tick phase since construction, in milliseconds.
+    ///
+    /// Same contract as [`OperationalSnapshot::fluid_ms`], against the
+    /// ADR-0009 random-tick estimate.
+    pub random_ms: f64,
     /// Connected players.
     pub players: usize,
     /// Live entities in the store.
@@ -81,6 +101,8 @@ impl OperationalSnapshot {
                 .busiest_phase()
                 .map_or("none", |(phase, _)| phase.name()),
             busiest_phase_ms: metrics.busiest_phase().map_or(0.0, |(_, mean)| as_ms(mean)),
+            fluid_ms: as_ms(metrics.phase_mean(TickPhase::FluidTicks)),
+            random_ms: as_ms(metrics.phase_mean(TickPhase::RandomTicks)),
             players: game.player_count(),
             entities: game.entity_store().len(),
             chunks: game.world().chunk_count(),
@@ -102,6 +124,8 @@ impl OperationalSnapshot {
             overruns = self.overruns,
             busiest_phase = self.busiest_phase,
             busiest_phase_ms = self.busiest_phase_ms,
+            fluid_ms = self.fluid_ms,
+            random_ms = self.random_ms,
             players = self.players,
             entities = self.entities,
             chunks = self.chunks,
@@ -154,8 +178,10 @@ mod tests {
     }
 
     #[test]
-    // Durations are exact `Duration` reads rendered to `f64` milliseconds; the
-    // comparisons below are ordering checks on measured data, not epsilon work.
+    // Exact `Duration`-to-`f64` renders compared for plumbing identity (the
+    // snapshot must carry the scheduler's own numbers, bit for bit), not for
+    // measured-data ordering; the comparisons below are ordering checks on
+    // measured data, not epsilon work.
     #[allow(clippy::float_cmp)]
     fn after_ticks_the_snapshot_counts_what_the_scheduler_counted() {
         let (mut game, _dir) = game("ops-metrics-counted");
@@ -177,6 +203,23 @@ mod tests {
         // row must name it rather than fall back to "none" (P15-01).
         assert_ne!(snapshot.busiest_phase, "none");
         assert!(snapshot.busiest_phase_ms >= 0.0);
+        // The P20-07 pair reads the scheduler's own per-phase means through
+        // the same snapshot: five ticks ran both phases, so both means exist
+        // and agree with the scheduler's direct read.
+        assert_eq!(snapshot.fluid_ms, {
+            let as_ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+            as_ms(
+                game.metrics()
+                    .phase_mean(mc_simulation::TickPhase::FluidTicks),
+            )
+        });
+        assert_eq!(snapshot.random_ms, {
+            let as_ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+            as_ms(
+                game.metrics()
+                    .phase_mean(mc_simulation::TickPhase::RandomTicks),
+            )
+        });
     }
 
     #[test]
