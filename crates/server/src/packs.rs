@@ -380,6 +380,10 @@ pub fn load_packs(
                 .cloned()
                 .unwrap_or_default(),
         );
+        // Breeding-food tags for the P20-06 animal handlers (item tags from
+        // the same root; missing tags fall back per kind inside the game, so
+        // a dataless world still breeds).
+        game.set_animal_foods(&mc_worldgen::load_item_tags(&namespace_root));
     }
 
     // Loot, from every pack's `loot_table/` directory in load order (P11-04).

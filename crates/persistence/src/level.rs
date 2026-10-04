@@ -159,6 +159,88 @@ pub fn write_weather(world_root: &Path, document: &NbtTag) -> ServerResult<()> {
     crate::save::write_atomic(&path, &bytes, false)
 }
 
+/// File name of the 26.1 game-rule document (`data/minecraft/game_rules.dat`).
+///
+/// 26.1 moved the rules out of `level.dat` into this file (module docs
+/// above). Shape, measured on Pumpkin's 26.x reader
+/// (`OpenSourceMinecraftServer/Pumpkin-master/.../world_info/data_files.rs`,
+/// `game_rules_to_nbt`/`game_rules_from_nbt`): gzip NBT
+/// `{data: {"minecraft:<rule>": Byte|Int, ...}}`, with `DataVersion` carried
+/// *inside* `data` (unlike `weather.dat`, which carries it at the root).
+/// Pumpkin targets 26.2 while this server targets 26.1.2; the rule names and
+/// the shape are stable across that gap, but the *value table* is quoted from
+/// Pumpkin's `assets/game_rules.json`, not from our own jar read — the reader
+/// below is therefore tolerant (unknown keys ignored, missing keys default,
+/// `DataVersion` accepted at either level).
+pub const GAME_RULES_FILE: &str = "game_rules.dat";
+
+/// Paths a 26.1 world may keep [`GAME_RULES_FILE`] at, most likely first.
+///
+/// Same two placements as [`weather_paths`]: the global
+/// `<world>/data/minecraft/` tree, then the overworld's own 26.1 tree.
+#[must_use]
+pub fn game_rules_paths(world_root: &Path) -> [PathBuf; 2] {
+    [
+        world_root
+            .join("data")
+            .join("minecraft")
+            .join(GAME_RULES_FILE),
+        DimensionLayout::modern(world_root, &Dimension::Overworld)
+            .data_dir()
+            .join(GAME_RULES_FILE),
+    ]
+}
+
+/// Read a world's 26.1 game-rule document, if it has one.
+///
+/// Returns `Ok(None)` when neither candidate path exists — a fresh world has
+/// no stored rules, which is not an error: the caller starts from the jar
+/// defaults (what the jar's own fresh file records).
+///
+/// # Errors
+///
+/// [`ServerError::Operational`] when a document exists but cannot be read, and
+/// [`ServerError::CorruptData`] when it is not a gzip NBT document. Like
+/// weather, a present-but-unreadable document is loud: silently restarting
+/// with default rules would flip operator-set values such as
+/// `keep_inventory` with no trace.
+pub fn read_game_rules(world_root: &Path) -> ServerResult<Option<NbtTag>> {
+    for path in game_rules_paths(world_root) {
+        if !path.is_file() {
+            continue;
+        }
+        let bytes = std::fs::read(&path).map_err(|e| {
+            ServerError::Operational(format!("cannot read {}: {e}", path.display()))
+        })?;
+        let document = crate::save::decode_gzip_nbt(&bytes).map_err(|e| match e {
+            ServerError::CorruptData(message) => ServerError::CorruptData(format!(
+                "{} is not a readable game-rule document: {message}",
+                path.display()
+            )),
+            other => other,
+        })?;
+        return Ok(Some(document));
+    }
+    Ok(None)
+}
+
+/// Write a world's 26.1 game-rule document to the global placement.
+///
+/// Always the first candidate of [`game_rules_paths`]: one writer, one place,
+/// so two documents can never disagree. Atomic with no backup — like weather,
+/// the rules regenerate from defaults, so a crash between staging and commit
+/// keeps the previous values rather than losing the world.
+///
+/// # Errors
+///
+/// [`ServerError::Operational`] when the document cannot be encoded or the
+/// atomic write fails.
+pub fn write_game_rules(world_root: &Path, document: &NbtTag) -> ServerResult<()> {
+    let path = game_rules_paths(world_root)[0].clone();
+    let bytes = crate::save::encode_gzip_nbt("", document)?;
+    crate::save::write_atomic(&path, &bytes, false)
+}
+
 /// Read a world's 26.1 world-gen settings document, if it has one.
 ///
 /// The seed inside it is *not* interpreted here: which key path holds it is

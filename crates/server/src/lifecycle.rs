@@ -545,6 +545,15 @@ impl<H: TickHook> Server<H> {
         // re-randomizes — there is nothing to fork).
         game.load_weather(&self.config.storage.world_dir);
 
+        // Game rules (P20-05): `game_rules.dat` beside the weather file. Same
+        // never-fatal contract. A fresh world (no document) additionally takes
+        // the config's `pvp` as its starting rule — the operator's intent for
+        // a world that has none yet; a stored rule always wins on an existing
+        // world, and `/gamerule` can change it live afterwards.
+        if !game.load_game_rules(&self.config.storage.world_dir) && !self.config.gameplay.pvp {
+            game.rules.pvp = false;
+        }
+
         // The lifecycle is the authority for the player cap, so it tells the game
         // rather than the game reading the config itself (`/list` is the only consumer).
         game.set_max_players(self.config.network.max_players);

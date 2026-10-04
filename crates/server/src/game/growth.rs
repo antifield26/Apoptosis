@@ -30,6 +30,15 @@
 //! survival (light/soil checks on place) is not modelled, so a crop floats
 //! where Vanilla would pop it.
 //!
+//! Slice 2b added cane, cactus, grass and mycelium spread on the same
+//! dispatch. Slice 2c (this slice) adds oak saplings (stage, then the
+//! worldgen oak feature grown at runtime), leaf decay with on-demand
+//! distance repair, and the `UseItemOn` bone-meal arm in `session.rs`.
+//! Named gaps inside slice 2c: only oak grows (the only tree feature);
+//! bone meal advances crops one stage (the jar grows several — the exact
+//! constants were not re-read here) and does not flora-spread grass;
+//! saplings skip the soil check, in the same gap class as crop survival.
+//!
 //! ## Light (a consequence, not a new gap)
 //!
 //! The brightness gate reads the chunk's cached light, which is Vanilla's own
@@ -40,9 +49,13 @@
 use super::Game;
 use mc_world::ChunkPos;
 
-/// Game-rule default until P20-05 stores it: `javap -c GameRules` registers
-/// `random_tick_speed` as `registerInteger("random_tick_speed", UPDATES, 3, 0)`.
-pub(crate) const RANDOM_TICK_SPEED: usize = 3;
+/// Jar default for `random_tick_speed`, pinned: `javap -c GameRules` registers
+/// it as `registerInteger("random_tick_speed", UPDATES, 3, 0)`.
+///
+/// The sweep reads the live stored value (`Game::rules.tick_speed()`); this
+/// constant pins the default the rate tests assume, so a default change fails
+/// loudly here instead of silently halving every farm.
+pub(crate) const RANDOM_TICK_SPEED_DEFAULT: usize = 3;
 
 /// Crops grown by the shared `CropBlock.randomTick` path (slice 1).
 ///
@@ -87,6 +100,32 @@ const SPREAD_ATTEMPTS: usize = 4;
 /// `canStayAlive` tail).
 const FULL_OPACITY: u8 = 15;
 
+/// Sapling draws: the jar's `SaplingBlock.randomTick` grows on 1-in-7.
+const SAPLING_TICK_ONE_IN: i32 = 7;
+
+/// Leaf distance that decays (`LeavesBlock`: `!persistent && distance == 7`).
+const LEAF_DECAY_DISTANCE: i32 = 7;
+
+/// Support-search radius for the on-demand leaf repair (a log farther than
+/// this cannot sustain the cell, same bound as the decay rule above).
+const LEAF_SUPPORT_RADIUS: i32 = 7;
+
+/// Documented vanilla drop rates for oak-family leaves, *not* jar-read:
+/// 1-in-20 the leaf's sapling, 1-in-50 a stick. They ride these constants so
+/// a loot-table wiring (which would replace them) fails loudly here.
+const SAPLING_DROP_ONE_IN: i32 = 20;
+const STICK_DROP_ONE_IN: i32 = 50;
+
+/// The six face neighbours, for the leaf-support search.
+const LEAF_STEPS: [(i32, i32, i32); 6] = [
+    (1, 0, 0),
+    (-1, 0, 0),
+    (0, 1, 0),
+    (0, -1, 0),
+    (0, 0, 1),
+    (0, 0, -1),
+];
+
 impl Game {
     /// One random-tick sample at `(x, y, z)`: dispatch to the block's handler.
     ///
@@ -108,6 +147,8 @@ impl Game {
             "minecraft:sugar_cane" => self.tick_cane(x, y, z, id),
             "minecraft:cactus" => self.tick_cactus(x, y, z, id),
             "minecraft:grass_block" | "minecraft:mycelium" => self.tick_spread(x, y, z, id, &name),
+            "minecraft:oak_sapling" => self.tick_sapling(x, y, z, id),
+            name if name.ends_with("_leaves") => self.tick_leaves(x, y, z, id, name),
             _ => false,
         }
     }
@@ -255,7 +296,7 @@ impl Game {
     ///
     /// The assignment is re-read rather than passed in: seven arguments is
     /// the lint ceiling, and the lookup is one table probe.
-    fn write_property(
+    pub(crate) fn write_property(
         &mut self,
         x: i32,
         y: i32,
@@ -308,6 +349,8 @@ impl Game {
     /// with no per-tick minimum — a ≥1.5-block fall always qualifies, here
     /// and in vanilla, while shorter hops inherit the documented P05-segment
     /// interaction (our fall distance is per tick, vanilla's accumulates).
+    /// The `mob_griefing` gate lives at the callers (P20-05): the jar checks
+    /// the rule for non-players only, so the player path calls straight in.
     pub(crate) fn trample_on_landing(&mut self, x: i32, y: i32, z: i32, fall: f64) {
         let is_farmland = self
             .world
@@ -539,8 +582,190 @@ impl Game {
             .is_some_and(|name| name == "minecraft:snow" || name == "minecraft:snow_block")
     }
 
-    /// Sweep helper: the loaded chunks inside the ticking radius around loaded
-    /// entity positions (ADR-0009 §2.4; `simulation_distance` arrives with
+    /// Oak sapling growth (`SaplingBlock.randomTick` shape, P20-02 slice 2c).
+    ///
+    /// Brightness `>= 9` and a 1-in-7 draw, then stage 0 advances to 1 and a
+    /// stage-1 sapling attempts the worldgen oak feature at runtime. Only oak
+    /// grows: it is the only tree feature this build has (worldgen docs list
+    /// the rest as not implemented).
+    fn tick_sapling(&mut self, x: i32, y: i32, z: i32, id: i32) -> bool {
+        if self.raw_brightness(x, y, z) < GROWTH_LIGHT {
+            return false;
+        }
+        if self.random.next_i32_bounded(SAPLING_TICK_ONE_IN) != 0 {
+            return false;
+        }
+        let properties = self.registries.blocks.properties_of(id).unwrap_or_default();
+        let Some(stage) = int_property(&properties, "stage") else {
+            return false;
+        };
+        if stage < 1 {
+            return self.write_property(x, y, z, "minecraft:oak_sapling", "stage", stage + 1);
+        }
+        self.grow_oak_tree(x, y, z)
+    }
+
+    /// Grow the worldgen oak feature where a stage-1 sapling stands (slice 2c).
+    ///
+    /// The trunk base is the sapling cell (soil = the cell below). The volume
+    /// is pre-checked — trunk cells must be air except the sapling's own, the
+    /// canopy must be air or leaves — because `place_oak_at` overwrites
+    /// whatever it is given and a runtime growth must not eat a build the way
+    /// generation-time placement may reshape terrain. Refusals (straddling,
+    /// vertical, occupied) keep the sapling for a later tick.
+    ///
+    /// Changed cells ride the canonical edit path cell by cell, so the growth
+    /// dirties, feeds and broadcasts like player edits. Leaf distances repair
+    /// lazily on sampling (`tick_leaves`), so no fixup pass runs here.
+    pub(crate) fn grow_oak_tree(&mut self, x: i32, y: i32, z: i32) -> bool {
+        use mc_worldgen::features::{
+            CANOPY_LAYERS, CANOPY_RADIUS, MAX_TRUNK_HEIGHT, MIN_TRUNK_HEIGHT,
+        };
+        let span = MAX_TRUNK_HEIGHT - MIN_TRUNK_HEIGHT + 1;
+        let trunk_height = MIN_TRUNK_HEIGHT + self.random.next_i32_bounded(span);
+        let surface_y = y - 1;
+        let trunk_top = surface_y + trunk_height;
+        // The trunk column must be free except the sapling's own cell.
+        for ty in surface_y + 1..=trunk_top {
+            if ty == y {
+                continue;
+            }
+            let free = self
+                .world
+                .get_block_loaded(x, ty, z)
+                .is_some_and(|cell| self.registries.blocks.is_empty(cell));
+            if !free {
+                return false;
+            }
+        }
+        // The canopy must be air or leaves (never a build).
+        for layer in 0..=CANOPY_LAYERS {
+            let radius = (CANOPY_RADIUS - layer).max(0);
+            let cy = trunk_top + 1 + layer;
+            for dx in -radius..=radius {
+                for dz in -radius..=radius {
+                    if layer == 0 && dx.abs() == radius && dz.abs() == radius {
+                        continue;
+                    }
+                    let free =
+                        self.world
+                            .get_block_loaded(x + dx, cy, z + dz)
+                            .is_some_and(|cell| {
+                                self.registries.blocks.is_empty(cell)
+                                    || self
+                                        .registries
+                                        .blocks
+                                        .block_name(cell)
+                                        .is_ok_and(|name| name.ends_with("_leaves"))
+                            });
+                    if !free {
+                        return false;
+                    }
+                }
+            }
+        }
+        // Snapshot the affected box, place at chunk level, then feed every
+        // cell that changed.
+        let mut before = Vec::new();
+        for by in surface_y + 1..=trunk_top + 1 + CANOPY_LAYERS {
+            for dx in -CANOPY_RADIUS..=CANOPY_RADIUS {
+                for dz in -CANOPY_RADIUS..=CANOPY_RADIUS {
+                    if let Some(cell) = self.world.get_block_loaded(x + dx, by, z + dz) {
+                        before.push(((x + dx, by, z + dz), cell));
+                    }
+                }
+            }
+        }
+        let Ok(palette) = mc_worldgen::terrain::BlockPalette::resolve(&self.registries.blocks)
+        else {
+            return false;
+        };
+        let chunk_pos = ChunkPos::new(x.div_euclid(16), z.div_euclid(16));
+        let Some(chunk) = self.world.chunk_mut(chunk_pos) else {
+            return false;
+        };
+        match mc_worldgen::features::place_oak_at(
+            chunk,
+            &self.registries.blocks,
+            &palette,
+            x,
+            surface_y,
+            z,
+            trunk_height,
+        ) {
+            mc_worldgen::features::OakPlacement::Placed { .. } => {}
+            _ => return false,
+        }
+        for ((cx, cy, cz), old) in before {
+            let Some(current) = self.world.get_block_loaded(cx, cy, cz) else {
+                continue;
+            };
+            if current != old {
+                self.block_feed(cx, cy, cz, current);
+            }
+        }
+        true
+    }
+
+    /// Leaf decay with on-demand distance repair (P20-02 slice 2c).
+    ///
+    /// The jar's `LeavesBlock.randomTick` decays `!persistent && distance ==
+    /// 7`; distance itself arrives over neighbour updates in vanilla. Nothing
+    /// here propagates distances on write (no `updateShape` analogue), so the
+    /// sampled cell measures its own support instead: a bounded BFS through
+    /// leaves to the nearest log. A supported cell writes its true distance
+    /// and lives; an unreachable one (`distance == 7`) decays with the
+    /// documented drop rates. Generated canopies therefore repair rather than
+    /// rot — the fixture default is `distance=7`, which a blind decay arm
+    /// would evaporate.
+    ///
+    /// Drops (documented vanilla rates, not jar-read: 1-in-20 the leaf's
+    /// sapling, 1-in-50 a stick) arrive as item entities; unmapped leaf kinds
+    /// drop sticks only.
+    fn tick_leaves(&mut self, x: i32, y: i32, z: i32, id: i32, name: &str) -> bool {
+        let properties = self.registries.blocks.properties_of(id).unwrap_or_default();
+        let persistent = properties
+            .iter()
+            .find(|(k, _)| k == "persistent")
+            .is_some_and(|(_, v)| v == "true");
+        if persistent {
+            return false;
+        }
+        let distance = leaf_support_distance(self, x, y, z);
+        let stored = int_property(&properties, "distance").unwrap_or(LEAF_DECAY_DISTANCE);
+        if distance != stored {
+            return self.write_property(x, y, z, name, "distance", distance);
+        }
+        if distance != LEAF_DECAY_DISTANCE {
+            return false;
+        }
+        // Unsupported: remove on the canonical path, then roll the drops.
+        let air = self.registries.blocks.air_id();
+        if self.world.set_block(x, y, z, air).is_err() {
+            return false;
+        }
+        self.block_feed(x, y, z, air);
+        if self.random.next_i32_bounded(SAPLING_DROP_ONE_IN) == 0
+            && let Some(sapling) = leaf_sapling_item(name)
+            && let Ok(item_id) = self.registries.items.id(sapling)
+            && let Ok(stack) = mc_entity::stack::ItemStack::new(item_id, 1)
+        {
+            let at =
+                mc_world::Vec3::new(f64::from(x) + 0.5, f64::from(y) + 0.5, f64::from(z) + 0.5);
+            let _ = self.spawn_item_owned(stack, at, None);
+        }
+        if self.random.next_i32_bounded(STICK_DROP_ONE_IN) == 0
+            && let Ok(item_id) = self.registries.items.id("minecraft:stick")
+            && let Ok(stack) = mc_entity::stack::ItemStack::new(item_id, 1)
+        {
+            let at =
+                mc_world::Vec3::new(f64::from(x) + 0.5, f64::from(y) + 0.5, f64::from(z) + 0.5);
+            let _ = self.spawn_item_owned(stack, at, None);
+        }
+        true
+    }
+
+    /// Sweep helper: the loaded chunks inside the ticking radius around loaded    /// entity positions (ADR-0009 §2.4; `simulation_distance` arrives with
     /// P20-05, until then the loader's `view_distance` is the radius).
     pub(crate) fn random_tick_chunks(&self) -> std::collections::BTreeSet<ChunkPos> {
         let radius = self.view_distance.clamp(2, 16);
@@ -584,6 +809,83 @@ fn int_property(properties: &[(String, String)], key: &str) -> Option<i32> {
         .iter()
         .find(|(k, _)| k == key)
         .and_then(|(_, v)| v.parse().ok())
+}
+
+/// Shortest leaf-distance from `(x, y, z)` to a log, through leaves only.
+///
+/// `0` would be a log cell itself (never queried — only leaves call this);
+/// leaves chain at `parent + 1`, capped at [`LEAF_DECAY_DISTANCE`]. Anything
+/// unloaded bounds the search like a solid cell: an unloaded neighbour
+/// carries no support the loader has not proven.
+fn leaf_support_distance(game: &Game, x: i32, y: i32, z: i32) -> i32 {
+    use std::collections::{BTreeMap, BTreeSet, VecDeque};
+    let blocks = &game.registries.blocks;
+    let cell_kind = |cx: i32, cy: i32, cz: i32| -> Option<bool> {
+        // `Some(true)` = log, `Some(false)` = leaves, `None` = anything else.
+        let id = game.world.get_block_loaded(cx, cy, cz)?;
+        let name = blocks.block_name(id).ok()?;
+        if name.ends_with("_log") {
+            Some(true)
+        } else if name.ends_with("_leaves") {
+            Some(false)
+        } else {
+            None
+        }
+    };
+    // Seed with every log in the cube: multi-source BFS assigns minimums.
+    let mut distance = BTreeMap::new();
+    let mut queue = VecDeque::new();
+    let mut seen = BTreeSet::new();
+    for dx in -LEAF_SUPPORT_RADIUS..=LEAF_SUPPORT_RADIUS {
+        for dy in -LEAF_SUPPORT_RADIUS..=LEAF_SUPPORT_RADIUS {
+            for dz in -LEAF_SUPPORT_RADIUS..=LEAF_SUPPORT_RADIUS {
+                let (cx, cy, cz) = (x + dx, y + dy, z + dz);
+                if cell_kind(cx, cy, cz) == Some(true) {
+                    distance.insert((cx, cy, cz), 0);
+                    queue.push_back((cx, cy, cz));
+                    seen.insert((cx, cy, cz));
+                }
+            }
+        }
+    }
+    while let Some((cx, cy, cz)) = queue.pop_front() {
+        let here = distance[&(cx, cy, cz)];
+        if here >= LEAF_DECAY_DISTANCE {
+            continue;
+        }
+        for (dx, dy, dz) in LEAF_STEPS {
+            let next = (cx + dx, cy + dy, cz + dz);
+            if !seen.insert(next) {
+                continue;
+            }
+            // Logs seed the search; only leaves propagate through it.
+            if cell_kind(next.0, next.1, next.2) == Some(false) {
+                distance.insert(next, here + 1);
+                queue.push_back(next);
+            }
+        }
+    }
+    distance
+        .get(&(x, y, z))
+        .copied()
+        .unwrap_or(LEAF_DECAY_DISTANCE)
+}
+
+/// The sapling item a leaf kind drops (`None` when the kind has no mapped
+/// item — sticks still drop).
+fn leaf_sapling_item(leaves: &str) -> Option<&'static str> {
+    match leaves {
+        "minecraft:oak_leaves" => Some("minecraft:oak_sapling"),
+        "minecraft:dark_oak_leaves" => Some("minecraft:dark_oak_sapling"),
+        "minecraft:pale_oak_leaves" => Some("minecraft:pale_oak_sapling"),
+        "minecraft:birch_leaves" => Some("minecraft:birch_sapling"),
+        "minecraft:spruce_leaves" => Some("minecraft:spruce_sapling"),
+        "minecraft:jungle_leaves" => Some("minecraft:jungle_sapling"),
+        "minecraft:acacia_leaves" => Some("minecraft:acacia_sapling"),
+        "minecraft:cherry_leaves" => Some("minecraft:cherry_sapling"),
+        "minecraft:mangrove_leaves" => Some("minecraft:mangrove_propagule"),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -1395,5 +1697,336 @@ mod tests {
             (speed - 5.0).abs() < f32::EPSILON,
             "a 2×2 wheat block halves the speed, got {speed}"
         );
+    }
+
+    // Slice-2c pins, same direct-call shape (TEST-TIME-PLAN §2).
+    fn staged(game: &Game, name: &str, stage: i32) -> i32 {
+        game.registries()
+            .blocks
+            .state_id(name, &[("stage".to_owned(), stage.to_string())])
+            .expect("staged sapling state")
+    }
+
+    fn stage_of(game: &Game, x: i32, y: i32, z: i32) -> i32 {
+        let id = game.world().get_block_loaded(x, y, z).expect("loaded");
+        game.registries()
+            .blocks
+            .properties_of(id)
+            .expect("properties")
+            .iter()
+            .find(|(k, _)| k == "stage")
+            .and_then(|(_, v)| v.parse().ok())
+            .expect("stage reads")
+    }
+
+    fn name_of(game: &Game, x: i32, y: i32, z: i32) -> String {
+        let id = game.world().get_block_loaded(x, y, z).expect("loaded");
+        game.registries()
+            .blocks
+            .block_name(id)
+            .expect("registered")
+            .to_owned()
+    }
+
+    /// Dirt at `(x, 119, z)`, open sky above: the sapling pad.
+    fn sapling_pad(game: &mut Game, x: i32, z: i32) {
+        let dirt = game
+            .registries()
+            .blocks
+            .default_state("minecraft:dirt")
+            .expect("dirt");
+        game.world_mut()
+            .set_block(x, 119, z, dirt)
+            .expect("pad placed");
+    }
+
+    fn leaf_state(game: &Game, distance: i32, persistent: bool) -> i32 {
+        game.registries()
+            .blocks
+            .state_id(
+                "minecraft:oak_leaves",
+                &[
+                    ("distance".to_owned(), distance.to_string()),
+                    (
+                        "persistent".to_owned(),
+                        if persistent { "true" } else { "false" }.to_owned(),
+                    ),
+                    ("waterlogged".to_owned(), "false".to_owned()),
+                ],
+            )
+            .expect("leaf state")
+    }
+
+    fn distance_of(game: &Game, x: i32, y: i32, z: i32) -> i32 {
+        let id = game.world().get_block_loaded(x, y, z).expect("loaded");
+        game.registries()
+            .blocks
+            .properties_of(id)
+            .expect("properties")
+            .iter()
+            .find(|(k, _)| k == "distance")
+            .and_then(|(_, v)| v.parse().ok())
+            .expect("distance reads")
+    }
+
+    #[test]
+    fn sapling_advances_stage_on_direct_calls() {
+        let (mut game, _dir) = bare_game("sapling-stage-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        sapling_pad(&mut game, 8, 8);
+        let seedling = staged(&game, "minecraft:oak_sapling", 0);
+        game.world_mut()
+            .set_block(8, 120, 8, seedling)
+            .expect("sapling placed");
+        light_farm(&mut game);
+        assert!(
+            game.raw_brightness(8, 120, 8) >= 9,
+            "open sky really is bright"
+        );
+        // The 1-in-7 gate refuses most calls; a hundred always lands one
+        // ((6/7)^100 is ~1e-7, and the seed fixes the draws anyway).
+        for _ in 0..100 {
+            let id = game.world().get_block_loaded(8, 120, 8).expect("loaded");
+            if game.random_tick_block(8, 120, 8, id) {
+                break;
+            }
+        }
+        assert_eq!(
+            stage_of(&game, 8, 120, 8),
+            1,
+            "a stage-0 sapling advances (or the dispatch never reached it)"
+        );
+    }
+
+    #[test]
+    fn sapling_grows_a_tree_on_direct_calls() {
+        let (mut game, _dir) = bare_game("sapling-tree-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        sapling_pad(&mut game, 8, 8);
+        let grown = staged(&game, "minecraft:oak_sapling", 1);
+        game.world_mut()
+            .set_block(8, 120, 8, grown)
+            .expect("sapling placed");
+        light_farm(&mut game);
+        for _ in 0..200 {
+            let id = game.world().get_block_loaded(8, 120, 8).expect("loaded");
+            if name_of(&game, 8, 120, 8) != "minecraft:oak_sapling" {
+                break;
+            }
+            game.random_tick_block(8, 120, 8, id);
+        }
+        assert_eq!(
+            name_of(&game, 8, 120, 8),
+            "minecraft:oak_log",
+            "the trunk base replaces the sapling"
+        );
+        assert_eq!(
+            name_of(&game, 8, 121, 8),
+            "minecraft:oak_log",
+            "the trunk rises"
+        );
+        // The canopy sits above the top log: some leaves within two of the
+        // trunk top, none of them the trunk itself.
+        let mut leaves = 0;
+        for y in 121..=132 {
+            for dx in -2..=2 {
+                for dz in -2..=2 {
+                    if name_of(&game, 8 + dx, y, 8 + dz) == "minecraft:oak_leaves" {
+                        leaves += 1;
+                    }
+                }
+            }
+        }
+        assert!(leaves >= 10, "a canopy grew, saw {leaves} leaves");
+    }
+
+    #[test]
+    fn sapling_refuses_without_headroom() {
+        let (mut game, _dir) = bare_game("sapling-roof-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        let blocks = game.registries().blocks.clone();
+        let stone = blocks.default_state("minecraft:stone").expect("stone");
+        sapling_pad(&mut game, 8, 8);
+        let grown = staged(&game, "minecraft:oak_sapling", 1);
+        game.world_mut()
+            .set_block(8, 120, 8, grown)
+            .expect("sapling placed");
+        game.world_mut()
+            .set_block(8, 123, 8, stone)
+            .expect("ceiling placed");
+        light_farm(&mut game);
+        for _ in 0..100 {
+            let id = game.world().get_block_loaded(8, 120, 8).expect("loaded");
+            game.random_tick_block(8, 120, 8, id);
+        }
+        assert_eq!(
+            name_of(&game, 8, 120, 8),
+            "minecraft:oak_sapling",
+            "an occupied canopy keeps its sapling (neutralise the space check and a trunk lands)"
+        );
+    }
+
+    #[test]
+    fn other_saplings_stay_saplings() {
+        let (mut game, _dir) = bare_game("sapling-other-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        sapling_pad(&mut game, 8, 8);
+        let exotic = staged(&game, "minecraft:dark_oak_sapling", 1);
+        game.world_mut()
+            .set_block(8, 120, 8, exotic)
+            .expect("sapling placed");
+        light_farm(&mut game);
+        for _ in 0..20 {
+            let id = game.world().get_block_loaded(8, 120, 8).expect("loaded");
+            assert!(
+                !game.random_tick_block(8, 120, 8, id),
+                "no handler answers a non-oak sapling"
+            );
+        }
+        assert_eq!(
+            name_of(&game, 8, 120, 8),
+            "minecraft:dark_oak_sapling",
+            "only oak grows until more features exist"
+        );
+    }
+
+    #[test]
+    fn supported_leaves_repair_on_direct_call() {
+        let (mut game, _dir) = bare_game("leaf-repair-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        let blocks = game.registries().blocks.clone();
+        let log = blocks.default_state("minecraft:oak_log").expect("log");
+        game.world_mut()
+            .set_block(8, 120, 8, log)
+            .expect("log placed");
+        // A leaf column with stale all-7 distances (the fixture default).
+        let stale = leaf_state(&game, 7, false);
+        for y in 121..=125 {
+            game.world_mut()
+                .set_block(8, y, 8, stale)
+                .expect("leaf placed");
+        }
+        let id = game.world().get_block_loaded(8, 124, 8).expect("loaded");
+        assert!(
+            game.random_tick_block(8, 124, 8, id),
+            "a stale distance rewrites"
+        );
+        assert_eq!(
+            distance_of(&game, 8, 124, 8),
+            4,
+            "four up from the log reads four, not rot"
+        );
+        assert_eq!(
+            name_of(&game, 8, 124, 8),
+            "minecraft:oak_leaves",
+            "supported leaves live (a blind decay arm would take the canopy)"
+        );
+    }
+
+    #[test]
+    fn unsupported_leaves_decay_on_direct_call() {
+        let (mut game, _dir) = bare_game("leaf-decay-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        // A cleared cube: no log within the support radius, so the verdict
+        // cannot be borrowed from generated terrain.
+        let air = game.registries().blocks.air_id();
+        for y in 130..=144 {
+            for z in 1..=15 {
+                for x in 1..=15 {
+                    game.world_mut().set_block(x, y, z, air).expect("cleared");
+                }
+            }
+        }
+        let lone = leaf_state(&game, 7, false);
+        game.world_mut()
+            .set_block(8, 137, 8, lone)
+            .expect("leaf placed");
+        let id = game.world().get_block_loaded(8, 137, 8).expect("loaded");
+        assert!(
+            game.random_tick_block(8, 137, 8, id),
+            "an unreachable tick applies"
+        );
+        assert_eq!(
+            name_of(&game, 8, 137, 8),
+            "minecraft:air",
+            "unsupported leaves decay (neutralise the repair and nothing rots)"
+        );
+    }
+
+    #[test]
+    fn persistent_leaves_never_decay() {
+        let (mut game, _dir) = bare_game("leaf-keep-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        let air = game.registries().blocks.air_id();
+        for y in 130..=144 {
+            for z in 1..=15 {
+                for x in 1..=15 {
+                    game.world_mut().set_block(x, y, z, air).expect("cleared");
+                }
+            }
+        }
+        let kept = leaf_state(&game, 7, true);
+        game.world_mut()
+            .set_block(8, 137, 8, kept)
+            .expect("leaf placed");
+        let id = game.world().get_block_loaded(8, 137, 8).expect("loaded");
+        assert!(
+            !game.random_tick_block(8, 137, 8, id),
+            "player-placed leaves are refused by the decay arm"
+        );
+        assert_eq!(
+            name_of(&game, 8, 137, 8),
+            "minecraft:oak_leaves",
+            "persistent leaves stay"
+        );
+    }
+
+    #[test]
+    fn decay_drops_saplings_over_many_trials() {
+        let (mut game, _dir) = bare_game("leaf-drops-unit");
+        assert!(game.load_chunk(ChunkPos::new(0, 0)), "field loads");
+        let air = game.registries().blocks.air_id();
+        for y in 130..=144 {
+            for z in 1..=15 {
+                for x in 1..=15 {
+                    game.world_mut().set_block(x, y, z, air).expect("cleared");
+                }
+            }
+        }
+        // 200 decays at 1-in-20: a dry run is ~4e-5 by the binomial, and the
+        // seed fixes every draw, so this is a pin rather than a gamble.
+        let lone = leaf_state(&game, 7, false);
+        for _ in 0..200 {
+            game.world_mut()
+                .set_block(8, 137, 8, lone)
+                .expect("leaf placed");
+            let id = game.world().get_block_loaded(8, 137, 8).expect("loaded");
+            assert!(
+                game.random_tick_block(8, 137, 8, id),
+                "every unreachable tick applies"
+            );
+        }
+        let drops = game
+            .entities
+            .iter()
+            .filter(|entity| matches!(entity.body, mc_entity::EntityBody::Item(_)))
+            .count();
+        assert!(
+            drops > 0,
+            "two hundred decays drop something (neutralise the drop rolls and the store stays empty)"
+        );
+    }
+
+    #[test]
+    fn leaf_kind_maps_to_its_sapling() {
+        assert_eq!(
+            super::leaf_sapling_item("minecraft:oak_leaves"),
+            Some("minecraft:oak_sapling")
+        );
+        assert_eq!(
+            super::leaf_sapling_item("minecraft:cherry_leaves"),
+            Some("minecraft:cherry_sapling")
+        );
+        assert_eq!(super::leaf_sapling_item("minecraft:stone"), None);
     }
 }

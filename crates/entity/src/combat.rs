@@ -18,7 +18,8 @@
 /// What dealt the damage. Only sources with a production caller exist here:
 /// fire/void/magic sources have no callers in the tree at all. P20-01 added
 /// [`DamageSource::Drowning`] and [`DamageSource::Lava`], whose callers are the
-/// fluid effects in the Entities phase.
+/// fluid effects in the Entities phase; P20-03 added
+/// [`DamageSource::Lightning`], whose caller is the thunderstorm strike.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DamageSource {
     /// A player's melee swing.
@@ -51,6 +52,15 @@ pub enum DamageSource {
     /// `tags/damage_type/is_fire.json`) and is **not** in `bypasses_armor`, so
     /// armour does reduce it.
     Lava,
+    /// A lightning strike (`lightning_bolt`, P20-03 slice 2).
+    ///
+    /// Read from the 26.1 pack's damage-type tags (Pumpkin's `26_1` export):
+    /// `lightning_bolt` is **absent** from `bypasses_armor` (armour reduces
+    /// it) and **present** in `no_knockback` (no shove). 5.0 damage to every
+    /// living entity in the strike box, once, is the vanilla-ported shape
+    /// (Pumpkin `EntityBase::on_lightning_strike`); the 8-second fire there is
+    /// a named gap here (no fire model).
+    Lightning,
 }
 
 impl DamageSource {
@@ -65,6 +75,7 @@ impl DamageSource {
             | Self::Poison
             | Self::Arrow
             | Self::Explosion
+            | Self::Lightning
             | Self::Lava => false,
             Self::Fall | Self::Starvation | Self::Wither | Self::Drowning => true,
         }
@@ -83,6 +94,7 @@ impl DamageSource {
             | Self::Wither
             | Self::Explosion
             | Self::Drowning
+            | Self::Lightning
             | Self::Lava => false,
         }
     }

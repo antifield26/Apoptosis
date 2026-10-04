@@ -37,13 +37,16 @@
 //! `ScheduledTicks` (the jar's `tickTime` slot, ADR-0009 §2.2), the four
 //! packets above, `/weather`, `weather.dat` round-trip, `is_raining_at` for
 //! the farmland rain arm (which P20-02 left false) and beds (P20-04 reads the
-//! same flags). Named gaps: `ADVANCE_WEATHER` is always true until P20-05
-//! stores rules (like `mobGriefing`); lightning strikes are slice 2 (no bolt
-//! entity exists yet); thunder darkness in the spawn-light rule is untouched;
-//! `canHaveWeather` is always true (one dimension); sleep does not reset the
-//! cycle yet (P20-04 owns the call).
+//! same flags). Slice 2 adds lightning strikes: a per-chunk roll while
+//! thundering spawns a bolt entity that damages the strike box once and is
+//! swept after its visual fuse. Named gaps: `ADVANCE_WEATHER` reads the
+//! stored rule since P20-05; thunder darkness in the spawn-light rule is
+//! untouched; `canHaveWeather` is always true (one dimension); fire, creeper
+//! charging and villager/witch conversion on strike are unmodelled (no fire
+//! model, no powered state, unmodelled mobs).
 
 use super::Game;
+use mc_core::error::ServerResult;
 use mc_protocol::packets::Packet;
 use mc_protocol::packets::play::GameEvent;
 
@@ -72,6 +75,25 @@ const EVENT_START_RAINING: u8 = 1;
 const EVENT_STOP_RAINING: u8 = 2;
 const EVENT_RAIN_LEVEL_CHANGE: u8 = 7;
 const EVENT_THUNDER_LEVEL_CHANGE: u8 = 8;
+
+/// Strike roll: one in this many per chunk per tick while thundering.
+///
+/// Vanilla's `tickThunder` shape, confirmed in the local reference
+/// (`Pumpkin-master .../world/mod.rs`: `is_raining && is_thundering &&
+/// rng 0..100_000 == 0` per spawning chunk; GPL-3.0, shape only).
+pub(crate) const LIGHTNING_CHUNK_ONE_IN: i32 = 100_000;
+
+/// Damage one strike deals to every living entity in its box (vanilla shape
+/// via Pumpkin `EntityBase::on_lightning_strike`; the 8-second fire there is
+/// a named gap here).
+pub(crate) const LIGHTNING_DAMAGE: f32 = 5.0;
+
+/// Strike box half-extents around the strike point (Pumpkin's
+/// `damage_box`: `x±3, y-3..y+9, z±3`).
+const LIGHTNING_DX: f64 = 3.0;
+const LIGHTNING_DY_LO: f64 = 3.0;
+const LIGHTNING_DY_HI: f64 = 9.0;
+const LIGHTNING_DZ: f64 = 3.0;
 
 /// The five `WeatherData` fields plus the two client-visible levels.
 #[derive(Debug, Clone, PartialEq)]
@@ -186,9 +208,8 @@ impl Game {
     /// Advance world time and the weather timers (head of `ScheduledTicks`).
     ///
     /// The jar puts `tickTime()` before both tick queues (ADR-0009 §2.2); this
-    /// is the same slot. `ADVANCE_WEATHER` reads true until P20-05 stores
-    /// rules — like `mobGriefing` elsewhere, the default-true rule is named,
-    /// not hidden.
+    /// is the same slot. The `advance_weather` rule gates the call itself
+    /// (P20-05, in `run_phase_inner`): this body always advances when it runs.
     pub(crate) fn tick_weather(&mut self, report: &mut super::TickReport) {
         let was_raining = self.weather.raining;
         // Timers (the jar's `advanceWeatherCycle` with `ADVANCE_WEATHER` true
@@ -364,6 +385,88 @@ impl Game {
         self.weather.rain_level = if raining { 1.0 } else { 0.0 };
         self.weather.thunder_level = if thundering { 1.0 } else { 0.0 };
     }
+
+    /// Strike lightning at the cell `(x, y, z)` (P20-03 slice 2).
+    ///
+    /// Spawns the bolt visual (announced through the pending-spawn path with
+    /// the jar's `minecraft:lightning_bolt` type) and deals 5.0 to every
+    /// living entity in the strike box, once, through the shared damage path
+    /// (hurt window, armour, death and loot all apply). The bolt itself is
+    /// excluded, and so is everything non-living — drops and orbs weather
+    /// the storm like vanilla. Fire, creeper charging and mob conversion on
+    /// strike are named gaps (see the module docs).
+    ///
+    /// Public like `set_weather` and `spawn_mob`: the scheduler below calls
+    /// it live, and tests call the same entry instead of a second path.
+    ///
+    /// # Errors
+    ///
+    /// When the entity store is full — the bolt is refused rather than
+    /// displacing a live entity.
+    pub fn strike_lightning(
+        &mut self,
+        x: i32,
+        y: i32,
+        z: i32,
+    ) -> ServerResult<mc_entity::EntityId> {
+        let at = mc_world::Vec3::new(f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5);
+        let bolt = self
+            .entities
+            .spawn(mc_entity::EntityBody::Bolt(mc_entity::Bolt::new()), at)?;
+        self.pending_entity_spawns.push(bolt);
+        let victims: Vec<mc_entity::EntityId> = self
+            .entities
+            .iter()
+            .filter(|entity| {
+                !entity.removed
+                    && entity.id != bolt
+                    && entity.kind().is_living()
+                    && (entity.position.x - at.x).abs() <= LIGHTNING_DX
+                    && entity.position.y >= at.y - LIGHTNING_DY_LO
+                    && entity.position.y <= at.y + LIGHTNING_DY_HI
+                    && (entity.position.z - at.z).abs() <= LIGHTNING_DZ
+            })
+            .map(|entity| entity.id)
+            .collect();
+        for victim in victims {
+            self.damage_entity(
+                victim,
+                LIGHTNING_DAMAGE,
+                mc_entity::combat::DamageSource::Lightning,
+                None,
+            );
+        }
+        Ok(bolt)
+    }
+
+    /// One chunk's thunderstorm roll (P20-03 slice 2).
+    ///
+    /// The jar's `tickThunder` shape, called per loaded chunk in the ticking
+    /// radius (here: from the `RandomTicks` sweep, which already walks those
+    /// chunks): thundering, then 1-in-`LIGHTNING_CHUNK_ONE_IN`, then a random
+    /// column whose top must be rained on. A miss is silent — most ticks
+    /// strike nothing anywhere.
+    ///
+    /// Public like `strike_lightning`: the sweep calls it live, and the
+    /// no-thunder gate is pinned by calling it directly a thousand times.
+    pub fn maybe_strike_lightning(&mut self, chunk: mc_world::ChunkPos) {
+        if !self.weather.thundering {
+            return;
+        }
+        if self.random.next_i32_bounded(LIGHTNING_CHUNK_ONE_IN) != 0 {
+            return;
+        }
+        let x = chunk.x * 16 + self.random.next_i32_bounded(mc_world::SECTION_WIDTH);
+        let z = chunk.z * 16 + self.random.next_i32_bounded(mc_world::SECTION_WIDTH);
+        let Some(top) = self.world.highest_block(x, z) else {
+            return;
+        };
+        let y = top + 1;
+        if !self.is_raining_at(x, y, z) {
+            return;
+        }
+        let _ = self.strike_lightning(x, y, z);
+    }
 }
 
 #[cfg(test)]
@@ -385,6 +488,28 @@ mod tests {
         assert_eq!(
             (THUNDER_DURATION_MIN, THUNDER_DURATION_MAX),
             (3_600, 15_600)
+        );
+    }
+
+    /// The strike roll runs at the jar's rate: one in 100 000 draws hits.
+    ///
+    /// A million draws off the seeded source, asserting a band around the
+    /// expected ten (sd ~3.2, so 2..=18 is ±2.5σ; the seed fixes the draws,
+    /// so this is a pin rather than a gamble). A zeroed bound or a dropped
+    /// roll lands outside the band.
+    #[test]
+    fn strike_roll_matches_the_jar_rate() {
+        use mc_core::random::RandomSource;
+        let mut random = RandomSource::new(super::super::DEFAULT_RANDOM_SEED);
+        let mut strikes = 0;
+        for _ in 0..1_000_000 {
+            if random.next_i32_bounded(super::LIGHTNING_CHUNK_ONE_IN) == 0 {
+                strikes += 1;
+            }
+        }
+        assert!(
+            (2..=18).contains(&strikes),
+            "one-in-100 000 over a million draws lands ~10, saw {strikes}"
         );
     }
 

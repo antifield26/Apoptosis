@@ -255,7 +255,8 @@ fn standing_still_never_tramples() {
     );
 }
 
-/// A falling mob tramples too (mobGriefing reads true until P20-05).
+/// A falling mob tramples too (`mob_griefing` reads the stored rule, P20-05;
+/// default true, which is what this pin runs under).
 #[test]
 fn mob_fall_tramples_farmland() {
     let mut harness = Harness::new("trample-mob");

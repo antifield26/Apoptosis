@@ -15,10 +15,11 @@
 //! - `water_source_conversion` — `GameRuleCategory.UPDATES`, `iconst_1`
 //!   (**true**).
 //!
-//! P20-01 has no game-rule storage yet (P20-05 owns `/gamerule` and the level
-//! data), so [`world_fluid_rules`] returns the vanilla **defaults** and says so.
-//! When P20-05 lands, its rule values feed these two arguments and nothing else
-//! in the flow engine changes.
+//! P20-01 had no game-rule storage yet (P20-05 owns `/gamerule` and the level
+//! data), so the flow rules carried the vanilla **defaults**. P20-05 landed:
+//! [`Game::fluid_rules`](super::Game::fluid_rules) feeds the stored rule
+//! values into these same two arguments. Nothing else in the flow engine
+//! changed.
 //!
 //! ## Per-dimension lava
 //!
@@ -29,20 +30,8 @@
 //! answer, not a hard-coded assumption about lava.
 
 use mc_registry::BlockRegistry;
-use mc_simulation::fluid::{
-    BlockFacts, FluidKind, FluidRules, FluidState, FluidTickOutcome, FluidWorld, Pos,
-};
+use mc_simulation::fluid::{BlockFacts, FluidKind, FluidState, FluidTickOutcome, FluidWorld, Pos};
 use mc_world::World;
-
-/// The water rules at the jar's default game rule values.
-#[must_use]
-pub const fn world_fluid_rules(kind: FluidKind) -> FluidRules {
-    match kind {
-        FluidKind::Water => FluidRules::water(true),
-        // Overworld lava: `FAST_LAVA` is false outside the Nether.
-        FluidKind::Lava => FluidRules::lava(false, false),
-    }
-}
 
 /// Blocks `canHoldAnyFluid` refuses although they do not block motion.
 ///

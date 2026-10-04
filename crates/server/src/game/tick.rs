@@ -281,8 +281,14 @@ impl Game {
             TickPhase::Network => self.phase_network(report),
             TickPhase::ScheduledTicks => {
                 // World time and weather first (the jar's `tickTime()` slot,
-                // ADR-0009 §2.2), then the due block scheduled ticks.
-                self.tick_weather(report);
+                // ADR-0009 §2.2), then the due block scheduled ticks. The
+                // `advance_weather` rule gates the cycle (P20-05): a stopped
+                // clock freezes the timers — levels keep easing toward the
+                // frozen flags, which changes nothing visible.
+                self.maintain_time_freeze();
+                if self.rules.advance_weather {
+                    self.tick_weather(report);
+                }
                 self.tick_scheduled(tick, report);
                 Ok(())
             }
@@ -481,6 +487,13 @@ impl Game {
         report.fluid_ticks_fired = drain.len();
         let mut written = 0usize;
         for pos in drain.due {
+            // Rule flags first: the adapter below borrows `world` mutably
+            // while the engine runs, so a method call on `self` would borrow
+            // across it (`fluid_rules_for` takes the flags, not the game).
+            let (water_conversion, lava_conversion) = (
+                self.rules.water_source_conversion,
+                self.rules.lava_source_conversion,
+            );
             // Disjoint field borrows: the adapter owns `world` and reads
             // `registries`, while `fluid_ticks` and `random` are borrowed by the
             // engine. No lock and no clone is involved.
@@ -489,7 +502,7 @@ impl Game {
             let Some(kind) = world.facts(pos).and_then(|facts| facts.fluid.kind()) else {
                 continue;
             };
-            let rules = super::fluids::world_fluid_rules(kind);
+            let rules = Self::fluid_rules_for(kind, water_conversion, lava_conversion);
             let outcome = mc_simulation::fluid::tick(
                 &mut world,
                 rules,
@@ -525,23 +538,31 @@ impl Game {
     /// - **The radius is the view distance.** ADR-0009 §2.4 makes
     ///   `simulation_distance` the ticking radius and records the boundary that
     ///   this server loads by `view_distance`, so the effective radius is
-    ///   `min(simulation_distance, view_distance)`; until P20-05 stores the
-    ///   game rules there is one number, and it is the loader's.
-    /// - **Rain never falls.** Farmland's wetting rule reads
-    ///   `isNearWater || isRainingAt`, and the second arm is false until P20-03
-    ///   owns weather — dry biomes dry out here even under Vanilla rain.
+    ///   `min(simulation_distance, view_distance)`; the `simulation_distance`
+    ///   rule is stored (P20-05) but the sweep still walks the loader's
+    ///   radius, so there is one number and it is the loader's.
+    /// - **Rain falls since P20-03.** Farmland's wetting rule reads
+    ///   `isNearWater || isRainingAt`, and the second arm is live. Thundering
+    ///   chunks additionally roll lightning (P20-03 slice 2) on the walk
+    ///   above, at the jar's 1-in-100 000 per chunk.
     fn phase_random_ticks(&mut self, report: &mut TickReport) {
-        // The jar's `random_tick_speed` game rule: `javap -c GameRules`
-        // registers it as `registerInteger("random_tick_speed", UPDATES, 3,
-        // 0)`. P20-05 stores it; until then the default is the honest value.
-        // First in the body because an item declares itself from the start of
-        // its scope.
-        use super::growth::RANDOM_TICK_SPEED;
+        // The jar's `random_tick_speed` game rule, live from storage (P20-05):
+        // `javap -c GameRules` registers it as `registerInteger(
+        // "random_tick_speed", UPDATES, 3, 0)`. Zero disables the draws; the
+        // sweep still runs so the sample counter keeps proving the rate.
+        let tick_speed = self.rules.tick_speed();
         let chunks = self.random_tick_chunks();
+        // Thunderstorm strikes (P20-03 slice 2): the jar rolls lightning per
+        // chunk in the same `tickChunk` this sweep mirrors, so the roll rides
+        // the chunks already walked rather than a second ring.
+        let striking = self.weather.thundering;
         let sections = self.world.section_count();
         let mut samples = 0_usize;
         let mut applied = 0_usize;
         for pos in &chunks {
+            if striking {
+                self.maybe_strike_lightning(*pos);
+            }
             let Some(chunk) = self.world.chunk(*pos) else {
                 continue;
             };
@@ -550,7 +571,7 @@ impl Game {
             let base_z = pos.z.saturating_mul(mc_world::SECTION_WIDTH);
             for section in 0..sections {
                 let base_y = min_y.saturating_add(section as i32 * mc_world::SECTION_WIDTH);
-                for _ in 0..RANDOM_TICK_SPEED {
+                for _ in 0..tick_speed {
                     let x = base_x + self.random.next_i32_bounded(mc_world::SECTION_WIDTH);
                     let y = base_y + self.random.next_i32_bounded(mc_world::SECTION_WIDTH);
                     let z = base_z + self.random.next_i32_bounded(mc_world::SECTION_WIDTH);
@@ -1563,10 +1584,13 @@ impl Game {
         // Collected first: the loop mutates the store, so it cannot hold the
         // iterator. `ids()` is ascending because the store is a `BTreeMap`.
         let ids: Vec<EntityId> = self.entities.ids().collect();
+        // Food holders once per tick (P20-06): the tempt check below would
+        // otherwise resolve the held-item name per mob per session.
+        let holders = self.ready_food_holders();
         for id in ids {
             // The AI hook runs first, as Vanilla orders `tick` before the move; see
             // `tick_entity_ai` for what it decides and resolves.
-            self.tick_entity_ai(id);
+            self.tick_entity_ai(id, &holders);
             self.tick_mob_despawn(id);
             // Fluid effects sit where vanilla's `LivingEntity.baseTick` does:
             // before the entity's own tick, so a drowning hit lands on the tick
@@ -1579,6 +1603,9 @@ impl Game {
             // after theirs: same phase, same ordering rationale.
             self.resolve_projectile_hit(id);
         }
+        // Farm-animal life (P20-06) runs on settled positions, after every
+        // mover: age/in-love timers, pair breeding, egg laying, graze regrow.
+        self.tick_animals();
         self.merge_and_collect_items();
     }
 
@@ -1982,7 +2009,7 @@ impl Game {
             return;
         }
         let darken = crate::spawn::sky_darken(crate::spawn::time_of_day(
-            self.tick as i64,
+            self.world_time(),
             self.time_offset,
         ));
         // Per-category counts over the world; the cap scope is a named
@@ -2071,13 +2098,18 @@ impl Game {
         let picked = {
             let mut monster = None;
             let mut creature = None;
-            if counts[crate::spawn::MobCategory::Monster as usize]
-                < crate::spawn::MobCategory::Monster.max_instances()
+            // Natural-spawn gates (P20-05): `spawn_monsters`/`spawn_mobs`
+            // read live. A closed gate draws nothing for its category — the
+            // cap check below never sees it.
+            if self.rules.spawn_monsters
+                && counts[crate::spawn::MobCategory::Monster as usize]
+                    < crate::spawn::MobCategory::Monster.max_instances()
             {
                 monster = tables.pick(crate::spawn::MobCategory::Monster, &mut self.random);
             }
-            if counts[crate::spawn::MobCategory::Creature as usize]
-                < crate::spawn::MobCategory::Creature.max_instances()
+            if self.rules.spawn_mobs
+                && counts[crate::spawn::MobCategory::Creature as usize]
+                    < crate::spawn::MobCategory::Creature.max_instances()
             {
                 creature = tables.pick(crate::spawn::MobCategory::Creature, &mut self.random);
             }
@@ -2225,7 +2257,7 @@ impl Game {
     /// swings, skeleton bow shots, and the creeper fuse (P16-04). The
     /// creeper's damage figure stays the explosion value, never a melee one
     /// (see `mob.rs`'s gap list).
-    fn tick_entity_ai(&mut self, id: EntityId) {
+    fn tick_entity_ai(&mut self, id: EntityId, holders: &[(mc_world::Vec3, String)]) {
         // Observation first: these read through `&self`, so no entity borrow is
         // live when `decide` needs `&mut self.entities`.
         let Some(entity) = self.entities.get(id) else {
@@ -2269,6 +2301,10 @@ impl Game {
             let mut rng = AiRng(&mut self.random);
             mob.ai.decide(kind, observation, &mut rng)
         };
+        // Tempting players pull passives off whatever was decided (P20-06):
+        // the override points the walk memory at the player, so the follow
+        // persists while food is held and degrades to an ordinary walk after.
+        let goal = self.tempt_override(id, kind, position, goal, holders);
         self.resolve_mob_goal(id, kind, goal, position);
     }
 
@@ -3215,6 +3251,18 @@ impl Game {
             }
             return false;
         }
+        // A bolt is a visual with a fuse: no motion, no physics, no AI. It
+        // burns here and flags itself removed at zero, and the removal sweep
+        // broadcasts it (P20-03 slice 2).
+        if matches!(entity.body, mc_entity::EntityBody::Bolt(_)) {
+            if let Some(entity) = self.entities.get_mut(id)
+                && let mc_entity::EntityBody::Bolt(bolt) = &mut entity.body
+                && bolt.tick_life()
+            {
+                entity.removed = true;
+            }
+            return true;
+        }
         let start_y = entity.position.y;
         let position = entity.position;
         let on_ground = entity.on_ground;
@@ -3336,8 +3384,8 @@ impl Game {
                 }
             }
             // Trampling (P20-02 slice 2a): jar `fallOn` for mobs — LivingEntity
-            // with `width² × height > 0.512`, and `mobGriefing` assumed true
-            // until P20-05 stores rules (like the growth default). Players
+            // with `width² × height > 0.512`, gated on `mob_griefing` like the
+            // jar (`fallOn` checks the rule for non-players; P20-05). Players
             // take the session path above; everything here is a mob.
             if grounded && !on_ground && start_y > applied.y {
                 let big_enough = self
@@ -3351,7 +3399,7 @@ impl Game {
                         _ => None,
                     })
                     .unwrap_or(false);
-                if big_enough {
+                if big_enough && self.rules.mob_griefing {
                     // Vanilla's `getOnPos(1.0E-5)`: the block below the feet
                     // with epsilon, so sub-cube tops resolve to their block.
                     let gx = floor_to_i32(applied.x);
@@ -4049,6 +4097,13 @@ impl Game {
                     self.registries.entities.id(mc_registry::entities::PLAYER)?
                 }
                 mc_entity::EntityBody::Item(_) => item,
+                // A strike announces as `minecraft:lightning_bolt` (77 in the
+                // jar-extracted table): the client draws the bolt from the
+                // type alone, with no metadata packet behind it.
+                mc_entity::EntityBody::Bolt(_) => self
+                    .registries
+                    .entities
+                    .id(mc_registry::entities::LIGHTNING_BOLT)?,
             };
             let position = entity.position;
             let (yaw, pitch) = (entity.yaw, entity.pitch);
@@ -4139,7 +4194,9 @@ impl Game {
                     .to_raw()?;
                     self.broadcast_all(&contents, report);
                 }
-                mc_entity::EntityBody::Player | mc_entity::EntityBody::Projectile(_) => {}
+                mc_entity::EntityBody::Player
+                | mc_entity::EntityBody::Projectile(_)
+                | mc_entity::EntityBody::Bolt(_) => {}
             }
         }
         Ok(())
@@ -4335,15 +4392,14 @@ impl Game {
     fn send_world_time(&self, report: &mut TickReport, tick: Tick) -> ServerResult<()> {
         if !tick.is_multiple_of(20) {
             return Ok(());
-        }
-        // Vanilla's steady state is an empty clock map
+        } // Vanilla's steady state is an empty clock map
         // (`forceGameTimeSynchronization`); the client advances its clock
         // instances locally from the join-time full sync and the immediate
         // single-entry broadcast a `/time` mutation sends. A full entry every
         // second would also work, but the empty map is what eighteen captured
         // vanilla packets all carry.
         let packet = SetTime {
-            world_age: tick as i64,
+            world_age: self.world_time(),
             clocks: Vec::new(),
         }
         .to_raw()?;
@@ -4595,6 +4651,9 @@ impl Game {
             // `respawn` call finds an empty inventory and drops nothing twice.
             // Experience orbs are not an entity kind here (named gap), so the
             // experience reset happens at respawn with nothing on the ground.
+            // `keep_inventory` (P20-05) keeps both: no drain, no scatter, and
+            // the matching `respawn(true)` below keeps the bar.
+            let keep = self.rules.keep_inventory;
             let (position, stacks, level) = match self.sessions.get_mut(&id) {
                 Some(session) => {
                     let p = session.player.position;
@@ -4612,7 +4671,11 @@ impl Game {
                     ));
                     (
                         position,
-                        session.player.inventory.drain_all(),
+                        if keep {
+                            Vec::new()
+                        } else {
+                            session.player.inventory.drain_all()
+                        },
                         session.player.level,
                     )
                 }
@@ -4625,15 +4688,16 @@ impl Game {
                 }
             }
             // Experience scatter (P16-02): vanilla drops min(7 * level, 100)
-            // points as orbs. No keepInventory gamerule exists here, so the
-            // scatter is unconditional —and the later `respawn` still resets
-            // the bar, which is now correct instead of lossy.
-            let dropped = u32::try_from(level.max(0))
-                .unwrap_or(0)
-                .saturating_mul(7)
-                .min(100);
-            if dropped > 0 {
-                self.scatter_experience(position, dropped);
+            // points as orbs — unless `keep_inventory` holds, which keeps the
+            // bar with the inventory (P20-05).
+            if !keep {
+                let dropped = u32::try_from(level.max(0))
+                    .unwrap_or(0)
+                    .saturating_mul(7)
+                    .min(100);
+                if dropped > 0 {
+                    self.scatter_experience(position, dropped);
+                }
             }
         }
         if outcome.died {
@@ -4831,6 +4895,10 @@ impl Game {
             mc_entity::EntityBody::Item(_) => {
                 self.registries.entities.id(mc_registry::entities::ITEM)?
             }
+            mc_entity::EntityBody::Bolt(_) => self
+                .registries
+                .entities
+                .id(mc_registry::entities::LIGHTNING_BOLT)?,
         };
         let position = entity.position;
         let (yaw, pitch) = (entity.yaw, entity.pitch);
@@ -4893,7 +4961,9 @@ impl Game {
                     .to_raw()?,
                 );
             }
-            mc_entity::EntityBody::Player | mc_entity::EntityBody::Projectile(_) => {}
+            mc_entity::EntityBody::Player
+            | mc_entity::EntityBody::Projectile(_)
+            | mc_entity::EntityBody::Bolt(_) => {}
         }
         Ok(out)
     }

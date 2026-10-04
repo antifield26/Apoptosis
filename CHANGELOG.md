@@ -473,6 +473,137 @@ leave-bed packet, sleep-count broadcast), bed explosion (P21), placement
 survival checks, `RotationArgument` day suffixes (none — angles are plain
 doubles), water/snow above a forced point (air-subset edge).
 
+**P20-05 — game rules: storage, `/gamerule`, wiring of every mechanised
+rule.** Twelve snake_case rules with the jar's defaults
+(`crates/server/src/game/gamerules.rs`): `random_tick_speed` (3),
+`advance_weather`/`advance_time` (true), `keep_inventory` (false),
+`mob_griefing`/`spawn_mobs`/`spawn_monsters`/`water_source_conversion`/`pvp`
+(true), `lava_source_conversion` (false),
+`players_sleeping_percentage` (100), `fire_spread_radius_around_player`
+(128, inert). Names come from two agreeing in-repo sources — the
+fluid-differential driver's jar-read list and Pumpkin's 26.x gamerule table
+(names/defaults only, version caveat recorded) — and the old wiki camelCase
+is refused by name. `data/minecraft/game_rules.dat`
+(`{data: {"minecraft:<rule>": ...}}`, Pumpkin-measured shape) loads at boot
+and writes on every save; `/gamerule [<rule> [<value>]]` (level 2, root 42 —
+the KD-31 pin moves 41 → 42 with it) queries, sets with typed refusals, and
+labels the inert fire-spread rule on the reply. Every wired mechanism reads
+live: sweep draws (0 disables), the weather cycle, the daylight clock (a
+captured frozen reading while off), the sleep quorum, death keep (no drain,
+no scatter, `respawn(true)`), mob-only trample gating (players trample
+regardless, like the jar), both spawn categories, both fluid conversions,
+and PvP hits. Fresh worlds seed `pvp` from config; stored rules always win.
+
+Evidence: `crates/server/tests/gamerules.rs` (11) — command
+list/query/set/refusals/permission, speed-0 stops draws, weather/time
+freezes with resume, keep keeps inventory and bar with a clean ground,
+pvp-off whiffs, a 50% two-player skip against a 100% control, closed gates
+spawning nothing over 300 night ticks against an open-gates positive,
+mob-griefing sparing mobs but never players, conversion forming sources
+iff true, restart round-trip — plus five unit pins. Ten perturbations
+proven red and restored byte-exact (speed, weather gate, keep, pvp, quorum,
+both spawn gates, grief, freeze, conversion); the pvp pin caught a real
+vacuity on the way (the second swing landed inside the hurt window, so the
+test now runs the window out first). The spawn pin caught a second one (a
+day variant stayed green with both gates neutralised — daylight spawns
+nothing to refuse — so the pin runs at night).
+
+Not done, named: `world_clocks.dat` (the frozen clock does not persist),
+`spawn`/`difficulty`-adjacent rules, thrown-channeling and bolt `/summon`.
+
+**P20-02 slice 2c — saplings, leaf decay, bone meal (DONE — the P20-02 row
+is complete except the named flora gaps).** Three handlers on the sweep
+dispatch in `game::growth`, all through the canonical edit path:
+`sapling` (brightness ≥ 9, 1-in-7, stage 0 → 1, then the worldgen oak
+feature grown at runtime behind a pre-checked free volume — trunk air
+except the sapling's own cell, canopy air-or-leaves, straddling/vertical/
+occupied refusals keep the sapling); `leaves` (persistent refused,
+on-demand support repair by bounded BFS through leaves to the nearest log,
+unreachable distance-7 cells decay with the documented 1-in-20
+sapling / 1-in-50 stick rates); bone meal through `UseItemOn` (crops +1
+stage, oak saplings advance-or-grow, one meal eaten per success, misses
+fall through to placement refusal). Only oak grows (the only tree
+feature); the +1 meal stage is a documented simplification (the jar grows
+several — exact constants not re-read); grass flora-spread is a named miss.
+Evidence: nine direct-call pins in `game::growth::tests` (stage advance,
+tree growth with canopy count, headroom refusal, non-oak refusal,
+supported-repair, unsupported-decay, persistent keep, 200-trial drops,
+kind→sapling map) plus click paths and a 96-sapling/600-tick phase-wiring
+test in `tests/saplings.rs` (trees through the sweep, repaired leaf
+distances near trunks). Six perturbations proven red and restored
+byte-exact (dispatch, space check, repair, decay, drops, meal arm). Suite
+cost: the phase test runs 600 ticks (~18 s with spawns gated off). One real
+interaction found by the landing: leaf repairs write blocks, and written
+chunks stay resident until a save clears them — so the teleport tick of
+`light_generation_staleness` (whose sweep still covers the origin because
+the entity projection publishes one tick late in the Players phase)
+re-dirtied the departing chunk through a single stray repair and pinned it.
+Production autosaves that away within minutes; the test now saves after
+the lag tick for the same reason, assertions untouched.
+
+**P20-03 slice 2 — lightning strikes (DONE — the P20-03 row is complete
+except thunder darkness).** `DamageSource::Lightning` (armour applies, no
+knockback — both read from the 26.1 damage-type tags) plus a transient
+`EntityBody::Bolt` (4-tick visual fuse, no physics/AI/persistence,
+announced with the jar's `minecraft:lightning_bolt` type id and removed by
+the sweep). The scheduler rolls the jar's 1-in-100 000 per loaded chunk
+while thundering (confirmed shape in the local reference) from the
+`RandomTicks` sweep, striking the column top where rain falls;
+`Game::strike_lightning` spawns the bolt and deals 5.0 once to every
+living entity in the `(x±3, y-3..y+9, z±3)` box (drops and orbs spared).
+Evidence: `crates/server/tests/lightning.rs` (4: damage + sparing,
+announce type + removal, rain-without-thunder gate over a million rolls,
+restart transience) plus the strike-rate unit pin — four perturbations
+proven red and restored byte-exact (damage loop, type arm, fuse, gate). Not done, named: fire, creeper charging, villager/witch and
+pig/piglin conversion, thrown-channeling, bolt `/summon`, thunder
+darkness, strike sounds (no sound channel).
+
+**P20-06 — animals: breeding, babies, tempt, shearing, milk, eggs
+(DONE).** `Mob` carries the vanilla `AgeableMob` shape (`age` signed both
+ways, `in_love`, `sheared`, `egg_ticks`, `forage_ticks`;
+`BABY_START_AGE` -24000 and 600 love ticks quoted from the reference).
+Feeding (pack `tags/item/*_food.json` first, jar-mirrored fallback per
+kind: wheat; carrot/potato/beetroot; six seeds) grows babies 10% closer
+and loves ready adults; pairs within 8 blocks breed (cooldowns, calf
+between them, 1–7 XP); babies ride at half hitbox and grow up; tempting
+holders pull passives within 10 blocks; shears take 1–3 wool from adult
+unshorn sheep (100 grass ticks regrow); buckets milk adult cows and milk
+drinking clears every effect; adult chickens lay on `6000 + nextInt(6000)`.
+`Age`/`Sheared` persist (love/egg/graze restart). Evidence: nine
+direct-call pins in `game::animals::tests` plus five click/tick/save
+tests in `tests/animals.rs` (pair birth with half-scale calf, milk cure,
+shear + regrow, two-leg follow-and-return in a walled arena, restart with
+a still-small calf and a still-bare sheep) — eleven perturbations proven
+red and restored byte-exact. Two honest vacuity catches on the way: the
+pvp-style hurt-window trap reappeared (fixed the same way), and the open-
+road follow test froze when the cow walked off the one-wide road and fell
+56 blocks out of tempt range — the test now runs in a walled arena, and
+the reversal leg (follow east, follow back west) is what makes the pin
+directional rather than lucky. The tempt scan is hoisted to once per tick
+(`ready_food_holders`) after the entity-heavy bench showed the naive
+per-mob scan; behaviour verified identical by the follow test. Not done,
+named: baby render scale, love hearts, thrown-egg hatching, off-hand
+interaction, unmodelled kinds.
+
+**P20-07 — Pi soak with farm + fluid workload (NOT RUN).** No Pi 5
+hardware on this host, so the §13 acceptance cannot sign here — same
+standing as P22-04's NVMe boundary. What exists instead, labelled
+supporting rather than acceptance: (1) the `entity_heavy` ignored suite
+ran on this Windows x86_64 debug host before and after the P20 tree
+(600 mobs / 400 items, 400 ticks): base `entities 24.98 ms / random 16.15
+ms` vs P20 `26.35 ms / 17.53 ms` — both fail the suite's own 40 ms debug-
+desktop guard either way (the file's own header says a busy desktop moves
+these numbers more than a code change does; broadcast swung 71→81 ms
+between runs on an idle tree), so the delta is read as noise, not as a
+verdict; (2) the new per-tick work is bounded by construction (tempt is
+one holder list per tick, breeding scans only the in-love, leaf BFS runs
+only on sampled leaves, lightning rolls draw nothing when clear). The Pi
+run, when hardware is available: 10 mixed players, flowing-water farm,
+lava cast, wheat fields, bred herds, a thunderstorm window; report fluid
+and random-tick costs separately against the ADR-0009 estimate (≤1.5 /
+≤0.5 ms p99). **P20-08** is the owner checklist
+(`docs/testing/P20-08-FARM-DAY-CHECKLIST.md`), likewise NOT RUN.
+
 ## [Unreleased] — AUDIT-19 fix round
 
 The first half of the audit's fix queue (`docs/audits/AUDIT-19.md` §8), landed

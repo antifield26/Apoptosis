@@ -195,7 +195,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use tracing::{debug, info, warn};
 
+mod animals;
 mod fluids;
+mod gamerules;
 mod growth;
 mod persist;
 mod session;
@@ -203,6 +205,7 @@ mod sleep;
 mod tick;
 mod weather;
 
+pub(crate) use gamerules::GameRules;
 pub(crate) use sleep::RespawnPoint;
 pub(crate) use weather::{
     RAIN_DELAY_MAX, RAIN_DELAY_MIN, RAIN_DURATION_MAX, RAIN_DURATION_MIN, THUNDER_DURATION_MAX,
@@ -975,6 +978,28 @@ pub struct Game {
     /// written back on every save. Default is clear skies with zeroed timers
     /// — what the jar's own fresh file records.
     weather: self::weather::WeatherState,
+    /// Breeding foods per kind (P20-06).
+    ///
+    /// The pack's `tags/item/*_food.json` sets when present, jar-mirrored
+    /// fallbacks otherwise (see `game::animals`). Read live by feeding and
+    /// tempting; nothing caches a copy.
+    pub(crate) animal_foods: self::animals::AnimalFoods,
+    /// Live game rules (P20-05).
+    ///
+    /// The jar's `GameRules` values. Loaded from `game_rules.dat` at boot
+    /// (fresh worlds start at the jar defaults), read live by every wired
+    /// mechanism, written back on every save. `/gamerule` mutates this in
+    /// place — nothing caches a copy.
+    pub(crate) rules: self::gamerules::GameRules,
+    /// Frozen daylight reading while `advance_time` is false (P20-05).
+    ///
+    /// `Some(tick)` once the rule turns the clock off, cleared when it turns
+    /// back on. Daylight time is derived from the tick counter (which never
+    /// stops), so freezing needs a captured value; it is deliberately *not*
+    /// persisted — clock persistence is the unwritten `world_clocks.dat`,
+    /// and a frozen value outliving its session would be a second source of
+    /// truth for a clock that already has none.
+    time_frozen_at: Option<i64>,
     /// Who may run operator commands, loaded from `ops.json` at construction.
     ///
     /// Loaded once rather than per login, matching Vanilla's startup read. A change to the
@@ -1323,6 +1348,9 @@ impl Game {
             grows_crops: BTreeSet::new(),
             maintains_farmland: BTreeSet::new(),
             weather: self::weather::WeatherState::default(),
+            animal_foods: self::animals::AnimalFoods::with_fallbacks(),
+            rules: self::gamerules::GameRules::default(),
+            time_frozen_at: None,
             operators,
             ops_directory: None,
             whitelist: crate::whitelist::Whitelist::new(),
@@ -1744,7 +1772,7 @@ impl Game {
                 "minecraft:lava" => mc_simulation::FluidKind::Lava,
                 _ => continue,
             };
-            let delay = fluids::world_fluid_rules(kind).tick_delay();
+            let delay = self.fluid_rules(kind).tick_delay();
             self.fluid_ticks
                 .schedule(now, mc_simulation::fluid::Pos::new(cx, cy, cz), delay);
         }

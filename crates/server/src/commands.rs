@@ -319,6 +319,14 @@ impl Game {
             .with_argument(Argument::optional("d", ArgumentKind::Word))
             .with_argument(Argument::optional("e", ArgumentKind::Word))
             .requiring(PermissionLevel::Operator));
+        // Vanilla gates `/gamerule` at level 2 as well (jar
+        // `GameRuleCommand.register`: `LEVEL_GAMEMASTERS`). Rule then optional
+        // value: query with one word, set with two — parsed by hand like
+        // `/time`, since values are typed per rule (bool vs integer).
+        add(Command::new("gamerule", "Query or set a game rule")
+            .with_argument(Argument::optional("rule", ArgumentKind::Word))
+            .with_argument(Argument::optional("value", ArgumentKind::Word))
+            .requiring(PermissionLevel::Operator));
         // `/tp` is Vanilla level 2 (wiki: Commands/teleport), so level-0
         // players cannot reach it — AUDIT-19 G-09 found the default `All`
         // permission left it open. Recorded as a deliberate divergence from
@@ -696,6 +704,7 @@ impl Game {
             "time" => Ok(self.command_time(parsed, report)?),
             "weather" => Ok(self.command_weather(parsed, report)),
             "spawnpoint" => Ok(self.command_spawnpoint(id, parsed)),
+            "gamerule" => Ok(self.command_gamerule(parsed)),
             "tp" | "teleport" => Ok(self.command_tp(id, parsed)),
             "execute" => {
                 // The chain parser owns the grammar; the token list is the raw argument text so
@@ -825,7 +834,7 @@ impl Game {
         let action = parsed.string(0);
         let value = parsed.string(1);
         let query = || {
-            let time = (self.tick_count() % 24_000).cast_signed() + self.time_offset();
+            let time = self.world_time() % 24_000 + self.time_offset();
             Ok(CommandResult::message(format!(
                 "The time is {} (daytime)",
                 time.rem_euclid(24_000)
@@ -856,7 +865,7 @@ impl Game {
         // to every client in the overworld clock entry (P14-09 walk: the old
         // shape decoded as an empty clock map, so `/time` moved the server's
         // mobs but never the client's sky).
-        self.set_time_offset(target - (self.tick_count() % 24_000).cast_signed());
+        self.set_time_offset(target - self.world_time() % 24_000);
         info!(
             from = %parsed.source.name,
             target,
@@ -864,8 +873,8 @@ impl Game {
             "time offset set"
         );
         let packet = SetTime {
-            world_age: self.tick_count().cast_signed(),
-            clocks: vec![self.overworld_clock_entry(self.tick_count())],
+            world_age: self.world_time(),
+            clocks: vec![self.overworld_clock_entry(u64::try_from(self.world_time()).unwrap_or(0))],
         };
         let ids: Vec<mc_network::bridge::ConnectionId> = self.sessions.keys().copied().collect();
         for target in ids {
@@ -873,7 +882,7 @@ impl Game {
         }
         Ok(CommandResult::message(format!(
             "Set the time to {}",
-            (self.tick_count().cast_signed() + self.time_offset()).rem_euclid(24_000)
+            (self.world_time() + self.time_offset()).rem_euclid(24_000)
         )))
     }
 
@@ -1056,6 +1065,48 @@ impl Game {
             "Set {name}'s spawn point to ({}, {}, {})",
             pos.0, pos.1, pos.2
         ))
+    }
+
+    /// `/gamerule [<rule> [<value>]]` (P20-05).
+    ///
+    /// Jar `GameRuleCommand`: query prints the current value, set parses it by
+    /// the rule's type (booleans take `true`/`false`, integers a non-negative
+    /// `i32`) and takes effect immediately — every wired mechanism reads the
+    /// stored rules live. Unknown names are refused by name (the wiki's old
+    /// camelCase included). `fire_spread_radius_around_player` stores but is
+    /// inert here (no fire model), and the reply says so rather than implying
+    /// a spread change.
+    fn command_gamerule(&mut self, parsed: &mc_command::dispatch::ParsedCommand) -> CommandResult {
+        let Some(name) = parsed.string(0) else {
+            let mut lines = vec!["Game rules:".to_owned()];
+            for rule in crate::game::GameRules::NAMES {
+                let value = self
+                    .rules
+                    .get(rule)
+                    .map_or_else(|| "?".to_owned(), |v| v.to_string());
+                lines.push(format!("{rule} = {value}"));
+            }
+            return CommandResult::message(lines.join("\n"));
+        };
+        let Some(current) = self.rules.get(name) else {
+            return CommandResult::message(format!("unknown game rule {name}"));
+        };
+        let Some(value) = parsed.string(1) else {
+            return CommandResult::message(format!(
+                "Gamerule {name} is currently set to: {current}"
+            ));
+        };
+        match self.rules.set(name, value) {
+            Ok(updated) => {
+                info!(from = %parsed.source.name, rule = name, %updated, "game rule set");
+                let mut message = format!("Gamerule {name} is now set to: {updated}");
+                if !crate::game::GameRules::is_wired(name) {
+                    message.push_str(" (stored; no fire model reads it in this build)");
+                }
+                CommandResult::message(message)
+            }
+            Err(reason) => CommandResult::message(reason),
+        }
     }
 
     /// A `/time` value word: an integer, or one of Vanilla's presets

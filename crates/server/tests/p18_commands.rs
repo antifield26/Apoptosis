@@ -695,9 +695,13 @@ fn dispatcher_counts_pin_the_kd_31_and_kd_32_rows() {
         names.contains(&"spawnpoint"),
         "P20-04 adds the spawnpoint root; tree has {names:?}"
     );
+    assert!(
+        names.contains(&"gamerule"),
+        "P20-05 adds the gamerule root; tree has {names:?}"
+    );
     assert_eq!(
-        kd31, 41,
-        "KD-31 counts {kd31} roots (40 at P20-03 + spawnpoint); bump the tree \
+        kd31, 42,
+        "KD-31 counts {kd31} roots (41 at P20-04 + gamerule); bump the tree \
          and this pin plus the parity row move together"
     );
 

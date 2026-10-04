@@ -283,6 +283,10 @@ impl Game {
             .filter(|entity| {
                 !entity.removed
                     && entity.kind() != EntityKind::Player
+                    // Bolts are weather visuals, not world state: vanilla
+                    // never writes them, and a reloaded strike would be a
+                    // ghost with no storm behind it.
+                    && entity.kind() != EntityKind::Bolt
                     && chunk_of(entity.position.x, entity.position.z) == pos
             })
             .map(|entity| {
@@ -294,6 +298,17 @@ impl Game {
                             mc_nbt::NbtTag::String(format!("minecraft:{}", mob.kind.name())),
                         ));
                         fields.push(("Health".to_owned(), mc_nbt::NbtTag::Float(entity.health)));
+                        // Breeding age (P20-06): babies reload as babies.
+                        // Love timers, egg timers and graze progress are
+                        // transient by design — a restart ends courtships,
+                        // restarts egg clocks and stands sheep up from grass.
+                        fields.push(("Age".to_owned(), mc_nbt::NbtTag::Int(mob.age)));
+                        if mob.kind == mc_entity::mob::MobKind::Sheep {
+                            fields.push((
+                                "Sheared".to_owned(),
+                                mc_nbt::NbtTag::Byte(i8::from(mob.sheared)),
+                            ));
+                        }
                     }
                     EntityBody::Item(item) => {
                         let item_name = item
@@ -328,7 +343,7 @@ impl Game {
                         ));
                         fields.push(("Value".to_owned(), mc_nbt::NbtTag::Int(orb.value)));
                     }
-                    EntityBody::Player | EntityBody::Projectile(_) => {}
+                    EntityBody::Player | EntityBody::Projectile(_) | EntityBody::Bolt(_) => {}
                 }
                 fields.push((
                     "Pos".to_owned(),
@@ -462,7 +477,39 @@ impl Game {
                 warn!(%id, "a saved entity names a kind this build does not model; skipped");
                 continue;
             };
-            if self.spawn_mob(kind, position).is_err() {
+            // Breeding age round-trips (P20-06); everything transient (love,
+            // eggs, grazing) restarts at its default.
+            let age = get("Age")
+                .and_then(mc_nbt::NbtTag::as_i64)
+                .and_then(|v| i32::try_from(v).ok())
+                .unwrap_or(0);
+            let sheared = get("Sheared").is_some_and(|v| !matches!(v, mc_nbt::NbtTag::Byte(0)));
+            self.respawn_saved_mob(kind, position, age, sheared);
+        }
+    }
+
+    /// Respawn one saved mob and restore its breeding age (P20-06).
+    ///
+    /// Split out of [`Game::load_chunk_entities`] when the age fields pushed
+    /// it past the line budget: the shape match stays in the loop, the mob
+    /// rebuild lives here. A spawn failure warns like every other skip.
+    fn respawn_saved_mob(
+        &mut self,
+        kind: MobKind,
+        position: mc_world::Vec3,
+        age: i32,
+        sheared: bool,
+    ) {
+        match self.spawn_mob(kind, position) {
+            Ok(born) => {
+                if let Some(entity) = self.entities.get_mut(born)
+                    && let EntityBody::Mob(mob) = &mut entity.body
+                {
+                    mob.age = age;
+                    mob.sheared = sheared;
+                }
+            }
+            Err(_) => {
                 warn!("a saved mob could not be spawned");
             }
         }
@@ -901,6 +948,14 @@ impl Game {
             mc_persistence::level::write_weather(storage.root(), &self.weather.to_document())
         {
             warn!(%error, "weather document could not be written");
+        }
+        // Game rules ride every save beside the weather (P20-05): same tiny
+        // document, same warn-only contract — a rule set on a running server
+        // must survive the next restart.
+        if let Err(error) =
+            mc_persistence::level::write_game_rules(storage.root(), &self.rules.to_document())
+        {
+            warn!(%error, "game-rule document could not be written");
         }
         Ok(())
     }

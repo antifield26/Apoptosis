@@ -972,8 +972,10 @@ impl Game {
         self.send(
             id,
             &SetTime {
-                world_age: self.tick as i64,
-                clocks: vec![self.overworld_clock_entry(self.tick)],
+                world_age: self.world_time(),
+                clocks: vec![
+                    self.overworld_clock_entry(u64::try_from(self.world_time()).unwrap_or(0)),
+                ],
             },
             report,
         )?;
@@ -1093,8 +1095,9 @@ impl Game {
                 }
             }
             PlayIntent::Interact { entity, kind } => {
-                // Only the attack acts; a use/interact-at on an entity needs the
-                // interaction surfaces (villagers, boats), which are not modelled.
+                // Attacks act through the damage path below; use/interact-at
+                // acts through the animal surfaces (P20-06). Other uses still
+                // fall through (villagers, boats unmodelled).
                 // The wire id is this server's own `EntityId` value --
                 // `AddEntity` is written from `id.get()` with no base offset, so
                 // the id a client echoes back is the id the store holds (checked
@@ -1112,6 +1115,18 @@ impl Game {
                         // interaction range is not refused" (AUDIT-09).
                         if !self.within_entity_reach(id, target) {
                             debug!(id = %id, target = %target, "rejected attack outside entity reach");
+                            return Ok(());
+                        }
+                        // PvP gate (P20-05): a player swinging at another
+                        // player deals nothing while the `pvp` rule reads
+                        // false. Mob and other victims are unaffected — the
+                        // rule is player-versus-player only.
+                        if !self.rules.pvp
+                            && self.entities.get(target).is_some_and(|entity| {
+                                matches!(entity.body, EntityBody::Player)
+                            })
+                        {
+                            debug!(id = %id, target = %target, "refused PvP hit (pvp=false)");
                             return Ok(());
                         }
                         // Held-item damage (P16-01): fist plus the weapon's
@@ -1167,6 +1182,12 @@ impl Game {
                         debug!(id = %id, target = %target, damage, died, "player attack");
                     }
                 }
+                // Right-clicking an entity (use / use-at): farm-animal
+                // surfaces (P20-06) — milking, shearing, feeding. Other kinds
+                // keep the old fall-through (villagers, boats unmodelled).
+                if kind == 0 || kind == 2 {
+                    self.interact_with_entity(id, entity, report);
+                }
             }
             PlayIntent::PlayerAction {
                 status,
@@ -1189,10 +1210,17 @@ impl Game {
             }
             PlayIntent::UseItem { sequence, hand, .. } => {
                 // Vanilla feeds the sequence into the same high-water mark from
-                // `handleUseItem`. The use itself starts a consumable (P18-06)
-                // when the held stack is edible.
+                // `handleUseItem`. Milk drinks at once (P20-06): it carries no
+                // food/consumable components, so the eat path below would
+                // refuse it. Anything else starts a consumable (P18-06) when
+                // the held stack is edible.
                 self.note_block_change_sequence(id, sequence);
-                self.start_eat(id, hand);
+                let used = if hand == 1 { Hand::Off } else { Hand::Main };
+                if self.held_item_is(id, used, "minecraft:milk_bucket") {
+                    self.drink_milk(id, used, report);
+                } else {
+                    self.start_eat(id, hand);
+                }
             }
             PlayIntent::SetCarriedItem { slot } => self.apply_hotbar(id, slot, report)?,
             // Creative inventory take/place (owner-session blocker). The
@@ -3807,6 +3835,27 @@ impl Game {
         self.registries.items.name(held).ok().map(str::to_owned)
     }
 
+    /// Whether the stack in `hand` is `name` (a `minecraft:` id).
+    ///
+    /// The hand-aware read `held_item_name` (main hand only) cannot do: milk
+    /// drinks from either hand, so the `UseItem` arm names its own.
+    fn held_item_is(&self, id: ConnectionId, hand: Hand, name: &str) -> bool {
+        let Some(stack) = self
+            .sessions
+            .get(&id)
+            .map(|session| session.player.inventory.held_item(hand).item_id())
+        else {
+            return false;
+        };
+        let Some(stack) = stack else {
+            return false;
+        };
+        self.registries
+            .items
+            .name(stack)
+            .is_ok_and(|held| held == name)
+    }
+
     /// Whether the player's feet report ground contact (mid-air digging runs
     /// at a fifth of the speed).
     fn on_ground(&self, id: ConnectionId) -> bool {
@@ -4607,7 +4656,7 @@ impl Game {
     /// Factored out of the placement tail so door placement shares the exact
     /// same consume-and-sync (P14-09 walk: take + shrink + write back to the
     /// same slot, never through `add_stack`).
-    fn consume_held(&mut self, id: ConnectionId, hand: Hand, report: &mut TickReport) {
+    pub(crate) fn consume_held(&mut self, id: ConnectionId, hand: Hand, report: &mut TickReport) {
         let survival = self
             .sessions
             .get(&id)
@@ -5190,7 +5239,80 @@ impl Game {
         if self.apply_hoe(id, (x, y, z), face, hand, report) {
             return;
         }
+        // Bone meal grows instead of placing (P20-02 slice 2c): crops and
+        // oak saplings answer, everything else falls through to placement
+        // (which refuses the non-placeable meal, the jar's `PASS` with the
+        // same observable outcome).
+        if self.apply_bone_meal(id, (x, y, z), hand, report) {
+            return;
+        }
         self.place_held_block(id, (x, y, z), face, hand, cursor, report);
+    }
+
+    /// Right-click an entity: milking, shearing, feeding (P20-06).
+    ///
+    /// The main hand acts (the decoded intent carries no hand — named
+    /// simplification). Cows give milk to a held bucket, sheep give 1–3 wool
+    /// to shears, and breeding food feeds any of the four kinds (babies grow,
+    /// adults fall in love). Misses do nothing: no consume, no wear, no
+    /// placement — the hand simply comes back empty of consequences.
+    fn interact_with_entity(&mut self, id: ConnectionId, wire: i32, report: &mut TickReport) {
+        let Ok(target) = EntityId::new(wire) else {
+            return;
+        };
+        if !self.within_entity_reach(id, target) {
+            debug!(id = %id, target = %target, "rejected interact outside entity reach");
+            return;
+        }
+        let Some(kind) = self
+            .entities
+            .get(target)
+            .and_then(|entity| match &entity.body {
+                EntityBody::Mob(mob) => Some(mob.kind),
+                _ => None,
+            })
+        else {
+            return;
+        };
+        let held = self.held_item_name(id);
+        match kind {
+            mc_entity::mob::MobKind::Cow if held.as_deref() == Some("minecraft:bucket") => {
+                if self.milk_cow(target) {
+                    self.exchange_held(id, Hand::Main, "minecraft:milk_bucket", report);
+                }
+            }
+            mc_entity::mob::MobKind::Sheep if held.as_deref() == Some("minecraft:shears") => {
+                if let Some(wool) = self.shear_sheep(target) {
+                    let at = self.entities.get(target).map_or(
+                        mc_world::Vec3::new(0.0, 0.0, 0.0),
+                        |entity| {
+                            mc_world::Vec3::new(
+                                entity.position.x,
+                                entity.position.y + 0.5,
+                                entity.position.z,
+                            )
+                        },
+                    );
+                    if let Ok(wool_id) = self.registries.items.id("minecraft:white_wool")
+                        && let Ok(stack) = mc_entity::stack::ItemStack::new(wool_id, wool)
+                    {
+                        let _ = self.spawn_item_owned(stack, at, None);
+                    }
+                    self.wear_held(id, 1, report);
+                }
+            }
+            mc_entity::mob::MobKind::Cow
+            | mc_entity::mob::MobKind::Pig
+            | mc_entity::mob::MobKind::Sheep
+            | mc_entity::mob::MobKind::Chicken => {
+                if let Some(item) = held
+                    && self.feed_animal(target, &item)
+                {
+                    self.consume_held(id, Hand::Main, report);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Hoe tilling through `UseItemOn` (P20-02 slice 2a).
@@ -5273,6 +5395,91 @@ impl Game {
             self.wear_held(id, 1, report);
         }
         true
+    }
+
+    /// Bone meal through `UseItemOn` (P20-02 slice 2c).
+    ///
+    /// The jar's `BoneMealItem.useOn` over the clicked block, subset to what
+    /// this build grows: crops gain one stage (the jar grows several — the
+    /// exact constants were not re-read here, so one stage is the documented
+    /// simplification), and an oak sapling advances a stage or attempts its
+    /// tree. Grass flora-spread, the other sapling kinds and every other
+    /// growable are named misses that fall through to placement refusal.
+    /// One meal is consumed per success, in survival only (`consume_held`).
+    fn apply_bone_meal(
+        &mut self,
+        id: ConnectionId,
+        (x, y, z): (i32, i32, i32),
+        hand: Hand,
+        report: &mut TickReport,
+    ) -> bool {
+        let Some(held) = self.held_item_name(id) else {
+            return false;
+        };
+        if held != "minecraft:bone_meal" {
+            return false;
+        }
+        let Some(clicked) = self.world.get_block_loaded(x, y, z) else {
+            return false;
+        };
+        let Ok(clicked_name) = self.registries.blocks.block_name(clicked) else {
+            return false;
+        };
+        let clicked_name = clicked_name.to_owned();
+        match clicked_name.as_str() {
+            "minecraft:wheat"
+            | "minecraft:carrots"
+            | "minecraft:potatoes"
+            | "minecraft:beetroots" => {
+                let properties = self
+                    .registries
+                    .blocks
+                    .properties_of(clicked)
+                    .unwrap_or_default();
+                let age = properties
+                    .iter()
+                    .find(|(k, _)| k == "age")
+                    .and_then(|(_, v)| v.parse::<i32>().ok());
+                let max = match clicked_name.as_str() {
+                    "minecraft:beetroots" => 3,
+                    _ => 7,
+                };
+                let Some(age) = age else { return false };
+                if age >= max {
+                    return false;
+                }
+                if !self.write_property(x, y, z, &clicked_name, "age", age + 1) {
+                    return false;
+                }
+                self.consume_held(id, hand, report);
+                true
+            }
+            "minecraft:oak_sapling" => {
+                let properties = self
+                    .registries
+                    .blocks
+                    .properties_of(clicked)
+                    .unwrap_or_default();
+                let stage = properties
+                    .iter()
+                    .find(|(k, _)| k == "stage")
+                    .and_then(|(_, v)| v.parse::<i32>().ok())
+                    .unwrap_or(0);
+                if stage < 1 {
+                    if !self.write_property(x, y, z, "minecraft:oak_sapling", "stage", stage + 1) {
+                        return false;
+                    }
+                    self.consume_held(id, hand, report);
+                    return true;
+                }
+                if !self.grow_oak_tree(x, y, z) {
+                    return false;
+                }
+                self.consume_held(id, hand, report);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Bucket fill and empty through `UseItemOn` (P20-01).
@@ -5484,7 +5691,13 @@ impl Game {
     }
 
     /// Replace the held stack with one item of `name`, in the same slot.
-    fn exchange_held(&mut self, id: ConnectionId, hand: Hand, name: &str, report: &mut TickReport) {
+    pub(crate) fn exchange_held(
+        &mut self,
+        id: ConnectionId,
+        hand: Hand,
+        name: &str,
+        report: &mut TickReport,
+    ) {
         let Ok(item) = self.registries.items.id(name) else {
             return;
         };
@@ -6007,12 +6220,12 @@ impl Game {
             let Some(session) = self.sessions.get_mut(&id) else {
                 return Ok(());
             };
-            // `keep_inventory` is a game rule we do not model yet; Vanilla's default
-            // is `false`, so items are dropped. The stacks are returned to the
-            // caller and discarded here: they are dropped at the *death* position,
-            // which this path no longer knows, and item entities for a death drop
-            // land with the rest of P05-15. Stated, not implied.
-            let dropped = session.player.respawn(false);
+            // `keep_inventory` (P20-05) rides the stored rule: kept deaths
+            // return their stacks to the caller and keep the bar
+            // (`Player::respawn(true)`), so the drops discarded below are
+            // empty by construction. Unkept deaths drop at the death position
+            // (P11-07), which this path no longer knows — same as before.
+            let dropped = session.player.respawn(self.rules.keep_inventory);
             session.player.position = mc_world::Vec3::new(sx, sy, sz);
             if let Some((yaw, pitch)) = bed_rotation {
                 session.player.yaw = yaw;

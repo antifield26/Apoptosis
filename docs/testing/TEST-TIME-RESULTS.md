@@ -25,7 +25,10 @@ by up to ±60 % between runs, so the suite-time sum is ±20–30 s.
 
 **Totals now:** suite-time sum **379.5 s** (1 690 s at the plan's writing, −78 %),
 `cargo test --workspace` **388 s** (1 307 s), fast tier **135–165 s**, counts
-**2 006 passed / 0 failed / 44 ignored / 161 suites**.
+**2 054 passed / 0 failed / 44 ignored / 165 suites** (the +48/+4 over the
+runtime work's close are the P20 remainder: `gamerules` 11, `saplings` 4,
+`lightning` 4, `animals` 5, plus 24 lib/unit pins and the `gamerule` root —
+see TEST-MATRIX.md, which owns the counts).
 
 ## §1 Instrumentation
 

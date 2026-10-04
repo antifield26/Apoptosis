@@ -128,6 +128,7 @@
     clippy::cast_lossless
 )]
 
+pub mod bolt;
 pub mod combat;
 pub mod components;
 pub mod effect;
@@ -159,6 +160,7 @@ pub use wear::{
     is_armor_item, max_damage_of,
 };
 
+pub use bolt::{BOLT_LIFE_TICKS, Bolt};
 pub use effect::ActiveEffect;
 pub use entity::{
     AIR_TICKS, DROWN_DAMAGE, DROWN_DAMAGE_INTERVAL, Entity, EntityBody, EntityId, EntityKind,

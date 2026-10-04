@@ -122,7 +122,7 @@ pub use ore::{
     MAX_ATTEMPTS_PER_FEATURE, OVERWORLD_ORE_PLACED_FEATURES, OreConfig, OreFeature, OreSet,
     OreStats, OreTarget, ore_blocks_by_band, ore_state_ids, populate_ores,
 };
-pub use pack_json::{Attempts, FloatRange, HeightDist, TagTable, YAnchor};
+pub use pack_json::{Attempts, FloatRange, HeightDist, TagTable, YAnchor, load_item_tags};
 pub use placement::{
     AirPolicy, Anchor, CrossChunk, PlacementReport, blocks_outside_chunk, fits_in_chunk, place,
 };

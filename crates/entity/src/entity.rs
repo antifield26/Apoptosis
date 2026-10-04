@@ -84,6 +84,9 @@ pub enum EntityKind {
     Projectile,
     /// An experience orb (any value).
     Orb,
+    /// A lightning-bolt visual (P20-03 slice 2): transient, non-living, never
+    /// persisted. Damage is applied at spawn by the striker.
+    Bolt,
 }
 
 impl EntityKind {
@@ -96,6 +99,7 @@ impl EntityKind {
             Self::Mob => "mob",
             Self::Projectile => "projectile",
             Self::Orb => "orb",
+            Self::Bolt => "bolt",
         }
     }
 
@@ -129,6 +133,8 @@ pub enum EntityBody {
     Projectile(crate::projectile::Projectile),
     /// An experience orb.
     Orb(crate::orb::Orb),
+    /// A lightning-bolt visual: no state beyond the fuse.
+    Bolt(crate::bolt::Bolt),
 }
 
 impl EntityBody {
@@ -141,6 +147,7 @@ impl EntityBody {
             Self::Mob(_) => EntityKind::Mob,
             Self::Projectile(_) => EntityKind::Projectile,
             Self::Orb(_) => EntityKind::Orb,
+            Self::Bolt(_) => EntityKind::Bolt,
         }
     }
 }
@@ -211,7 +218,10 @@ impl Entity {
         let health = match &body {
             EntityBody::Player => crate::player::MAX_HEALTH,
             EntityBody::Mob(mob) => mob.kind.max_health(),
-            EntityBody::Item(_) | EntityBody::Projectile(_) | EntityBody::Orb(_) => 0.0,
+            EntityBody::Item(_)
+            | EntityBody::Projectile(_)
+            | EntityBody::Orb(_)
+            | EntityBody::Bolt(_) => 0.0,
         };
         Self {
             id,
@@ -258,9 +268,22 @@ impl Entity {
             EntityBody::Item(_) | EntityBody::Projectile(_) => {
                 mc_world::Aabb::sized(self.position, 0.25, 0.25)
             }
-            EntityBody::Orb(_) => mc_world::Aabb::sized(self.position, 0.5, 0.5),
+            EntityBody::Orb(_) | EntityBody::Bolt(_) => {
+                // Orbs take their half-block; bolts share it (the strike
+                // never collides — damage is applied at spawn, not by
+                // contact — and a zero box would be a second convention for
+                // "untouchable").
+                mc_world::Aabb::sized(self.position, 0.5, 0.5)
+            }
             EntityBody::Mob(mob) => {
                 let (width, height) = mob.kind.dimensions();
+                // Babies ride at half scale (Vanilla `AgeableMob` 0.5×):
+                // without it a calf blocks doorways its body should fit.
+                let (width, height) = if mob.is_baby() {
+                    (width * 0.5_f32, height * 0.5_f32)
+                } else {
+                    (width, height)
+                };
                 mc_world::Aabb::sized(self.position, f64::from(width), f64::from(height))
             }
         }

@@ -5,9 +5,22 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **2 006 passed, 0 failed, 44 ignored** across **161 suites**, re-derived from
-`cargo test --workspace --no-fail-fast` on the current tree (161/161 `ok`,
-this task's run). The +12 over the **1 994** figure is the three TEST-TIME-PLAN
+Totals: **2 054 passed, 0 failed, 44 ignored** across **165 suites**, re-derived from
+`cargo test --workspace --no-fail-fast` on the current tree (165/165 `ok`,
+this task's run). The +48 over the **2 006** figure is the P20 remainder,
+landed 2026-10-04: P20-05 game rules (+5 lib units, +11 `gamerules` suite:
+command list/query/set/refusals/permission, speed/weather/time/keep/pvp/
+quorum/spawn/grief/conversion wirings, restart round-trip), P20-02 slice 2c
+(+9 `growth` units, +4 `saplings` suite: stage/tree/headroom/other-sapling/
+repair/decay/keep/drops/map pins plus bone-meal clicks and the 96-sapling
+phase-wiring test), P20-03 slice 2 (+1 weather rate unit, +4 `lightning`
+suite: damage/sparing, announce/removal, no-thunder gate, transience),
+P20-06 animals (+9 `animals` units, +5 `animals` suite: birth, milk cure,
+shear/regrow, two-leg tempt, restart), and the `p18_commands` KD-31 pin
+moving 41 → 42 with the `gamerule` root. Every new mechanism carries a
+neutralise-to-red perturbation record, restored byte-exact (thirty-one
+across the four landings, including two vacuity catches the pins
+themselves exposed). The +12 over the **1 994** figure is the three TEST-TIME-PLAN
 §2 migrations, all landed 2026-10-03: the `spread` suite's five tick tests
 became one phase-wiring test plus ten direct-call pins (+6); the `growth`
 slice-1 suite's four tick farms plus its sampling-rate test became one

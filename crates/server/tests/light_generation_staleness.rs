@@ -169,6 +169,13 @@ fn unloading_a_chunk_sends_light_updates_to_holders() {
     for _ in 0..60 {
         game.tick().expect("tick settles");
     }
+    // Persist the settle: random-tick growth writes blocks (leaf repairs
+    // since P20-02 slice 2c, crops before it), and a written chunk is dirty
+    // — which the unload path keeps resident until a save clears it.
+    // Production autosaves every 6000 ticks, so dirtiness only ever pins a
+    // chunk briefly; the test saves here for the same reason, so the
+    // teleport below measures unloading rather than dirtiness.
+    game.save_all_owned().expect("settle saves");
     while out.try_recv().is_some() {}
     assert_eq!(
         game.pending_light_len(),
@@ -179,7 +186,16 @@ fn unloading_a_chunk_sends_light_updates_to_holders() {
     // Walk away: chunk (0, 0) unloads (view 4 + margin 2 = 6 < 7) while
     // (1, 0) stays held.
     game.player_mut(id).expect("player").position = Vec3::new(120.0, 70.0, 8.0);
-    for _ in 0..40 {
+    // The sweep centres on the entity projection, which the Players phase
+    // publishes one tick late — so the teleport tick still sweeps the origin
+    // ring, and a sampled leaf there repairs (P20-02 slice 2c) and re-dirties
+    // the chunk. Production would autosave that away within minutes; the
+    // test saves after the lag tick for the same reason, then measures.
+    for _ in 0..2 {
+        game.tick().expect("tick publishes the teleport");
+    }
+    game.save_all_owned().expect("post-teleport save");
+    for _ in 0..38 {
         game.tick().expect("tick unloads and redrains");
     }
     assert!(

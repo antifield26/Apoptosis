@@ -47,8 +47,13 @@ use mc_network::bridge::ConnectionId;
 /// `sleepCounter >= 100`).
 pub(crate) const DEEP_SLEEP_TICKS: u32 = 100;
 
-/// Skip-night percentage until P20-05 stores the rule (jar default 100).
-pub(crate) const SLEEPING_PERCENTAGE: i32 = 100;
+/// Jar default for `players_sleeping_percentage`, pinned (jar
+/// `GameRules.registerInteger(PLAYER, 100, 0)`).
+///
+/// The skip-night count reads the live stored value
+/// (`Game::rules.players_sleeping_percentage`); this constant pins the
+/// default the percentage test assumes.
+pub(crate) const SLEEPING_PERCENTAGE_DEFAULT: i32 = 100;
 
 /// Reach box half-extents (`isReachableBedBlock`: |dx|≤3, |dy|≤2, |dz|≤3).
 const BED_DX: f64 = 3.0;
@@ -147,7 +152,7 @@ impl Game {
         if self.weather.thundering {
             return true;
         }
-        let time = crate::spawn::time_of_day(self.tick as i64, self.time_offset());
+        let time = crate::spawn::time_of_day(self.world_time(), self.time_offset());
         crate::spawn::sky_darken(time) >= 4
     }
 
@@ -511,14 +516,14 @@ impl Game {
             })
             .count();
         let need = (active
-            .saturating_mul(SLEEPING_PERCENTAGE as usize)
+            .saturating_mul(self.rules.players_sleeping_percentage.max(0) as usize)
             .saturating_add(99)
             / 100)
             .max(1);
         if sleeping < need || deep < need {
             return;
         }
-        let time = crate::spawn::time_of_day(self.tick as i64, self.time_offset());
+        let time = crate::spawn::time_of_day(self.world_time(), self.time_offset());
         self.set_time_offset(self.time_offset() + (WAKE_TIME_OF_DAY - time).rem_euclid(24_000));
         if self.weather.raining {
             // Silent like `resetWeatherCycle`: no START/STOP event — the

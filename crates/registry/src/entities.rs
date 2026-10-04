@@ -46,6 +46,10 @@ pub const ARROW: &str = "minecraft:arrow";
 /// `minecraft:experience_orb`, the type an XP value is carried by.
 pub const EXPERIENCE_ORB: &str = "minecraft:experience_orb";
 
+/// `minecraft:lightning_bolt`, the type a thunderstorm strike is carried by
+/// (P20-03 slice 2; id 77 in the jar-extracted table).
+pub const LIGHTNING_BOLT: &str = "minecraft:lightning_bolt";
+
 /// Entity-type lookup table.
 #[derive(Debug, Clone)]
 pub struct EntityTypeRegistry {

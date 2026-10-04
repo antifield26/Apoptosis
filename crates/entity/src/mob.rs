@@ -1076,7 +1076,48 @@ pub struct Mob {
     /// ring. Until Phase 11 wires goal activity (`tick_entity_ai`), every mob
     /// is idle and the counter simply climbs.
     pub no_action_ticks: u64,
+    /// Age in ticks (P20-06 breeding): `0` is an adult ready to breed,
+    /// negative counts up to adulthood (bred babies start at
+    /// [`BABY_START_AGE`]), positive counts a post-breeding cooldown down.
+    /// Vanilla's single `AgeableMob.age` field, same signs.
+    pub age: i32,
+    /// Ticks of willingness to breed left (Vanilla `inLove`, 600 on feeding).
+    /// Only read while `age == 0`; babies and cooling adults ignore it.
+    pub in_love: u32,
+    /// Whether this sheep has been shorn (sheep only; regrows by grazing).
+    /// Vanilla persists it as `Sheared`, and so does the chunk save.
+    pub sheared: bool,
+    /// Ticks until this chicken lays an egg (chickens only). Vanilla draws
+    /// `6000 + nextInt(6000)`; spawns randomise it, chunk loads restart it
+    /// (transient, never persisted).
+    pub egg_ticks: u32,
+    /// Consecutive ticks spent standing on grass while shorn (sheep only).
+    /// Vanilla's graze goal with a fixed count instead of a second RNG.
+    pub forage_ticks: u32,
 }
+
+/// A bred baby's starting age (Vanilla `AgeableMob.BABY_START_AGE`, via
+/// Pumpkin `ageable.rs`): twenty minutes of growing up.
+pub const BABY_START_AGE: i32 = -24_000;
+
+/// Love ticks one feeding grants (Vanilla `setLoveTicks(600)`, via Pumpkin
+/// `animal.rs`).
+pub const LOVE_TICKS: u32 = 600;
+
+/// Cooldown after breeding, in ticks (five minutes before either parent may
+/// breed again).
+pub const BREED_COOLDOWN_TICKS: i32 = 6_000;
+
+/// Ticks a chicken waits between eggs at minimum (Vanilla draws
+/// `6000 + nextInt(6000)`).
+pub const EGG_DELAY_MIN_TICKS: u32 = 6_000;
+
+/// Extra random egg delay on top of [`EGG_DELAY_MIN_TICKS`].
+pub const EGG_DELAY_SPREAD_TICKS: u32 = 6_000;
+
+/// Consecutive grass ticks that regrow a shorn sheep's wool (a fixed count
+/// standing in for vanilla's graze goal).
+pub const FORAGE_REGROW_TICKS: u32 = 100;
 
 impl Mob {
     /// A mob of `kind`, idle. Health is not stored here: it lives on
@@ -1087,7 +1128,25 @@ impl Mob {
             kind,
             ai: MobAi::new(),
             no_action_ticks: 0,
+            age: 0,
+            in_love: 0,
+            sheared: false,
+            egg_ticks: EGG_DELAY_MIN_TICKS,
+            forage_ticks: 0,
         }
+    }
+
+    /// Whether this mob is a baby (`age < 0`, Vanilla `isBaby`).
+    #[must_use]
+    pub const fn is_baby(&self) -> bool {
+        self.age < 0
+    }
+
+    /// Whether this mob may breed now: an adult with no cooldown and a live
+    /// love timer.
+    #[must_use]
+    pub const fn is_breedable(&self) -> bool {
+        self.age == 0 && self.in_love > 0
     }
 
     /// Which mob this is.

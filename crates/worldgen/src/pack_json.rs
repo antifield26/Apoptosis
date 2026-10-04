@@ -394,39 +394,7 @@ impl TagTable {
     /// recurse (the cycle is dropped, not panicked).
     #[must_use]
     pub fn load_block_tags(namespace_root: &Path, registry: &mc_registry::BlockRegistry) -> Self {
-        let mut raw: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        let mut pending = vec![namespace_root.join("tags").join("block")];
-        while let Some(dir) = pending.pop() {
-            let Ok(entries) = std::fs::read_dir(&dir) else {
-                continue;
-            };
-            let mut names: Vec<_> = entries.flatten().map(|e| e.path()).collect();
-            names.sort();
-            for path in names {
-                if path.is_dir() {
-                    pending.push(path);
-                    continue;
-                }
-                if path.extension().is_none_or(|e| e != "json") {
-                    continue;
-                }
-                let Some(name) = tag_name_of(&namespace_root.join("tags").join("block"), &path)
-                else {
-                    continue;
-                };
-                let Ok(value) = read_worldgen_json(&path) else {
-                    continue;
-                };
-                let Some(values) = value.get("values").and_then(serde_json::Value::as_array) else {
-                    continue;
-                };
-                let entries = values
-                    .iter()
-                    .filter_map(|v| v.as_str().map(str::to_owned))
-                    .collect::<Vec<_>>();
-                raw.insert(name, entries);
-            }
-        }
+        let raw = collect_raw_tags(&namespace_root.join("tags").join("block"));
         let mut table = Self::default();
         let keys: Vec<String> = raw.keys().cloned().collect();
         for key in keys {
@@ -469,6 +437,93 @@ impl TagTable {
     pub const fn missing(&self) -> &BTreeSet<String> {
         &self.missing
     }
+}
+
+/// Read every `*.json` tag file under `dir` (recursively) into
+/// `namespace:path → raw values`, following the same deterministic order as
+/// the block loader. Shared by block tags (resolved to state ids) and item
+/// tags (kept as names): one walker, two expanders.
+fn collect_raw_tags(dir: &Path) -> BTreeMap<String, Vec<String>> {
+    let mut raw: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut pending = vec![dir.to_owned()];
+    while let Some(current) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&current) else {
+            continue;
+        };
+        let mut names: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+        names.sort();
+        for path in names {
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            if path.extension().is_none_or(|e| e != "json") {
+                continue;
+            }
+            let Some(name) = tag_name_of(dir, &path) else {
+                continue;
+            };
+            let Ok(value) = read_worldgen_json(&path) else {
+                continue;
+            };
+            let Some(values) = value.get("values").and_then(serde_json::Value::as_array) else {
+                continue;
+            };
+            let entries = values
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect::<Vec<_>>();
+            raw.insert(name, entries);
+        }
+    }
+    raw
+}
+
+/// Load every `tags/item/**/*.json` under `namespace_root` as item-name sets.
+///
+/// Item tags carry item ids (`"minecraft:wheat"`, `"#namespace:parent"`),
+/// not block states, so — unlike [`TagTable`] — there is no registry to
+/// resolve against and the values stay strings. Nesting expands with the
+/// same depth cap; unknown names are kept verbatim (the caller decides what
+/// a name means — a pack may name items this build never heard of, and
+/// matching is by held-item name, which simply never equals them).
+#[must_use]
+pub fn load_item_tags(namespace_root: &Path) -> BTreeMap<String, BTreeSet<String>> {
+    /// Expand one tag into item names, following `#other` entries.
+    fn expand(
+        raw: &BTreeMap<String, Vec<String>>,
+        key: &str,
+        out: &mut BTreeSet<String>,
+        depth: usize,
+    ) {
+        if depth > 8 || out.len() > 10_000 {
+            return;
+        }
+        let Some(entries) = raw.get(key) else {
+            return;
+        };
+        for entry in entries {
+            if let Some(nested) = entry.strip_prefix('#') {
+                let nested_key = if nested.contains(':') {
+                    nested.to_owned()
+                } else {
+                    format!("minecraft:{nested}")
+                };
+                expand(raw, &nested_key, out, depth + 1);
+            } else {
+                out.insert(entry.clone());
+            }
+        }
+    }
+
+    let raw = collect_raw_tags(&namespace_root.join("tags").join("item"));
+    let mut tags = BTreeMap::new();
+    for key in raw.keys().cloned().collect::<Vec<_>>() {
+        let mut out = BTreeSet::new();
+        expand(&raw, &key, &mut out, 0);
+        tags.insert(key, out);
+    }
+    tags
 }
 
 /// `tags/block/stone_ore_replaceables.json` → `minecraft:stone_ore_replaceables`.
