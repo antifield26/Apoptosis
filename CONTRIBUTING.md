@@ -32,7 +32,7 @@ and [docs/operations/RUNBOOK.md](docs/operations/RUNBOOK.md)).
 
 | Gate | Command | Current state (2026-10-04) |
 |---|---|---|
-| Tests | `cargo test --workspace --no-fail-fast` | 2 054 passed / 0 failed / 44 ignored, 165 suites |
+| Tests | `cargo test --workspace --no-fail-fast` | 2 055 passed / 0 failed / 44 ignored, 166 suites |
 | Formatting | `cargo fmt --all -- --check` | clean |
 | Lints | `cargo clippy --workspace --all-targets -- -D warnings` | clean |
 | aarch64 | `cargo check --target aarch64-unknown-linux-gnu --workspace --all-targets` | needs a `*-linux-gnu-gcc` cross C compiler for `ring`; green in CI, not runnable on a host without one |
@@ -53,8 +53,8 @@ minus aarch64 and cargo-deny, with the tests run by nextest instead of
 `cargo test`: it keeps **every** test and takes **135–165 s** end to end against the
 full tier's ~8 min, because nextest schedules across test binaries rather than
 running one binary at a time. The counts `--quick` prints are nextest's own —
-it does not run doctests, so they read 2 050 where the canonical figure is
-2 054; the figure TEST-MATRIX owns always comes from the full tier's
+it does not run doctests, so they read 2 051 where the canonical figure is
+2 055; the figure TEST-MATRIX owns always comes from the full tier's
 `cargo test`. Retries for the two suites with written flake history live in
 [.config/nextest.toml](.config/nextest.toml).
 

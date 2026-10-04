@@ -585,24 +585,25 @@ per-mob scan; behaviour verified identical by the follow test. Not done,
 named: baby render scale, love hearts, thrown-egg hatching, off-hand
 interaction, unmodelled kinds.
 
-**P20-07 — Pi soak with farm + fluid workload (NOT RUN).** No Pi 5
-hardware on this host, so the §13 acceptance cannot sign here — same
-standing as P22-04's NVMe boundary. What exists instead, labelled
-supporting rather than acceptance: (1) the `entity_heavy` ignored suite
-ran on this Windows x86_64 debug host before and after the P20 tree
-(600 mobs / 400 items, 400 ticks): base `entities 24.98 ms / random 16.15
-ms` vs P20 `26.35 ms / 17.53 ms` — both fail the suite's own 40 ms debug-
-desktop guard either way (the file's own header says a busy desktop moves
-these numbers more than a code change does; broadcast swung 71→81 ms
-between runs on an idle tree), so the delta is read as noise, not as a
-verdict; (2) the new per-tick work is bounded by construction (tempt is
-one holder list per tick, breeding scans only the in-love, leaf BFS runs
-only on sampled leaves, lightning rolls draw nothing when clear). The Pi
-run, when hardware is available: 10 mixed players, flowing-water farm,
-lava cast, wheat fields, bred herds, a thunderstorm window; report fluid
-and random-tick costs separately against the ADR-0009 estimate (≤1.5 /
-≤0.5 ms p99). **P20-08** is the owner checklist
-(`docs/testing/P20-08-FARM-DAY-CHECKLIST.md`), likewise NOT RUN.
+**P20-07 — Pi soak with farm + fluid workload (DONE 2026-10-04; see
+`docs/testing/P20-07-SOAK.md` for the §13 record).** 10 scripted clients,
+30 min, seed 20261004, spawn platform farm (wheat, saplings, pens,
+lava cast, tank outflow; the setup script omitted the reservoir's east
+wall, so the mid-soak "breach" opened hillside instead of releasing a dam
+— fluid burst weaker than designed, sustained growth as designed).
+Settled p50/p95/p99 ≈ **8.8/9.9/10.4 ms**, flat; 41 lifetime overruns (38
+join burst, 1 rejoin storm, 2 attributed mid-soak: entities AI burst 50.7
+ms, players send burst 98 ms — isolated, no cascade); RSS flat 164 MB;
+clean SIGTERM save. **Estimate verdict: fluid ≈ 0.001 ms passes with huge
+margin; random ≈ 5.4 ms mean misses the ≤ 1.5 estimate ~3.5×** — per
+ADR-0009's own rule the early-out (a registry name resolve per sample) is
+wrong, and raising the estimate needs an ADR revision (filed as follow-up,
+not a blocker: the standing rule holds 5×). Two findings filed: a
+join-storm outbound overflow dropping all 10 at once (all rejoined clean;
+P22 reconnect-storm brief) and the setup-script wall omission (pinned by
+the new `fill_negative_coords` regression test, which also exonerated the
+minus-sign parser). Thunderstorm second half by expected-count (~4
+strikes; no strike log line exists).
 
 ## [Unreleased] — AUDIT-19 fix round
 

@@ -5,9 +5,11 @@ Conventions: the test-level vocabulary `L1` unit · `L2` property/fuzz ·
 vanilla · `L7` regression-per-bug is defined in
 [CONVENTIONS.md §11](../CONVENTIONS.md).
 
-Totals: **2 054 passed, 0 failed, 44 ignored** across **165 suites**, re-derived from
-`cargo test --workspace --no-fail-fast` on the current tree (165/165 `ok`,
-this task's run). The +48 over the **2 006** figure is the P20 remainder,
+Totals: **2 055 passed, 0 failed, 44 ignored** across **166 suites**, re-derived from
+`cargo test --workspace --no-fail-fast` on the current tree (166/166 `ok`,
+this task's run). The +1 over the **2 054** figure is the P20-07 setup
+lesson kept as `fill_negative_coords` (negatives resolve absolutely;
+overlapping fills count only changed cells). The +48 over the **2 006** figure is the P20 remainder,
 landed 2026-10-04: P20-05 game rules (+5 lib units, +11 `gamerules` suite:
 command list/query/set/refusals/permission, speed/weather/time/keep/pvp/
 quorum/spawn/grief/conversion wirings, restart round-trip), P20-02 slice 2c
