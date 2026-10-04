@@ -92,7 +92,7 @@ rule (mean ≪ 50 ms, no death spiral) holds with a 5× margin.
    report 0 failures). A restart with 10 players reconnecting at once
    would hit exactly this. Out of P20 scope — chunk streaming and the
    outbound budget predate it — but squarely in P22's reconnect-storm
-   brief (AGENTS.md §10).
+   brief.
 2. **Farm-setup script bug (mine, no server change).** The reservoir walls
    above. No operator impact beyond a weaker fluid burst; the pin above
    keeps the lesson.

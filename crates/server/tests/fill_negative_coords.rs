@@ -38,9 +38,8 @@ impl Harness {
         let uuid = mc_network::auth::offline_profile("Chief").id;
         let text = format!(r#"[{{"uuid": "{uuid}", "name": "Chief", "level": 4}}]"#);
         let ops = OperatorList::parse(&text, Path::new("ops.json")).expect("ops");
-        let game =
-            Game::build_with_operators(None, Some(storage), 2, rx, DEFAULT_RANDOM_SEED, ops)
-                .expect("game builds");
+        let game = Game::build_with_operators(None, Some(storage), 2, rx, DEFAULT_RANDOM_SEED, ops)
+            .expect("game builds");
         Self {
             game,
             events: tx,
@@ -102,12 +101,16 @@ fn negative_fills_land_where_named_and_count_changes() {
     // Two walls sharing their corner columns, like the soak tank.
     let lines = harness.command(&mut out, "fill 8 100 -14 8 102 -10 minecraft:stone");
     assert!(
-        lines.iter().any(|line| line.contains("15 block(s) out of 15")),
+        lines
+            .iter()
+            .any(|line| line.contains("15 block(s) out of 15")),
         "a fresh wall fills whole, saw {lines:?}"
     );
     let lines = harness.command(&mut out, "fill 8 100 -14 12 102 -14 minecraft:stone");
     assert!(
-        lines.iter().any(|line| line.contains("12 block(s) out of 15")),
+        lines
+            .iter()
+            .any(|line| line.contains("12 block(s) out of 15")),
         "the one shared corner is not double-counted, saw {lines:?}"
     );
     // ...at the named (negative) coordinates, not mirrored positive.

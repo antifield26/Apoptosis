@@ -1,9 +1,9 @@
 # P20-08 "Farm Day" — owner real-client checklist (NOT RUN)
 
-Status: **NOT RUN**. This is the scripted single-sitting session
-`tasks/TASK-INDEX.md` P20-08 requires (PLANNING-REVIEW.md R9): every item
-below is checkable on a real Java 26.1.2 client in one sitting. Nothing here
-is claimed until the boxes are ticked with a build id and date.
+Status: **NOT RUN**. This is the scripted single-sitting session the P20-08
+task requires (one checklist, one sitting): every item below is checkable on
+a real Java 26.1.2 client in one sitting. Nothing here is claimed until the
+boxes are ticked with a build id and date.
 
 Setup: release build of this tree, fresh world (`seed` unset), default
 config plus `online_mode = false`, one operator (`/op`), survival mode,
