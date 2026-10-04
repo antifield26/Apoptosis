@@ -5775,7 +5775,15 @@ impl Game {
             debug!(id = %id, "rejected placement into an unloaded chunk");
             return;
         };
-        if !self.registries.blocks.is_empty(target) {
+        // Fluids are replaceable (P20-08 owner finding): vanilla lets a
+        // block displace water or lava, so a fluid cell is a legal target
+        // like air is. The write below replaces the fluid wholesale — no
+        // waterlogging on placement (buckets own that path).
+        let fluid_here = !matches!(
+            self.fluid_state_at(tx, ty, tz),
+            mc_simulation::FluidState::Empty
+        );
+        if !self.registries.blocks.is_empty(target) && !fluid_here {
             debug!(id = %id, "refused to place inside an occupied block");
             return;
         }
@@ -6284,6 +6292,32 @@ impl Game {
         );
         self.send_vitals(id, report)?;
         self.stream_for(id, report)?;
+        // Respawn re-sync (P20-08 owner finding): the death screen clears
+        // the client's inventory view without telling the server, so the
+        // menu mirror still matches the kept inventory and a delta sync
+        // would send nothing — the client keeps showing an empty inventory
+        // for items the server never lost. Send the full window like a
+        // stale-click correction, unconditionally: with keep off it
+        // re-asserts the emptied inventory (curing ghost items the other
+        // way), with keep on it restores what death hid.
+        {
+            let Some(session) = self.sessions.get_mut(&id) else {
+                return Ok(());
+            };
+            mirror_inventory(&mut session.menu, &session.player.inventory);
+            let contents = session.menu.full_contents();
+            let state = session.menu.state_id();
+            let wire_window = i32::from(session.menu.window_id());
+            let packet = ContainerSetContent {
+                window_id: wire_window,
+                state_id: state,
+                slots: contents.iter().cloned().map(wire_stack).collect(),
+                carried: wire_stack(session.menu.cursor()),
+            };
+            if let Err(error) = self.send(id, &packet, report) {
+                debug!(id = %id, %error, "could not send the respawn inventory");
+            }
+        }
         Ok(())
     }
 

@@ -23,7 +23,7 @@ use mc_network::bridge::{
 };
 use mc_protocol::ids::clientbound;
 use mc_protocol::packets::Packet;
-use mc_protocol::packets::play::{GameEvent, PlayIntent, block_position};
+use mc_protocol::packets::play::{ContainerSetContent, GameEvent, PlayIntent, block_position};
 use mc_server::game::{DEFAULT_RANDOM_SEED, Game};
 use mc_server::ops::OperatorList;
 use mc_server::storage::WorldService;
@@ -641,6 +641,56 @@ fn water_source_conversion_feeds_the_engine() {
         );
     }
 }
+/// `keep_inventory true` also re-syncs the menu on respawn: the death
+/// screen clears the client's inventory view without telling the server,
+/// so a delta sync would send nothing for items the server never lost.
+/// The respawn handler sends the full window unconditionally.
+#[test]
+fn keep_inventory_respawn_resyncs_the_menu() {
+    let mut harness = Harness::new("gamerule-resync", ops_for("Chief", 4));
+    let (op, mut out) = harness.join("Chief");
+    harness.command(op, &mut out, "give Chief minecraft:diamond 3");
+    harness.command(op, &mut out, "gamerule keep_inventory true");
+    // Drain the give-time menu sync: without this the assertion below would
+    // pass on the stale `give` packet even with the respawn re-sync removed.
+    while out.try_recv().is_some() {}
+    harness.command(op, &mut out, "kill Chief");
+    harness.run(2);
+    // Death itself may push packets (vitals, death screen); only the
+    // respawn answer counts.
+    while out.try_recv().is_some() {}
+    // The respawn button: ClientCommand action 0.
+    harness
+        .events
+        .try_send(ClientEvent {
+            id: op,
+            kind: ClientEventKind::Intent(PlayIntent::ClientCommand { action: 0 }),
+        })
+        .expect("respawn queued");
+    harness.run(2);
+    let diamond = harness
+        .game
+        .registries()
+        .items
+        .id("minecraft:diamond")
+        .expect("diamond");
+    let mut saw_diamonds = false;
+    while let Some(raw) = out.try_recv() {
+        if raw.id == clientbound::play::CONTAINER_SET_CONTENT
+            && let Ok(contents) = ContainerSetContent::decode(&raw.payload)
+        {
+            saw_diamonds |= contents
+                .slots
+                .iter()
+                .any(|stack| stack.item_id == diamond && stack.count == 3);
+        }
+    }
+    assert!(
+        saw_diamonds,
+        "respawn re-sends the full menu with the kept diamonds (neutralise the resync and the client keeps showing an empty inventory)"
+    );
+}
+
 /// Rules ride the save and come back on the next boot.
 #[test]
 fn rules_survive_restart() {

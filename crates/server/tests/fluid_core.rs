@@ -670,3 +670,23 @@ fn a_fluid_tick_for_a_position_that_no_longer_holds_fluid_is_a_no_op() {
         "no water was resurrected"
     );
 }
+
+#[test]
+fn a_solid_block_displaces_a_fluid_cell() {
+    // P20-08 owner finding ("无法在接触流体的方块面上放置方块"): vanilla
+    // lets a block displace water or lava, so a fluid cell is a legal
+    // placement target like air is. Click the top face of the floor under a
+    // water source while holding stone: the stone lands in the water cell.
+    let mut harness = Harness::new("p20-place-into-fluid");
+    harness.join("Mason");
+    stone_floor(&mut harness.game);
+    place_water_source(&mut harness.game, 1, 64, 0);
+    harness.stand(0, 64, 0);
+    harness.give("minecraft:stone");
+    harness.click(1, 63, 0, 1);
+    assert_eq!(
+        block_name(&harness.game, 1, 64, 0),
+        "minecraft:stone",
+        "the block displaced the water (refuse this and the client predicts a block the server never places)"
+    );
+}
