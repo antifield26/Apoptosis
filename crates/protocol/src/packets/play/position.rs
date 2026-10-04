@@ -159,9 +159,9 @@ pub struct MoveEntityPosRot {
     pub dy: i16,
     /// Z delta, in 1/4096 of a block.
     pub dz: i16,
-    /// Yaw, in 1/256 of a degree.
+    /// Yaw, in 256ths of a full turn.
     pub yaw: i8,
-    /// Pitch, in 1/256 of a degree.
+    /// Pitch, in 256ths of a full turn.
     pub pitch: i8,
     /// Whether the entity is resting on solid ground.
     pub on_ground: bool,
@@ -172,9 +172,9 @@ pub struct MoveEntityPosRot {
 pub struct MoveEntityRot {
     /// Entity id.
     pub entity_id: i32,
-    /// Yaw, in 1/256 of a degree.
+    /// Yaw, in 256ths of a full turn.
     pub yaw: i8,
-    /// Pitch, in 1/256 of a degree.
+    /// Pitch, in 256ths of a full turn.
     pub pitch: i8,
     /// Whether the entity is resting on solid ground.
     pub on_ground: bool,

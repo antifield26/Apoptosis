@@ -537,11 +537,11 @@ pub struct AddEntity {
     pub y: f64,
     /// Z coordinate.
     pub z: f64,
-    /// Pitch, in 1/256 of a degree.
+    /// Pitch, in 256ths of a full turn.
     pub pitch: i8,
-    /// Yaw, in 1/256 of a degree.
+    /// Yaw, in 256ths of a full turn.
     pub yaw: i8,
-    /// Head yaw, in 1/256 of a degree.
+    /// Head yaw, in 256ths of a full turn.
     pub head_yaw: i8,
     /// Object data: the variant fields of a non-living entity, `0` for a living one.
     pub data: i32,
