@@ -40,7 +40,7 @@ staged world generation with
 eventual vanilla parity as the target; offline mode default and
 online mode configurable (implemented in P19-05 — [ADR-0008](adr/ADR-0008-online-auth.md),
 Mojang handshake + session verify, the default stays offline); TOML config;
-`tracing` structured logs; Rust stable pinned in `rust-toolchain.toml`;
+`tracing` structured logs; Rust stable, unpinned (no toolchain file);
 `unsafe` Rust only when narrowly isolated, justified and documented (the
 workspace currently forbids it).
 

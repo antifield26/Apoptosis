@@ -32,9 +32,7 @@ but has no pistons and no exact update order; 41 of ~90 commands).
 
 ## 2. Building from source
 
-Requirements: Rust **1.98.1** — pinned, not advisory; `rust-toolchain.toml`
-selects it automatically with rustup, and a different toolchain is a build
-reproducibility failure, not a configuration.
+Requirements: Rust stable — no pinned toolchain; rustup uses the default.
 
 ```text
 cargo build --workspace --release --locked     # the server binary
@@ -50,7 +48,7 @@ the release build succeeds from a clean target with `--locked` (no unpinned
 resolution); the binary hash and size are recorded in
 `docs/performance/BENCHMARK-BASELINE.md` §P09-09. Rust releases are not
 bit-identical across hosts/toolchains, so "reproducible" here means: same
-commit + same pinned toolchain + `--locked` → a build that passes the same
+commit + same toolchain + `--locked` → a build that passes the same
 gates, with the hash recorded for this host's artifact.
 
 ## 3. Running

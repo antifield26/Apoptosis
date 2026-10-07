@@ -10,7 +10,7 @@ Anvil format.
 |---|---|
 | License | [MIT](LICENSE) (see also [NOTICE](NOTICE)) |
 | Target protocol | 775 (Minecraft 26.1.2; wire display string "26.1") |
-| Toolchain | Rust **1.98.1**, pinned in [rust-toolchain.toml](rust-toolchain.toml) |
+| Toolchain | Rust stable |
 | Platform | x86_64 (dev/CI) + aarch64 (production target) |
 | CI | GitHub Actions (`ci` workflow) — fmt, clippy, tests, aarch64 check, cargo-deny |
 | Status | **`v0.3.0`** (latest release) — binaries on [GitHub Releases](https://github.com/antifield26/Apoptosis/releases); `main` carries the unreleased v0.4.0 (P19–P22) work. See [docs/release/RELEASE-CANDIDATE.md](docs/release/RELEASE-CANDIDATE.md) |
@@ -84,8 +84,7 @@ This project records gaps instead of papering over them. The headline items
 
 ## Build and run
 
-Requirements: Rust **1.98.1** (rustup installs the pinned toolchain
-automatically), plus a C toolchain for linking.
+Requirements: Rust stable (no pinned toolchain), plus a C toolchain for linking.
 
 ```sh
 cargo build --workspace --release --locked

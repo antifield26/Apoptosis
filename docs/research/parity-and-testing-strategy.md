@@ -40,7 +40,7 @@ Levels, cheapest first:
 
 ## 3. Initial dependency / license policy (P00-09, binding proposal → ratified in ADR-0001 §8)
 
-- Runtime (Phase 01): `tokio` (net/tasks), `serde`+`serde_json`, `toml`, `tracing`+`tracing-subscriber`, `thiserror`, `bytes`. All MIT/Apache-2.0. Pin exact versions in `Cargo.lock` (committed); toolchain pinned post-validation (`rust-toolchain.toml`, P01-02) — current dev toolchain observed: `rustc 1.98.1 / cargo 1.98.1 / stable-x86_64-pc-windows-msvc`.
+- Runtime (Phase 01): `tokio` (net/tasks), `serde`+`serde_json`, `toml`, `tracing`+`tracing-subscriber`, `thiserror`, `bytes`. All MIT/Apache-2.0. Pin exact versions in `Cargo.lock` (committed); no toolchain pin — current dev toolchain observed: `rustc 1.99.0 / stable-x86_64-pc-windows-msvc`.
 - Compression (Phase 03 decision point): `flate2` (zlib/gzip, MINIZ) vs `ruzstd`/others — decide by license + aarch64 perf evidence, not preference.
 - Dev: fuzz/property + `criterion`-style benches + `cargo deny`-equivalent license check wired in CI (P01-03).
 - Forbidden without owner + legal review: GPL/AGPL/SSPL-licensed crates; vendored reference code; reference-extracted Mojang data assets.

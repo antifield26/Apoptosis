@@ -434,22 +434,15 @@ fn print_phase_means(game: &Game) {
 }
 
 fn rustc_version() -> String {
-    // `rustc --version` at profile time would fork a process per run; the
-    // pinned toolchain file is the version of record for this workspace. The
-    // path is resolved from the crate root so the test finds it regardless of
-    // the runner's working directory (the first version of this helper read a
-    // relative path and printed "unreadable" on every run).
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../rust-toolchain.toml");
-    let channel = std::fs::read_to_string(&path)
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|line| line.strip_prefix("channel"))
-        .map(str::trim)
-        .collect::<Vec<_>>()
-        .join(" ");
-    if channel.is_empty() {
-        format!("rust-toolchain.toml unreadable at {}", path.display())
-    } else {
-        format!("pinned toolchain {channel}")
-    }
+    // No pinned toolchain file exists anymore, so ask the compiler directly.
+    // One fork per profile run (not per tick) keeps the original reason for
+    // avoiding this — process-spawn cost inside the measurement — intact.
+    std::process::Command::new("rustc")
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .filter(|version| !version.is_empty())
+        .unwrap_or_else(|| "rustc --version unavailable".to_owned())
 }

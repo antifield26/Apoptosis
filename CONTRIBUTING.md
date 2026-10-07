@@ -7,9 +7,7 @@ test that cannot fail proves nothing.**
 
 ## Environment
 
-- Rust **1.98.1** — pinned in [rust-toolchain.toml](rust-toolchain.toml);
-  rustup selects it automatically. A different toolchain is a reproducibility
-  failure, not a configuration.
+- Rust stable
 - Development happens on x86_64 (Windows or Linux); the production target is
   aarch64 (Raspberry Pi 5, Debian 13). CI runs the gates on both host platforms
   plus an aarch64 cross-check.
