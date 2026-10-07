@@ -996,7 +996,7 @@ mod tests {
         // The mode is opt-in, so a normal trace must not start scattering files.
         let (mut session, buf) = new_session();
         enter_login(&mut session);
-        assert!(!packets(&buf.text()).is_empty());
+        assert_ne!(packets(&buf.text()).len(), 0);
         // Nothing to assert on disk: the point is that construction alone creates nothing and does not panic.
     }
 

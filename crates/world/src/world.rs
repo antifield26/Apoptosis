@@ -1179,7 +1179,7 @@ mod tests {
         // The helper builds its floor through `set_block`, so start from a clear
         // slate to observe only this test's change.
         let _ = world.take_block_changes();
-        assert!(world.block_changes().is_empty());
+        assert_eq!(world.block_changes().len(), 0);
         let change = world
             .set_block(1, 64, 1, 1)
             .expect("sets")
@@ -1191,7 +1191,7 @@ mod tests {
         // A no-op write reports nothing.
         assert!(world.set_block(1, 64, 1, 1).expect("sets").is_none());
         assert_eq!(world.take_block_changes().len(), 1);
-        assert!(world.block_changes().is_empty());
+        assert_eq!(world.block_changes().len(), 0);
         // The chunk is dirty.
         let touched = ChunkPos::new(0, 0);
         assert!(world.chunk(touched).expect("chunk").dirty);
@@ -1202,7 +1202,7 @@ mod tests {
         // The helper's floor spans 36 chunks (x/z from -33..32), all dirty from
         // construction; `clear_dirty` must empty the whole set.
         world.clear_dirty();
-        assert!(world.dirty_chunks().is_empty());
+        assert_eq!(world.dirty_chunks().len(), 0);
     }
 
     #[test]

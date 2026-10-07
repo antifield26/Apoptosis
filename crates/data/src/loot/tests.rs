@@ -148,7 +148,7 @@ fn weights_are_respected_across_many_draws() {
 fn rolls_equal_to_zero_produce_nothing() {
     let table = table_with(vec![item("minecraft:stone", 1)], 0.0);
     let out = roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context()).expect("rolls");
-    assert!(out.is_empty());
+    assert_eq!(out.len(), 0);
 }
 
 #[test]
@@ -732,7 +732,7 @@ fn any_of_and_inverted_compose() {
     let mut survived = context();
     survived.survives_explosion = Some(true);
     let out = roll(&table, &LootTables::new(), &mut SeqRng::new(1), &survived).expect("rolls");
-    assert!(out.is_empty());
+    assert_eq!(out.len(), 0);
 }
 
 #[test]
@@ -904,7 +904,7 @@ fn a_hostile_rng_returning_one_does_not_index_past_the_end() {
 fn an_empty_pool_yields_nothing_rather_than_panicking() {
     let table = table_with(Vec::new(), 4.0);
     let out = roll(&table, &LootTables::new(), &mut SeqRng::new(1), &context()).expect("rolls");
-    assert!(out.is_empty());
+    assert_eq!(out.len(), 0);
 }
 
 #[test]
@@ -1134,7 +1134,7 @@ fn lookup_helpers_answer_deterministically() {
             .is_some()
     );
     assert!(tables.by_name(&id("minecraft:nope")).is_none());
-    assert!(tables.referencing(&id("minecraft:test")).is_empty());
+    assert_eq!(tables.referencing(&id("minecraft:test")).len(), 0);
 }
 
 #[test]

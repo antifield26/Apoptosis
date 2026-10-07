@@ -1970,7 +1970,7 @@ mod tests {
         assert_eq!(player.level, 0);
         assert_eq!(player.total_experience, 0);
         assert!(player.inventory.slot(0).is_empty());
-        assert!(player.extra.is_empty());
+        assert_eq!(player.extra.len(), 0);
         assert!(player.is_alive());
     }
 
@@ -2158,7 +2158,7 @@ mod tests {
         assert_eq!(player.effects[&POISON].amplifier, 1);
         assert!(player.clear_effect(POISON));
         assert!(!player.clear_effect(POISON));
-        assert!(player.effects.is_empty());
+        assert_eq!(player.effects.len(), 0);
     }
 
     #[test]
@@ -2213,9 +2213,9 @@ mod tests {
         use crate::effect::effect_id::SPEED;
         let mut player = survivor();
         player.give_effect(SPEED, 0, 2);
-        assert!(player.tick_effects(1, &CombatStats::ZERO).is_empty());
+        assert_eq!(player.tick_effects(1, &CombatStats::ZERO).len(), 0);
         assert_eq!(player.tick_effects(2, &CombatStats::ZERO), vec![SPEED]);
-        assert!(player.effects.is_empty());
+        assert_eq!(player.effects.len(), 0);
     }
 
     #[test]
@@ -2300,7 +2300,7 @@ mod tests {
         assert_eq!(player.experience, 0.0);
         assert_eq!(player.total_experience, 0);
         assert_eq!(player.inventory.selected_hotbar(), 0);
-        assert!(player.extra.is_empty());
+        assert_eq!(player.extra.len(), 0);
         assert_eq!(player.entity_id, 3, "the entity system assigns the id");
     }
 
@@ -2663,6 +2663,6 @@ mod tests {
             .count();
         assert_eq!(versions, 1, "DataVersion appears exactly once");
         let loaded = Player::from_nbt(&reencoded, profile(), 1, &items).expect("loads");
-        assert!(loaded.extra.is_empty());
+        assert_eq!(loaded.extra.len(), 0);
     }
 }

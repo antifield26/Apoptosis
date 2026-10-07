@@ -342,7 +342,7 @@ mod light_fields_tests {
             fields.sky_mask.is_empty(),
             "a uniform section needs no data array: {fields:?}"
         );
-        assert!(fields.sky.is_empty());
+        assert_eq!(fields.sky.len(), 0);
         // the block side of the same section is all-dark, which is empty
         assert!(fields.empty_block_mask.contains(&7), "{fields:?}");
     }

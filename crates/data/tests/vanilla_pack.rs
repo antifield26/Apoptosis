@@ -268,7 +268,7 @@ fn check_recipes(pack_root: &Path) {
     let mut shapeless_seen = 0;
     for recipe in book.of_kind(RecipeKind::Shapeless) {
         if let Recipe::Shapeless(shapeless) = recipe {
-            assert!(!shapeless.ingredients.is_empty());
+            assert_ne!(shapeless.ingredients.len(), 0);
             shapeless_seen += 1;
         }
     }

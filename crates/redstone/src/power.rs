@@ -649,7 +649,7 @@ mod tests {
                 assert_eq!(state.strong, PowerLevel::ZERO, "{source} strong");
             }
             assert!(state.is_powered(), "{source} active means powered");
-            assert!(!source.name().is_empty());
+            assert_ne!(source.name(), "");
         }
     }
 

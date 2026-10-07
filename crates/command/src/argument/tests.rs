@@ -296,7 +296,7 @@ fn error_messages_name_the_argument_and_the_problem() {
     let error = parse_value(&word("name"), "").expect_err("empty");
     // Every error implements Display and Error, so a caller can log or chain it.
     let _: &dyn std::error::Error = &error;
-    assert!(!error.to_string().is_empty());
+    assert_ne!(error.to_string(), "");
 }
 
 #[test]

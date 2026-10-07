@@ -285,7 +285,7 @@ mod tests {
         for level in 0..=4u8 {
             let parsed = PermissionLevel::from_level(level).expect("a known level");
             assert_eq!(parsed.level(), level);
-            assert!(!parsed.name().is_empty());
+            assert_ne!(parsed.name(), "");
             assert!(parsed.to_string().contains(&level.to_string()));
         }
         assert_eq!(PermissionLevel::from_level(5), None);
@@ -344,7 +344,7 @@ mod tests {
             SourceKind::Console,
             SourceKind::CommandBlock,
         ] {
-            assert!(!kind.name().is_empty());
+            assert_ne!(kind.name(), "");
         }
     }
 

@@ -269,7 +269,7 @@ fn the_captured_latency_only_body_names_bit_four_as_update_latency() {
     // An empty entry list is a legal body and stays two bytes: the count is a
     // VarInt right after the bitset.
     let empty = PlayerInfoUpdate::decode(&CAPTURED_ALL_ACTIONS_NO_ENTRIES).expect("decodes");
-    assert!(empty.entries.is_empty());
+    assert_eq!(empty.entries.len(), 0);
     assert_eq!(empty.actions.bits(), 0xFF);
     assert_eq!(
         empty.encode().expect("encodes"),

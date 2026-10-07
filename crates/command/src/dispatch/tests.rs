@@ -68,7 +68,7 @@ fn a_bare_command_parses_with_no_arguments() {
     let outcome = dispatcher().parse("help", &player());
     let parsed = outcome.parsed().expect("parsed");
     assert_eq!(parsed.name, "help");
-    assert!(parsed.arguments.is_empty());
+    assert_eq!(parsed.arguments.len(), 0);
     assert_eq!(parsed.raw_arguments, "");
 }
 
@@ -159,7 +159,7 @@ fn an_unknown_command_reports_near_matches() {
     }
     // Nothing similar: no suggestions, and still a clean refusal.
     match dispatcher().parse("zzz", &player()) {
-        CommandOutcome::UnknownCommand { suggestions, .. } => assert!(suggestions.is_empty()),
+        CommandOutcome::UnknownCommand { suggestions, .. } => assert_eq!(suggestions.len(), 0),
         other => panic!("expected UnknownCommand, got {other:?}"),
     }
 }
@@ -289,7 +289,7 @@ fn suggestions_are_roots_only_and_respect_permission() {
     assert!(!suggestions[0].complete);
 
     // An operator-only command is not offered to a plain player.
-    assert!(dispatcher.suggest("o", &player()).is_empty());
+    assert_eq!(dispatcher.suggest("o", &player()).len(), 0);
     assert_eq!(dispatcher.suggest("o", &op()).len(), 1);
 
     // The empty prefix offers everything the source may use.
@@ -298,7 +298,7 @@ fn suggestions_are_roots_only_and_respect_permission() {
 
     // Past the first word there are no suggestions, because argument candidates need
     // knowledge the tree does not have.
-    assert!(dispatcher.suggest("say hello", &player()).is_empty());
+    assert_eq!(dispatcher.suggest("say hello", &player()).len(), 0);
     // A leading slash is accepted.
     assert_eq!(dispatcher.suggest("/h", &player()).len(), 1);
 }
@@ -314,8 +314,8 @@ fn the_tree_is_ordered_and_lookup_is_exact() {
     assert!(tree.get("Help").is_none(), "names are case sensitive");
     assert!(tree.get("").is_none());
     assert_eq!(tree.len(), 7);
-    assert!(!tree.is_empty());
-    assert!(CommandTree::new().is_empty());
+    assert_ne!(tree.len(), 0);
+    assert_eq!(CommandTree::new().len(), 0);
 }
 
 #[test]
@@ -449,6 +449,6 @@ fn an_empty_tree_parses_nothing_and_suggests_nothing() {
         dispatcher.parse("help", &player()),
         CommandOutcome::UnknownCommand { .. }
     ));
-    assert!(dispatcher.suggest("", &player()).is_empty());
-    assert!(dispatcher.tree().is_empty());
+    assert_eq!(dispatcher.suggest("", &player()).len(), 0);
+    assert_eq!(dispatcher.tree().len(), 0);
 }

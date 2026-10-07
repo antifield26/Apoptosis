@@ -967,7 +967,7 @@ mod tests {
         assert_eq!(template.size, [2, 2, 2]);
         assert_eq!(template.palette.len(), 3);
         assert_eq!(template.palette[0].name.to_string(), "minecraft:air");
-        assert!(template.palette[0].properties.is_empty());
+        assert_eq!(template.palette[0].properties.len(), 0);
         assert_eq!(template.palette[1].name.to_string(), "minecraft:oak_log");
         assert_eq!(
             template.palette[1].properties,

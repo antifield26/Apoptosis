@@ -30,7 +30,7 @@ fn a_new_entity_has_an_empty_payload_of_its_own_kind() {
         assert_eq!(entity.kind(), kind, "{kind} kind");
         assert!(entity.data.is_well_formed(), "{kind} payload shape");
         assert_eq!(entity.data.kind(), kind);
-        assert!(!kind.name().is_empty());
+        assert_ne!(kind.name(), "");
         if kind.has_inventory() {
             let items = entity.data.items().expect("an inventory");
             assert_eq!(items.len(), kind.slot_count(), "{kind} slot count");
@@ -113,7 +113,7 @@ fn iteration_is_ascending_by_position() {
     // And filtering keeps the order.
     let containers = store.of_kind(BlockEntityKind::Container);
     assert_eq!(containers, positions);
-    assert!(store.of_kind(BlockEntityKind::Furnace).is_empty());
+    assert_eq!(store.of_kind(BlockEntityKind::Furnace).len(), 0);
 }
 
 #[test]

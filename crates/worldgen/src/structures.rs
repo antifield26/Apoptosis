@@ -1846,7 +1846,7 @@ mod tests {
         assert!(registry.is_empty());
         assert_eq!(report.files, 0);
         assert_eq!(report.loaded, 0);
-        assert!(report.skipped.is_empty());
+        assert_eq!(report.skipped.len(), 0);
         assert_eq!(report.unreadable_dirs.len(), 1, "{report:?}");
         assert!(
             !report.is_complete(),

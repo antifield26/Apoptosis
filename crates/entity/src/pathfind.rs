@@ -879,7 +879,7 @@ mod tests {
                     // search documents (after clamping).
                     if let Some(path) = find_path(&world, start, goal, limits) {
                         assert!(path.len() <= max_path_len.max(1) as usize);
-                        assert!(!path.is_empty());
+                        assert_ne!(path.len(), 0);
                     }
                 }
             }

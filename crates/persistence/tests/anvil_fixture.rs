@@ -130,7 +130,7 @@ fn vanilla_region_header_matches_our_decoder() {
         Compression::Zlib,
         "vanilla's default codec is deflate"
     );
-    assert!(!stored.data.is_empty());
+    assert_ne!(stored.data.len(), 0);
     let _ = region.sync();
 }
 
@@ -191,8 +191,8 @@ fn vanilla_chunk_decodes_to_the_measured_shape() {
 
     // `entities` was absent from this chunk in the vanilla file; the reader must
     // not invent it.
-    assert!(chunk.entities.is_empty());
-    assert!(chunk.block_entities.is_empty());
+    assert_eq!(chunk.entities.len(), 0);
+    assert_eq!(chunk.block_entities.len(), 0);
 }
 
 #[test]

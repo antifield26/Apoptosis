@@ -18,7 +18,7 @@ fn parse_str(text: &str) -> Result<super::ExecuteChain, ExecuteError> {
 #[test]
 fn a_bare_run_carries_no_modifiers() {
     let chain = parse_str("run say hi").expect("parses");
-    assert!(chain.modifiers.is_empty());
+    assert_eq!(chain.modifiers.len(), 0);
     assert_eq!(chain.run, "say hi");
     assert!(!chain.has_as());
     assert!(!chain.has_position_modifier());
@@ -266,7 +266,7 @@ fn axes_parse_and_refuse_repeats_and_unknowns() {
     );
     assert_eq!(Axes::parse("xyz").expect("parses").count(), 3);
     assert_eq!(Axes::parse("y").expect("parses").count(), 1);
-    assert!(!Axes::parse("y").expect("parses").is_empty());
+    assert_ne!(Axes::parse("y").expect("parses").count(), 0);
 
     for bad in ["", "q", "xyq", "xx", "xyx", "zz", "X"] {
         let result = Axes::parse(bad);
@@ -281,7 +281,7 @@ fn axes_parse_and_refuse_repeats_and_unknowns() {
             z: false
         }
     );
-    assert!(Axes::default().is_empty());
+    assert_eq!(Axes::default().count(), 0);
 }
 
 #[test]

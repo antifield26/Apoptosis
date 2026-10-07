@@ -636,7 +636,7 @@ fn every_baseline_recipe_resolves_and_is_reachable_from_its_ingredients() {
     assert_eq!(sorted.len(), names.len(), "recipe names must be unique");
 
     for recipe in recipes.recipes() {
-        assert!(!recipe.name().is_empty());
+        assert_ne!(recipe.name(), "");
         assert!(
             recipe.ingredient_count() >= 1,
             "{} has no ingredients",
@@ -658,7 +658,7 @@ fn every_baseline_recipe_resolves_and_is_reachable_from_its_ingredients() {
         match recipe {
             Recipe::Shaped(shaped) => {
                 let shape = shaped.pattern().shape();
-                assert!(!shape.is_empty());
+                assert_ne!(shape.len(), 0);
                 assert!(
                     shape.width() >= 1 && shape.width() <= 3,
                     "{}",
@@ -670,7 +670,7 @@ fn every_baseline_recipe_resolves_and_is_reachable_from_its_ingredients() {
                     recipe.name()
                 );
                 for cell in shaped.pattern().cells().iter().flatten() {
-                    assert!(!cell.item_ids().is_empty());
+                    assert_ne!(cell.item_ids().len(), 0);
                     for item_id in cell.item_ids() {
                         items
                             .entry(*item_id)
@@ -680,9 +680,9 @@ fn every_baseline_recipe_resolves_and_is_reachable_from_its_ingredients() {
                 }
             }
             Recipe::Shapeless(shapeless) => {
-                assert!(!shapeless.ingredients().is_empty());
+                assert_ne!(shapeless.ingredients().len(), 0);
                 for ingredient in shapeless.ingredients() {
-                    assert!(!ingredient.item_ids().is_empty());
+                    assert_ne!(ingredient.item_ids().len(), 0);
                     for item_id in ingredient.item_ids() {
                         items
                             .entry(*item_id)
@@ -926,7 +926,7 @@ fn an_empty_registry_matches_nothing() {
     let recipes = RecipeRegistry::empty();
     let mut grid = grid2();
     grid[0] = stack(oak_log(), 1);
-    assert!(recipes.is_empty());
+    assert_eq!(recipes.len(), 0);
     assert!(!recipes.matches(&grid, 2));
     assert!(
         recipes

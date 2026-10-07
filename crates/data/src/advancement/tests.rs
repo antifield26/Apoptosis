@@ -142,8 +142,8 @@ fn a_two_node_cycle_is_reported_and_terminates() {
     assert!(registry.depth_of(&id("minecraft:b")).is_none());
     assert_eq!(registry.max_depth(), None);
     // The walks that could hang must not.
-    assert!(!registry.ancestors_of(&id("minecraft:a")).is_empty());
-    assert!(!registry.subtree_of(&id("minecraft:a")).is_empty());
+    assert_ne!(registry.ancestors_of(&id("minecraft:a")).len(), 0);
+    assert_ne!(registry.subtree_of(&id("minecraft:a")).len(), 0);
     let histogram = registry.depth_histogram();
     assert_eq!(
         histogram.get(&0).copied(),
@@ -271,7 +271,7 @@ fn absent_requirements_mean_every_criterion_is_required() {
         advancement.effective_requirements(),
         vec![vec!["minecraft:crit"]]
     );
-    assert!(advancement.undefined_requirements().is_empty());
+    assert_eq!(advancement.undefined_requirements().len(), 0);
     // And with an explicit group, that group is used verbatim.
     advancement.requirements = vec![vec!["minecraft:crit".to_owned()]];
     assert_eq!(
@@ -345,7 +345,7 @@ fn triggers_are_collected_across_the_registry() {
     assert_eq!(triggers.len(), 2);
     assert!(triggers.contains("minecraft:tick"));
     assert_eq!(registry.with_trigger("minecraft:tick").len(), 1);
-    assert!(registry.with_trigger("minecraft:nope").is_empty());
+    assert_eq!(registry.with_trigger("minecraft:nope").len(), 0);
     let advancement = registry.by_name(&id("minecraft:a")).expect("present");
     assert_eq!(advancement.criterion_names(), vec!["one", "two"]);
     assert_eq!(
@@ -485,7 +485,7 @@ fn a_rewards_block_is_modelled_but_grants_nothing() {
         read_advancement_file(&file, id("minecraft:story/r"), mc_data_limits()).expect("parses");
     assert_eq!(advancement.rewards.experience, 100);
     assert_eq!(advancement.rewards.recipes.len(), 2);
-    assert!(advancement.rewards.loot.is_empty());
+    assert_eq!(advancement.rewards.loot.len(), 0);
     assert!(advancement.rewards.function.is_none());
     assert!(!advancement.rewards.is_empty());
     assert_eq!(advancement.parent, Some(id("minecraft:story/root")));
@@ -599,8 +599,8 @@ fn a_real_directory_loads_and_accounts_for_every_file() {
 
     report.check(&registry);
     assert!(report.problems().is_empty(), "{:?}", report.problems());
-    assert!(report.errors().is_empty());
-    assert!(report.cycles().is_empty());
+    assert_eq!(report.errors().len(), 0);
+    assert_eq!(report.cycles().len(), 0);
 }
 
 #[test]

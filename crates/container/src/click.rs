@@ -457,7 +457,7 @@ mod tests {
     fn click_type_ids_round_trip_and_cover_the_wire_range() {
         for kind in ClickType::ALL {
             assert_eq!(ClickType::from_id(kind.id()), Some(kind));
-            assert!(!kind.name().is_empty());
+            assert_ne!(kind.name(), "");
         }
         assert_eq!(ClickType::from_id(-1), None);
         assert_eq!(ClickType::from_id(7), None);
@@ -585,7 +585,7 @@ mod tests {
         ];
         for case in cases {
             let text = case.to_string();
-            assert!(!text.is_empty());
+            assert_ne!(text, "");
         }
     }
 }

@@ -800,7 +800,7 @@ mod tests {
     #[test]
     fn chunk_light_defaults_are_dark_and_rectangular() {
         let light = ChunkLight::default();
-        assert!(light.sky.is_empty());
-        assert!(light.block.is_empty());
+        assert_eq!(light.sky.len(), 0);
+        assert_eq!(light.block.len(), 0);
     }
 }

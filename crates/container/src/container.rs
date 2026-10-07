@@ -372,7 +372,7 @@ mod tests {
             ContainerKind::Crafting,
             ContainerKind::Furnace,
         ] {
-            assert!(!kind.name().is_empty());
+            assert_ne!(kind.name(), "");
         }
         assert!(ContainerKind::Generic.is_block_entity());
         assert!(ContainerKind::Furnace.is_block_entity());
@@ -403,7 +403,7 @@ mod tests {
             SlotRole::FurnaceOutput,
         ] {
             assert!(role.may_pickup(), "{role:?} should allow pickup");
-            assert!(!role.name().is_empty());
+            assert_ne!(role.name(), "");
         }
         assert!(SlotRole::CraftingResult.is_computed());
         assert!(SlotRole::FurnaceOutput.is_computed());
@@ -416,7 +416,7 @@ mod tests {
         assert!(container.get(99).is_empty());
         assert!(container.set(99, stack(STONE, 1)).is_err());
         // A rejected write must not have marked anything changed.
-        assert!(container.changed().is_empty());
+        assert_eq!(container.changed().len(), 0);
     }
 
     #[test]
@@ -479,7 +479,7 @@ mod tests {
         assert!(container.swap(9, 0).is_err());
         container.clear_changed();
         container.swap(1, 1).expect("no-op swap");
-        assert!(container.changed().is_empty());
+        assert_eq!(container.changed().len(), 0);
     }
 
     #[test]

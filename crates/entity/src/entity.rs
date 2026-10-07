@@ -807,7 +807,7 @@ mod tests {
 
         assert_eq!(store.of_kind(EntityKind::Player), vec![player]);
         assert_eq!(store.of_kind(EntityKind::Mob).len(), 2);
-        assert!(store.of_kind(EntityKind::Item).is_empty());
+        assert_eq!(store.of_kind(EntityKind::Item).len(), 0);
 
         let near = store.within_radius(Vec3::new(0.0, 64.0, 0.0), 2.0);
         assert_eq!(near.len(), 2, "the player and the near zombie");
@@ -828,9 +828,9 @@ mod tests {
     fn radius_queries_reject_hostile_arguments() {
         let store = store_with_mobs(2);
         let centre = Vec3::default();
-        assert!(store.within_radius(centre, -1.0).is_empty());
-        assert!(store.within_radius(centre, f64::NAN).is_empty());
-        assert!(store.within_radius(centre, f64::INFINITY).is_empty());
+        assert_eq!(store.within_radius(centre, -1.0).len(), 0);
+        assert_eq!(store.within_radius(centre, f64::NAN).len(), 0);
+        assert_eq!(store.within_radius(centre, f64::INFINITY).len(), 0);
         assert!(
             store
                 .nearest_of_kind(EntityKind::Mob, centre, -5.0)

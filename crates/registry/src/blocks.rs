@@ -805,12 +805,12 @@ mod tests {
                 .refused_tiers("minecraft:diamond_ore")
                 .contains(&"minecraft:incorrect_for_stone_tool".to_owned())
         );
-        assert!(blocks.refused_tiers("minecraft:stone").is_empty());
+        assert_eq!(blocks.refused_tiers("minecraft:stone").len(), 0);
         // Unknown names degrade, never refuse: empty tags, no requirement,
         // no hardness.
         assert_eq!(blocks.hardness("minecraft:not_a_block"), None);
         assert!(!blocks.requires_tool("minecraft:not_a_block"));
-        assert!(blocks.mineable_tags("minecraft:not_a_block").is_empty());
+        assert_eq!(blocks.mineable_tags("minecraft:not_a_block").len(), 0);
     }
 
     #[test]

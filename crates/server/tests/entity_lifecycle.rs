@@ -295,12 +295,9 @@ fn dropping_the_held_item_spawns_an_item_entity() {
             .set_slot(0, ItemStack::new(stone, 3).expect("three stone"))
             .expect("slot 0");
     }
-    assert!(
-        harness
-            .game
-            .entity_store()
-            .of_kind(EntityKind::Item)
-            .is_empty()
+    assert_eq!(
+        harness.game.entity_store().of_kind(EntityKind::Item).len(),
+        0
     );
 
     // `player_action` status 3 is the drop; the target position only has to be

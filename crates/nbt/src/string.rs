@@ -158,7 +158,7 @@ mod tests {
             let mut slice = &out[..];
             let decoded = read_modified_utf8(&mut slice).expect("decodes");
             assert_eq!(decoded, value);
-            assert!(slice.is_empty());
+            assert_eq!(slice.len(), 0);
         }
     }
 

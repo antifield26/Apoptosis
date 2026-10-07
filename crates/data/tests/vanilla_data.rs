@@ -552,7 +552,7 @@ fn check_functions(pack_root: &Path) {
     );
     assert!(registry.is_empty());
     assert_eq!(registry.command_budget(), 0);
-    assert!(registry.functions_calling_functions().is_empty());
+    assert_eq!(registry.functions_calling_functions().len(), 0);
     assert!(report.is_fully_accounted());
     assert!(report.is_clean());
 

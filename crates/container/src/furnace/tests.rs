@@ -816,7 +816,7 @@ fn a_furnace_refuses_impossible_slot_layouts_instead_of_panicking() {
         Furnace::ready_to_cook(&container, FurnaceSlots::CANONICAL, &recipes, &sizes())
             .expect("a valid layout")
     );
-    assert!(!FurnaceSlots::CANONICAL.indices().is_empty());
+    assert_ne!(FurnaceSlots::CANONICAL.indices().len(), 0);
     assert!(FurnaceSlots::CANONICAL.are_distinct());
     assert!(!overlapping.are_distinct());
 }

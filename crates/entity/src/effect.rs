@@ -402,7 +402,7 @@ mod tests {
             EffectKind::Regeneration,
         ] {
             assert_eq!(EffectKind::from_id(kind.id()), Some(kind));
-            assert!(!kind.name().is_empty());
+            assert_ne!(kind.name(), "");
         }
         // An unmodelled id is stored but contributes nothing.
         assert_eq!(EffectKind::from_id(effect_id::JUMP_BOOST), None);

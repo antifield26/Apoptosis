@@ -385,7 +385,7 @@ mod tests {
     fn every_source_block_name_resolves_back_to_its_source() {
         for (name, source) in SOURCE_BLOCKS {
             assert_eq!(source_for_name(name), Some(*source), "{name}");
-            assert!(!primary_block_name(*source).is_empty());
+            assert_ne!(primary_block_name(*source), "");
         }
         assert_eq!(source_for_name("minecraft:stone"), None);
         assert_eq!(source_for_name("minecraft:redstone_dust"), None);

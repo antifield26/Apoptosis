@@ -264,7 +264,7 @@ mod tests {
             write_named("Data", &hetero, &mut named).is_err(),
             "the disk encoding refuses too"
         );
-        assert!(named.is_empty());
+        assert_eq!(named.len(), 0);
         // Nesting is no escape hatch: each level checks its own elements.
         let nested = NbtTag::List(vec![NbtTag::List(vec![NbtTag::Int(1), NbtTag::Long(2)])]);
         assert!(write_unnamed(&nested, &mut Vec::new()).is_err());

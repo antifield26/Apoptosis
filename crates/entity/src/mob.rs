@@ -1360,7 +1360,7 @@ mod tests {
                 "{kind} clearance {}",
                 kind.clearance()
             );
-            assert!(!kind.name().is_empty());
+            assert_ne!(kind.name(), "");
         }
         assert_eq!(MobKind::Chicken.clearance(), 1);
         assert_eq!(MobKind::Cow.clearance(), 2);
@@ -1895,7 +1895,7 @@ mod tests {
             MobGoalKind::Attack,
             MobGoalKind::Flee,
         ] {
-            assert!(!kind.name().is_empty());
+            assert_ne!(kind.name(), "");
         }
         assert_eq!(MobBehaviour::Hostile.goals().len(), 4);
         assert_eq!(MobBehaviour::Passive.goals().len(), 3);

@@ -40,7 +40,7 @@ mod tests {
         let mut slice = &bytes[..];
         let decoded = Nbt::read_network(&mut slice).expect("decodes");
         assert_eq!(decoded, value);
-        assert!(slice.is_empty());
+        assert_eq!(slice.len(), 0);
         // Nameless root: the first byte is the compound tag id, not a length.
         assert_eq!(bytes[0], super::tag::COMPOUND);
     }

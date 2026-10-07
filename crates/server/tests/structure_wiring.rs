@@ -140,7 +140,7 @@ fn the_selection_matches_what_the_build_policy_can_place() {
     let fitting_names: std::collections::BTreeSet<mc_core::ids::ResourceId> =
         fitting.names().into_iter().collect();
 
-    assert!(!selectable.is_empty());
+    assert_ne!(selectable.len(), 0);
     for name in selectable {
         assert!(
             fitting_names.contains(name),

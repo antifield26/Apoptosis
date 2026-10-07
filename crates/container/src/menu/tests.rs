@@ -190,7 +190,7 @@ fn transfer_order_never_includes_the_source_group_first() {
     );
     // A slot in no group tries every group in order.
     assert_eq!(layout.transfer_order(999).len(), 3);
-    assert!(MenuLayout::none().transfer_order(0).is_empty());
+    assert_eq!(MenuLayout::none().transfer_order(0).len(), 0);
     assert_eq!(layout.group_of(0), Some(0));
     assert_eq!(layout.group_of(50), None);
     assert!(SlotRange::new(0, 9).contains(8));

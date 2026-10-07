@@ -46,7 +46,7 @@ pub const fn bits_for(palette_len: usize, min_bits: u32) -> u32 {
     let needed = if palette_len <= 1 {
         0
     } else {
-        usize::BITS - (palette_len - 1).leading_zeros()
+        (palette_len - 1).bit_width()
     };
     if needed < min_bits { min_bits } else { needed }
 }

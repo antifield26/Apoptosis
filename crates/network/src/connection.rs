@@ -1194,7 +1194,7 @@ mod tests {
         let (id, body) = read_frame(&mut client, None).await;
         assert_eq!(id, mc_protocol::ids::clientbound::login::HELLO);
         let request = EncryptionRequest::decode(&body).expect("decodes");
-        assert!(request.server_id.is_empty());
+        assert_eq!(request.server_id, "");
         assert!(!request.public_key.is_empty() && request.verify_token.len() == 4);
         assert!(
             request.should_authenticate,

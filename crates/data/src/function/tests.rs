@@ -338,7 +338,7 @@ fn the_registry_finds_callers_and_cycles() {
     let callers = registry.calling(&id("minecraft:b"));
     assert_eq!(callers.len(), 1);
     assert_eq!(callers[0].name, id("minecraft:a"));
-    assert!(registry.calling(&id("minecraft:a")).is_empty());
+    assert_eq!(registry.calling(&id("minecraft:a")).len(), 0);
     assert!(!registry.has_recursion(&id("minecraft:a")));
     assert_eq!(registry.functions_calling_functions().len(), 2);
 
