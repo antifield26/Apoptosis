@@ -37,7 +37,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.98.1"
+          toolchain: "stable"
 
       # The tag must agree with the manifest. Prefix rather than equality, because a
       # pre-release tag carries a suffix cargo does not model: the existing tag is
