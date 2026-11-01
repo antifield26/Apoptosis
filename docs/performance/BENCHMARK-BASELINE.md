@@ -1,5 +1,7 @@
 # Benchmark Baseline
 
+> 注 / Note (2026-11-01): the `rust-toolchain.toml` 1.98.1 pin cited in the historical records below was removed in `831b7d7`; CI now follows Rust stable. The records are kept as measured.
+
 Owner: engineering. Method contract: CONVENTIONS.md section 13 — every record carries
 hardware, OS, toolchain, commit, build profile, workload, duration, TPS, MSPT
 percentiles, CPU, RSS and (where relevant) storage and network figures.

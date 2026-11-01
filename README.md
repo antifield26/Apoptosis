@@ -84,7 +84,7 @@ This project records gaps instead of papering over them. The headline items
 
 ## Build and run
 
-Requirements: Rust stable (no pinned toolchain), plus a C toolchain for linking.
+Requirements: Rust stable (no pinned toolchain; MSRV `rust-version = "1.98.1"` in `Cargo.toml`), plus a C toolchain for linking.
 
 ```sh
 cargo build --workspace --release --locked

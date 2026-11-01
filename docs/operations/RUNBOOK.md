@@ -43,6 +43,8 @@ install -m 0644 crates/test-support/fixtures/registry/blocks.tsv \
                  crates/test-support/fixtures/registry/block_tool_tiers.tsv \
                  crates/test-support/fixtures/registry/tool_rules.tsv \
                  /srv/mc-server/fixtures/registry/
+# biome_spawners.tsv and entity_metadata.tsv are compiled into the binary
+# (include_str!) and need not be installed.
 install -m 0644 docs/operations/RUNBOOK.md /srv/mc-server/RUNBOOK.md
 install -m 0644 config.example.toml /srv/mc-server/config.toml
 # then edit /srv/mc-server/config.toml (bind, world_dir; see section 2 for
